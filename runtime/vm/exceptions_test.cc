@@ -76,7 +76,7 @@ static Dart_NativeFunction native_lookup(Dart_Handle name,
   int num_entries = sizeof(BuiltinEntries) / sizeof(struct NativeEntries);
   for (int i = 0; i < num_entries; i++) {
     struct NativeEntries* entry = &(BuiltinEntries[i]);
-    if (!strcmp(function_name, entry->name_) &&
+    if ((strcmp(function_name, entry->name_) == 0) &&
         (argument_count == entry->argument_count_)) {
       return reinterpret_cast<Dart_NativeFunction>(entry->function_);
     }
@@ -114,8 +114,7 @@ TEST_CASE(UnhandledExceptions) {
       "  UnhandledExceptions.equals(2, Second.method1(1));\n"
       "  UnhandledExceptions.equals(3, Second.method3(1));\n"
       "}";
-  Dart_Handle lib = TestCase::LoadTestScript(
-      kScriptChars, reinterpret_cast<Dart_NativeEntryResolver>(native_lookup));
+  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, native_lookup);
   EXPECT_VALID(Dart_Invoke(lib, NewString("testMain"), 0, NULL));
 }
 

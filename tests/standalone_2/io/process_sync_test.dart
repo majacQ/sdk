@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 // OtherResources=process_sync_script.dart
 
 import "dart:io";
@@ -13,13 +15,16 @@ test(int blockCount, int stdoutBlockSize, int stderrBlockSize, int exitCode,
   // Get the Dart script file that generates output.
   var scriptFile = new File(
       Platform.script.resolve("process_sync_script.dart").toFilePath());
-  var args = [
-    scriptFile.path,
-    blockCount.toString(),
-    stdoutBlockSize.toString(),
-    stderrBlockSize.toString(),
-    exitCode.toString()
-  ];
+  var args = <String>[]
+    ..addAll(Platform.executableArguments)
+    ..add('--verbosity=warning')
+    ..addAll([
+      scriptFile.path,
+      blockCount.toString(),
+      stdoutBlockSize.toString(),
+      stderrBlockSize.toString(),
+      exitCode.toString()
+    ]);
   ProcessResult syncResult = Process.runSync(Platform.executable, args);
   Expect.equals(blockCount * stdoutBlockSize, syncResult.stdout.length);
   Expect.equals(blockCount * stderrBlockSize, syncResult.stderr.length);

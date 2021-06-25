@@ -2,13 +2,12 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-#if !defined(DART_PRECOMPILED_RUNTIME)
-
 #include "vm/compiler/frontend/flow_graph_builder.h"
 
 #include "vm/compiler/backend/branch_optimizer.h"
 #include "vm/compiler/backend/flow_graph.h"
 #include "vm/compiler/backend/il.h"
+#include "vm/compiler/compiler_timings.h"
 #include "vm/compiler/frontend/kernel_to_il.h"
 #include "vm/object.h"
 #include "vm/zone.h"
@@ -39,6 +38,7 @@ uword FindDoubleConstant(double value) {
 }
 
 void InlineExitCollector::PrepareGraphs(FlowGraph* callee_graph) {
+  COMPILER_TIMINGS_TIMER_SCOPE(callee_graph->thread(), PrepareGraphs);
   ASSERT(callee_graph->graph_entry()->SuccessorCount() == 1);
   ASSERT(callee_graph->max_block_id() > caller_graph_->max_block_id());
   ASSERT(callee_graph->max_virtual_register_number() >
@@ -51,10 +51,19 @@ void InlineExitCollector::PrepareGraphs(FlowGraph* callee_graph) {
 
   // Attach the outer environment on each instruction in the callee graph.
   ASSERT(call_->env() != NULL);
+  ASSERT(call_->deopt_id() != DeoptId::kNone);
+
+  auto zone = callee_graph->zone();
+  auto env = call_->env();
+
+  const intptr_t outer_deopt_id = call_->deopt_id();
   // Scale the edge weights by the call count for the inlined function.
-  double scale_factor =
-      static_cast<double>(call_->CallCount()) /
-      static_cast<double>(caller_graph_->graph_entry()->entry_count());
+  double scale_factor = 1.0;
+  if (caller_graph_->graph_entry()->entry_count() != 0) {
+    scale_factor =
+        static_cast<double>(call_->CallCount()) /
+        static_cast<double>(caller_graph_->graph_entry()->entry_count());
+  }
   for (BlockIterator block_it = callee_graph->postorder_iterator();
        !block_it.Done(); block_it.Advance()) {
     BlockEntryInstr* block = block_it.Current();
@@ -62,16 +71,16 @@ void InlineExitCollector::PrepareGraphs(FlowGraph* callee_graph) {
       block->AsTargetEntry()->adjust_edge_weight(scale_factor);
     }
     Instruction* instr = block;
-    if (block->env() != NULL) {
-      call_->env()->DeepCopyToOuter(callee_graph->zone(), block);
+    if (block->env() != nullptr) {
+      env->DeepCopyToOuter(zone, block, outer_deopt_id);
     }
     for (ForwardInstructionIterator it(block); !it.Done(); it.Advance()) {
       instr = it.Current();
       // TODO(zerny): Avoid creating unnecessary environments. Note that some
       // optimizations need deoptimization info for non-deoptable instructions,
       // eg, LICM on GOTOs.
-      if (instr->env() != NULL) {
-        call_->env()->DeepCopyToOuter(callee_graph->zone(), instr);
+      if (instr->env() != nullptr) {
+        env->DeepCopyToOuter(zone, instr, outer_deopt_id);
       }
     }
     if (instr->IsGoto()) {
@@ -255,7 +264,7 @@ void InlineExitCollector::ReplaceCall(BlockEntryInstr* callee_entry) {
 
     ConstantInstr* true_const = caller_graph_->GetConstant(Bool::True());
     BranchInstr* branch = new (Z) BranchInstr(
-        new (Z) StrictCompareInstr(TokenPosition::kNoSource, Token::kEQ_STRICT,
+        new (Z) StrictCompareInstr(InstructionSource(), Token::kEQ_STRICT,
                                    new (Z) Value(true_const),
                                    new (Z) Value(true_const), false,
                                    CompilerState::Current().GetNextDeoptId()),
@@ -271,11 +280,22 @@ void InlineExitCollector::ReplaceCall(BlockEntryInstr* callee_entry) {
     call_->previous()->AppendInstruction(branch);
     call_block->set_last_instruction(branch);
 
-    // Replace uses of the return value with null to maintain valid
-    // SSA form - even though the rest of the caller is unreachable.
-    call_->ReplaceUsesWith(caller_graph_->constant_null());
+    // Replace uses of the return value with sentinel constant to maintain
+    // valid SSA form - even though the rest of the caller is unreachable.
+    call_->ReplaceUsesWith(caller_graph_->GetConstant(Object::sentinel()));
 
     // Update dominator tree.
+    for (intptr_t i = 0, n = callee_entry->dominated_blocks().length(); i < n;
+         i++) {
+      BlockEntryInstr* block = callee_entry->dominated_blocks()[i];
+      true_target->AddDominatedBlock(block);
+    }
+    for (intptr_t i = 0, n = call_block->dominated_blocks().length(); i < n;
+         i++) {
+      BlockEntryInstr* block = call_block->dominated_blocks()[i];
+      false_block->AddDominatedBlock(block);
+    }
+    call_block->ClearDominatedBlocks();
     call_block->AddDominatedBlock(true_target);
     call_block->AddDominatedBlock(false_block);
 
@@ -358,13 +378,20 @@ bool SimpleInstanceOfType(const AbstractType& type) {
 
   ASSERT(type.HasTypeClass());
   const Class& type_class = Class::Handle(type.type_class());
+
   // Bail if the type has any type parameters.
-  if (type_class.IsGeneric()) return false;
+  if (type_class.IsGeneric()) {
+    // If the interface type we check against is generic but has all-dynamic
+    // type arguments, then we can still use the _simpleInstanceOf
+    // implementation (see also runtime/lib/object.cc:Object_SimpleInstanceOf).
+    const auto& rare_type = AbstractType::Handle(type_class.RareType());
+    // TODO(regis): Revisit the usage of TypeEquality::kSyntactical when
+    // implementing strong mode.
+    return rare_type.IsEquivalent(type, TypeEquality::kSyntactical);
+  }
 
   // Finally a simple class for instance of checking.
   return true;
 }
 
 }  // namespace dart
-
-#endif  // !defined(DART_PRECOMPILED_RUNTIME)

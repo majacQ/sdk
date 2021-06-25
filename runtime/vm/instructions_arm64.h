@@ -10,11 +10,21 @@
 #error Do not include instructions_arm64.h directly; use instructions.h instead.
 #endif
 
-#include "vm/constants_arm64.h"
-#include "vm/native_entry.h"
-#include "vm/object.h"
+#include "vm/allocation.h"
+#include "vm/constants.h"
+#include "vm/native_function.h"
+#include "vm/tagged_pointer.h"
+
+#if !defined(DART_PRECOMPILED_RUNTIME)
+#include "vm/compiler/assembler/assembler.h"
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
 
 namespace dart {
+
+class Code;
+class ICData;
+class Object;
+class ObjectPool;
 
 class InstructionPattern : public AllStatic {
  public:
@@ -74,28 +84,41 @@ class CallPattern : public ValueObject {
  public:
   CallPattern(uword pc, const Code& code);
 
-  RawICData* IcData();
-
-  RawCode* TargetCode() const;
+  CodePtr TargetCode() const;
   void SetTargetCode(const Code& target) const;
 
  private:
   const ObjectPool& object_pool_;
 
-  uword end_;
-  uword ic_data_load_end_;
-
   intptr_t target_code_pool_index_;
-  ICData& ic_data_;
 
   DISALLOW_COPY_AND_ASSIGN(CallPattern);
+};
+
+class ICCallPattern : public ValueObject {
+ public:
+  ICCallPattern(uword pc, const Code& caller_code);
+
+  ObjectPtr Data() const;
+  void SetData(const Object& data) const;
+
+  CodePtr TargetCode() const;
+  void SetTargetCode(const Code& target) const;
+
+ private:
+  const ObjectPool& object_pool_;
+
+  intptr_t target_pool_index_;
+  intptr_t data_pool_index_;
+
+  DISALLOW_COPY_AND_ASSIGN(ICCallPattern);
 };
 
 class NativeCallPattern : public ValueObject {
  public:
   NativeCallPattern(uword pc, const Code& code);
 
-  RawCode* target() const;
+  CodePtr target() const;
   void set_target(const Code& target) const;
 
   NativeFunction native_function() const;
@@ -116,21 +139,50 @@ class NativeCallPattern : public ValueObject {
 //   load guarded cid            load ICData             load MegamorphicCache
 //   load monomorphic target <-> load ICLookup stub  ->  load MMLookup stub
 //   call target.entry           call stub.entry         call stub.entry
-class SwitchableCallPattern : public ValueObject {
+class SwitchableCallPatternBase : public ValueObject {
  public:
-  SwitchableCallPattern(uword pc, const Code& code);
+  explicit SwitchableCallPatternBase(const ObjectPool& object_pool);
 
-  RawObject* data() const;
-  RawCode* target() const;
+  ObjectPtr data() const;
   void SetData(const Object& data) const;
-  void SetTarget(const Code& target) const;
 
- private:
+ protected:
   const ObjectPool& object_pool_;
   intptr_t data_pool_index_;
   intptr_t target_pool_index_;
 
+ private:
+  DISALLOW_COPY_AND_ASSIGN(SwitchableCallPatternBase);
+};
+
+// See [SwitchableCallBase] for a switchable calls in general.
+//
+// The target slot is always a [Code] object: Either the code of the
+// monomorphic function or a stub code.
+class SwitchableCallPattern : public SwitchableCallPatternBase {
+ public:
+  SwitchableCallPattern(uword pc, const Code& code);
+
+  uword target_entry() const;
+  void SetTarget(const Code& target) const;
+
+ private:
   DISALLOW_COPY_AND_ASSIGN(SwitchableCallPattern);
+};
+
+// See [SwitchableCallBase] for a switchable calls in general.
+//
+// The target slot is always a direct entrypoint address: Either the entry point
+// of the monomorphic function or a stub entry point.
+class BareSwitchableCallPattern : public SwitchableCallPatternBase {
+ public:
+  explicit BareSwitchableCallPattern(uword pc);
+
+  uword target_entry() const;
+  void SetTarget(const Code& target) const;
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(BareSwitchableCallPattern);
 };
 
 class ReturnPattern : public ValueObject {
@@ -148,15 +200,20 @@ class ReturnPattern : public ValueObject {
   const uword pc_;
 };
 
-class PcRelativeCallPattern : public ValueObject {
+class PcRelativePatternBase : public ValueObject {
  public:
-  explicit PcRelativeCallPattern(uword pc) : pc_(pc) {}
+  // 26 bit signed integer which will get multiplied by 4.
+  static constexpr intptr_t kLowerCallingRange = -(1 << 27);
+  static constexpr intptr_t kUpperCallingRange = (1 << 27) - Instr::kInstrSize;
+
+  explicit PcRelativePatternBase(uword pc) : pc_(pc) {}
 
   static const int kLengthInBytes = 1 * Instr::kInstrSize;
 
   int32_t distance() {
 #if !defined(DART_PRECOMPILED_RUNTIME)
-    return Assembler::DecodeImm26BranchOffset(*reinterpret_cast<int32_t*>(pc_));
+    return compiler::Assembler::DecodeImm26BranchOffset(
+        *reinterpret_cast<int32_t*>(pc_));
 #else
     UNREACHABLE();
     return 0;
@@ -166,7 +223,7 @@ class PcRelativeCallPattern : public ValueObject {
   void set_distance(int32_t distance) {
 #if !defined(DART_PRECOMPILED_RUNTIME)
     int32_t* word = reinterpret_cast<int32_t*>(pc_);
-    *word = Assembler::EncodeImm26BranchOffset(distance, *word);
+    *word = compiler::Assembler::EncodeImm26BranchOffset(distance, *word);
 #else
     UNREACHABLE();
 #endif
@@ -174,38 +231,73 @@ class PcRelativeCallPattern : public ValueObject {
 
   bool IsValid() const;
 
- private:
+ protected:
   uword pc_;
 };
 
-class PcRelativeJumpPattern : public ValueObject {
+class PcRelativeCallPattern : public PcRelativePatternBase {
  public:
-  explicit PcRelativeJumpPattern(uword pc) : pc_(pc) {}
+  explicit PcRelativeCallPattern(uword pc) : PcRelativePatternBase(pc) {}
 
-  static const int kLengthInBytes = 1 * Instr::kInstrSize;
+  bool IsValid() const;
+};
 
-  int32_t distance() {
-#if !defined(DART_PRECOMPILED_RUNTIME)
-    return Assembler::DecodeImm26BranchOffset(*reinterpret_cast<int32_t*>(pc_));
-#else
-    UNREACHABLE();
-    return 0;
-#endif
+class PcRelativeTailCallPattern : public PcRelativePatternBase {
+ public:
+  explicit PcRelativeTailCallPattern(uword pc) : PcRelativePatternBase(pc) {}
+
+  bool IsValid() const;
+};
+
+// Instruction pattern for a tail call to a signed 32-bit PC-relative offset
+//
+// The AOT compiler can emit PC-relative calls. If the destination of such a
+// call is not in range for the "bl <offset>" instruction, the AOT compiler will
+// emit a trampoline which is in range. That trampoline will then tail-call to
+// the final destination (also via PC-relative offset, but it supports a full
+// signed 32-bit offset).
+//
+// The pattern of the trampoline looks like:
+//
+//     adr TMP, #lower16  (same as TMP = PC + #lower16)
+//     movz TMP2, #higher16 lsl 16
+//     add TMP, TMP, TMP2, SXTW
+//     br TMP
+//
+class PcRelativeTrampolineJumpPattern : public ValueObject {
+ public:
+  explicit PcRelativeTrampolineJumpPattern(uword pattern_start)
+      : pattern_start_(pattern_start) {
+    USE(pattern_start_);
   }
 
-  void set_distance(int32_t distance) {
-#if !defined(DART_PRECOMPILED_RUNTIME)
-    int32_t* word = reinterpret_cast<int32_t*>(pc_);
-    *word = Assembler::EncodeImm26BranchOffset(distance, *word);
-#else
-    UNREACHABLE();
-#endif
-  }
+  static const int kLengthInBytes = 4 * Instr::kInstrSize;
 
+  void Initialize();
+
+  int32_t distance();
+  void set_distance(int32_t distance);
   bool IsValid() const;
 
  private:
-  uword pc_;
+  // This offset must be applied to account for the fact that
+  //   a) the actual "branch" is only in the 3rd instruction
+  //   b) when reading the PC it reports current instruction + 8
+  static const intptr_t kDistanceOffset = -5 * Instr::kInstrSize;
+
+  // adr TMP, #lower16  (same as TMP = PC + #lower16)
+  static const uint32_t kAdrEncoding = (1 << 28) | (TMP << kRdShift);
+
+  // movz TMP2, #higher16 lsl 16
+  static const uint32_t kMovzEncoding = MOVZ | (1 << kHWShift) | TMP2;
+
+  // add TMP, TMP, TMP2, SXTW
+  static const uint32_t kAddTmpTmp2 = 0x8b31c210;
+
+  // br TMP
+  static const uint32_t kJumpEncoding = BR | (TMP << kRnShift);
+
+  uword pattern_start_;
 };
 
 }  // namespace dart

@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library test.instance_members;
 
 import 'dart:mirrors';
@@ -9,8 +11,8 @@ import 'package:expect/expect.dart';
 
 import 'declarations_model.dart' as declarations_model;
 
-selectKeys(map, predicate) {
-  return map.keys.where((key) => predicate(map[key]));
+selectKeys<K, V>(Map<K, V> map, bool Function(V) predicate) {
+  return map.keys.where((K key) => predicate(map[key]));
 }
 
 main() {

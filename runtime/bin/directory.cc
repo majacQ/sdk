@@ -9,12 +9,12 @@
 
 #include "bin/dartutils.h"
 #include "bin/io_buffer.h"
-#include "bin/log.h"
 #include "bin/namespace.h"
 #include "bin/typed_data_utils.h"
 #include "bin/utils.h"
 #include "include/dart_api.h"
 #include "platform/assert.h"
+#include "platform/syslog.h"
 
 namespace dart {
 namespace bin {
@@ -232,9 +232,7 @@ void FUNCTION_NAME(Directory_GetAsyncDirectoryListerPointer)(
   }
 }
 
-static void ReleaseListing(void* isolate_callback_data,
-                           Dart_WeakPersistentHandle handle,
-                           void* peer) {
+static void ReleaseListing(void* isolate_callback_data, void* peer) {
   AsyncDirectoryListing* listing =
       reinterpret_cast<AsyncDirectoryListing*>(peer);
   listing->Release();
@@ -247,8 +245,8 @@ void FUNCTION_NAME(Directory_SetAsyncDirectoryListerPointer)(
       DartUtils::GetIntptrValue(Dart_GetNativeArgument(args, 1));
   AsyncDirectoryListing* listing =
       reinterpret_cast<AsyncDirectoryListing*>(listing_pointer);
-  Dart_NewWeakPersistentHandle(dart_this, reinterpret_cast<void*>(listing),
-                               sizeof(*listing), ReleaseListing);
+  Dart_NewFinalizableHandle(dart_this, reinterpret_cast<void*>(listing),
+                            sizeof(*listing), ReleaseListing);
   Dart_Handle result = Dart_SetNativeInstanceField(
       dart_this, kAsyncDirectoryListerFieldIndex, listing_pointer);
   ThrowIfError(result);
@@ -260,7 +258,7 @@ void Directory::SetSystemTemp(const char* path) {
     system_temp_path_override_ = NULL;
   }
   if (path != NULL) {
-    system_temp_path_override_ = strdup(path);
+    system_temp_path_override_ = Utils::StrDup(path);
   }
 }
 
@@ -453,7 +451,7 @@ bool AsyncDirectoryListing::AddFileSystemEntityToResponse(Response type,
     size_t len = strlen(arg);
     Dart_CObject* io_buffer = CObject::NewIOBuffer(len);
     uint8_t* data = io_buffer->value.as_external_typed_data.data;
-    strncpy(reinterpret_cast<char*>(data), arg, len);
+    memmove(reinterpret_cast<char*>(data), arg, len);
 
     CObjectExternalUint8Array* external_array =
         new CObjectExternalUint8Array(io_buffer);

@@ -2,12 +2,11 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-#if !defined(DART_PRECOMPILED_RUNTIME)
-
 #include "vm/compiler/backend/type_propagator.h"
 
+#include "platform/text_buffer.h"
+
 #include "vm/bit_vector.h"
-#include "vm/compiler/backend/il_printer.h"
 #include "vm/compiler/compiler_state.h"
 #include "vm/object_store.h"
 #include "vm/regexp_assembler.h"
@@ -40,12 +39,8 @@ static void TraceStrongModeType(const Instruction* instr,
 }
 
 void FlowGraphTypePropagator::Propagate(FlowGraph* flow_graph) {
-#ifndef PRODUCT
-  Thread* thread = flow_graph->thread();
-  TimelineStream* compiler_timeline = Timeline::GetCompilerStream();
-  TimelineDurationScope tds2(thread, compiler_timeline,
-                             "FlowGraphTypePropagator");
-#endif  // !PRODUCT
+  TIMELINE_DURATION(flow_graph->thread(), CompilerVerbose,
+                    "FlowGraphTypePropagator");
   FlowGraphTypePropagator propagator(flow_graph);
   propagator.Propagate();
 }
@@ -53,6 +48,7 @@ void FlowGraphTypePropagator::Propagate(FlowGraph* flow_graph) {
 FlowGraphTypePropagator::FlowGraphTypePropagator(FlowGraph* flow_graph)
     : FlowGraphVisitor(flow_graph->reverse_postorder()),
       flow_graph_(flow_graph),
+      is_aot_(CompilerState::Current().is_aot()),
       visited_blocks_(new (flow_graph->zone())
                           BitVector(flow_graph->zone(),
                                     flow_graph->reverse_postorder().length())),
@@ -64,15 +60,13 @@ FlowGraphTypePropagator::FlowGraphTypePropagator(FlowGraph* flow_graph)
     types_.Add(NULL);
   }
 
-  if (Isolate::Current()->argument_type_checks()) {
-    asserts_ = new ZoneGrowableArray<AssertAssignableInstr*>(
-        flow_graph->current_ssa_temp_index());
-    for (intptr_t i = 0; i < flow_graph->current_ssa_temp_index(); i++) {
-      asserts_->Add(NULL);
-    }
-
-    collected_asserts_ = new ZoneGrowableArray<intptr_t>(10);
+  asserts_ = new ZoneGrowableArray<AssertAssignableInstr*>(
+      flow_graph->current_ssa_temp_index());
+  for (intptr_t i = 0; i < flow_graph->current_ssa_temp_index(); i++) {
+    asserts_->Add(NULL);
   }
+
+  collected_asserts_ = new ZoneGrowableArray<intptr_t>(10);
 }
 
 void FlowGraphTypePropagator::Propagate() {
@@ -126,11 +120,11 @@ void FlowGraphTypePropagator::PropagateRecursive(BlockEntryInstr* block) {
 
   const intptr_t rollback_point = rollback_.length();
 
-  // When having assertions enabled or when running in strong-mode the IR graphs
-  // can contain [AssertAssignableInstr]s and we therefore enable this
-  // optimization.
-  Isolate* isolate = Isolate::Current();
-  if (isolate->argument_type_checks()) {
+  if (!is_aot_) {
+    // Don't try to strengthen asserts with class checks in AOT mode, this is a
+    // speculative optimization which only really makes sense in JIT mode.
+    // It is also written to expect environments to be attached to
+    // AssertAssignable instructions, which is not always a case in AOT mode.
     StrengthenAsserts(block);
   }
 
@@ -196,17 +190,21 @@ void FlowGraphTypePropagator::SetCid(Definition* def, intptr_t cid) {
   }
 }
 
+void FlowGraphTypePropagator::GrowTypes(intptr_t up_to) {
+  // Grow types array if a new redefinition was inserted.
+  for (intptr_t i = types_.length(); i <= up_to; ++i) {
+    types_.Add(nullptr);
+  }
+}
+
 void FlowGraphTypePropagator::EnsureMoreAccurateRedefinition(
     Instruction* prev,
     Definition* original,
     CompileType new_type) {
   RedefinitionInstr* redef =
       flow_graph_->EnsureRedefinition(prev, original, new_type);
-  // Grow types array if a new redefinition was inserted.
-  if (redef != NULL) {
-    for (intptr_t i = types_.length(); i <= redef->ssa_temp_index() + 1; ++i) {
-      types_.Add(NULL);
-    }
+  if (redef != nullptr) {
+    GrowTypes(redef->ssa_temp_index() + 1);
   }
 }
 
@@ -284,9 +282,21 @@ void FlowGraphTypePropagator::VisitCheckNull(CheckNullInstr* check) {
   Definition* receiver = check->value()->definition();
   CompileType* type = TypeOf(receiver);
   if (type->is_nullable()) {
-    // Insert redefinition for the receiver to guard against invalid
-    // code motion.
-    EnsureMoreAccurateRedefinition(check, receiver, type->CopyNonNullable());
+    // If the type is nullable, translate an implicit control
+    // dependence to an explicit data dependence at this point
+    // to guard against invalid code motion later. Valid code
+    // motion of the check may still enable valid code motion
+    // of the checked code.
+    if (check->ssa_temp_index() == -1) {
+      flow_graph_->AllocateSSAIndexes(check);
+      GrowTypes(check->ssa_temp_index() + 1);
+    }
+    FlowGraph::RenameDominatedUses(receiver, check, check);
+    // Set non-nullable type on check itself (but avoid None()).
+    CompileType result = type->CopyNonNullable();
+    if (!result.IsNone()) {
+      SetTypeOf(check, new (zone()) CompileType(result));
+    }
   }
 }
 
@@ -298,10 +308,14 @@ void FlowGraphTypePropagator::CheckNonNullSelector(
     // Nothing to do if type is already non-nullable.
     return;
   }
+  Thread* thread = Thread::Current();
   const Class& null_class =
-      Class::Handle(Isolate::Current()->object_store()->null_class());
-  const Function& target = Function::Handle(Resolver::ResolveDynamicAnyArgs(
-      Thread::Current()->zone(), null_class, function_name));
+      Class::Handle(thread->isolate_group()->object_store()->null_class());
+  Function& target = Function::Handle();
+  if (Error::Handle(null_class.EnsureIsFinalized(thread)).IsNull()) {
+    target = Resolver::ResolveDynamicAnyArgs(thread->zone(), null_class,
+                                             function_name);
+  }
   if (target.IsNull()) {
     // If the selector is not defined on Null, we can propagate non-nullness.
     CompileType* type = TypeOf(receiver);
@@ -325,13 +339,13 @@ void FlowGraphTypePropagator::VisitInstanceCall(InstanceCallInstr* instr) {
 
 void FlowGraphTypePropagator::VisitPolymorphicInstanceCall(
     PolymorphicInstanceCallInstr* instr) {
-  if (instr->instance_call()->has_unique_selector()) {
+  if (instr->has_unique_selector()) {
     SetCid(instr->Receiver()->definition(),
            instr->targets().MonomorphicReceiverCid());
     return;
   }
   CheckNonNullSelector(instr, instr->Receiver()->definition(),
-                       instr->instance_call()->function_name());
+                       instr->function_name());
 }
 
 void FlowGraphTypePropagator::VisitGuardFieldClass(
@@ -347,7 +361,9 @@ void FlowGraphTypePropagator::VisitGuardFieldClass(
       (current->is_nullable() && !guard->field().is_nullable())) {
     const bool is_nullable =
         guard->field().is_nullable() && current->is_nullable();
-    SetTypeOf(def, new (zone()) CompileType(is_nullable, cid, NULL));
+    SetTypeOf(def,
+              new (zone()) CompileType(
+                  is_nullable, CompileType::kCannotBeSentinel, cid, nullptr));
   }
 }
 
@@ -355,6 +371,11 @@ void FlowGraphTypePropagator::VisitAssertAssignable(
     AssertAssignableInstr* instr) {
   SetTypeOf(instr->value()->definition(),
             new (zone()) CompileType(instr->ComputeType()));
+}
+
+void FlowGraphTypePropagator::VisitAssertBoolean(AssertBooleanInstr* instr) {
+  SetTypeOf(instr->value()->definition(),
+            new (zone()) CompileType(CompileType::Bool()));
 }
 
 void FlowGraphTypePropagator::VisitAssertSubtype(AssertSubtypeInstr* instr) {}
@@ -381,7 +402,7 @@ void FlowGraphTypePropagator::VisitBranch(BranchInstr* instr) {
   } else if ((is_simple_instance_of || (instance_of != NULL)) &&
              comparison->InputAt(1)->BindsToConstant() &&
              comparison->InputAt(1)->BoundConstant().IsBool()) {
-    if (comparison->InputAt(1)->BoundConstant().raw() == Bool::False().raw()) {
+    if (comparison->InputAt(1)->BoundConstant().ptr() == Bool::False().ptr()) {
       negated = !negated;
     }
     BlockEntryInstr* true_successor =
@@ -400,12 +421,15 @@ void FlowGraphTypePropagator::VisitBranch(BranchInstr* instr) {
       type = &(instance_of->type());
       left = instance_of->value()->definition();
     }
-    if (!type->IsDynamicType() && !type->IsObjectType()) {
-      const bool is_nullable = type->IsNullType() ? CompileType::kNullable
-                                                  : CompileType::kNonNullable;
+    if (!type->IsTopTypeForInstanceOf()) {
+      const bool is_nullable = (type->IsNullable() || type->IsTypeParameter() ||
+                                (type->IsNeverType() && type->IsLegacy()))
+                                   ? CompileType::kCanBeNull
+                                   : CompileType::kCannotBeNull;
       EnsureMoreAccurateRedefinition(
           true_successor, left,
-          CompileType::FromAbstractType(*type, is_nullable));
+          CompileType::FromAbstractType(*type, is_nullable,
+                                        CompileType::kCannotBeSentinel));
     }
   } else if (comparison->InputAt(0)->BindsToConstant() &&
              comparison->InputAt(0)->BoundConstant().IsNull()) {
@@ -424,6 +448,25 @@ void FlowGraphTypePropagator::VisitBranch(BranchInstr* instr) {
     EnsureMoreAccurateRedefinition(
         true_successor, comparison->InputAt(0)->definition(),
         comparison->InputAt(0)->Type()->CopyNonNullable());
+  } else if (comparison->InputAt(0)->BindsToConstant() &&
+             comparison->InputAt(0)->BoundConstant().ptr() ==
+                 Object::sentinel().ptr()) {
+    // Handle for expr != sentinel.
+    BlockEntryInstr* true_successor =
+        negated ? instr->true_successor() : instr->false_successor();
+    EnsureMoreAccurateRedefinition(
+        true_successor, comparison->InputAt(1)->definition(),
+        comparison->InputAt(1)->Type()->CopyNonSentinel());
+
+  } else if (comparison->InputAt(1)->BindsToConstant() &&
+             comparison->InputAt(1)->BoundConstant().ptr() ==
+                 Object::sentinel().ptr()) {
+    // Handle for sentinel != expr.
+    BlockEntryInstr* true_successor =
+        negated ? instr->true_successor() : instr->false_successor();
+    EnsureMoreAccurateRedefinition(
+        true_successor, comparison->InputAt(0)->definition(),
+        comparison->InputAt(0)->Type()->CopyNonSentinel());
   }
   // TODO(fschneider): Add propagation for generic is-tests.
 }
@@ -493,21 +536,19 @@ void FlowGraphTypePropagator::StrengthenAssertWith(Instruction* check) {
 
   Instruction* check_clone = NULL;
   if (check->IsCheckSmi()) {
-    check_clone =
-        new CheckSmiInstr(assert->value()->Copy(zone()),
-                          assert->env()->deopt_id(), check->token_pos());
+    check_clone = new CheckSmiInstr(assert->value()->Copy(zone()),
+                                    assert->deopt_id(), check->source());
     check_clone->AsCheckSmi()->set_licm_hoisted(
         check->AsCheckSmi()->licm_hoisted());
   } else {
     ASSERT(check->IsCheckClass());
-    check_clone = new CheckClassInstr(
-        assert->value()->Copy(zone()), assert->env()->deopt_id(),
-        check->AsCheckClass()->cids(), check->token_pos());
+    check_clone =
+        new CheckClassInstr(assert->value()->Copy(zone()), assert->deopt_id(),
+                            check->AsCheckClass()->cids(), check->source());
     check_clone->AsCheckClass()->set_licm_hoisted(
         check->AsCheckClass()->licm_hoisted());
   }
   ASSERT(check_clone != NULL);
-  ASSERT(assert->deopt_id() == assert->env()->deopt_id());
   check_clone->InsertBefore(assert);
   assert->env()->DeepCopyTo(zone(), check_clone);
 
@@ -524,41 +565,42 @@ void CompileType::Union(CompileType* other) {
     return;
   }
 
-  is_nullable_ = is_nullable_ || other->is_nullable_;
+  can_be_null_ = can_be_null_ || other->can_be_null_;
+  can_be_sentinel_ = can_be_sentinel_ || other->can_be_sentinel_;
 
-  if (ToNullableCid() == kNullCid) {
+  ToNullableCid();  // Ensure cid_ is set.
+  if ((cid_ == kNullCid) || (cid_ == kSentinelCid)) {
     cid_ = other->cid_;
     type_ = other->type_;
     return;
   }
 
-  if (other->ToNullableCid() == kNullCid) {
+  other->ToNullableCid();  // Ensure other->cid_ is set.
+  if ((other->cid_ == kNullCid) || (other->cid_ == kSentinelCid)) {
     return;
   }
 
   const AbstractType* abstract_type = ToAbstractType();
-  if (ToNullableCid() != other->ToNullableCid()) {
-    ASSERT(cid_ != kNullCid);
+  if (cid_ != other->cid_) {
     cid_ = kDynamicCid;
   }
 
   const AbstractType* other_abstract_type = other->ToAbstractType();
-  if (abstract_type->IsMoreSpecificThan(*other_abstract_type, NULL, NULL,
-                                        Heap::kOld)) {
+  if (abstract_type->IsSubtypeOf(*other_abstract_type, Heap::kOld)) {
     type_ = other_abstract_type;
     return;
-  } else if (other_abstract_type->IsMoreSpecificThan(*abstract_type, NULL, NULL,
-                                                     Heap::kOld)) {
+  } else if (other_abstract_type->IsSubtypeOf(*abstract_type, Heap::kOld)) {
     return;  // Nothing to do.
   }
 
   // Climb up the hierarchy to find a suitable supertype. Note that interface
   // types are not considered, making the union potentially non-commutative
-  if (abstract_type->IsInstantiated() && !abstract_type->IsDynamicType()) {
+  if (abstract_type->IsInstantiated() && !abstract_type->IsDynamicType() &&
+      !abstract_type->IsFunctionType()) {
     Class& cls = Class::Handle(abstract_type->type_class());
     for (; !cls.IsNull() && !cls.IsGeneric(); cls = cls.SuperClass()) {
       type_ = &AbstractType::ZoneHandle(cls.RareType());
-      if (other_abstract_type->IsSubtypeOf(*type_, NULL, NULL, Heap::kOld)) {
+      if (other_abstract_type->IsSubtypeOf(*type_, Heap::kOld)) {
         // Found suitable supertype: keep type_ only.
         cid_ = kDynamicCid;
         return;
@@ -572,12 +614,14 @@ void CompileType::Union(CompileType* other) {
 
 CompileType* CompileType::ComputeRefinedType(CompileType* old_type,
                                              CompileType* new_type) {
+  ASSERT(new_type != nullptr);
+
   // In general, prefer the newly inferred type over old type.
   // It is possible that new and old types are unrelated or do not intersect
   // at all (for example, in case of unreachable code).
 
   // Discard None type as it is used to denote an unknown type.
-  if (old_type->IsNone()) {
+  if (old_type == nullptr || old_type->IsNone()) {
     return new_type;
   }
   if (new_type->IsNone()) {
@@ -596,8 +640,7 @@ CompileType* CompileType::ComputeRefinedType(CompileType* old_type,
   const AbstractType* new_abstract_type = new_type->ToAbstractType();
 
   CompileType* preferred_type;
-  if (old_abstract_type->IsMoreSpecificThan(*new_abstract_type, NULL, NULL,
-                                            Heap::kOld)) {
+  if (old_abstract_type->IsSubtypeOf(*new_abstract_type, Heap::kOld)) {
     // Prefer old type, as it is clearly more specific.
     preferred_type = old_type;
   } else {
@@ -606,69 +649,86 @@ CompileType* CompileType::ComputeRefinedType(CompileType* old_type,
     preferred_type = new_type;
   }
 
-  // Refine non-nullability.
-  bool is_nullable = old_type->is_nullable() && new_type->is_nullable();
+  // Refine non-nullability and whether it can be sentinel.
+  const bool can_be_null = old_type->is_nullable() && new_type->is_nullable();
+  const bool can_be_sentinel =
+      old_type->can_be_sentinel() && new_type->can_be_sentinel();
 
-  if (preferred_type->is_nullable() && !is_nullable) {
-    return new CompileType(preferred_type->CopyNonNullable());
+  if ((preferred_type->is_nullable() && !can_be_null) ||
+      (preferred_type->can_be_sentinel() && !can_be_sentinel)) {
+    return new CompileType(can_be_null, can_be_sentinel, preferred_type->cid_,
+                           preferred_type->type_);
   } else {
-    ASSERT(preferred_type->is_nullable() == is_nullable);
+    ASSERT(preferred_type->is_nullable() == can_be_null);
+    ASSERT(preferred_type->can_be_sentinel() == can_be_sentinel);
     return preferred_type;
   }
 }
 
-static bool IsNullableCid(intptr_t cid) {
-  ASSERT(cid != kIllegalCid);
-  return cid == kNullCid || cid == kDynamicCid;
-}
-
-CompileType CompileType::Create(intptr_t cid, const AbstractType& type) {
-  return CompileType(IsNullableCid(cid), cid, &type);
-}
-
 CompileType CompileType::FromAbstractType(const AbstractType& type,
-                                          bool is_nullable) {
-  return CompileType(is_nullable, kIllegalCid, &type);
+                                          bool can_be_null,
+                                          bool can_be_sentinel) {
+  return CompileType(can_be_null && !type.IsStrictlyNonNullable(),
+                     can_be_sentinel, kIllegalCid, &type);
 }
 
 CompileType CompileType::FromCid(intptr_t cid) {
-  return CompileType(IsNullableCid(cid), cid, NULL);
+  ASSERT(cid != kIllegalCid);
+  ASSERT(cid != kDynamicCid);
+  return CompileType(cid == kNullCid, cid == kSentinelCid, cid, nullptr);
 }
 
 CompileType CompileType::Dynamic() {
-  return Create(kDynamicCid, Object::dynamic_type());
+  return CompileType(kCanBeNull, kCannotBeSentinel, kDynamicCid,
+                     &Object::dynamic_type());
 }
 
 CompileType CompileType::Null() {
-  return Create(kNullCid, Type::ZoneHandle(Type::NullType()));
+  return CompileType(kCanBeNull, kCannotBeSentinel, kNullCid,
+                     &Type::ZoneHandle(Type::NullType()));
 }
 
 CompileType CompileType::Bool() {
-  return Create(kBoolCid, Type::ZoneHandle(Type::BoolType()));
+  return CompileType(kCannotBeNull, kCannotBeSentinel, kBoolCid,
+                     &Type::ZoneHandle(Type::BoolType()));
 }
 
 CompileType CompileType::Int() {
-  return FromAbstractType(Type::ZoneHandle(Type::IntType()), kNonNullable);
+  return FromAbstractType(Type::ZoneHandle(Type::IntType()), kCannotBeNull,
+                          kCannotBeSentinel);
+}
+
+CompileType CompileType::Int32() {
+#if defined(TARGET_ARCH_IS_64_BIT) && !defined(DART_COMPRESSED_POINTERS)
+  return FromCid(kSmiCid);
+#else
+  return Int();
+#endif
 }
 
 CompileType CompileType::NullableInt() {
-  return FromAbstractType(Type::ZoneHandle(Type::IntType()), kNullable);
+  return FromAbstractType(Type::ZoneHandle(Type::NullableIntType()), kCanBeNull,
+                          kCannotBeSentinel);
 }
 
 CompileType CompileType::Smi() {
-  return Create(kSmiCid, Type::ZoneHandle(Type::SmiType()));
+  return CompileType(kCannotBeNull, kCannotBeSentinel, kSmiCid,
+                     &Type::ZoneHandle(Type::SmiType()));
 }
 
 CompileType CompileType::Double() {
-  return Create(kDoubleCid, Type::ZoneHandle(Type::Double()));
+  return CompileType(kCannotBeNull, kCannotBeSentinel, kDoubleCid,
+                     &Type::ZoneHandle(Type::Double()));
 }
 
 CompileType CompileType::NullableDouble() {
-  return FromAbstractType(Type::ZoneHandle(Type::Double()), kNullable);
+  return FromAbstractType(Type::ZoneHandle(Type::NullableDouble()), kCanBeNull,
+                          kCannotBeSentinel);
 }
 
 CompileType CompileType::String() {
-  return FromAbstractType(Type::ZoneHandle(Type::StringType()), kNonNullable);
+  return FromAbstractType(Type::ZoneHandle(Type::StringType()), kCannotBeNull,
+                          kCannotBeSentinel);
 }
 
 intptr_t CompileType::ToCid() {
@@ -678,13 +738,18 @@ intptr_t CompileType::ToCid() {
     if ((type_ != NULL) && type_->IsNullType()) {
       cid_ = kNullCid;
     }
+    // Same for sentinel.
+    if ((type_ != NULL) && type_->IsSentinelType()) {
+      cid_ = kSentinelCid;
+    }
   }
 
-  if ((cid_ == kNullCid) || (cid_ == kDynamicCid)) {
-    return cid_;
+  if ((cid_ == kDynamicCid) || (can_be_null_ && (cid_ != kNullCid)) ||
+      (can_be_sentinel_ && (cid_ != kSentinelCid))) {
+    return kDynamicCid;
   }
 
-  return is_nullable_ ? static_cast<intptr_t>(kDynamicCid) : ToNullableCid();
+  return ToNullableCid();
 }
 
 intptr_t CompileType::ToNullableCid() {
@@ -692,12 +757,12 @@ intptr_t CompileType::ToNullableCid() {
     if (type_ == NULL) {
       // Type propagation is turned off or has not yet run.
       return kDynamicCid;
-    } else if (type_->IsMalformed()) {
-      cid_ = kDynamicCid;
     } else if (type_->IsVoidType()) {
       cid_ = kDynamicCid;
     } else if (type_->IsNullType()) {
       cid_ = kNullCid;
+    } else if (type_->IsSentinelType()) {
+      cid_ = kSentinelCid;
     } else if (type_->IsFunctionType() || type_->IsDartFunctionType()) {
       cid_ = kClosureCid;
     } else if (type_->type_class_id() != kIllegalCid) {
@@ -712,7 +777,7 @@ intptr_t CompileType::ToNullableCid() {
           // Type of a private class cannot change through later loaded libs.
           cid_ = type_class.id();
         } else if (FLAG_use_cha_deopt ||
-                   thread->isolate()->all_classes_finalized()) {
+                   thread->isolate_group()->all_classes_finalized()) {
           if (FLAG_trace_cha) {
             THR_Print("  **(CHA) Compile type not subclassed: %s\n",
                       type_class.ToCString());
@@ -732,11 +797,15 @@ intptr_t CompileType::ToNullableCid() {
     }
   }
 
+  if (can_be_sentinel_ && (cid_ != kSentinelCid)) {
+    return kDynamicCid;
+  }
+
   return cid_;
 }
 
 bool CompileType::HasDecidableNullability() {
-  return !is_nullable_ || IsNull();
+  return !can_be_null_ || IsNull();
 }
 
 bool CompileType::IsNull() {
@@ -747,8 +816,7 @@ const AbstractType* CompileType::ToAbstractType() {
   if (type_ == NULL) {
     // Type propagation has not run. Return dynamic-type.
     if (cid_ == kIllegalCid) {
-      type_ = &Object::dynamic_type();
-      return type_;
+      return &Object::dynamic_type();
     }
 
     // VM-internal objects don't have a compile-type. Return dynamic-type
@@ -758,29 +826,16 @@ const AbstractType* CompileType::ToAbstractType() {
       return type_;
     }
 
-    Isolate* I = Isolate::Current();
-    const Class& type_class = Class::Handle(I->class_table()->At(cid_));
-    if (type_class.NumTypeArguments() > 0) {
-      type_ = &AbstractType::ZoneHandle(type_class.RareType());
-    } else {
-      type_ = &Type::ZoneHandle(Type::NewNonParameterizedType(type_class));
-    }
+    auto IG = IsolateGroup::Current();
+    const Class& type_class = Class::Handle(IG->class_table()->At(cid_));
+    type_ = &AbstractType::ZoneHandle(type_class.RareType());
   }
 
   return type_;
 }
 
-bool CompileType::CanComputeIsInstanceOf(const AbstractType& type,
-                                         bool is_nullable,
-                                         bool* is_instance) {
-  ASSERT(is_instance != NULL);
-  // We cannot give an answer if the given type is malformed or malbounded.
-  if (type.IsMalformedOrMalbounded()) {
-    return false;
-  }
-
-  if (type.IsDynamicType() || type.IsObjectType() || type.IsVoidType()) {
-    *is_instance = true;
+bool CompileType::IsSubtypeOf(const AbstractType& other) {
+  if (other.IsTopTypeForSubtyping()) {
     return true;
   }
 
@@ -788,39 +843,124 @@ bool CompileType::CanComputeIsInstanceOf(const AbstractType& type,
     return false;
   }
 
-  // Consider the compile type of the value.
-  const AbstractType& compile_type = *ToAbstractType();
-
-  if (compile_type.IsMalformedOrMalbounded()) {
-    return false;
-  }
-
-  // The null instance is an instance of Null, of Object, and of dynamic.
-  // Functions that do not explicitly return a value, implicitly return null,
-  // except generative constructors, which return the object being constructed.
-  // It is therefore acceptable for void functions to return null.
-  if (compile_type.IsNullType()) {
-    *is_instance = is_nullable || type.IsObjectType() || type.IsDynamicType() ||
-                   type.IsNullType() || type.IsVoidType();
-    return true;
-  }
-
-  // If the value can be null then we can't eliminate the
-  // check unless null is allowed.
-  if (is_nullable_ && !is_nullable) {
-    return false;
-  }
-
-  *is_instance = compile_type.IsMoreSpecificThan(type, NULL, NULL, Heap::kOld);
-  return *is_instance;
+  return ToAbstractType()->IsSubtypeOf(other, Heap::kOld);
 }
 
-bool CompileType::IsMoreSpecificThan(const AbstractType& other) {
+bool CompileType::IsAssignableTo(const AbstractType& other) {
+  if (other.IsTopTypeForSubtyping()) {
+    return true;
+  }
   if (IsNone()) {
     return false;
   }
+  if (is_nullable() && !Instance::NullIsAssignableTo(other)) {
+    return false;
+  }
+  return ToAbstractType()->IsSubtypeOf(other, Heap::kOld);
+}
 
-  return ToAbstractType()->IsMoreSpecificThan(other, NULL, NULL, Heap::kOld);
+bool CompileType::IsInstanceOf(const AbstractType& other) {
+  if (other.IsTopTypeForInstanceOf()) {
+    return true;
+  }
+  if (IsNone() || !other.IsInstantiated()) {
+    return false;
+  }
+  if (is_nullable() && !other.IsNullable()) {
+    return false;
+  }
+  return ToAbstractType()->IsSubtypeOf(other, Heap::kOld);
+}
+
+bool CompileType::Specialize(GrowableArray<intptr_t>* class_ids) {
+  ToNullableCid();
+  if (cid_ != kDynamicCid) {
+    class_ids->Add(cid_);
+    return true;
+  }
+  if (type_ != nullptr && type_->type_class_id() != kIllegalCid) {
+    const Class& type_class = Class::Handle(type_->type_class());
+    if (!CHA::ConcreteSubclasses(type_class, class_ids)) return false;
+    if (can_be_null_) {
+      class_ids->Add(kNullCid);
+    }
+    if (can_be_sentinel_) {
+      class_ids->Add(kSentinelCid);
+    }
+  }
+  return false;
+}
+
+// For the given type conservatively computes whether Smi can potentially
+// appear in a location of this type.
+//
+// If recurse is false this function will not call itself recursively
+// to prevent infinite recursion when traversing a cycle in type parameter
+// bounds.
+static bool CanPotentiallyBeSmi(const AbstractType& type, bool recurse) {
+  if (type.IsInstantiated()) {
+    return CompileType::Smi().IsAssignableTo(type);
+  } else if (type.IsTypeParameter()) {
+    // For type parameters look at their bounds (if recurse allows us).
+    const auto& param = TypeParameter::Cast(type);
+    return !recurse || CanPotentiallyBeSmi(AbstractType::Handle(param.bound()),
+                                           /*recurse=*/false);
+  } else if (type.HasTypeClass()) {
+    // If this is an unstantiated type then it can only potentially be a super
+    // type of a Smi if it is either FutureOr<...> or Comparable<...>.
+    // In which case we need to look at the type argument to determine whether
+    // this location can contain a smi.
+    //
+    // Note: we are making a simplification here. This approach will yield
+    // true for Comparable<T> where T extends int - while in reality Smi is
+    // *not* assignable to it (because int implements Comparable<num> and not
+    // Comparable<int>).
+    if (type.IsFutureOrType() ||
+        type.type_class() == CompilerState::Current().ComparableClass().ptr()) {
+      // Type may be a TypeRef.
+      const auto& args = TypeArguments::Handle(type.arguments());
+      const auto& arg0 = AbstractType::Handle(args.TypeAt(0));
+      return !recurse || CanPotentiallyBeSmi(arg0, /*recurse=*/true);
+    }
+    return false;
+  }
+  return false;
+}
+
+bool CompileType::CanBeSmi() {
+  // Fast path for known cid.
+  if (cid_ != kIllegalCid && cid_ != kDynamicCid) {
+    return cid_ == kSmiCid;
+  }
+  return CanPotentiallyBeSmi(*ToAbstractType(), /*recurse=*/true);
+}
+
+void CompileType::PrintTo(BaseTextBuffer* f) const {
+  const char* type_name = "?";
+  if (IsNone()) {
+    f->AddString("T{}");
+    return;
+  } else if ((cid_ != kIllegalCid) && (cid_ != kDynamicCid)) {
+    const Class& cls =
+        Class::Handle(IsolateGroup::Current()->class_table()->At(cid_));
+    type_name = String::Handle(cls.ScrubbedName()).ToCString();
+  } else if (type_ != NULL) {
+    type_name = type_->IsDynamicType()
+                    ? "*"
+                    : String::Handle(type_->ScrubbedName()).ToCString();
+  } else if (!is_nullable()) {
+    type_name = "!null";
+  }
+
+  f->Printf("T{%s%s%s}", type_name, can_be_null_ ? "?" : "",
+            can_be_sentinel_ ? "~" : "");
+}
+
+const char* CompileType::ToCString() const {
+  char buffer[1024];
+  BufferFormatter f(buffer, sizeof(buffer));
+  PrintTo(&f);
+  return Thread::Current()->zone()->MakeCopyOfString(buffer);
 }
 
 CompileType* Value::Type() {
@@ -830,13 +970,22 @@ CompileType* Value::Type() {
   return reaching_type_;
 }
 
-void Value::RefineReachingType(CompileType* type) {
-  ASSERT(type != NULL);
-  if (reaching_type_ == NULL) {
-    reaching_type_ = type;
-  } else {
-    reaching_type_ = CompileType::ComputeRefinedType(reaching_type_, type);
+void Value::SetReachingType(CompileType* type) {
+  // If [type] is owned but not by the definition which flows into this use
+  // then we need to disconect the type from original owner by cloning it.
+  // This is done to prevent situations when [type] is updated by its owner
+  // but [owner] is no longer connected to this use through def-use chain
+  // and as a result type propagator does not recompute type of the current
+  // instruction.
+  if (type != nullptr && type->owner() != nullptr &&
+      type->owner() != definition()) {
+    type = new CompileType(*type);
   }
+  reaching_type_ = type;
+}
+
+void Value::RefineReachingType(CompileType* type) {
+  SetReachingType(CompileType::ComputeRefinedType(reaching_type_, type));
 }
 
 CompileType PhiInstr::ComputeType() const {
@@ -873,18 +1022,19 @@ CompileType RedefinitionInstr::ComputeType() const {
     // If either type is non-nullable, the resulting type is non-nullable.
     const bool is_nullable =
         value()->Type()->is_nullable() && constrained_type_->is_nullable();
+    const bool can_be_sentinel = value()->Type()->can_be_sentinel() &&
+                                 constrained_type_->can_be_sentinel();
 
     // If either type has a concrete cid, stick with it.
     if (value()->Type()->ToNullableCid() != kDynamicCid) {
-      return CompileType::CreateNullable(is_nullable,
-                                         value()->Type()->ToNullableCid());
+      return CompileType(is_nullable, can_be_sentinel,
+                         value()->Type()->ToNullableCid(), nullptr);
     }
     if (constrained_type_->ToNullableCid() != kDynamicCid) {
-      return CompileType::CreateNullable(is_nullable,
-                                         constrained_type_->ToNullableCid());
+      return CompileType(is_nullable, can_be_sentinel,
+                         constrained_type_->ToNullableCid(), nullptr);
     }
-    if (value()->Type()->IsMoreSpecificThan(
-            *constrained_type_->ToAbstractType())) {
+    if (value()->Type()->IsSubtypeOf(*constrained_type_->ToAbstractType())) {
       return is_nullable ? *value()->Type()
                          : value()->Type()->CopyNonNullable();
     } else {
@@ -896,6 +1046,37 @@ CompileType RedefinitionInstr::ComputeType() const {
 }
 
 bool RedefinitionInstr::RecomputeType() {
+  return UpdateType(ComputeType());
+}
+
+CompileType CheckNullInstr::ComputeType() const {
+  CompileType* type = value()->Type();
+  if (type->is_nullable()) {
+    CompileType result = type->CopyNonNullable();
+    if (!result.IsNone()) {
+      return result;
+    }
+  }
+  return *type;
+}
+
+bool CheckNullInstr::RecomputeType() {
+  return UpdateType(ComputeType());
+}
+
+CompileType CheckArrayBoundInstr::ComputeType() const {
+  return *index()->Type();
+}
+
+bool CheckArrayBoundInstr::RecomputeType() {
+  return UpdateType(ComputeType());
+}
+
+CompileType GenericCheckBoundInstr::ComputeType() const {
+  return *index()->Type();
+}
+
+bool GenericCheckBoundInstr::RecomputeType() {
   return UpdateType(ComputeType());
 }
 
@@ -950,20 +1131,15 @@ CompileType ParameterInstr::ComputeType() const {
     return CompileType::Dynamic();
   }
 
-  if (function.HasBytecode() &&
-      graph_entry->parsed_function().node_sequence() == nullptr) {
-    // TODO(alexmarkov): Consider adding node_sequence() and scope.
-    return CompileType::Dynamic();
-  }
-
   // Parameter is the receiver.
   if ((index() == 0) &&
       (function.IsDynamicFunction() || function.IsGenerativeConstructor())) {
-    LocalScope* scope = graph_entry->parsed_function().node_sequence()->scope();
-    const AbstractType& type = scope->VariableAt(index())->type();
+    const AbstractType& type =
+        graph_entry->parsed_function().RawParameterVariable(0)->type();
     if (type.IsObjectType() || type.IsNullType()) {
       // Receiver can be null.
-      return CompileType::FromAbstractType(type, CompileType::kNullable);
+      return CompileType::FromAbstractType(type, CompileType::kCanBeNull,
+                                           CompileType::kCannotBeSentinel);
     }
 
     // Receiver can't be null but can be an instance of a subclass.
@@ -978,7 +1154,7 @@ CompileType ParameterInstr::ComputeType() const {
           cid = type_class.id();
         } else {
           if (FLAG_use_cha_deopt ||
-              thread->isolate()->all_classes_finalized()) {
+              thread->isolate_group()->all_classes_finalized()) {
             if (FLAG_trace_cha) {
               THR_Print(
                   "  **(CHA) Computing exact type of receiver, "
@@ -996,44 +1172,54 @@ CompileType ParameterInstr::ComputeType() const {
       }
     }
 
-    return CompileType(CompileType::kNonNullable, cid, &type);
+    return CompileType(CompileType::kCannotBeNull,
+                       CompileType::kCannotBeSentinel, cid, &type);
   }
 
   const bool is_unchecked_entry_param =
       graph_entry->unchecked_entry() == block_;
 
-  if (Isolate::Current()->can_use_strong_mode_types()) {
-    LocalScope* scope = graph_entry->parsed_function().node_sequence()->scope();
-    // Note: in catch-blocks we have ParameterInstr for each local variable
-    // not only for normal parameters.
-    if (index() < scope->num_variables()) {
-      const LocalVariable* param = scope->VariableAt(index());
-      CompileType* inferred_type = NULL;
-      if (!block_->IsCatchBlockEntry()) {
-        inferred_type = param->parameter_type();
-      }
-      // Best bet: use inferred type if it is a concrete class or int.
-      if ((inferred_type != nullptr) &&
-          ((inferred_type->ToNullableCid() != kDynamicCid) ||
-           inferred_type->IsNullableInt())) {
-        TraceStrongModeType(this, inferred_type);
-        return *inferred_type;
-      }
-      // If parameter type was checked by caller, then use Dart type annotation,
-      // plus non-nullability from inferred type if known.
-      if (param->was_type_checked_by_caller() ||
-          (is_unchecked_entry_param &&
-           !param->is_explicit_covariant_parameter())) {
-        const bool is_nullable =
-            (inferred_type == NULL) || inferred_type->is_nullable();
-        TraceStrongModeType(this, param->type());
-        return CompileType::FromAbstractType(param->type(), is_nullable);
-      }
-      // Last resort: use inferred non-nullability.
-      if (inferred_type != NULL) {
-        TraceStrongModeType(this, inferred_type);
-        return *inferred_type;
-      }
+  LocalScope* scope = graph_entry->parsed_function().scope();
+  // Note: in catch-blocks we have ParameterInstr for each local variable
+  // not only for normal parameters.
+  const LocalVariable* param = nullptr;
+  if (scope != nullptr && (index() < scope->num_variables())) {
+    param = scope->VariableAt(index());
+  } else if (index() < function.NumParameters()) {
+    param = graph_entry->parsed_function().RawParameterVariable(index());
+  }
+  if (param != nullptr) {
+    CompileType* inferred_type = NULL;
+    if (!block_->IsCatchBlockEntry()) {
+      inferred_type = param->parameter_type();
+    }
+    // Best bet: use inferred type if it is a concrete class or int.
+    if ((inferred_type != nullptr) &&
+        ((inferred_type->ToNullableCid() != kDynamicCid) ||
+         inferred_type->IsNullableInt())) {
+      TraceStrongModeType(this, inferred_type);
+      return *inferred_type;
+    }
+    // If parameter type was checked by caller, then use Dart type annotation,
+    // plus non-nullability from inferred type if known.
+    // Do not trust static parameter type of 'operator ==' as it is a
+    // non-nullable Object but VM handles comparison with null in
+    // the callee, so 'operator ==' can take null as an argument.
+    if ((function.name() != Symbols::EqualOperator().ptr()) &&
+        (param->was_type_checked_by_caller() ||
+         (is_unchecked_entry_param &&
+          !param->is_explicit_covariant_parameter()))) {
+      const bool is_nullable =
+          (inferred_type == NULL) || inferred_type->is_nullable();
+      TraceStrongModeType(this, param->type());
+      return CompileType::FromAbstractType(
+          param->type(), is_nullable,
+          block_->IsCatchBlockEntry() && param->is_late());
+    }
+    // Last resort: use inferred non-nullability.
+    if (inferred_type != NULL) {
+      TraceStrongModeType(this, inferred_type);
+      return *inferred_type;
     }
   }
 
@@ -1051,12 +1237,18 @@ CompileType ConstantInstr::ComputeType() const {
 
   intptr_t cid = value().GetClassId();
 
+  if (cid == kSmiCid && !compiler::target::IsSmi(Smi::Cast(value()).Value())) {
+    return CompileType(CompileType::kCannotBeNull,
+                       CompileType::kCannotBeSentinel, kMintCid,
+                       &AbstractType::ZoneHandle(Type::MintType()));
+  }
+
   if ((cid != kTypeArgumentsCid) && value().IsInstance()) {
     // Allocate in old-space since this may be invoked from the
     // background compiler.
-    return CompileType::Create(
-        cid,
-        AbstractType::ZoneHandle(Instance::Cast(value()).GetType(Heap::kOld)));
+    return CompileType(
+        cid == kNullCid, cid == kSentinelCid, cid,
+        &AbstractType::ZoneHandle(Instance::Cast(value()).GetType(Heap::kOld)));
   } else {
     // Type info for non-instance objects.
     return CompileType::FromCid(cid);
@@ -1066,11 +1258,16 @@ CompileType ConstantInstr::ComputeType() const {
 CompileType AssertAssignableInstr::ComputeType() const {
   CompileType* value_type = value()->Type();
 
-  if (value_type->IsMoreSpecificThan(dst_type())) {
-    return *value_type;
+  const AbstractType* abs_type = &AbstractType::dynamic_type();
+  if (dst_type()->BindsToConstant() &&
+      dst_type()->BoundConstant().IsAbstractType()) {
+    abs_type = &AbstractType::Cast(dst_type()->BoundConstant());
+    if (value_type->IsSubtypeOf(*abs_type)) {
+      return *value_type;
+    }
   }
-
-  return CompileType::Create(value_type->ToCid(), dst_type());
+  return CompileType::FromAbstractType(*abs_type, value_type->is_nullable(),
+                                       CompileType::kCannotBeSentinel);
 }
 
 bool AssertAssignableInstr::RecomputeType() {
@@ -1120,7 +1317,8 @@ CompileType SpecialParameterInstr::ComputeType() const {
     case kArgDescriptor:
       return CompileType::FromCid(kImmutableArrayCid);
     case kException:
-      return CompileType(CompileType::kNonNullable, kDynamicCid,
+      return CompileType(CompileType::kCannotBeNull,
+                         CompileType::kCannotBeSentinel, kDynamicCid,
                          &Object::dynamic_type());
     case kStackTrace:
       // We cannot use [kStackTraceCid] here because any kind of object can be
@@ -1132,21 +1330,21 @@ CompileType SpecialParameterInstr::ComputeType() const {
 }
 
 CompileType CloneContextInstr::ComputeType() const {
-  return CompileType(CompileType::kNonNullable, kContextCid,
-                     &Object::dynamic_type());
+  return CompileType(CompileType::kCannotBeNull, CompileType::kCannotBeSentinel,
+                     kContextCid, &Object::dynamic_type());
 }
 
 CompileType AllocateContextInstr::ComputeType() const {
-  return CompileType(CompileType::kNonNullable, kContextCid,
-                     &Object::dynamic_type());
+  return CompileType(CompileType::kCannotBeNull, CompileType::kCannotBeSentinel,
+                     kContextCid, &Object::dynamic_type());
 }
 
 CompileType AllocateUninitializedContextInstr::ComputeType() const {
-  return CompileType(CompileType::kNonNullable, kContextCid,
-                     &Object::dynamic_type());
+  return CompileType(CompileType::kCannotBeNull, CompileType::kCannotBeSentinel,
+                     kContextCid, &Object::dynamic_type());
 }
 
-CompileType InstanceCallInstr::ComputeType() const {
+CompileType InstanceCallBaseInstr::ComputeType() const {
   // TODO(alexmarkov): calculate type of InstanceCallInstr eagerly
   // (in optimized mode) and avoid keeping separate result_type.
   CompileType* inferred_type = result_type();
@@ -1156,33 +1354,46 @@ CompileType InstanceCallInstr::ComputeType() const {
     return *inferred_type;
   }
 
-  if (Isolate::Current()->can_use_strong_mode_types()) {
-    const Function& target = interface_target();
-    if (!target.IsNull()) {
-      const AbstractType& result_type =
-          AbstractType::ZoneHandle(target.result_type());
-      // Currently VM doesn't have enough information to instantiate generic
-      // result types of interface targets:
-      // 1. receiver type inferred by the front-end is not passed to VM.
-      // 2. VM collects type arguments through the chain of superclasses but
-      // not through implemented interfaces.
-      // So treat non-instantiated generic types as dynamic to avoid pretending
-      // the type is known.
-      // TODO(dartbug.com/30480): instantiate generic result_type
-      if (result_type.IsInstantiated()) {
-        TraceStrongModeType(this, result_type);
-        const bool is_nullable =
-            (inferred_type == NULL) || inferred_type->is_nullable();
-        return CompileType::FromAbstractType(result_type, is_nullable);
-      }
+  const Function& target = interface_target();
+  if (!target.IsNull()) {
+    const AbstractType& result_type =
+        AbstractType::ZoneHandle(target.result_type());
+    // Currently VM doesn't have enough information to instantiate generic
+    // result types of interface targets:
+    // 1. receiver type inferred by the front-end is not passed to VM.
+    // 2. VM collects type arguments through the chain of superclasses but
+    // not through implemented interfaces.
+    // So treat non-instantiated generic types as dynamic to avoid pretending
+    // the type is known.
+    // TODO(dartbug.com/30480): instantiate generic result_type
+    if (result_type.IsInstantiated()) {
+      TraceStrongModeType(this, result_type);
+      const bool is_nullable =
+          (inferred_type == NULL) || inferred_type->is_nullable();
+      return CompileType::FromAbstractType(result_type, is_nullable,
+                                           CompileType::kCannotBeSentinel);
     }
   }
 
   return CompileType::Dynamic();
 }
 
+CompileType DispatchTableCallInstr::ComputeType() const {
+  // TODO(dartbug.com/40188): Share implementation with InstanceCallBaseInstr.
+  const Function& target = interface_target();
+  ASSERT(!target.IsNull());
+  const auto& result_type = AbstractType::ZoneHandle(target.result_type());
+  if (result_type.IsInstantiated()) {
+    TraceStrongModeType(this, result_type);
+    return CompileType::FromAbstractType(result_type, CompileType::kCanBeNull,
+                                         CompileType::kCannotBeSentinel);
+  }
+
+  return CompileType::Dynamic();
+}
+
 CompileType PolymorphicInstanceCallInstr::ComputeType() const {
-  bool is_nullable = CompileType::kNullable;
+  bool is_nullable = CompileType::kCanBeNull;
   if (IsSureToCallSingleRecognizedTarget()) {
     const Function& target = *targets_.TargetAt(0)->target;
     if (target.has_pragma()) {
@@ -1190,64 +1401,89 @@ CompileType PolymorphicInstanceCallInstr::ComputeType() const {
       if (cid != kDynamicCid) {
         return CompileType::FromCid(cid);
       } else if (MethodRecognizer::HasNonNullableResultTypeFromPragma(target)) {
-        is_nullable = CompileType::kNonNullable;
+        is_nullable = CompileType::kCannotBeNull;
       }
     }
   }
 
-  if (Isolate::Current()->can_use_strong_mode_types()) {
-    CompileType* type = instance_call()->Type();
-    TraceStrongModeType(this, type);
-    return is_nullable ? *type : type->CopyNonNullable();
-  }
+  CompileType type = InstanceCallBaseInstr::ComputeType();
+  return is_nullable ? type : type.CopyNonNullable();
+}
 
-  return CompileType::Dynamic();
+static CompileType ComputeListFactoryType(CompileType* inferred_type,
+                                          Value* type_args_value) {
+  ASSERT(inferred_type != nullptr);
+  const intptr_t cid = inferred_type->ToNullableCid();
+  ASSERT(cid != kDynamicCid);
+  if ((cid == kGrowableObjectArrayCid || cid == kArrayCid ||
+       cid == kImmutableArrayCid) &&
+      type_args_value->BindsToConstant()) {
+    const auto& type_args =
+        type_args_value->BoundConstant().IsNull()
+            ? TypeArguments::null_type_arguments()
+            : TypeArguments::Cast(type_args_value->BoundConstant());
+    const Class& cls =
+        Class::Handle(IsolateGroup::Current()->class_table()->At(cid));
+    Type& type =
+        Type::ZoneHandle(Type::New(cls, type_args, Nullability::kNonNullable));
+    ASSERT(type.IsInstantiated());
+    type.SetIsFinalized();
+    return CompileType(CompileType::kCannotBeNull,
+                       CompileType::kCannotBeSentinel, cid, &type);
+  }
+  return *inferred_type;
 }
 
 CompileType StaticCallInstr::ComputeType() const {
   // TODO(alexmarkov): calculate type of StaticCallInstr eagerly
   // (in optimized mode) and avoid keeping separate result_type.
-  CompileType* inferred_type = result_type();
+  CompileType* const inferred_type = result_type();
+  if (is_known_list_constructor()) {
+    return ComputeListFactoryType(inferred_type, ArgumentValueAt(0));
+  }
   if ((inferred_type != NULL) &&
       (inferred_type->ToNullableCid() != kDynamicCid)) {
     return *inferred_type;
   }
 
-  bool is_nullable = CompileType::kNullable;
+  bool is_nullable = CompileType::kCanBeNull;
   if (function_.has_pragma()) {
     const intptr_t cid = MethodRecognizer::ResultCidFromPragma(function_);
     if (cid != kDynamicCid) {
       return CompileType::FromCid(cid);
     }
     if (MethodRecognizer::HasNonNullableResultTypeFromPragma(function_)) {
-      is_nullable = CompileType::kNonNullable;
+      is_nullable = CompileType::kCannotBeNull;
     }
   }
 
-  if (Isolate::Current()->can_use_strong_mode_types()) {
-    const AbstractType& result_type =
-        AbstractType::ZoneHandle(function().result_type());
-    // TODO(dartbug.com/30480): instantiate generic result_type if possible.
-    // Also, consider fixing AbstractType::IsMoreSpecificThan to handle
-    // non-instantiated types properly.
-    if (result_type.IsInstantiated()) {
-      TraceStrongModeType(this, result_type);
-      is_nullable = is_nullable &&
-                    (inferred_type == nullptr || inferred_type->is_nullable());
-      return CompileType::FromAbstractType(result_type, is_nullable);
-    }
+  const AbstractType& result_type =
+      AbstractType::ZoneHandle(function().result_type());
+  // TODO(dartbug.com/30480): instantiate generic result_type if possible.
+  // Also, consider fixing AbstractType::IsSubtypeOf to handle
+  // non-instantiated types properly.
+  if (result_type.IsInstantiated()) {
+    TraceStrongModeType(this, result_type);
+    is_nullable = is_nullable &&
+                  (inferred_type == nullptr || inferred_type->is_nullable());
+    return CompileType::FromAbstractType(result_type, is_nullable,
+                                         CompileType::kCannotBeSentinel);
   }
 
   return CompileType::Dynamic();
 }
 
 CompileType LoadLocalInstr::ComputeType() const {
-  if (Isolate::Current()->can_use_strong_mode_types()) {
-    const AbstractType& local_type = local().type();
-    TraceStrongModeType(this, local_type);
-    return CompileType::FromAbstractType(local_type);
+  if (local().needs_covariant_check_in_method()) {
+    // We may not yet have checked the actual type of the parameter value.
+    // Assuming that the value has the required type can lead to unsound
+    // optimizations. See dartbug.com/43464.
+    return CompileType::Dynamic();
   }
-  return CompileType::Dynamic();
+  const AbstractType& local_type = local().type();
+  TraceStrongModeType(this, local_type);
+  return CompileType::FromAbstractType(local_type, CompileType::kCanBeNull,
+                                       local().is_late());
 }
 
 CompileType DropTempsInstr::ComputeType() const {
@@ -1273,21 +1509,17 @@ CompileType StringInterpolateInstr::ComputeType() const {
 }
 
 CompileType LoadStaticFieldInstr::ComputeType() const {
-  bool is_nullable = CompileType::kNullable;
-  intptr_t cid = kDynamicCid;
-  AbstractType* abstract_type = NULL;
-  const Field& field = this->StaticField();
-  if (Isolate::Current()->can_use_strong_mode_types()) {
-    cid = kIllegalCid;  // Abstract type is known, calculate cid lazily.
-    abstract_type = &AbstractType::ZoneHandle(field.type());
-    TraceStrongModeType(this, *abstract_type);
-  }
+  const Field& field = this->field();
+  bool is_nullable = CompileType::kCanBeNull;
+  intptr_t cid = kIllegalCid;  // Abstract type is known, calculate cid lazily.
+  AbstractType* abstract_type = &AbstractType::ZoneHandle(field.type());
+  TraceStrongModeType(this, *abstract_type);
   ASSERT(field.is_static());
-  if (field.is_final() && !FLAG_fields_may_be_reset) {
-    const Instance& obj = Instance::Handle(field.StaticValue());
-    if ((obj.raw() != Object::sentinel().raw()) &&
-        (obj.raw() != Object::transition_sentinel().raw()) && !obj.IsNull()) {
-      is_nullable = CompileType::kNonNullable;
+  auto& obj = Object::Handle();
+  const bool is_initialized = IsFieldInitialized(&obj);
+  if (field.is_final() && is_initialized) {
+    if (!obj.IsNull()) {
+      is_nullable = CompileType::kCannotBeNull;
       cid = obj.GetClassId();
       abstract_type = nullptr;  // Cid is known, calculate abstract type lazily.
     }
@@ -1298,7 +1530,14 @@ CompileType LoadStaticFieldInstr::ComputeType() const {
     is_nullable = field.is_nullable();
     abstract_type = nullptr;  // Cid is known, calculate abstract type lazily.
   }
-  return CompileType(is_nullable, cid, abstract_type);
+  if (field.needs_load_guard()) {
+    // Should be kept in sync with Slot::Get.
+    DEBUG_ASSERT(IsolateGroup::Current()->HasAttemptedReload());
+    return CompileType::Dynamic();
+  }
+  const bool can_be_sentinel = !calls_initializer() && field.is_late() &&
+                               field.is_final() && !field.has_initializer();
+  return CompileType(is_nullable, can_be_sentinel, cid, abstract_type);
 }
 
 CompileType CreateArrayInstr::ComputeType() const {
@@ -1306,14 +1545,23 @@ CompileType CreateArrayInstr::ComputeType() const {
   return CompileType::FromCid(kArrayCid);
 }
 
+CompileType AllocateTypedDataInstr::ComputeType() const {
+  return CompileType::FromCid(class_id());
+}
+
 CompileType AllocateObjectInstr::ComputeType() const {
-  if (!closure_function().IsNull()) {
-    ASSERT(cls().id() == kClosureCid);
-    return CompileType(CompileType::kNonNullable, kClosureCid,
-                       &Type::ZoneHandle(closure_function().SignatureType()));
-  }
   // TODO(vegorov): Incorporate type arguments into the returned type.
   return CompileType::FromCid(cls().id());
+}
+
+CompileType AllocateClosureInstr::ComputeType() const {
+  const auto& func = known_function();
+  if (!func.IsNull()) {
+    const auto& sig = FunctionType::ZoneHandle(func.signature());
+    return CompileType(CompileType::kCannotBeNull,
+                       CompileType::kCannotBeSentinel, kClosureCid, &sig);
+  }
+  return CompileType::FromCid(kClosureCid);
 }
 
 CompileType LoadUntaggedInstr::ComputeType() const {
@@ -1325,26 +1573,12 @@ CompileType LoadClassIdInstr::ComputeType() const {
 }
 
 CompileType LoadFieldInstr::ComputeType() const {
-  const AbstractType& field_type = slot().static_type();
-  CompileType compile_type_cid = slot().ComputeCompileType();
-  if (field_type.raw() == AbstractType::null()) {
-    return compile_type_cid;
+  CompileType type = slot().ComputeCompileType();
+  if (calls_initializer()) {
+    type = type.CopyNonSentinel();
   }
-
-  const Isolate* isolate = Isolate::Current();
-  const AbstractType* abstract_type = NULL;
-  if (isolate->can_use_strong_mode_types() ||
-      (field_type.IsFunctionType() || field_type.HasTypeClass())) {
-    abstract_type = &field_type;
-    TraceStrongModeType(this, *abstract_type);
-  }
-
-  if (compile_type_cid.ToNullableCid() != kDynamicCid) {
-    abstract_type = nullptr;
-  }
-
-  return CompileType(compile_type_cid.is_nullable(),
-                     compile_type_cid.ToNullableCid(), abstract_type);
+  TraceStrongModeType(this, &type);
+  return type;
 }
 
 CompileType LoadCodeUnitsInstr::ComputeType() const {
@@ -1359,6 +1593,22 @@ CompileType LoadCodeUnitsInstr::ComputeType() const {
       UNIMPLEMENTED();
       return CompileType::Dynamic();
   }
+}
+
+CompileType BinaryUint32OpInstr::ComputeType() const {
+  return CompileType::Int32();
+}
+
+CompileType ShiftUint32OpInstr::ComputeType() const {
+  return CompileType::Int32();
+}
+
+CompileType SpeculativeShiftUint32OpInstr::ComputeType() const {
+  return CompileType::Int32();
+}
+
+CompileType UnaryUint32OpInstr::ComputeType() const {
+  return CompileType::Int32();
 }
 
 CompileType BinaryInt32OpInstr::ComputeType() const {
@@ -1402,32 +1652,6 @@ CompileType SpeculativeShiftInt64OpInstr::ComputeType() const {
 
 CompileType UnaryInt64OpInstr::ComputeType() const {
   return CompileType::Int();
-}
-
-CompileType CheckedSmiOpInstr::ComputeType() const {
-  if (Isolate::Current()->can_use_strong_mode_types()) {
-    if (left()->Type()->IsNullableInt() && right()->Type()->IsNullableInt()) {
-      const AbstractType& abstract_type =
-          AbstractType::ZoneHandle(Type::IntType());
-      TraceStrongModeType(this, abstract_type);
-      return CompileType::FromAbstractType(abstract_type,
-                                           CompileType::kNonNullable);
-    } else {
-      CompileType* type = call()->Type();
-      TraceStrongModeType(this, type);
-      return *type;
-    }
-  }
-  return CompileType::Dynamic();
-}
-
-CompileType CheckedSmiComparisonInstr::ComputeType() const {
-  if (Isolate::Current()->can_use_strong_mode_types()) {
-    CompileType* type = call()->Type();
-    TraceStrongModeType(this, type);
-    return *type;
-  }
-  return CompileType::Dynamic();
 }
 
 CompileType BoxIntegerInstr::ComputeType() const {
@@ -1474,12 +1698,13 @@ CompileType MathMinMaxInstr::ComputeType() const {
   return CompileType::FromCid(result_cid_);
 }
 
-CompileType CaseInsensitiveCompareUC16Instr::ComputeType() const {
+CompileType CaseInsensitiveCompareInstr::ComputeType() const {
   return CompileType::FromCid(kBoolCid);
 }
 
 CompileType UnboxInstr::ComputeType() const {
   switch (representation()) {
+    case kUnboxedFloat:
     case kUnboxedDouble:
       return CompileType::FromCid(kDoubleCid);
 
@@ -1503,6 +1728,7 @@ CompileType UnboxInstr::ComputeType() const {
 
 CompileType BoxInstr::ComputeType() const {
   switch (from_representation()) {
+    case kUnboxedFloat:
     case kUnboxedDouble:
       return CompileType::FromCid(kDoubleCid);
 
@@ -1558,6 +1784,136 @@ CompileType ExtractNthOutputInstr::ComputeType() const {
   return CompileType::FromCid(definition_cid_);
 }
 
-}  // namespace dart
+static AbstractTypePtr ExtractElementTypeFromArrayType(
+    const AbstractType& array_type) {
+  if (array_type.IsTypeParameter()) {
+    return ExtractElementTypeFromArrayType(
+        AbstractType::Handle(TypeParameter::Cast(array_type).bound()));
+  }
+  if (!array_type.IsType()) {
+    return Object::dynamic_type().ptr();
+  }
+  const intptr_t cid = array_type.type_class_id();
+  if (cid == kGrowableObjectArrayCid || cid == kArrayCid ||
+      cid == kImmutableArrayCid ||
+      array_type.type_class() ==
+          IsolateGroup::Current()->object_store()->list_class()) {
+    const auto& type_args = TypeArguments::Handle(array_type.arguments());
+    return type_args.TypeAtNullSafe(Array::kElementTypeTypeArgPos);
+  }
+  return Object::dynamic_type().ptr();
+}
 
-#endif  // !defined(DART_PRECOMPILED_RUNTIME)
+static AbstractTypePtr GetElementTypeFromArray(Value* array) {
+  // Sometimes type of definition may contain a static type
+  // which is useful to extract element type, but reaching type
+  // only has a cid. So try out type of definition, if any.
+  if (array->definition()->HasType()) {
+    auto& elem_type = AbstractType::Handle(ExtractElementTypeFromArrayType(
+        *(array->definition()->Type()->ToAbstractType())));
+    if (!elem_type.IsDynamicType()) {
+      return elem_type.ptr();
+    }
+  }
+  return ExtractElementTypeFromArrayType(*(array->Type()->ToAbstractType()));
+}
+
+static CompileType ComputeArrayElementType(Value* array) {
+  // 1. Try to extract element type from array value.
+  auto& elem_type = AbstractType::Handle(GetElementTypeFromArray(array));
+  if (!elem_type.IsDynamicType()) {
+    return CompileType::FromAbstractType(elem_type, CompileType::kCanBeNull,
+                                         CompileType::kCannotBeSentinel);
+  }
+
+  // 2. Array value may be loaded from GrowableObjectArray.data.
+  // Unwrap and try again.
+  if (auto* load_field = array->definition()->AsLoadField()) {
+    if (load_field->slot().IsIdentical(Slot::GrowableObjectArray_data())) {
+      array = load_field->instance();
+      elem_type = GetElementTypeFromArray(array);
+      if (!elem_type.IsDynamicType()) {
+        return CompileType::FromAbstractType(elem_type, CompileType::kCanBeNull,
+                                             CompileType::kCannotBeSentinel);
+      }
+    }
+  }
+
+  // 3. If array was loaded from a Dart field, use field's static type.
+  // Unlike propagated type (which could be cid), static type may contain
+  // type arguments which can be used to figure out element type.
+  if (auto* load_field = array->definition()->AsLoadField()) {
+    if (load_field->slot().IsDartField()) {
+      elem_type =
+          ExtractElementTypeFromArrayType(load_field->slot().static_type());
+    }
+  }
+  return CompileType::FromAbstractType(elem_type, CompileType::kCanBeNull,
+                                       CompileType::kCannotBeSentinel);
+}
+
+CompileType LoadIndexedInstr::ComputeType() const {
+  switch (class_id_) {
+    case kArrayCid:
+    case kImmutableArrayCid:
+      if (result_type_ != nullptr) {
+        // The original call knew something.
+        return *result_type_;
+      }
+      return ComputeArrayElementType(array());
+
+    case kTypeArgumentsCid:
+      return CompileType::FromAbstractType(Object::dynamic_type(),
+                                           CompileType::kCannotBeNull,
+                                           CompileType::kCannotBeSentinel);
+
+    case kTypedDataFloat32ArrayCid:
+    case kTypedDataFloat64ArrayCid:
+      return CompileType::FromCid(kDoubleCid);
+
+    case kTypedDataFloat32x4ArrayCid:
+      return CompileType::FromCid(kFloat32x4Cid);
+
+    case kTypedDataInt32x4ArrayCid:
+      return CompileType::FromCid(kInt32x4Cid);
+
+    case kTypedDataFloat64x2ArrayCid:
+      return CompileType::FromCid(kFloat64x2Cid);
+
+    case kTypedDataInt8ArrayCid:
+    case kTypedDataUint8ArrayCid:
+    case kTypedDataUint8ClampedArrayCid:
+    case kExternalTypedDataUint8ArrayCid:
+    case kExternalTypedDataUint8ClampedArrayCid:
+    case kTypedDataInt16ArrayCid:
+    case kTypedDataUint16ArrayCid:
+    case kOneByteStringCid:
+    case kTwoByteStringCid:
+    case kExternalOneByteStringCid:
+    case kExternalTwoByteStringCid:
+      return CompileType::FromCid(kSmiCid);
+
+    case kTypedDataInt32ArrayCid:
+    case kTypedDataUint32ArrayCid:
+      return CompileType::Int32();
+
+    case kTypedDataInt64ArrayCid:
+    case kTypedDataUint64ArrayCid:
+      return CompileType::Int();
+
+    default:
+      UNIMPLEMENTED();
+      return CompileType::Dynamic();
+  }
+}
+
+bool LoadIndexedInstr::RecomputeType() {
+  if ((class_id_ == kArrayCid) || (class_id_ == kImmutableArrayCid)) {
+    // Array element type computation depends on computed
+    // types of other instructions and may change over time.
+    return UpdateType(ComputeType());
+  }
+  return false;
+}
+
+}  // namespace dart

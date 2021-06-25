@@ -2,33 +2,33 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library interactive_test;
 
 import 'dart:async';
 import 'dart:html';
-import 'package:unittest/unittest.dart';
-import 'package:unittest/html_individual_config.dart';
+import 'package:async_helper/async_helper.dart';
+import 'package:expect/expect.dart';
 import 'utils.dart';
 
+Future testGetCurrentPosition() async {
+  var position = await window.navigator.geolocation.getCurrentPosition();
+  Expect.isNotNull(position.coords.latitude);
+  Expect.isNotNull(position.coords.longitude);
+  Expect.isNotNull(position.coords.accuracy);
+}
+
+Future testWatchPosition() async {
+  var position = await window.navigator.geolocation.watchPosition().first;
+  Expect.isNotNull(position.coords.latitude);
+  Expect.isNotNull(position.coords.longitude);
+  Expect.isNotNull(position.coords.accuracy);
+}
+
 main() {
-  useHtmlIndividualConfiguration();
-
-  test('getCurrentPosition', () {
-    return window.navigator.geolocation.getCurrentPosition().then((position) {
-      expect(position.coords.latitude, isNotNull);
-      expect(position.coords.longitude, isNotNull);
-      expect(position.coords.accuracy, isNotNull);
-    });
-  });
-
-  test('watchPosition', () {
-    return window.navigator.geolocation
-        .watchPosition()
-        .first
-        .then((position) {
-      expect(position.coords.latitude, isNotNull);
-      expect(position.coords.longitude, isNotNull);
-      expect(position.coords.accuracy, isNotNull);
-    });
+  asyncTest(() async {
+    await testGetCurrentPosition();
+    await testWatchPosition();
   });
 }

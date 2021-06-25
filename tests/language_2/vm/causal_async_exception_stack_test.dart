@@ -1,8 +1,12 @@
 // Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
+//
+// VMOptions=--lazy-async-stacks
 
-import 'package:expect/async_minitest.dart';
+// @dart = 2.9
+
+import 'package:async_helper/async_minitest.dart';
 
 import 'causal_async_exception_stack_helper.dart' as h;
 
@@ -34,13 +38,11 @@ main() async {
     } catch (e, st) {
       expect(
           h.stringContainsInOrder(st.toString(), [
-            'thrower', '.dart:10', //
-            '<asynchronous suspension>', //
-            'generator', '.dart:19', //
-            '<asynchronous suspension>', //
-            'foo', '.dart:23', //
-            '<asynchronous suspension>', //
-            'main', //
+            'thrower', '.dart:14', // no auto-format.
+            'generator', '.dart:23', // no auto-format.
+            '<asynchronous suspension>', // no auto-format.
+            'foo', '.dart', // no auto-format.
+            'main',
           ]),
           isTrue);
     }
@@ -60,11 +62,8 @@ main() async {
       expect(
           h.stringContainsInOrder(st.toString(), [
             'thrower',
-            '<asynchronous suspension>',
             'main.<anonymous closure>.inner.deep',
-            '<asynchronous suspension>',
             'main.<anonymous closure>.inner',
-            '<asynchronous suspension>',
             'main',
             '<asynchronous suspension>',
           ]),
@@ -77,9 +76,8 @@ main() async {
     } catch (e, st) {
       expect(
           h.stringContainsInOrder(st.toString(), [
-            'thrower', '.dart:10', //
-            '<asynchronous suspension>', //
-            'main.<anonymous closure>', '.dart:76', //
+            'thrower', '.dart:14', // no auto-format.
+            'main.<anonymous closure>', '.dart:75', // no auto-format.
           ]),
           isTrue);
     }

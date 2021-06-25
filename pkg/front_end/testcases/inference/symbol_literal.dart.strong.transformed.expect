@@ -1,8 +1,0 @@
-library test;
-import self as self;
-import "dart:core" as core;
-
-static method test() → void {
-  core::Symbol x = #foo;
-}
-static method main() → dynamic {}

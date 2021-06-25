@@ -1,7 +1,7 @@
 // Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-
+// @dart=2.9
 /*@testedFeatures=checks*/
 library test;
 
@@ -10,8 +10,8 @@ typedef void F<T>(T x);
 typedef U G<T, U>(T x);
 
 class C<T> {
-  void f1(T /*@covariance=genericImpl*/ x) {}
-  T f2(List<T> /*@covariance=genericImpl*/ x) => x.first;
+  void f1(T x) {}
+  T f2(List<T> x) => x.first;
 }
 
 F<num> g1(C<num> c) {

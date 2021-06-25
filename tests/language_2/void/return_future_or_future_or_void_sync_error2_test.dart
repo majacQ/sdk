@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import 'dart:async';
 
 void main() {
@@ -10,5 +12,5 @@ void main() {
 
 // Testing that a block bodied function may have an empty return
 FutureOr<FutureOr<void>> test() {
-  return; //# none: static type warning
+  return; //# none: compile-time error
 }

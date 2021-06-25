@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library test.invoke_call_through_getter;
 
 import 'dart:mirrors';
@@ -104,7 +106,7 @@ testLibraryBase() {
 }
 
 testLibraryReflective() {
-  LibraryMirror lm = reflectClass(D).owner;
+  LibraryMirror lm = reflectClass(D).owner as LibraryMirror;
 
   Expect.equals('1 5 6', lm.invoke(#fakeFunctionCall, [5, 6]).reflectee);
   Expect.equals('7, 8', lm.invoke(#fakeFunctionNSM, [7, 8]).reflectee);

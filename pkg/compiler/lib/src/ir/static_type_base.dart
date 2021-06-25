@@ -3,10 +3,49 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:kernel/ast.dart' as ir;
-import 'package:kernel/class_hierarchy.dart' as ir;
-import 'package:kernel/core_types.dart' as ir;
-import 'package:kernel/type_algebra.dart' as ir;
 import 'package:kernel/type_environment.dart' as ir;
+
+/// Special bottom type used to signal that an expression or statement does
+/// not complete normally. This is the case for instance of throw expressions
+/// and return statements.
+class DoesNotCompleteType extends ir.NeverType {
+  const DoesNotCompleteType() : super.internal(ir.Nullability.nonNullable);
+
+  @override
+  String toString() => 'DoesNotCompleteType()';
+}
+
+/// Special interface type used to signal that the static type of an expression
+/// has precision of a this-expression.
+class ThisInterfaceType extends ir.InterfaceType {
+  ThisInterfaceType(ir.Class classNode, ir.Nullability nullability,
+      [List<ir.DartType> typeArguments])
+      : super(classNode, nullability, typeArguments);
+
+  factory ThisInterfaceType.from(ir.InterfaceType type) => type != null
+      ? new ThisInterfaceType(
+          type.classNode, type.nullability, type.typeArguments)
+      : null;
+
+  @override
+  String toString() => 'this:${super.toString()}';
+}
+
+/// Special interface type used to signal that the static type of an expression
+/// is exact, i.e. the runtime type is not a subtype or subclass of the type.
+class ExactInterfaceType extends ir.InterfaceType {
+  ExactInterfaceType(ir.Class classNode, ir.Nullability nullability,
+      [List<ir.DartType> typeArguments])
+      : super(classNode, nullability, typeArguments);
+
+  factory ExactInterfaceType.from(ir.InterfaceType type) => type != null
+      ? new ExactInterfaceType(
+          type.classNode, type.nullability, type.typeArguments)
+      : null;
+
+  @override
+  String toString() => 'exact:${super.toString()}';
+}
 
 /// Base class for computing static types.
 ///
@@ -18,7 +57,8 @@ import 'package:kernel/type_environment.dart' as ir;
 /// expression kind. For instance method invocations whose static type depend
 /// on the static types of the receiver and type arguments and the signature
 /// of the targeted procedure.
-class StaticTypeBase extends ir.Visitor<ir.DartType> {
+abstract class StaticTypeBase extends ir.Visitor<ir.DartType>
+    with ir.VisitorNullMixin<ir.DartType> {
   final ir.TypeEnvironment _typeEnvironment;
 
   StaticTypeBase(this._typeEnvironment);
@@ -26,6 +66,10 @@ class StaticTypeBase extends ir.Visitor<ir.DartType> {
   fail(String message) => message;
 
   ir.TypeEnvironment get typeEnvironment => _typeEnvironment;
+
+  ir.StaticTypeContext get staticTypeContext;
+
+  ThisInterfaceType get thisType;
 
   @override
   ir.DartType defaultNode(ir.Node node) {
@@ -42,6 +86,7 @@ class StaticTypeBase extends ir.Visitor<ir.DartType> {
     }
   }
 
+  @override
   ir.DartType defaultExpression(ir.Expression node) {
     throw fail('Unhandled node $node (${node.runtimeType})');
   }
@@ -53,52 +98,58 @@ class StaticTypeBase extends ir.Visitor<ir.DartType> {
 
   @override
   ir.DartType visitAwaitExpression(ir.AwaitExpression node) {
-    return typeEnvironment.unfutureType(visitNode(node.operand));
+    return typeEnvironment.flatten(visitNode(node.operand));
   }
 
   @override
-  ir.DartType visitBoolLiteral(ir.BoolLiteral node) => typeEnvironment.boolType;
+  ir.DartType visitBoolLiteral(ir.BoolLiteral node) =>
+      typeEnvironment.coreTypes.boolNonNullableRawType;
 
   @override
   ir.DartType visitCheckLibraryIsLoaded(ir.CheckLibraryIsLoaded node) =>
-      typeEnvironment.objectType;
+      typeEnvironment.coreTypes.objectNonNullableRawType;
 
   @override
   ir.DartType visitStringLiteral(ir.StringLiteral node) =>
-      typeEnvironment.stringType;
+      typeEnvironment.coreTypes.stringNonNullableRawType;
 
   @override
   ir.DartType visitStringConcatenation(ir.StringConcatenation node) {
-    return typeEnvironment.stringType;
+    return typeEnvironment.coreTypes.stringNonNullableRawType;
   }
 
   @override
-  ir.DartType visitNullLiteral(ir.NullLiteral node) => const ir.BottomType();
+  ir.DartType visitNullLiteral(ir.NullLiteral node) => const ir.NullType();
 
   @override
-  ir.DartType visitIntLiteral(ir.IntLiteral node) => typeEnvironment.intType;
+  ir.DartType visitIntLiteral(ir.IntLiteral node) =>
+      typeEnvironment.coreTypes.intNonNullableRawType;
 
   @override
   ir.DartType visitDoubleLiteral(ir.DoubleLiteral node) =>
-      typeEnvironment.doubleType;
+      typeEnvironment.coreTypes.doubleNonNullableRawType;
 
   @override
   ir.DartType visitSymbolLiteral(ir.SymbolLiteral node) =>
-      typeEnvironment.symbolType;
+      typeEnvironment.coreTypes.symbolNonNullableRawType;
 
   @override
   ir.DartType visitListLiteral(ir.ListLiteral node) {
-    return typeEnvironment.literalListType(node.typeArgument);
+    return typeEnvironment.listType(
+        node.typeArgument, ir.Nullability.nonNullable);
+  }
+
+  @override
+  ir.DartType visitSetLiteral(ir.SetLiteral node) {
+    return typeEnvironment.setType(
+        node.typeArgument, ir.Nullability.nonNullable);
   }
 
   @override
   ir.DartType visitMapLiteral(ir.MapLiteral node) {
-    return typeEnvironment.literalMapType(node.keyType, node.valueType);
+    return typeEnvironment.mapType(
+        node.keyType, node.valueType, ir.Nullability.nonNullable);
   }
-
-  @override
-  ir.DartType visitVariableGet(ir.VariableGet node) =>
-      node.promotedType ?? node.variable.type;
 
   @override
   ir.DartType visitVariableSet(ir.VariableSet node) {
@@ -111,13 +162,7 @@ class StaticTypeBase extends ir.Visitor<ir.DartType> {
   }
 
   @override
-  ir.DartType visitDirectPropertySet(ir.DirectPropertySet node) {
-    return visitNode(node.value);
-  }
-
-  @override
-  ir.DartType visitThisExpression(ir.ThisExpression node) =>
-      typeEnvironment.thisType;
+  ThisInterfaceType visitThisExpression(ir.ThisExpression node) => thisType;
 
   @override
   ir.DartType visitStaticGet(ir.StaticGet node) => node.target.getterType;
@@ -133,18 +178,18 @@ class StaticTypeBase extends ir.Visitor<ir.DartType> {
   }
 
   @override
-  ir.DartType visitThrow(ir.Throw node) => const ir.BottomType();
+  ir.DartType visitThrow(ir.Throw node) => const DoesNotCompleteType();
 
   @override
-  ir.DartType visitRethrow(ir.Rethrow node) => const ir.BottomType();
+  ir.DartType visitRethrow(ir.Rethrow node) => const DoesNotCompleteType();
 
   @override
   ir.DartType visitLogicalExpression(ir.LogicalExpression node) =>
-      typeEnvironment.boolType;
+      typeEnvironment.coreTypes.boolNonNullableRawType;
 
   @override
   ir.DartType visitNot(ir.Not node) {
-    return typeEnvironment.boolType;
+    return typeEnvironment.coreTypes.boolNonNullableRawType;
   }
 
   @override
@@ -154,15 +199,16 @@ class StaticTypeBase extends ir.Visitor<ir.DartType> {
 
   @override
   ir.DartType visitIsExpression(ir.IsExpression node) {
-    return typeEnvironment.boolType;
+    return typeEnvironment.coreTypes.boolNonNullableRawType;
   }
 
   @override
-  ir.DartType visitTypeLiteral(ir.TypeLiteral node) => typeEnvironment.typeType;
+  ir.DartType visitTypeLiteral(ir.TypeLiteral node) =>
+      typeEnvironment.coreTypes.typeNonNullableRawType;
 
   @override
   ir.DartType visitFunctionExpression(ir.FunctionExpression node) {
-    return node.function.functionType;
+    return node.function.computeFunctionType(staticTypeContext.nonNullable);
   }
 
   @override
@@ -171,11 +217,79 @@ class StaticTypeBase extends ir.Visitor<ir.DartType> {
   }
 
   @override
+  ir.DartType visitBlockExpression(ir.BlockExpression node) {
+    return visitNode(node.value);
+  }
+
+  @override
   ir.DartType visitInvalidExpression(ir.InvalidExpression node) =>
-      const ir.BottomType();
+      const DoesNotCompleteType();
 
   @override
   ir.DartType visitLoadLibrary(ir.LoadLibrary node) {
-    return typeEnvironment.futureType(const ir.DynamicType());
+    return typeEnvironment.futureType(
+        const ir.DynamicType(), ir.Nullability.nonNullable);
   }
+
+  @override
+  ir.DartType visitConstantExpression(ir.ConstantExpression node) {
+    // TODO(johnniwinther): Include interface exactness where applicable.
+    return node.getStaticType(staticTypeContext);
+  }
+
+  @override
+  ir.DartType visitEqualsNull(ir.EqualsNull node) =>
+      node.getStaticType(staticTypeContext);
+
+  @override
+  ir.DartType visitEqualsCall(ir.EqualsCall node) =>
+      node.getStaticType(staticTypeContext);
+
+  @override
+  ir.DartType visitDynamicInvocation(ir.DynamicInvocation node) =>
+      node.getStaticType(staticTypeContext);
+
+  @override
+  ir.DartType visitFunctionInvocation(ir.FunctionInvocation node) =>
+      node.getStaticType(staticTypeContext);
+
+  @override
+  ir.DartType visitLocalFunctionInvocation(ir.LocalFunctionInvocation node) =>
+      node.getStaticType(staticTypeContext);
+
+  @override
+  ir.DartType visitInstanceInvocation(ir.InstanceInvocation node) =>
+      node.getStaticType(staticTypeContext);
+
+  @override
+  ir.DartType visitInstanceGetterInvocation(ir.InstanceGetterInvocation node) =>
+      node.getStaticType(staticTypeContext);
+
+  @override
+  ir.DartType visitFunctionTearOff(ir.FunctionTearOff node) =>
+      node.getStaticType(staticTypeContext);
+
+  @override
+  ir.DartType visitInstanceTearOff(ir.InstanceTearOff node) =>
+      node.getStaticType(staticTypeContext);
+
+  @override
+  ir.DartType visitDynamicGet(ir.DynamicGet node) =>
+      node.getStaticType(staticTypeContext);
+
+  @override
+  ir.DartType visitInstanceGet(ir.InstanceGet node) =>
+      node.getStaticType(staticTypeContext);
+
+  @override
+  ir.DartType visitDynamicSet(ir.DynamicSet node) =>
+      node.getStaticType(staticTypeContext);
+
+  @override
+  ir.DartType visitInstanceSet(ir.InstanceSet node) =>
+      node.getStaticType(staticTypeContext);
+
+  @override
+  ir.DartType visitStaticTearOff(ir.StaticTearOff node) =>
+      node.getStaticType(staticTypeContext);
 }

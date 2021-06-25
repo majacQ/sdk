@@ -36,7 +36,7 @@ config("default_include_dirs") {
 }
 
 if (!is_win) {
-  using_sanitizer = is_asan || is_lsan || is_tsan || is_msan
+  using_sanitizer = is_asan || is_lsan || is_msan || is_tsan || is_ubsan
 }
 
 # compiler ---------------------------------------------------------------------
@@ -91,6 +91,11 @@ config("compiler") {
       ldflags += [ "-Wl,--fatal-warnings" ]
     }
 
+    # Enable mitigations for Cortex-A53 Erratum #843419 bug.
+    if (current_cpu == "arm64" && is_clang && !is_mac) {
+      ldflags += [ "-Wl,--fix-cortex-a53-843419" ]
+    }
+
     # Common options for AddressSanitizer, LeakSanitizer, ThreadSanitizer and
     # MemorySanitizer
     if (using_sanitizer) {
@@ -104,13 +109,17 @@ config("compiler") {
       cflags += [ "-fsanitize=leak" ]
       ldflags += [ "-fsanitize=leak" ]
     }
+    if (is_msan) {
+      cflags += [ "-fsanitize=memory" ]
+      ldflags += [ "-fsanitize=memory" ]
+    }
     if (is_tsan) {
       cflags += [ "-fsanitize=thread" ]
       ldflags += [ "-fsanitize=thread" ]
     }
-    if (is_msan) {
-      cflags += [ "-fsanitize=memory" ]
-      ldflags += [ "-fsanitize=memory" ]
+    if (is_ubsan) {
+      cflags += [ "-fsanitize=undefined" ]
+      ldflags += [ "-fsanitize=undefined" ]
     }
   }
 
@@ -233,8 +242,8 @@ config("compiler") {
   # 2. On Android.
   # 3. When using the sanitizers.
   # Otherwise there is a performance hit, in particular on ia32.
-  if (is_android || is_asan || is_lsan || is_msan || is_tsan ||
-      (is_linux && current_cpu != "x86")) {
+  if (is_android || is_asan || is_lsan || is_msan || is_tsan || is_ubsan ||
+      (is_linux && current_cpu != "x86") || is_fuchsia) {
     cflags += [ "-fPIC" ]
     ldflags += [ "-fPIC" ]
   }
@@ -242,8 +251,6 @@ config("compiler") {
   # Linux-specific compiler flags setup.
   # ------------------------------------
   if (is_linux) {
-    cflags += [ "-pthread" ]
-    ldflags += [ "-pthread" ]
     if (is_clang) {
       if (current_cpu == "arm") {
         cflags += [ "--target=armv7-linux-gnueabihf" ]
@@ -264,12 +271,12 @@ config("compiler") {
     cflags += [ "-fcolor-diagnostics" ]
   }
 
-  # C++11 compiler flags setup.
+  # C++ standard compiler flags setup.
   # ---------------------------
   if (is_win) {
-    cc_std = [ "/std:c++11" ]
+    cc_std = [ "/std:c++17" ]
   } else {
-    cc_std = [ "-std=c++11" ]
+    cc_std = [ "-std=c++17" ]
   }
   cflags_cc += cc_std
   cflags_objcc += cc_std
@@ -286,6 +293,10 @@ config("compiler") {
     if (!is_clang) {
       # Clang doesn't support these flags.
       cflags += [ "-finline-limit=64" ]
+    }
+    if (current_cpu == "arm64") {
+      # TODO (https://github.com/flutter/flutter/issues/75348).
+      cflags += [ "-mno-outline-atomics" ]
     }
     if (is_asan) {
       # Android build relies on -Wl,--gc-sections removing unreachable code.
@@ -367,7 +378,7 @@ config("compiler") {
 #   configs -= [ "//build/config/compiler:clang_stackrealign" ]
 # See https://crbug.com/556393 for details of where it must be avoided.
 config("clang_stackrealign") {
-  if (is_clang && current_cpu == "x86" && !is_nacl) {
+  if (is_clang && current_cpu == "x86" && !is_nacl && !is_win) {
     cflags = [
       # Align the stack on 16-byte boundaries, http://crbug.com/418554.
       "-mstack-alignment=16",
@@ -427,8 +438,10 @@ config("runtime_library") {
     ]
   }
 
-  # Android standard library setup.
-  if (is_android) {
+  if (is_linux) {
+    libs += [ "dl" ]
+  } else if (is_android) {
+    # Android standard library setup.
     if (is_clang) {
       # Work around incompatibilities between bionic and clang headers.
       defines += [ "__compiler_offsetof=__builtin_offsetof" ]
@@ -502,19 +515,31 @@ if (is_win) {
     default_warning_flags += [ "/WX" ]  # Treat warnings as errors.
   }
 
-  default_warning_flags += [
-    # Permanent.
-    "/wd4091",  # typedef warning from dbghelp.h
-    "/wd4722",  # destructor never returns
+  if (is_clang) {
+    default_warning_flags += [
+      "-Wno-deprecated-declarations",  # crashpad
+      "-Wno-ignored-pragma-optimize",  # icu, double-conversion
+      "-Wno-macro-redefined",
+      "-Wno-microsoft-cast",
+      "-Wno-microsoft-unqualified-friend",
+      "-Wno-unknown-argument",  # icu
+      "-Wno-unused-value",  # crashpad
+    ]
+  } else {
+    default_warning_flags += [
+      # Permanent.
+      "/wd4091",  # typedef warning from dbghelp.h
+      "/wd4722",  # destructor never returns
 
-    # Investigate.
-    "/wd4312",  # int to pointer of greater size conversion.
-    "/wd4838",  # Narrowing conversion required.
-    "/wd4172",  # Returning address of local.
-    "/wd4005",  # Redefinition of macros for PRId64 etc.
-    "/wd4311",  # Pointer truncation from PVOID to DWORD.
-    "/wd4477",  # Format string requires wchar_t*
-  ]
+      # Investigate.
+      "/wd4312",  # int to pointer of greater size conversion.
+      "/wd4838",  # Narrowing conversion required.
+      "/wd4172",  # Returning address of local.
+      "/wd4005",  # Redefinition of macros for PRId64 etc.
+      "/wd4311",  # Pointer truncation from PVOID to DWORD.
+      "/wd4477",  # Format string requires wchar_t*
+    ]
+  }
 } else {
   # Common GCC warning setup.
   default_warning_flags += [
@@ -527,7 +552,13 @@ if (is_win) {
   ]
 
   if (is_clang) {
-    default_warning_flags += [ "-Wno-tautological-constant-compare" ]
+    default_warning_flags += [
+      "-Wno-tautological-constant-compare",
+      "-Wno-unused-but-set-variable", # icu
+    ]
+  } else {
+    default_warning_flags +=
+        [ "-Wno-ignored-qualifiers" ]  # Warnings in BoringSSL headers
   }
 
   if (is_mac) {
@@ -588,7 +619,7 @@ config("chromium_code") {
     ]
 
     defines = []
-    if (!using_sanitizer && (!is_linux || !is_clang)) {
+    if (!using_sanitizer && !is_clang) {
       # _FORTIFY_SOURCE isn't really supported by Clang now, see
       # http://llvm.org/bugs/show_bug.cgi?id=16821.
       # It seems to work fine with Ubuntu 12 headers though, so use it in

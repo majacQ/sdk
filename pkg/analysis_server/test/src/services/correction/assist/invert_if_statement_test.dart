@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'assist_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(InvertIfStatementTest);
   });
@@ -19,8 +19,8 @@ class InvertIfStatementTest extends AssistProcessorTest {
   @override
   AssistKind get kind => DartAssistKind.INVERT_IF_STATEMENT;
 
-  test_blocks() async {
-    await resolveTestUnit('''
+  Future<void> test_blocks() async {
+    await resolveTestCode('''
 main() {
   if (true) {
     0;
@@ -40,8 +40,8 @@ main() {
 ''');
   }
 
-  test_statements() async {
-    await resolveTestUnit('''
+  Future<void> test_statements() async {
+    await resolveTestCode('''
 main() {
   if (true)
     0;

@@ -56,7 +56,13 @@ bool File::WriteFully(const void* buffer, int64_t num_bytes) {
   int64_t remaining = num_bytes;
   const char* current_buffer = reinterpret_cast<const char*>(buffer);
   while (remaining > 0) {
-    int64_t bytes_written = Write(current_buffer, remaining);
+    // On Windows, narrowing conversion from int64_t to DWORD will cause
+    // unexpected error.
+    // On MacOS, a single write() with more than kMaxInt32 will have
+    // "invalid argument" error.
+    // Therefore, limit the size for single write.
+    int64_t byte_to_write = remaining > kMaxInt32 ? kMaxInt32 : remaining;
+    int64_t bytes_written = Write(current_buffer, byte_to_write);
     if (bytes_written < 0) {
       return false;
     }
@@ -65,15 +71,17 @@ bool File::WriteFully(const void* buffer, int64_t num_bytes) {
   }
   if (capture_stdout || capture_stderr) {
     intptr_t fd = GetFD();
+    const char* result = nullptr;
     if ((fd == STDOUT_FILENO) && capture_stdout) {
-      Dart_ServiceSendDataEvent("Stdout", "WriteEvent",
-                                reinterpret_cast<const uint8_t*>(buffer),
-                                num_bytes);
+      result = Dart_ServiceSendDataEvent(
+          "Stdout", "WriteEvent", reinterpret_cast<const uint8_t*>(buffer),
+          num_bytes);
     } else if ((fd == STDERR_FILENO) && capture_stderr) {
-      Dart_ServiceSendDataEvent("Stderr", "WriteEvent",
-                                reinterpret_cast<const uint8_t*>(buffer),
-                                num_bytes);
+      result = Dart_ServiceSendDataEvent(
+          "Stderr", "WriteEvent", reinterpret_cast<const uint8_t*>(buffer),
+          num_bytes);
     }
+    ASSERT(result == nullptr);
   }
   return true;
 }

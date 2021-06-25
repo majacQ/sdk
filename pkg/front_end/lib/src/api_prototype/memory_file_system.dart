@@ -4,7 +4,6 @@
 
 library front_end.memory_file_system;
 
-import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -26,7 +25,9 @@ class MemoryFileSystem implements FileSystem {
   Uri currentDirectory;
 
   MemoryFileSystem(Uri currentDirectory)
-      : currentDirectory = _addTrailingSlash(currentDirectory);
+      : currentDirectory = _addTrailingSlash(currentDirectory) {
+    _directories.add(currentDirectory);
+  }
 
   @override
   MemoryFileSystemEntity entityForUri(Uri uri) {
@@ -35,7 +36,7 @@ class MemoryFileSystem implements FileSystem {
   }
 
   String get debugString {
-    var sb = new StringBuffer();
+    StringBuffer sb = new StringBuffer();
     _files.forEach((uri, _) => sb.write("- $uri\n"));
     _directories.forEach((uri) => sb.write("- $uri\n"));
     return '$sb';
@@ -85,13 +86,19 @@ class MemoryFileSystemEntity implements FileSystemEntity {
   }
 
   @override
+  Future<bool> existsAsyncIfPossible() => exists();
+
+  @override
   Future<List<int>> readAsBytes() async {
-    Uint8List contents = _fileSystem._files[uri];
+    Uint8List? contents = _fileSystem._files[uri];
     if (contents == null) {
       throw new FileSystemException(uri, 'File $uri does not exist.');
     }
     return contents;
   }
+
+  @override
+  Future<List<int>> readAsBytesAsyncIfPossible() => readAsBytes();
 
   @override
   Future<String> readAsString() async {

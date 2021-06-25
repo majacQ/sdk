@@ -5,8 +5,11 @@
 #ifndef RUNTIME_VM_COMPILER_FRONTEND_SCOPE_BUILDER_H_
 #define RUNTIME_VM_COMPILER_FRONTEND_SCOPE_BUILDER_H_
 
-#if !defined(DART_PRECOMPILED_RUNTIME)
+#if defined(DART_PRECOMPILED_RUNTIME)
+#error "AOT runtime should not use compiler sources (including header files)"
+#endif  // defined(DART_PRECOMPILED_RUNTIME)
 
+#include "vm/compiler/frontend/constant_reader.h"
 #include "vm/compiler/frontend/kernel_translation_helper.h"
 #include "vm/hash_map.h"
 #include "vm/object.h"
@@ -39,6 +42,7 @@ class ScopeBuilder {
   void VisitStatement();
   void VisitArguments();
   void VisitVariableDeclaration();
+  void VisitVariableGet(intptr_t declaration_binary_offset);
   void VisitDartType();
   void VisitInterfaceType(bool simple);
   void VisitFunctionType(bool simple);
@@ -69,6 +73,10 @@ class ScopeBuilder {
 
     // No parameters will be checked.
     kTypeCheckForStaticFunction,
+
+    // No non-covariant checks are performed, and any covariant checks are
+    // performed by the target.
+    kTypeCheckForImplicitClosureFunction,
   };
 
   // This assumes that the reader is at a FunctionNode,
@@ -109,13 +117,14 @@ class ScopeBuilder {
   // Record an assignment or reference to a variable.  If the occurrence is
   // in a nested function, ensure that the variable is handled properly as a
   // captured variable.
-  void LookupVariable(intptr_t declaration_binary_offset);
+  LocalVariable* LookupVariable(intptr_t declaration_binary_offset);
 
   StringIndex GetNameFromVariableDeclaration(intptr_t kernel_offset,
                                              const Function& function);
 
   const String& GenerateName(const char* prefix, intptr_t suffix);
 
+  void HandleLoadReceiver();
   void HandleSpecialLoad(LocalVariable** variable, const String& symbol);
   void LookupCapturedVariableByName(LocalVariable** variable,
                                     const String& name);
@@ -153,9 +162,10 @@ class ScopeBuilder {
   intptr_t name_index_;
 
   bool needs_expr_temp_;
-  TokenPosition first_body_token_position_;
+  TokenPosition first_body_token_position_ = TokenPosition::kNoSource;
 
   KernelReaderHelper helper_;
+  ConstantReader constant_reader_;
   InferredTypeMetadataHelper inferred_type_metadata_helper_;
   ProcedureAttributesMetadataHelper procedure_attributes_metadata_helper_;
   TypeTranslator type_translator_;
@@ -171,8 +181,7 @@ struct FunctionScope {
 class ScopeBuildingResult : public ZoneAllocated {
  public:
   ScopeBuildingResult()
-      : this_variable(NULL),
-        type_arguments_variable(NULL),
+      : type_arguments_variable(NULL),
         switch_variable(NULL),
         finally_return_variable(NULL),
         setter_value(NULL),
@@ -183,9 +192,6 @@ class ScopeBuildingResult : public ZoneAllocated {
   IntMap<LocalVariable*> locals;
   IntMap<LocalScope*> scopes;
   GrowableArray<FunctionScope> function_scopes;
-
-  // Only non-NULL for instance functions.
-  LocalVariable* this_variable;
 
   // Only non-NULL for factory constructor functions.
   LocalVariable* type_arguments_variable;
@@ -228,14 +234,7 @@ class ScopeBuildingResult : public ZoneAllocated {
   DISALLOW_COPY_AND_ASSIGN(ScopeBuildingResult);
 };
 
-// Returns true if the given method can skip type checks for all arguments
-// that are not covariant or generic covariant in its implementation.
-bool MethodCanSkipTypeChecksForNonCovariantArguments(
-    const Function& method,
-    const ProcedureAttributesMetadata& attrs);
-
 }  // namespace kernel
 }  // namespace dart
 
-#endif  // !defined(DART_PRECOMPILED_RUNTIME)
 #endif  // RUNTIME_VM_COMPILER_FRONTEND_SCOPE_BUILDER_H_

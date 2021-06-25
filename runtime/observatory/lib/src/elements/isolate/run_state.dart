@@ -6,32 +6,30 @@ import 'dart:html';
 import 'dart:async';
 import 'package:observatory/models.dart' as M;
 import 'package:observatory/src/elements/helpers/rendering_scheduler.dart';
-import 'package:observatory/src/elements/helpers/tag.dart';
+import 'package:observatory/src/elements/helpers/custom_element.dart';
 
-class IsolateRunStateElement extends HtmlElement implements Renderable {
-  static const tag = const Tag<IsolateRunStateElement>('isolate-run-state');
-
-  RenderingScheduler<IsolateRunStateElement> _r;
+class IsolateRunStateElement extends CustomElement implements Renderable {
+  late RenderingScheduler<IsolateRunStateElement> _r;
 
   Stream<RenderedEvent<IsolateRunStateElement>> get onRendered => _r.onRendered;
 
-  M.Isolate _isolate;
-  M.EventRepository _events;
-  StreamSubscription _debugSubscription;
-  StreamSubscription _isolateSubscription;
+  late M.Isolate _isolate;
+  late M.EventRepository _events;
+  late StreamSubscription _debugSubscription;
+  late StreamSubscription _isolateSubscription;
 
   factory IsolateRunStateElement(M.Isolate isolate, M.EventRepository events,
-      {RenderingQueue queue}) {
+      {RenderingQueue? queue}) {
     assert(isolate != null);
     assert(events != null);
-    IsolateRunStateElement e = document.createElement(tag.name);
+    IsolateRunStateElement e = new IsolateRunStateElement.created();
     e._r = new RenderingScheduler<IsolateRunStateElement>(e, queue: queue);
     e._isolate = isolate;
     e._events = events;
     return e;
   }
 
-  IsolateRunStateElement.created() : super.created();
+  IsolateRunStateElement.created() : super.created('isolate-run-state');
 
   @override
   void attached() {
@@ -64,7 +62,7 @@ class IsolateRunStateElement extends HtmlElement implements Renderable {
       case M.IsolateStatus.paused:
         children = <Element>[
           new SpanElement()
-            ..title = '${_isolate.pauseEvent.timestamp}'
+            ..title = '${_isolate.pauseEvent!.timestamp}'
             ..text = 'paused '
         ];
         break;

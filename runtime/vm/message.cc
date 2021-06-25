@@ -4,6 +4,9 @@
 
 #include "vm/message.h"
 
+#include <utility>
+
+#include "vm/dart_api_state.h"
 #include "vm/dart_entry.h"
 #include "vm/json_stream.h"
 #include "vm/object.h"
@@ -11,47 +14,64 @@
 
 namespace dart {
 
+const Dart_Port Message::kIllegalPort = 0;
+
 Message::Message(Dart_Port dest_port,
                  uint8_t* snapshot,
                  intptr_t snapshot_length,
                  MessageFinalizableData* finalizable_data,
                  Priority priority,
                  Dart_Port delivery_failure_port)
-    : next_(NULL),
-      dest_port_(dest_port),
+    : dest_port_(dest_port),
       delivery_failure_port_(delivery_failure_port),
-      snapshot_(snapshot),
+      payload_(snapshot),
       snapshot_length_(snapshot_length),
       finalizable_data_(finalizable_data),
       priority_(priority) {
   ASSERT((priority == kNormalPriority) ||
          (delivery_failure_port == kIllegalPort));
-  ASSERT(!IsRaw());
+  ASSERT(IsSnapshot());
 }
 
 Message::Message(Dart_Port dest_port,
-                 RawObject* raw_obj,
+                 ObjectPtr raw_obj,
                  Priority priority,
                  Dart_Port delivery_failure_port)
-    : next_(NULL),
-      dest_port_(dest_port),
+    : dest_port_(dest_port),
       delivery_failure_port_(delivery_failure_port),
-      snapshot_(reinterpret_cast<uint8_t*>(raw_obj)),
-      snapshot_length_(0),
-      finalizable_data_(NULL),
+      payload_(raw_obj),
       priority_(priority) {
-  ASSERT(!raw_obj->IsHeapObject() || raw_obj->IsVMHeapObject());
+  ASSERT(!raw_obj->IsHeapObject() || raw_obj->untag()->InVMIsolateHeap());
   ASSERT((priority == kNormalPriority) ||
          (delivery_failure_port == kIllegalPort));
   ASSERT(IsRaw());
 }
 
+Message::Message(Dart_Port dest_port,
+                 PersistentHandle* handle,
+                 Priority priority,
+                 Dart_Port delivery_failure_port)
+    : dest_port_(dest_port),
+      delivery_failure_port_(delivery_failure_port),
+      payload_(handle),
+      snapshot_length_(kPersistentHandleSnapshotLen),
+      priority_(priority) {
+  ASSERT((priority == kNormalPriority) ||
+         (delivery_failure_port == kIllegalPort));
+  ASSERT(IsPersistentHandle());
+}
+
 Message::~Message() {
   ASSERT(delivery_failure_port_ == kIllegalPort);
-  if (!IsRaw()) {
-    free(snapshot_);
+  if (IsSnapshot()) {
+    free(payload_.snapshot_);
   }
   delete finalizable_data_;
+  if (IsPersistentHandle()) {
+    auto isolate_group = IsolateGroup::Current();
+    isolate_group->api_state()->FreePersistentHandle(
+        payload_.persistent_handle_);
+  }
 }
 
 bool Message::RedirectToDeliveryFailurePort() {
@@ -93,7 +113,10 @@ MessageQueue::~MessageQueue() {
   ASSERT(head_ == NULL);
 }
 
-void MessageQueue::Enqueue(Message* msg, bool before_events) {
+void MessageQueue::Enqueue(std::unique_ptr<Message> msg0, bool before_events) {
+  // TODO(mdempsky): Use unique_ptr internally?
+  Message* msg = msg0.release();
+
   // Make sure messages are not reused.
   ASSERT(msg->next_ == NULL);
   if (head_ == NULL) {
@@ -134,34 +157,32 @@ void MessageQueue::Enqueue(Message* msg, bool before_events) {
   }
 }
 
-Message* MessageQueue::Dequeue() {
+std::unique_ptr<Message> MessageQueue::Dequeue() {
   Message* result = head_;
-  if (result != NULL) {
+  if (result != nullptr) {
     head_ = result->next_;
     // The following update to tail_ is not strictly needed.
-    if (head_ == NULL) {
-      tail_ = NULL;
+    if (head_ == nullptr) {
+      tail_ = nullptr;
     }
 #if defined(DEBUG)
     result->next_ = result;  // Make sure to trigger ASSERT in Enqueue.
 #endif                       // DEBUG
-    return result;
+    return std::unique_ptr<Message>(result);
   }
-  return NULL;
+  return nullptr;
 }
 
 void MessageQueue::Clear() {
-  Message* cur = head_;
-  head_ = NULL;
-  tail_ = NULL;
-  while (cur != NULL) {
-    Message* next = cur->next_;
+  std::unique_ptr<Message> cur(head_);
+  head_ = nullptr;
+  tail_ = nullptr;
+  while (cur != nullptr) {
+    std::unique_ptr<Message> next(cur->next_);
     if (cur->RedirectToDeliveryFailurePort()) {
-      PortMap::PostMessage(cur);
-    } else {
-      delete cur;
+      PortMap::PostMessage(std::move(cur));
     }
-    cur = next;
+    cur = std::move(next);
   }
 }
 
@@ -212,9 +233,6 @@ Message* MessageQueue::FindMessageById(intptr_t id) {
 
 void MessageQueue::PrintJSON(JSONStream* stream) {
 #ifndef PRODUCT
-  if (!FLAG_support_service) {
-    return;
-  }
   JSONArray messages(stream);
 
   Object& msg_handler = Object::Handle();

@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import "dart:mirrors";
 
 import "package:expect/expect.dart";
@@ -25,7 +27,7 @@ main() {
   Expect.equals('a,b,c', Function.apply(f, ['a', 'b', 'c']));
   Expect.throwsNoSuchMethodError(() => f.foo('a', 'b', 'c'));
 
-  ClosureMirror cm = reflect(f);
+  ClosureMirror cm = reflect(f) as ClosureMirror;
   Expect.isTrue(cm is ClosureMirror);
   Expect.equals('a', cm.apply(['a']).reflectee);
   Expect.equals('a,b', cm.apply(['a', 'b']).reflectee);

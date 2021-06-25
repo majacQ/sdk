@@ -5,32 +5,29 @@
 import 'dart:html';
 import 'dart:async';
 import 'package:observatory/models.dart' as M;
-import 'package:charted/charted.dart';
 import 'package:observatory/src/elements/helpers/rendering_scheduler.dart';
-import 'package:observatory/src/elements/helpers/tag.dart';
+import 'package:observatory/src/elements/helpers/custom_element.dart';
 
-class MetricGraphElement extends HtmlElement implements Renderable {
-  static const tag = const Tag<MetricGraphElement>('metric-graph');
-
-  RenderingScheduler<MetricGraphElement> _r;
+class MetricGraphElement extends CustomElement implements Renderable {
+  late RenderingScheduler<MetricGraphElement> _r;
 
   Stream<RenderedEvent<MetricGraphElement>> get onRendered => _r.onRendered;
 
-  M.IsolateRef _isolate;
-  M.Metric _metric;
-  M.MetricRepository _metrics;
-  Timer _timer;
+  late M.IsolateRef _isolate;
+  late M.Metric _metric;
+  late M.MetricRepository _metrics;
+  late Timer _timer;
 
   M.IsolateRef get isolate => _isolate;
   M.Metric get metric => _metric;
 
   factory MetricGraphElement(
       M.IsolateRef isolate, M.Metric metric, M.MetricRepository metrics,
-      {RenderingQueue queue}) {
+      {RenderingQueue? queue}) {
     assert(isolate != null);
     assert(metric != null);
     assert(metrics != null);
-    MetricGraphElement e = document.createElement(tag.name);
+    MetricGraphElement e = new MetricGraphElement.created();
     e._r = new RenderingScheduler<MetricGraphElement>(e, queue: queue);
     e._isolate = isolate;
     e._metric = metric;
@@ -38,7 +35,7 @@ class MetricGraphElement extends HtmlElement implements Renderable {
     return e;
   }
 
-  MetricGraphElement.created() : super.created();
+  MetricGraphElement.created() : super.created('metric-graph');
 
   @override
   void attached() {
@@ -55,17 +52,12 @@ class MetricGraphElement extends HtmlElement implements Renderable {
     _timer.cancel();
   }
 
-  final _columns = [
-    new ChartColumnSpec(label: 'Time', type: ChartColumnSpec.TYPE_TIMESTAMP),
-    new ChartColumnSpec(label: 'Value', formatter: (v) => v.toString())
-  ];
-
   void render() {
     final min = _metrics.getMinValue(_isolate, _metric);
     final max = _metrics.getMaxValue(_isolate, _metric);
     final rows = _metrics
-        .getSamples(_isolate, _metric)
-        .map((s) => [s.time.millisecondsSinceEpoch, s.value])
+        .getSamples(_isolate, _metric)!
+        .map((s) => [s.time!.millisecondsSinceEpoch, s.value])
         .toList();
     final current = rows.last.last;
 
@@ -117,18 +109,9 @@ class MetricGraphElement extends HtmlElement implements Renderable {
                       ..text = '$max'
                   ]
         ],
-      new DivElement()
-        ..classes = ['graph']
-        ..children = <Element>[host]
     ];
     if (rows.length <= 1) {
       return;
     }
-    final rect = host.getBoundingClientRect();
-    var series = new ChartSeries("one", [1], new LineChartRenderer());
-    var config = new ChartConfig([series], [0]);
-    config.minimumSize = new Rect(rect.width, rect.height);
-    final data = new ChartData(_columns, rows);
-    new CartesianArea(host, data, config, state: new ChartState()).draw();
   }
 }

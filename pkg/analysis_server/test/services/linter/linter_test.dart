@@ -5,14 +5,13 @@
 import 'package:analyzer/error/error.dart';
 import 'package:analyzer/error/listener.dart';
 import 'package:analyzer/src/analysis_options/analysis_options_provider.dart';
-import 'package:analyzer/src/generated/engine.dart';
 import 'package:analyzer/src/generated/source.dart';
 import 'package:analyzer/src/lint/options_rule_validator.dart';
 import 'package:linter/src/rules.dart';
 import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(LinterRuleOptionsValidatorTest);
   });
@@ -20,21 +19,27 @@ main() {
 
 @reflectiveTest
 class LinterRuleOptionsValidatorTest {
-  final LinterRuleOptionsValidator validator = new LinterRuleOptionsValidator();
-  final AnalysisOptionsProvider optionsProvider = new AnalysisOptionsProvider();
+  final LinterRuleOptionsValidator validator = LinterRuleOptionsValidator();
 
-  RecordingErrorListener recorder;
-  ErrorReporter reporter;
+  final AnalysisOptionsProvider optionsProvider = AnalysisOptionsProvider();
+
+  late RecordingErrorListener recorder;
+
+  late ErrorReporter reporter;
 
   List<AnalysisError> get errors => recorder.errors;
 
-  setUp() {
+  void setUp() {
     registerLintRules();
-    recorder = new RecordingErrorListener();
-    reporter = new ErrorReporter(recorder, new _TestSource());
+    recorder = RecordingErrorListener();
+    reporter = ErrorReporter(
+      recorder,
+      _TestSource(),
+      isNonNullableByDefault: false,
+    );
   }
 
-  test_linter_defined_rules() {
+  void test_linter_defined_rules() {
     validate('''
 linter:
   rules:
@@ -42,14 +47,14 @@ linter:
     ''', []);
   }
 
-  test_linter_no_rules() {
+  void test_linter_no_rules() {
     validate('''
 linter:
   rules:
     ''', []);
   }
 
-  test_linter_null_rule() {
+  void test_linter_null_rule() {
     validate('''
 linter:
   rules:
@@ -58,7 +63,7 @@ linter:
     ''', []);
   }
 
-  test_linter_undefined_rule() {
+  void test_linter_undefined_rule() {
     validate('''
 linter:
   rules:
@@ -66,7 +71,7 @@ linter:
     ''', [UNDEFINED_LINT_WARNING]);
   }
 
-  validate(String source, List<ErrorCode> expected) {
+  void validate(String source, List<ErrorCode> expected) {
     var options = optionsProvider.getOptionsFromString(source);
     validator.validate(reporter, options);
     expect(errors.map((AnalysisError e) => e.errorCode),
@@ -76,5 +81,8 @@ linter:
 
 class _TestSource implements Source {
   @override
-  noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+  String get fullName => '/package/lib/test.dart';
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

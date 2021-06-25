@@ -3,20 +3,31 @@
 // BSD-style license that can be found in the LICENSE file.
 library vm.target.vm;
 
-import 'dart:core' hide MapEntry;
-
 import 'package:kernel/ast.dart';
+import 'package:kernel/clone.dart';
 import 'package:kernel/class_hierarchy.dart';
 import 'package:kernel/core_types.dart';
+import 'package:kernel/reference_from_index.dart';
+import 'package:kernel/target/changed_structure_notifier.dart';
 import 'package:kernel/target/targets.dart';
 import 'package:kernel/transformations/mixin_full_resolution.dart'
     as transformMixins show transformLibraries;
 import 'package:kernel/transformations/continuation.dart' as transformAsync
     show transformLibraries, transformProcedure;
+import 'package:kernel/type_environment.dart';
+import 'package:kernel/vm/constants_native_effects.dart'
+    show VmConstantsBackend;
 
 import '../transformations/call_site_annotator.dart' as callSiteAnnotator;
-import '../transformations/list_factory_specializer.dart'
-    as listFactorySpecializer;
+import '../transformations/lowering.dart' as lowering
+    show transformLibraries, transformProcedure;
+import '../transformations/ffi.dart' as ffiHelper show importsFfi;
+import '../transformations/ffi_definitions.dart' as transformFfiDefinitions
+    show transformLibraries;
+import '../transformations/ffi_native.dart' as transformFfiNative
+    show transformLibraries;
+import '../transformations/ffi_use_sites.dart' as transformFfiUseSites
+    show transformLibraries;
 
 /// Specializes the kernel IR to the Dart VM.
 class VmTarget extends Target {
@@ -29,14 +40,32 @@ class VmTarget extends Target {
   Class _oneByteString;
   Class _twoByteString;
   Class _smi;
+  Class _double; // _Double, not double.
 
   VmTarget(this.flags);
 
   @override
-  bool get legacyMode => flags.legacyMode;
+  bool get enableNoSuchMethodForwarders => true;
 
   @override
-  bool get enableNoSuchMethodForwarders => true;
+  bool get supportsSetLiterals => false;
+
+  @override
+  int get enabledLateLowerings => flags.forceLateLoweringsForTesting;
+
+  @override
+  bool get supportsLateLoweringSentinel =>
+      flags.forceLateLoweringSentinelForTesting;
+
+  @override
+  bool get useStaticFieldLowering => flags.forceStaticFieldLoweringForTesting;
+
+  @override
+  bool get supportsExplicitGetterCalls =>
+      !flags.forceNoExplicitGetterCallsForTesting;
+
+  @override
+  bool get supportsNewMethodInvocationEncoding => true;
 
   @override
   String get name => 'vm';
@@ -49,6 +78,7 @@ class VmTarget extends Target {
         'dart:collection',
         'dart:convert',
         'dart:developer',
+        'dart:ffi',
         'dart:_internal',
         'dart:isolate',
         'dart:math',
@@ -57,7 +87,6 @@ class VmTarget extends Target {
         // PRODUCT mode.
         'dart:mirrors',
 
-        'dart:profiler',
         'dart:typed_data',
         'dart:vmservice_io',
         'dart:_vmservice',
@@ -68,18 +97,97 @@ class VmTarget extends Target {
       ];
 
   @override
-  void performModularTransformationsOnLibraries(Component component,
-      CoreTypes coreTypes, ClassHierarchy hierarchy, List<Library> libraries,
-      {void logger(String msg)}) {
-    transformMixins.transformLibraries(this, coreTypes, hierarchy, libraries,
-        doSuperResolution: false /* resolution is done in Dart VM */);
+  List<String> get extraRequiredLibrariesPlatform => const <String>[];
+
+  void _patchVmConstants(CoreTypes coreTypes) {
+    // Fix Endian.host to be a const field equal to Endian.little instead of
+    // a final field. VM does not support big-endian architectures at the
+    // moment.
+    // Can't use normal patching process for this because CFE does not
+    // support patching fields.
+    // See http://dartbug.com/32836 for the background.
+    final Field host =
+        coreTypes.index.getMember('dart:typed_data', 'Endian', 'host');
+    final Field little =
+        coreTypes.index.getMember('dart:typed_data', 'Endian', 'little');
+    host.isConst = true;
+    host.initializer = new CloneVisitorNotMembers().clone(little.initializer)
+      ..parent = host;
+  }
+
+  @override
+  void performPreConstantEvaluationTransformations(
+      Component component,
+      CoreTypes coreTypes,
+      List<Library> libraries,
+      DiagnosticReporter diagnosticReporter,
+      {void logger(String msg),
+      ChangedStructureNotifier changedStructureNotifier}) {
+    super.performPreConstantEvaluationTransformations(
+        component, coreTypes, libraries, diagnosticReporter,
+        logger: logger, changedStructureNotifier: changedStructureNotifier);
+    _patchVmConstants(coreTypes);
+  }
+
+  @override
+  List<String> get extraIndexedLibraries => const <String>[
+        // TODO(askesc): When the VM supports set literals, we no longer
+        // need to index dart:collection, as it is only needed for desugaring of
+        // const sets. We can remove it from this list at that time.
+        "dart:collection",
+        // TODO(askesc): This is for the VM host endian optimization, which
+        // could possibly be done more cleanly after the VM no longer supports
+        // doing constant evaluation on its own. See http://dartbug.com/32836
+        "dart:typed_data",
+      ];
+
+  @override
+  void performModularTransformationsOnLibraries(
+      Component component,
+      CoreTypes coreTypes,
+      ClassHierarchy hierarchy,
+      List<Library> libraries,
+      Map<String, String> environmentDefines,
+      DiagnosticReporter diagnosticReporter,
+      ReferenceFromIndex referenceFromIndex,
+      {void logger(String msg),
+      ChangedStructureNotifier changedStructureNotifier}) {
+    transformMixins.transformLibraries(
+        this, coreTypes, hierarchy, libraries, referenceFromIndex);
     logger?.call("Transformed mixin applications");
 
+    if (!ffiHelper.importsFfi(component, libraries)) {
+      logger?.call("Skipped ffi transformation");
+    } else {
+      // Transform @FfiNative(..) functions into ffi native call functions.
+      transformFfiNative.transformLibraries(
+          component, libraries, referenceFromIndex);
+      logger?.call("Transformed ffi natives");
+      // TODO(jensj/dacoharkes): We can probably limit the transformations to
+      // libraries that transitivley depend on dart:ffi.
+      transformFfiDefinitions.transformLibraries(
+          component,
+          coreTypes,
+          hierarchy,
+          libraries,
+          diagnosticReporter,
+          referenceFromIndex,
+          changedStructureNotifier);
+      transformFfiUseSites.transformLibraries(component, coreTypes, hierarchy,
+          libraries, diagnosticReporter, referenceFromIndex);
+      logger?.call("Transformed ffi annotations");
+    }
+
     // TODO(kmillikin): Make this run on a per-method basis.
-    transformAsync.transformLibraries(coreTypes, libraries, flags.syncAsync);
+    bool productMode = environmentDefines["dart.vm.product"] == "true";
+    transformAsync.transformLibraries(
+        new TypeEnvironment(coreTypes, hierarchy), libraries,
+        productMode: productMode);
     logger?.call("Transformed async methods");
 
-    listFactorySpecializer.transformLibraries(libraries, coreTypes);
+    lowering.transformLibraries(
+        libraries, coreTypes, hierarchy, flags.enableNullSafety);
+    logger?.call("Lowering transformations performed");
 
     callSiteAnnotator.transformLibraries(
         component, libraries, coreTypes, hierarchy);
@@ -88,10 +196,20 @@ class VmTarget extends Target {
 
   @override
   void performTransformationsOnProcedure(
-      CoreTypes coreTypes, ClassHierarchy hierarchy, Procedure procedure,
+      CoreTypes coreTypes,
+      ClassHierarchy hierarchy,
+      Procedure procedure,
+      Map<String, String> environmentDefines,
       {void logger(String msg)}) {
-    transformAsync.transformProcedure(coreTypes, procedure, flags.syncAsync);
+    bool productMode = environmentDefines["dart.vm.product"] == "true";
+    transformAsync.transformProcedure(
+        new TypeEnvironment(coreTypes, hierarchy), procedure,
+        productMode: productMode);
     logger?.call("Transformed async functions");
+
+    lowering.transformProcedure(
+        procedure, coreTypes, hierarchy, flags.enableNullSafety);
+    logger?.call("Lowering transformations performed");
   }
 
   Expression _instantiateInvocationMirrorWithType(
@@ -108,7 +226,7 @@ class VmTarget extends Target {
           new IntLiteral(type)..fileOffset = offset,
           _fixedLengthList(
               coreTypes,
-              coreTypes.typeClass.rawType,
+              coreTypes.typeLegacyRawType,
               arguments.types.map((t) => new TypeLiteral(t)).toList(),
               arguments.fileOffset),
           _fixedLengthList(coreTypes, const DynamicType(), arguments.positional,
@@ -116,17 +234,17 @@ class VmTarget extends Target {
           new StaticInvocation(
               coreTypes.mapUnmodifiable,
               new Arguments([
-                new MapLiteral(new List<MapEntry>.from(
+                new MapLiteral(new List<MapLiteralEntry>.from(
                     arguments.named.map((NamedExpression arg) {
-                  return new MapEntry(
+                  return new MapLiteralEntry(
                       new SymbolLiteral(arg.name)..fileOffset = arg.fileOffset,
                       arg.value)
                     ..fileOffset = arg.fileOffset;
-                })), keyType: coreTypes.symbolClass.rawType)
+                })), keyType: coreTypes.symbolLegacyRawType)
                   ..isConst = (arguments.named.length == 0)
                   ..fileOffset = arguments.fileOffset
               ], types: [
-                coreTypes.symbolClass.rawType,
+                coreTypes.symbolLegacyRawType,
                 new DynamicType()
               ]))
             ..fileOffset = offset
@@ -139,7 +257,7 @@ class VmTarget extends Target {
     bool isGetter = false, isSetter = false, isMethod = false;
     if (name.startsWith("set:")) {
       isSetter = true;
-      name = name.substring(4) + "=";
+      name = name.substring(4);
     } else if (name.startsWith("get:")) {
       isGetter = true;
       name = name.substring(4);
@@ -277,9 +395,17 @@ class VmTarget extends Target {
           new ListLiteral(elements, typeArgument: typeArgument)
             ..fileOffset = offset
         ], types: [
-          new DynamicType()
+          typeArgument,
         ]));
   }
+
+  // In addition to the default implementation, we allow VM tests to import
+  // private platform libraries - such as `dart:_internal` - for testing
+  // purposes.
+  bool allowPlatformPrivateLibraryAccess(Uri importer, Uri imported) =>
+      super.allowPlatformPrivateLibraryAccess(importer, imported) ||
+      importer.path.contains('runtime/tests/vm/dart') ||
+      importer.path.contains('test-lib');
 
   // TODO(sigmund,ahe): limit this to `dart-ext` libraries only (see
   // https://github.com/dart-lang/sdk/issues/29763).
@@ -334,6 +460,11 @@ class VmTarget extends Target {
   }
 
   @override
+  Class concreteDoubleLiteralClass(CoreTypes coreTypes, double value) {
+    return _double ??= coreTypes.index.getClass('dart:core', '_Double');
+  }
+
+  @override
   Class concreteStringLiteralClass(CoreTypes coreTypes, String value) {
     const int maxLatin1 = 0xff;
     for (int i = 0; i < value.length; ++i) {
@@ -344,5 +475,30 @@ class VmTarget extends Target {
     }
     return _oneByteString ??=
         coreTypes.index.getClass('dart:core', '_OneByteString');
+  }
+
+  @override
+  ConstantsBackend constantsBackend(CoreTypes coreTypes) =>
+      new VmConstantsBackend(coreTypes);
+
+  @override
+  Map<String, String> updateEnvironmentDefines(Map<String, String> map) {
+    // TODO(alexmarkov): Call this from the front-end in order to have
+    //  the same defines when compiling platform.
+    assert(map != null);
+    map['dart.isVM'] = 'true';
+    // TODO(dartbug.com/36460): Derive dart.library.* definitions from platform.
+    for (String library in extraRequiredLibraries) {
+      Uri libraryUri = Uri.parse(library);
+      if (libraryUri.scheme == 'dart') {
+        final path = libraryUri.path;
+        if (!path.startsWith('_')) {
+          map['dart.library.${path}'] = 'true';
+        }
+      }
+    }
+    // dart:core is not mentioned in Target.extraRequiredLibraries.
+    map['dart.library.core'] = 'true';
+    return map;
   }
 }

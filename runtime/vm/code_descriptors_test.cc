@@ -27,7 +27,7 @@ static void NativeFunc(Dart_NativeArguments args) {
   EXPECT_EQ(20, value);
   {
     TransitionNativeToVM transition(Thread::Current());
-    Isolate::Current()->heap()->CollectAllGarbage();
+    IsolateGroup::Current()->heap()->CollectAllGarbage();
   }
 }
 
@@ -36,7 +36,7 @@ static Dart_NativeFunction native_resolver(Dart_Handle name,
                                            bool* auto_setup_scope) {
   ASSERT(auto_setup_scope);
   *auto_setup_scope = false;
-  return reinterpret_cast<Dart_NativeFunction>(&NativeFunc);
+  return NativeFunc;
 }
 
 TEST_CASE(StackMapGC) {
@@ -52,7 +52,7 @@ TEST_CASE(StackMapGC) {
       "    i = 10; s1 = 'abcd'; k = 20; s2 = 'B'; s3 = 'C';"
       "    func(i, k);"
       "    return i + k; }"
-      "  static int moo() {"
+      "  static void moo() {"
       "    var i = A.foo();"
       "    if (i != 30) throw '$i != 30';"
       "  }\n"
@@ -71,6 +71,8 @@ TEST_CASE(StackMapGC) {
 
   // Now compile the two functions 'A.foo' and 'A.moo'
   String& function_moo_name = String::Handle(String::New("moo"));
+  const auto& error = cls.EnsureIsFinalized(thread);
+  EXPECT(error == Error::null());
   Function& function_moo =
       Function::Handle(cls.LookupStaticFunction(function_moo_name));
   EXPECT(CompilerTest::TestCompileFunction(function_moo));
@@ -84,10 +86,8 @@ TEST_CASE(StackMapGC) {
 
   // Build and setup a stackmap for the call to 'func' in 'A.foo' in order
   // to test the traversal of stack maps when a GC happens.
-  StackMapTableBuilder* stackmap_table_builder = new StackMapTableBuilder();
-  EXPECT(stackmap_table_builder != NULL);
   BitmapBuilder* stack_bitmap = new BitmapBuilder();
-  EXPECT(stack_bitmap != NULL);
+  EXPECT(stack_bitmap != nullptr);
   stack_bitmap->Set(0, false);  // var i.
   stack_bitmap->Set(1, true);   // var s1.
   stack_bitmap->Set(2, false);  // var k.
@@ -98,17 +98,19 @@ TEST_CASE(StackMapGC) {
   const PcDescriptors& descriptors =
       PcDescriptors::Handle(code.pc_descriptors());
   int call_count = 0;
-  PcDescriptors::Iterator iter(descriptors, RawPcDescriptors::kUnoptStaticCall);
+  PcDescriptors::Iterator iter(descriptors,
+                               UntaggedPcDescriptors::kUnoptStaticCall);
+  CompressedStackMapsBuilder compressed_maps_builder(thread->zone());
   while (iter.MoveNext()) {
-    stackmap_table_builder->AddEntry(iter.PcOffset(), stack_bitmap, 0);
+    compressed_maps_builder.AddEntry(iter.PcOffset(), stack_bitmap, 0);
     ++call_count;
   }
   // We can't easily check that we put the stackmap at the correct pc, but
   // we did if there was exactly one call seen.
   EXPECT(call_count == 1);
-  const Array& stack_maps =
-      Array::Handle(stackmap_table_builder->FinalizeStackMaps(code));
-  code.set_stackmaps(stack_maps);
+  const auto& compressed_maps =
+      CompressedStackMaps::Handle(compressed_maps_builder.Finalize());
+  code.set_compressed_stackmaps(compressed_maps);
 
   // Now invoke 'A.moo' and it will trigger a GC when the native function
   // is called, this should then cause the stack map of function 'A.foo'
@@ -119,9 +121,9 @@ TEST_CASE(StackMapGC) {
 }
 
 ISOLATE_UNIT_TEST_CASE(DescriptorList_TokenPositions) {
-  DescriptorList* descriptors = new DescriptorList(64);
+  DescriptorList* descriptors = new DescriptorList(thread->zone());
   ASSERT(descriptors != NULL);
-  const intptr_t token_positions[] = {
+  const int32_t token_positions[] = {
       kMinInt32,
       5,
       13,
@@ -139,12 +141,12 @@ ISOLATE_UNIT_TEST_CASE(DescriptorList_TokenPositions) {
       TokenPosition::kMinSourcePos,
       TokenPosition::kMaxSourcePos,
   };
-  const intptr_t num_token_positions =
-      sizeof(token_positions) / sizeof(token_positions[0]);
+  const intptr_t num_token_positions = ARRAY_SIZE(token_positions);
 
   for (intptr_t i = 0; i < num_token_positions; i++) {
-    descriptors->AddDescriptor(RawPcDescriptors::kRuntimeCall, 0, 0,
-                               TokenPosition(token_positions[i]), 0);
+    const TokenPosition& tp = TokenPosition::Deserialize(token_positions[i]);
+    descriptors->AddDescriptor(UntaggedPcDescriptors::kRuntimeCall, 0, 0, tp, 0,
+                               1);
   }
 
   const PcDescriptors& finalized_descriptors =
@@ -152,15 +154,16 @@ ISOLATE_UNIT_TEST_CASE(DescriptorList_TokenPositions) {
 
   ASSERT(!finalized_descriptors.IsNull());
   PcDescriptors::Iterator it(finalized_descriptors,
-                             RawPcDescriptors::kRuntimeCall);
+                             UntaggedPcDescriptors::kRuntimeCall);
 
   intptr_t i = 0;
   while (it.MoveNext()) {
-    if (token_positions[i] != it.TokenPos().value()) {
-      OS::PrintErr("[%" Pd "]: Expected: %" Pd " != %" Pd "\n", i,
-                   token_positions[i], it.TokenPos().value());
+    const TokenPosition& tp = TokenPosition::Deserialize(token_positions[i]);
+    if (tp != it.TokenPos()) {
+      OS::PrintErr("[%" Pd "]: Expected: %s != %s\n", i, tp.ToCString(),
+                   it.TokenPos().ToCString());
     }
-    EXPECT(token_positions[i] == it.TokenPos().value());
+    EXPECT(tp == it.TokenPos());
     i++;
   }
 }

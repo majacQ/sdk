@@ -1,10 +1,7 @@
-// Copyright (c) 2018, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2018, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'dart:async';
-
-import 'package:analysis_server/protocol/protocol.dart';
 import 'package:analysis_server/protocol/protocol_generated.dart';
 import 'package:analyzer_plugin/protocol/protocol_common.dart';
 import 'package:test/test.dart';
@@ -12,7 +9,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'abstract_search_domain.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(DeclarationsTest);
   });
@@ -20,10 +17,10 @@ main() {
 
 @reflectiveTest
 class DeclarationsTest extends AbstractSearchDomainTest {
-  SearchGetElementDeclarationsResult declarationsResult;
+  late SearchGetElementDeclarationsResult declarationsResult;
 
   ElementDeclaration assertHas(String name, ElementKind kind,
-      {String className, String mixinName}) {
+      {String? className, String? mixinName}) {
     return declarationsResult.declarations.singleWhere((ElementDeclaration d) =>
         declarationsResult.files[d.fileIndex] == testFile &&
         d.name == name &&
@@ -40,7 +37,7 @@ class DeclarationsTest extends AbstractSearchDomainTest {
             d.name == name))));
   }
 
-  test_class() async {
+  Future<void> test_class() async {
     addTestFile(r'''
 class C {
   int f;
@@ -57,11 +54,21 @@ class C {
     assertHas('f', ElementKind.FIELD, className: 'C');
     assertHas('named', ElementKind.CONSTRUCTOR, className: 'C');
     assertHas('g', ElementKind.GETTER, className: 'C');
-    assertHas('s', ElementKind.SETTER, className: 'C');
-    assertHas('m', ElementKind.METHOD, className: 'C');
+
+    {
+      var declaration = assertHas('s', ElementKind.SETTER, className: 'C');
+      expect(declaration.codeOffset, 59);
+      expect(declaration.codeLength, 16);
+    }
+
+    {
+      var declaration = assertHas('m', ElementKind.METHOD, className: 'C');
+      expect(declaration.codeOffset, 78);
+      expect(declaration.codeLength, 11);
+    }
   }
 
-  test_enum() async {
+  Future<void> test_enum() async {
     addTestFile(r'''
 enum E {
   a, b, c
@@ -75,7 +82,7 @@ enum E {
     assertHas('c', ElementKind.ENUM_CONSTANT);
   }
 
-  test_maxResults() async {
+  Future<void> test_maxResults() async {
     newFile(join(testFolder, 'a.dart'), content: r'''
 class A {}
 class B {}
@@ -98,7 +105,7 @@ class D {}
     expect(declarationsResult.declarations, hasLength(4));
   }
 
-  test_mixin() async {
+  Future<void> test_mixin() async {
     addTestFile(r'''
 mixin M {
   int f;
@@ -116,7 +123,7 @@ mixin M {
     assertHas('m', ElementKind.METHOD, mixinName: 'M');
   }
 
-  test_multipleFiles() async {
+  Future<void> test_multipleFiles() async {
     var a = newFile(join(testFolder, 'a.dart'), content: 'class A {}').path;
     var b = newFile(join(testFolder, 'b.dart'), content: 'class B {}').path;
 
@@ -126,7 +133,7 @@ mixin M {
     expect(declarationsResult.files, contains(b));
 
     {
-      ElementDeclaration declaration =
+      var declaration =
           declarationsResult.declarations.singleWhere((d) => d.name == 'A');
       expect(declaration.name, 'A');
       expect(declaration.kind, ElementKind.CLASS);
@@ -137,7 +144,7 @@ mixin M {
     }
 
     {
-      ElementDeclaration declaration =
+      var declaration =
           declarationsResult.declarations.singleWhere((d) => d.name == 'B');
       expect(declaration.name, 'B');
       expect(declaration.kind, ElementKind.CLASS);
@@ -145,7 +152,7 @@ mixin M {
     }
   }
 
-  test_onlyForFile() async {
+  Future<void> test_onlyForFile() async {
     var a = newFile(join(testFolder, 'a.dart'), content: 'class A {}').path;
     newFile(join(testFolder, 'b.dart'), content: 'class B {}').path;
 
@@ -160,17 +167,17 @@ mixin M {
     expect(declarationsResult.files[declaration.fileIndex], a);
   }
 
-  test_parameters() async {
+  Future<void> test_parameters() async {
     addTestFile(r'''
 void f(bool a, String b) {}
 ''');
     await _getDeclarations();
 
-    ElementDeclaration declaration = assertHas('f', ElementKind.FUNCTION);
+    var declaration = assertHas('f', ElementKind.FUNCTION);
     expect(declaration.parameters, '(bool a, String b)');
   }
 
-  test_regExp() async {
+  Future<void> test_regExp() async {
     addTestFile(r'''
 class A {}
 class B {}
@@ -185,7 +192,7 @@ class D {}
     assertNo('D');
   }
 
-  test_top() async {
+  Future<void> test_top() async {
     addTestFile(r'''
 int get g => 0;
 void set s(_) {}
@@ -205,13 +212,13 @@ typedef tf2<T> = int Function<S>(T tp, S sp);
   }
 
   Future<void> _getDeclarations(
-      {String file, String pattern, int maxResults}) async {
-    Request request = new SearchGetElementDeclarationsParams(
+      {String? file, String? pattern, int? maxResults}) async {
+    var request = SearchGetElementDeclarationsParams(
             file: file, pattern: pattern, maxResults: maxResults)
         .toRequest('0');
-    Response response = await waitResponse(request);
+    var response = await waitResponse(request);
 
     declarationsResult =
-        new SearchGetElementDeclarationsResult.fromResponse(response);
+        SearchGetElementDeclarationsResult.fromResponse(response);
   }
 }

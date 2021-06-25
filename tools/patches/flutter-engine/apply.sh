@@ -15,17 +15,20 @@
 # then it stops applying patches atomically as there isn't a patch available yet
 # for the new roll.
 #
+# Additionally, this script updates the flutter engine DEPS file with the
+# Dart SDK dependencies.
+#
 # Usage: src/third_party/dart/tools/patches/flutter-engine/apply.sh
 # (run inside the root of a flutter engine checkout)
 
 set -e
-if [ ! -e src/third_party/dart ]; then
-  echo "$0: error: "\
-       "This script must be run from the root of a flutter engine checkout" >&2
-  exit 1
-fi
-pinned_dart_sdk=$(grep -E "'dart_revision':.*" src/flutter/DEPS |
-                  sed -E "s/.*'([^']*)',/\1/")
+
+DIR=$(dirname -- "$(which -- "$0")")
+. $DIR/../utils.sh
+
+ensure_in_checkout_root
+
+pinned_dart_sdk=$(get_pinned_dart_version)
 need_runhooks=false
 patch=src/third_party/dart/tools/patches/flutter-engine/${pinned_dart_sdk}.flutter.patch
 if [ -e "$patch" ]; then
@@ -39,6 +42,12 @@ if [ -e "$patch" ]; then
   need_runhooks=true
 fi
 
+# Update the flutter DEPS with the revisions in the Dart SDK DEPS.
+src/tools/dart/create_updated_flutter_deps.py
+if ! (cd src/flutter && git diff --exit-code DEPS); then
+  need_runhooks=true
+fi
+
 if [ $need_runhooks = true ]; then
   # Check if .gclient configuration specifies a cache_dir. Local caches are used
   # by bots to reduce amount of Git traffic. .gclient configuration file
@@ -48,12 +57,12 @@ if [ $need_runhooks = true ]; then
   # referencing.
   # Normally gclient sync would update the cache - but we are bypassing
   # it here.
-  git_cache=$(python -c 'import imp; config = imp.load_source("config", ".gclient"); print getattr(config, "cache_dir", "")')
+  git_cache=$(python3 -c 'import imp; config = imp.load_source("config", ".gclient"); print(getattr(config, "cache_dir", ""))')
 
   # DEPS file might have been patched with new version of packages that
   # Dart SDK depends on. Get information about dependencies from the
   # DEPS file and forcefully update checkouts of those dependencies.
-  gclient revinfo | grep 'src/third_party/dart/' | while read -r line; do
+  gclient.py revinfo --ignore-dep-type=cipd | grep 'src/third_party/dart/third_party' | while read -r line; do
     # revinfo would produce lines in the following format:
     #     path: git-url@tag-or-hash
     # Where no spaces occur inside path, git-url or tag-or-hash.
@@ -64,8 +73,14 @@ if [ $need_runhooks = true ]; then
     line="${line/@/ }"
     line=(${line})
     dependency_path=${line[0]}
+    repo=${line[1]}
     dependency_tag_or_hash=${line[2]}
 
+    # If the dependency does not exist (e.g. was newly added) we need to clone
+    # the repository first into the right location.
+    if [ ! -e ${dependency_path} ]; then
+      git clone ${repo} ${dependency_path}
+    fi
     # Inside dependency compare HEAD to specified tag-or-hash by rev-parse'ing
     # them and comparing resulting hashes.
     # Note: tag^0 forces rev-parse to return commit hash rather then the hash of
@@ -82,5 +97,5 @@ if [ $need_runhooks = true ]; then
     fi
     popd > /dev/null
   done
-  gclient runhooks
+  gclient.py runhooks
 fi

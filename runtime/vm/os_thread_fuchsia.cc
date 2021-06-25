@@ -12,7 +12,6 @@
 #include <errno.h>  // NOLINT
 #include <zircon/status.h>
 #include <zircon/syscalls.h>
-#include <zircon/syscalls/object.h>
 #include <zircon/threads.h>
 #include <zircon/tls.h>
 #include <zircon/types.h>
@@ -57,7 +56,7 @@ namespace dart {
 
 static void ComputeTimeSpecMicros(struct timespec* ts, int64_t micros) {
   // time in nanoseconds.
-  zx_time_t now = zx_clock_get(ZX_CLOCK_MONOTONIC);
+  zx_time_t now = zx_clock_get_monotonic();
   zx_time_t target = now + (micros * kNanosecondsPerMicrosecond);
   int64_t secs = target / kNanosecondsPerSecond;
   int64_t nanos = target - (secs * kNanosecondsPerSecond);
@@ -134,7 +133,7 @@ int OSThread::Start(const char* name,
   return 0;
 }
 
-const ThreadId OSThread::kInvalidThreadId = ZX_KOID_INVALID;
+const ThreadId OSThread::kInvalidThreadId = ZX_HANDLE_INVALID;
 const ThreadJoinId OSThread::kInvalidThreadJoinId =
     static_cast<ThreadJoinId>(0);
 
@@ -164,18 +163,10 @@ intptr_t OSThread::GetMaxStackSize() {
 }
 
 ThreadId OSThread::GetCurrentThreadId() {
-  zx_info_handle_basic_t info;
-  zx_handle_t thread_handle = thrd_get_zx_handle(thrd_current());
-  zx_status_t status =
-      zx_object_get_info(thread_handle, ZX_INFO_HANDLE_BASIC, &info,
-                         sizeof(info), nullptr, nullptr);
-  if (status != ZX_OK) {
-    FATAL1("Failed to get thread koid: %s\n", zx_status_get_string(status));
-  }
-  return info.koid;
+  return thrd_get_zx_handle(thrd_current());
 }
 
-#ifndef PRODUCT
+#ifdef SUPPORT_TIMELINE
 ThreadId OSThread::GetCurrentThreadTraceId() {
   return pthread_self();
 }

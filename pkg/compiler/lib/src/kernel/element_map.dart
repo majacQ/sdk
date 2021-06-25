@@ -3,6 +3,8 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:kernel/ast.dart' as ir;
+import 'package:kernel/core_types.dart' as ir;
+import 'package:kernel/class_hierarchy.dart' as ir;
 import 'package:kernel/type_environment.dart' as ir;
 
 import '../constants/values.dart';
@@ -29,7 +31,14 @@ abstract class KernelToElementMap {
   /// Access to the [DartTypes] object.
   DartTypes get types;
 
+  /// Returns the core types for the underlying kernel model.
+  ir.CoreTypes get coreTypes;
+
+  /// Returns the type environment for the underlying kernel model.
   ir.TypeEnvironment get typeEnvironment;
+
+  /// Returns the class hierarchy for the underlying kernel model.
+  ir.ClassHierarchy get classHierarchy;
 
   /// Returns the [DartType] corresponding to [type].
   DartType getDartType(ir.DartType type);
@@ -44,16 +53,17 @@ abstract class KernelToElementMap {
   FunctionType getFunctionType(ir.FunctionNode node);
 
   /// Return the [InterfaceType] corresponding to the [cls] with the given
-  /// [typeArguments].
+  /// [typeArguments] and [nullability].
   InterfaceType createInterfaceType(
       ir.Class cls, List<ir.DartType> typeArguments);
 
   /// Returns the [CallStructure] corresponding to the [arguments].
   CallStructure getCallStructure(ir.Arguments arguments);
 
-  /// Returns the [Selector] corresponding to the invocation or getter/setter
-  /// access of [node].
-  Selector getSelector(ir.Expression node);
+  /// Returns the [Selector] corresponding to the invocation of [name] with
+  /// [arguments].
+  Selector getInvocationSelector(ir.Name name, int positionalArguments,
+      List<String> namedArguments, int typeArguments);
 
   /// Returns the [MemberEntity] corresponding to the member [node].
   MemberEntity getMember(ir.Member node);
@@ -70,14 +80,6 @@ abstract class KernelToElementMap {
 
   /// Returns the [ClassEntity] corresponding to the class [node].
   ClassEntity getClass(ir.Class node);
-
-  /// Returns the [TypedefType] corresponding to raw type of the typedef [node].
-  TypedefType getTypedefType(ir.Typedef node);
-
-  /// Returns the super [MemberEntity] for a super invocation, get or set of
-  /// [name] from the member [context].
-  MemberEntity getSuperMember(MemberEntity context, ir.Name name,
-      {bool setter: false});
 
   /// Returns the `noSuchMethod` [FunctionEntity] call from a
   /// `super.noSuchMethod` invocation within [cls].
@@ -102,9 +104,8 @@ abstract class KernelToElementMap {
   js.Name getNameForJsGetName(ConstantValue constant, Namer namer);
 
   /// Computes the [ConstantValue] for the constant [expression].
-  // TODO(johnniwinther): Move to [KernelToElementMapForBuilding]. This is only
-  // used in impact builder for symbol constants.
-  ConstantValue getConstantValue(ir.Expression expression,
+  ConstantValue getConstantValue(
+      ir.StaticTypeContext staticTypeContext, ir.Expression expression,
       {bool requireConstant: true, bool implicitNull: false});
 
   /// Return the [ImportEntity] corresponding to [node].
@@ -112,10 +113,6 @@ abstract class KernelToElementMap {
 
   /// Returns the defining node for [cls].
   ir.Class getClassNode(covariant ClassEntity cls);
-
-  /// Returns the static type of [node].
-  // TODO(johnniwinther): This should be provided directly from kernel.
-  DartType getStaticType(ir.Expression node);
 
   /// Adds libraries in [component] to the set of libraries.
   ///
@@ -142,11 +139,9 @@ abstract class KernelToElementMap {
   ConstructorEntity getSuperConstructor(
       ir.Constructor constructor, ir.Member target);
 
-  /// Returns `true` is [node] has a `@Native(...)` annotation.
-  bool isNativeClass(ir.Class node);
-
   /// Computes the native behavior for reading the native [field].
   NativeBehavior getNativeBehaviorForFieldLoad(ir.Field field,
+      Iterable<String> createsAnnotations, Iterable<String> returnsAnnotations,
       {bool isJsInterop});
 
   /// Computes the native behavior for writing to the native [field].
@@ -155,6 +150,7 @@ abstract class KernelToElementMap {
   /// Computes the native behavior for calling the function or constructor
   /// [member].
   NativeBehavior getNativeBehaviorForMethod(ir.Member member,
+      Iterable<String> createsAnnotations, Iterable<String> returnsAnnotations,
       {bool isJsInterop});
 
   /// Compute the kind of foreign helper function called by [node], if any.
@@ -164,21 +160,16 @@ abstract class KernelToElementMap {
   /// [JS_INTERCEPTOR_CONSTANT] function, if any.
   InterfaceType getInterfaceTypeForJsInterceptorCall(ir.StaticInvocation node);
 
-  /// Returns the [Local] corresponding to the [node]. The node must be either
-  /// a [ir.FunctionDeclaration] or [ir.FunctionExpression].
-  Local getLocalFunction(ir.TreeNode node);
+  /// Returns the [Local] corresponding to the local function [node].
+  Local getLocalFunction(ir.LocalFunction node);
 
   /// Returns the [ir.Library] corresponding to [library].
   ir.Library getLibraryNode(LibraryEntity library);
 
-  /// Returns the node that defines [typedef].
-  ir.Typedef getTypedefNode(covariant TypedefEntity typedef);
-
   /// Returns the defining node for [member].
   ir.Member getMemberNode(covariant MemberEntity member);
 
-  /// Returns the element type of a async/sync*/async* function.
-  DartType getFunctionAsyncOrSyncStarElementType(ir.FunctionNode functionNode);
+  ir.StaticTypeContext getStaticTypeContext(MemberEntity member);
 }
 
 /// Kinds of foreign functions.
@@ -188,4 +179,22 @@ enum ForeignKind {
   JS_EMBEDDED_GLOBAL,
   JS_INTERCEPTOR_CONSTANT,
   NONE,
+}
+
+// Members which dart2js ignores.
+bool memberIsIgnorable(ir.Member node, {ir.Class cls}) {
+  if (node is! ir.Procedure) return false;
+  ir.Procedure member = node;
+  switch (member.stubKind) {
+    case ir.ProcedureStubKind.Regular:
+    case ir.ProcedureStubKind.ConcreteForwardingStub:
+    case ir.ProcedureStubKind.NoSuchMethodForwarder:
+      return false;
+    case ir.ProcedureStubKind.AbstractForwardingStub:
+    case ir.ProcedureStubKind.MemberSignature:
+    case ir.ProcedureStubKind.AbstractMixinStub:
+    case ir.ProcedureStubKind.ConcreteMixinStub:
+      return true;
+  }
+  return false;
 }

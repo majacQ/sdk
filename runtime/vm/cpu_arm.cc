@@ -8,21 +8,23 @@
 #include "vm/cpu.h"
 #include "vm/cpu_arm.h"
 
-#include "vm/compiler/assembler/assembler.h"
 #include "vm/cpuinfo.h"
 #include "vm/heap/heap.h"
 #include "vm/isolate.h"
 #include "vm/object.h"
 #include "vm/simulator.h"
 
-#if !defined(USING_SIMULATOR)
+#if defined(HOST_OS_IOS)
+#include <libkern/OSCacheControl.h>
+#endif
+
+#if !defined(TARGET_HOST_MISMATCH)
 #include <sys/syscall.h> /* NOLINT */
 #include <unistd.h>      /* NOLINT */
 #endif
 
 // ARM version differences.
-// We support three major 32-bit ARM ISA versions: ARMv5TE, ARMv6 and variants,
-// and ARMv7 and variants. For each of these we detect the presence of vfp,
+// We support only ARMv7 and variants. We detect the presence of vfp,
 // neon, and integer division instructions. Considering ARMv5TE as the baseline,
 // later versions add the following features/instructions that we use:
 //
@@ -38,52 +40,24 @@
 //
 // If an aarch64 CPU is detected, we generate ARMv7 code.
 //
-// If an instruction is missing on ARMv5TE or ARMv6, we emulate it, if possible.
 // Where we are missing vfp, we do not unbox doubles, or generate intrinsics for
 // floating point operations. Where we are missing neon, we do not unbox SIMD
 // values, or inline operations on SIMD values. Where we are missing integer
 // division, we do not inline division operations, and we do not generate
 // intrinsics that do division. See the feature tests in flow_graph_optimizer.cc
 // for details.
-//
-// Alignment:
-//
-// Before ARMv6, that is only for ARMv5TE, unaligned accesses will cause a
-// crash. This includes the ldrd and strd instructions, which must use addresses
-// that are 8-byte aligned. Since we don't always guarantee that for our uses
-// of ldrd and strd, these instructions are emulated with two load or store
-// instructions on ARMv5TE. On ARMv6 and on, we assume that the kernel is
-// set up to fixup unaligned accesses. This can be verified by checking
-// /proc/cpu/alignment on modern Linux systems.
 
 namespace dart {
 
-#if defined(TARGET_ARCH_ARM_5TE)
-DEFINE_FLAG(bool, use_vfp, false, "Use vfp instructions if supported");
-DEFINE_FLAG(bool, use_neon, false, "Use neon instructions if supported");
-DEFINE_FLAG(bool,
-            use_integer_division,
-            false,
-            "Use integer division instruction if supported");
-#elif defined(TARGET_ARCH_ARM_6)
-DEFINE_FLAG(bool, use_vfp, true, "Use vfp instructions if supported");
-DEFINE_FLAG(bool, use_neon, false, "Use neon instructions if supported");
-DEFINE_FLAG(bool,
-            use_integer_division,
-            false,
-            "Use integer division instruction if supported");
-#else
 DEFINE_FLAG(bool, use_vfp, true, "Use vfp instructions if supported");
 DEFINE_FLAG(bool, use_neon, true, "Use neon instructions if supported");
 DEFINE_FLAG(bool,
             use_integer_division,
             true,
             "Use integer division instruction if supported");
-#endif
 
-#if defined(USING_SIMULATOR)
-#if defined(TARGET_ARCH_ARM_5TE) || defined(TARGET_OS_ANDROID) \
-    || defined(TARGET_OS_IOS)
+#if defined(TARGET_HOST_MISMATCH)
+#if defined(TARGET_OS_ANDROID) || defined(TARGET_OS_MACOS_IOS)
 DEFINE_FLAG(bool, sim_use_hardfp, false, "Use the hardfp ABI.");
 #else
 DEFINE_FLAG(bool, sim_use_hardfp, true, "Use the hardfp ABI.");
@@ -91,12 +65,9 @@ DEFINE_FLAG(bool, sim_use_hardfp, true, "Use the hardfp ABI.");
 #endif
 
 void CPU::FlushICache(uword start, uword size) {
-#if HOST_OS_IOS
-  // Precompilation never patches code so there should be no I cache flushes.
+#if defined(DART_PRECOMPILED_RUNTIME)
   UNREACHABLE();
-#endif
-
-#if !defined(USING_SIMULATOR) && !HOST_OS_IOS
+#elif !defined(TARGET_HOST_MISMATCH) && HOST_ARCH_ARM
   // Nothing to do. Flushing no instructions.
   if (size == 0) {
     return;
@@ -104,8 +75,15 @@ void CPU::FlushICache(uword start, uword size) {
 
 // ARM recommends using the gcc intrinsic __clear_cache on Linux, and the
 // library call cacheflush from unistd.h on Android:
-// blogs.arm.com/software-enablement/141-caches-and-self-modifying-code/
-#if defined(__linux__) && !defined(ANDROID)
+//
+// https://community.arm.com/developer/ip-products/processors/b/processors-ip-blog/posts/caches-and-self-modifying-code
+//
+// On iOS we use sys_icache_invalidate from Darwin. See:
+//
+// https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man3/sys_icache_invalidate.3.html
+#if defined(HOST_OS_IOS)
+  sys_icache_invalidate(reinterpret_cast<void*>(start), size);
+#elif defined(__linux__) && !defined(ANDROID)
   extern void __clear_cache(char*, char*);
   char* beg = reinterpret_cast<char*>(start);
   char* end = reinterpret_cast<char*>(start + size);
@@ -113,16 +91,16 @@ void CPU::FlushICache(uword start, uword size) {
 #elif defined(ANDROID)
   cacheflush(start, start + size, 0);
 #else
-#error FlushICache only tested/supported on Linux and Android
+#error FlushICache only tested/supported on Linux, Android and iOS
 #endif
 #endif
 }
 
 const char* CPU::Id() {
   return
-#if defined(USING_SIMULATOR)
+#if defined(TARGET_HOST_MISMATCH)
       "sim"
-#endif  // defined(USING_SIMULATOR)
+#endif  // defined(TARGET_HOST_MISMATCH)
       "arm";
 }
 
@@ -131,13 +109,12 @@ bool HostCPUFeatures::vfp_supported_ = false;
 bool HostCPUFeatures::neon_supported_ = false;
 bool HostCPUFeatures::hardfp_supported_ = false;
 const char* HostCPUFeatures::hardware_ = NULL;
-ARMVersion HostCPUFeatures::arm_version_ = ARMvUnknown;
 intptr_t HostCPUFeatures::store_pc_read_offset_ = 8;
 #if defined(DEBUG)
 bool HostCPUFeatures::initialized_ = false;
 #endif
 
-#if !defined(USING_SIMULATOR)
+#if !defined(TARGET_HOST_MISMATCH)
 #if HOST_OS_IOS
 void HostCPUFeatures::Init() {
   // TODO(24743): Actually check the CPU features and fail if we're missing
@@ -145,9 +122,6 @@ void HostCPUFeatures::Init() {
   hardware_ = "";
   // When the VM is targetted to ARMv7, pretend that the CPU is ARMv7 even if
   // the CPU is actually AArch64.
-  arm_version_ = ARMv7;
-  // Always assume we have floating point unit since we don't support ARMv6 in
-  // this path.
   vfp_supported_ = FLAG_use_vfp;
   integer_division_supported_ = FLAG_use_integer_division;
   neon_supported_ = FLAG_use_neon;
@@ -162,43 +136,30 @@ void HostCPUFeatures::Init() {
   CpuInfo::Init();
   hardware_ = CpuInfo::GetCpuModel();
 
-  // Check for ARMv5TE, ARMv6, ARMv7, or aarch64.
+  // Check for ARMv7, or aarch64.
   // It can be in either the Processor or Model information fields.
   if (CpuInfo::FieldContains(kCpuInfoProcessor, "aarch64") ||
       CpuInfo::FieldContains(kCpuInfoModel, "aarch64") ||
       CpuInfo::FieldContains(kCpuInfoArchitecture, "8") ||
       CpuInfo::FieldContains(kCpuInfoArchitecture, "AArch64")) {
     // pretend that this arm64 cpu is really an ARMv7
-    arm_version_ = ARMv7;
     is_arm64 = true;
-  } else if (CpuInfo::FieldContains(kCpuInfoProcessor, "ARM926EJ-S") ||
-             CpuInfo::FieldContains(kCpuInfoModel, "ARM926EJ-S")) {
-    // Lego Mindstorm EV3.
-    arm_version_ = ARMv5TE;
-    // On ARMv5, the PC read offset in an STR or STM instruction is either 8 or
-    // 12 bytes depending on the implementation. On the Mindstorm EV3 it is 12
-    // bytes.
-    store_pc_read_offset_ = 12;
-  } else if (CpuInfo::FieldContains(kCpuInfoProcessor, "Feroceon 88FR131") ||
-             CpuInfo::FieldContains(kCpuInfoModel, "Feroceon 88FR131")) {
-    // This is for the DGBox. For the time-being, assume it is similar to the
-    // Lego Mindstorm.
-    arm_version_ = ARMv5TE;
-    store_pc_read_offset_ = 12;
-  } else if (CpuInfo::FieldContains(kCpuInfoProcessor, "ARMv6") ||
-             CpuInfo::FieldContains(kCpuInfoModel, "ARMv6")) {
-    // Raspberry Pi, etc.
-    arm_version_ = ARMv6;
-  } else {
-    ASSERT(CpuInfo::FieldContains(kCpuInfoProcessor, "ARMv7") ||
-           CpuInfo::FieldContains(kCpuInfoModel, "ARMv7"));
-    arm_version_ = ARMv7;
+  } else if (!CpuInfo::FieldContains(kCpuInfoProcessor, "ARMv7") &&
+             !CpuInfo::FieldContains(kCpuInfoModel, "ARMv7") &&
+             !CpuInfo::FieldContains(kCpuInfoArchitecture, "7")) {
+#if !defined(DART_RUN_IN_QEMU_ARMv7)
+    FATAL("Unrecognized ARM CPU architecture.");
+#endif
   }
 
+#if defined(DART_RUN_IN_QEMU_ARMv7)
+  vfp_supported_ = true;
+#else
   // Has floating point unit.
   vfp_supported_ =
       (CpuInfo::FieldContains(kCpuInfoFeatures, "vfp") || is_arm64) &&
       FLAG_use_vfp;
+#endif
 
   // Has integer division.
   // Special cases:
@@ -208,6 +169,8 @@ void HostCPUFeatures::Init() {
   bool is_krait = CpuInfo::FieldContains(kCpuInfoHardware, "QCT APQ8064");
   bool is_armada_370xp =
       CpuInfo::FieldContains(kCpuInfoHardware, "Marvell Armada 370/XP");
+  bool is_virtual_machine =
+      CpuInfo::FieldContains(kCpuInfoHardware, "Dummy Virtual Machine");
 #if defined(HOST_OS_ANDROID)
   bool is_android = true;
 #else
@@ -225,6 +188,10 @@ void HostCPUFeatures::Init() {
     integer_division_supported_ = false;
   } else if (is_armada_370xp) {
     integer_division_supported_ = false;
+  } else if (is_android && !is_arm64 && is_virtual_machine) {
+    // Some Android ARM emulators claim support for integer division in
+    // /proc/cpuinfo but do not actually support it.
+    integer_division_supported_ = false;
   } else {
     integer_division_supported_ =
         (CpuInfo::FieldContains(kCpuInfoFeatures, "idiva") || is_arm64) &&
@@ -236,7 +203,7 @@ void HostCPUFeatures::Init() {
 
 // Use the cross-compiler's predefined macros to determine whether we should
 // use the hard or soft float ABI.
-#if defined(__ARM_PCS_VFP)
+#if defined(__ARM_PCS_VFP) || defined(DART_RUN_IN_QEMU_ARMv7)
   hardfp_supported_ = true;
 #else
   hardfp_supported_ = false;
@@ -265,14 +232,6 @@ void HostCPUFeatures::Init() {
   CpuInfo::Init();
   hardware_ = CpuInfo::GetCpuModel();
 
-#if defined(TARGET_ARCH_ARM_5TE)
-  arm_version_ = ARMv5TE;
-#elif defined(TARGET_ARCH_ARM_6)
-  arm_version_ = ARMv6;
-#else
-  arm_version_ = ARMv7;
-#endif
-
   integer_division_supported_ = FLAG_use_integer_division;
   vfp_supported_ = FLAG_use_vfp;
   neon_supported_ = FLAG_use_vfp && FLAG_use_neon;
@@ -292,7 +251,7 @@ void HostCPUFeatures::Cleanup() {
   hardware_ = NULL;
   CpuInfo::Cleanup();
 }
-#endif  // !defined(USING_SIMULATOR)
+#endif  // !defined(TARGET_HOST_MISMATCH)
 
 }  // namespace dart
 

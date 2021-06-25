@@ -4,7 +4,7 @@
 // VMOptions=--verbose_debug
 
 import 'package:observatory/service_io.dart';
-import 'package:unittest/unittest.dart';
+import 'package:test/test.dart';
 import 'service_test_common.dart';
 import 'test_helper.dart';
 import 'dart:developer';
@@ -32,7 +32,7 @@ var tests = <IsolateTest>[
 
 // Add breakpoint
   (Isolate isolate) async {
-    Library rootLib = await isolate.rootLibrary.load();
+    Library rootLib = await isolate.rootLibrary.load() as Library;
     var function =
         rootLib.functions.singleWhere((f) => f.name == 'testFunction');
 

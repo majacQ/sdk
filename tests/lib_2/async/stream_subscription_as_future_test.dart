@@ -2,13 +2,15 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 // Test the Stream.single method.
 library stream_single_test;
 
 import 'dart:async';
 
 import 'package:expect/expect.dart';
-import 'package:expect/async_minitest.dart';
+import 'package:async_helper/async_minitest.dart';
 
 main() {
   test("subscription.asFuture success", () {
@@ -114,7 +116,7 @@ main() {
   });
 
   test("subscription.asFuture failure in cancel", () {
-    runZoned(() {
+    runZonedGuarded(() {
       var completer = new Completer();
       var controller =
           new StreamController(onCancel: () => completer.future, sync: true);
@@ -135,7 +137,7 @@ main() {
         Expect.isFalse(catchErrorHasRun);
         completer.completeError(499);
       }));
-    }, onError: expectAsync((e) {
+    }, expectAsync2((e, s) {
       Expect.equals(499, e);
     }));
   });

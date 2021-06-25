@@ -7,35 +7,27 @@ import 'dart:async';
 import 'package:observatory/models.dart' as M;
 import 'package:observatory/src/elements/class_ref.dart';
 import 'package:observatory/src/elements/helpers/rendering_scheduler.dart';
-import 'package:observatory/src/elements/helpers/tag.dart';
+import 'package:observatory/src/elements/helpers/custom_element.dart';
 import 'package:observatory/src/elements/inbound_references.dart';
 import 'package:observatory/src/elements/retaining_path.dart';
 import 'package:observatory/src/elements/sentinel_value.dart';
 import 'package:observatory/utils.dart';
 
-class ObjectCommonElement extends HtmlElement implements Renderable {
-  static const tag =
-      const Tag<ObjectCommonElement>('object-common', dependencies: const [
-    ClassRefElement.tag,
-    InboundReferencesElement.tag,
-    RetainingPathElement.tag,
-    SentinelValueElement.tag
-  ]);
-
-  RenderingScheduler<ObjectCommonElement> _r;
+class ObjectCommonElement extends CustomElement implements Renderable {
+  late RenderingScheduler<ObjectCommonElement> _r;
 
   Stream<RenderedEvent<ObjectCommonElement>> get onRendered => _r.onRendered;
 
-  M.IsolateRef _isolate;
-  M.Object _object;
-  M.RetainedSizeRepository _retainedSizes;
-  M.ReachableSizeRepository _reachableSizes;
-  M.InboundReferencesRepository _references;
-  M.RetainingPathRepository _retainingPaths;
-  M.ObjectRepository _objects;
-  M.Guarded<M.Instance> _retainedSize = null;
+  late M.IsolateRef _isolate;
+  late M.Object _object;
+  late M.RetainedSizeRepository _retainedSizes;
+  late M.ReachableSizeRepository _reachableSizes;
+  late M.InboundReferencesRepository _references;
+  late M.RetainingPathRepository _retainingPaths;
+  late M.ObjectRepository _objects;
+  M.Guarded<M.Instance>? _retainedSize = null;
   bool _loadingRetainedBytes = false;
-  M.Guarded<M.Instance> _reachableSize = null;
+  M.Guarded<M.Instance>? _reachableSize = null;
   bool _loadingReachableBytes = false;
 
   M.IsolateRef get isolate => _isolate;
@@ -49,7 +41,7 @@ class ObjectCommonElement extends HtmlElement implements Renderable {
       M.InboundReferencesRepository references,
       M.RetainingPathRepository retainingPaths,
       M.ObjectRepository objects,
-      {RenderingQueue queue}) {
+      {RenderingQueue? queue}) {
     assert(isolate != null);
     assert(object != null);
     assert(retainedSizes != null);
@@ -57,7 +49,7 @@ class ObjectCommonElement extends HtmlElement implements Renderable {
     assert(references != null);
     assert(retainingPaths != null);
     assert(objects != null);
-    ObjectCommonElement e = document.createElement(tag.name);
+    ObjectCommonElement e = new ObjectCommonElement.created();
     e._r = new RenderingScheduler<ObjectCommonElement>(e, queue: queue);
     e._isolate = isolate;
     e._object = object;
@@ -69,7 +61,7 @@ class ObjectCommonElement extends HtmlElement implements Renderable {
     return e;
   }
 
-  ObjectCommonElement.created() : super.created();
+  ObjectCommonElement.created() : super.created('object-common');
 
   @override
   void attached() {
@@ -84,8 +76,8 @@ class ObjectCommonElement extends HtmlElement implements Renderable {
     children = <Element>[];
   }
 
-  RetainingPathElement _path;
-  InboundReferencesElement _inbounds;
+  RetainingPathElement? _path;
+  InboundReferencesElement? _inbounds;
 
   void render() {
     _path = _path ??
@@ -109,8 +101,9 @@ class ObjectCommonElement extends HtmlElement implements Renderable {
                 ..children = <Element>[
                   _object.clazz == null
                       ? (new SpanElement()..text = '...')
-                      : new ClassRefElement(_isolate, _object.clazz,
-                          queue: _r.queue)
+                      : new ClassRefElement(_isolate, _object.clazz!,
+                              queue: _r.queue)
+                          .element
                 ]
             ],
           new DivElement()
@@ -156,7 +149,7 @@ class ObjectCommonElement extends HtmlElement implements Renderable {
                 ..text = 'Retaining path ',
               new DivElement()
                 ..classes = ['memberValue']
-                ..children = <Element>[_path]
+                ..children = <Element>[_path!.element]
             ],
           new DivElement()
             ..classes = ['memberItem']
@@ -167,7 +160,7 @@ class ObjectCommonElement extends HtmlElement implements Renderable {
                 ..text = 'Inbound references ',
               new DivElement()
                 ..classes = ['memberValue']
-                ..children = <Element>[_inbounds]
+                ..children = <Element>[_inbounds!.element]
             ]
         ]
     ];
@@ -176,13 +169,14 @@ class ObjectCommonElement extends HtmlElement implements Renderable {
   List<Element> _createReachableSizeValue() {
     final content = <Element>[];
     if (_reachableSize != null) {
-      if (_reachableSize.isSentinel) {
-        content.add(new SentinelValueElement(_reachableSize.asSentinel,
-            queue: _r.queue));
+      if (_reachableSize!.isSentinel) {
+        content.add(new SentinelValueElement(_reachableSize!.asSentinel!,
+                queue: _r.queue)
+            .element);
       } else {
         content.add(new SpanElement()
-          ..text = Utils
-              .formatSize(int.parse(_reachableSize.asValue.valueAsString)));
+          ..text = Utils.formatSize(
+              int.parse(_reachableSize!.asValue!.valueAsString!)));
       }
     } else {
       content.add(new SpanElement()..text = '...');
@@ -194,7 +188,7 @@ class ObjectCommonElement extends HtmlElement implements Renderable {
     button.onClick.listen((_) async {
       button.disabled = true;
       _loadingReachableBytes = true;
-      _reachableSize = await _reachableSizes.get(_isolate, _object.id);
+      _reachableSize = await _reachableSizes.get(_isolate, _object.id!);
       _r.dirty();
     });
     content.add(button);
@@ -204,13 +198,14 @@ class ObjectCommonElement extends HtmlElement implements Renderable {
   List<Element> _createRetainedSizeValue() {
     final content = <Element>[];
     if (_retainedSize != null) {
-      if (_retainedSize.isSentinel) {
-        content.add(new SentinelValueElement(_retainedSize.asSentinel,
-            queue: _r.queue));
+      if (_retainedSize!.isSentinel) {
+        content.add(new SentinelValueElement(_retainedSize!.asSentinel!,
+                queue: _r.queue)
+            .element);
       } else {
         content.add(new SpanElement()
-          ..text =
-              Utils.formatSize(int.parse(_retainedSize.asValue.valueAsString)));
+          ..text = Utils.formatSize(
+              int.parse(_retainedSize!.asValue!.valueAsString!)));
       }
     } else {
       content.add(new SpanElement()..text = '...');
@@ -222,7 +217,7 @@ class ObjectCommonElement extends HtmlElement implements Renderable {
     button.onClick.listen((_) async {
       button.disabled = true;
       _loadingRetainedBytes = true;
-      _retainedSize = await _retainedSizes.get(_isolate, _object.id);
+      _retainedSize = await _retainedSizes.get(_isolate, _object.id!);
       _r.dirty();
     });
     content.add(button);

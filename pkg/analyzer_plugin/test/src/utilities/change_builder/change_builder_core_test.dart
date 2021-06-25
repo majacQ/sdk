@@ -6,10 +6,13 @@ import 'package:analyzer/src/generated/source.dart';
 import 'package:analyzer_plugin/protocol/protocol_common.dart';
 import 'package:analyzer_plugin/src/utilities/change_builder/change_builder_core.dart';
 import 'package:analyzer_plugin/utilities/change_builder/change_builder_core.dart';
+import 'package:analyzer_plugin/utilities/change_builder/conflicting_edit_exception.dart';
 import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
-main() {
+import 'mocks.dart';
+
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(ChangeBuilderImplTest);
     defineReflectiveTests(EditBuilderImplTest);
@@ -20,35 +23,94 @@ main() {
 
 @reflectiveTest
 class ChangeBuilderImplTest {
-  test_createFileEditBuilder() async {
-    ChangeBuilderImpl builder = new ChangeBuilderImpl();
-    String path = '/test.dart';
-    FileEditBuilderImpl fileEditBuilder =
-        await builder.createFileEditBuilder(path);
-    expect(fileEditBuilder, const TypeMatcher<FileEditBuilder>());
-    SourceFileEdit fileEdit = fileEditBuilder.fileEdit;
-    expect(fileEdit.file, path);
+  void test_copy_empty() {
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    var copy = builder.copy() as ChangeBuilderImpl;
+    expect(identical(copy, builder), isFalse);
+    expect(copy.workspace, builder.workspace);
+    expect(copy.eol, builder.eol);
+  }
+
+  Future<void> test_copy_newEdit() async {
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    await builder.addGenericFileEdit('/test.dart', (builder) {
+      builder.addSimpleInsertion(0, 'x');
+    });
+    var copy = builder.copy() as ChangeBuilderImpl;
+    await copy.addGenericFileEdit('/test.dart', (builder) {
+      builder.addSimpleInsertion(10, 'x');
+    });
+    var change = builder.sourceChange;
+    expect(change.edits[0].edits, hasLength(1));
+  }
+
+  Future<void> test_copy_newFile() async {
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    await builder.addGenericFileEdit('/test1.dart', (builder) {
+      builder.addSimpleInsertion(0, 'x');
+    });
+    var copy = builder.copy() as ChangeBuilderImpl;
+    await copy.addGenericFileEdit('/test2.dart', (builder) {
+      builder.addSimpleInsertion(0, 'x');
+    });
+    var change = builder.sourceChange;
+    expect(change.edits, hasLength(1));
+  }
+
+  Future<void> test_copy_newLinkedEditGroup() async {
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    await builder.addGenericFileEdit('/test.dart', (builder) {
+      builder.addLinkedPosition(SourceRange(1, 2), 'a');
+    });
+    var copy = builder.copy() as ChangeBuilderImpl;
+    await copy.addGenericFileEdit('/test.dart', (builder) {
+      builder.addLinkedPosition(SourceRange(3, 4), 'b');
+    });
+    var change = builder.sourceChange;
+    expect(change.linkedEditGroups, hasLength(1));
+  }
+
+  Future<void> test_copy_newLinkedPosition() async {
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    await builder.addGenericFileEdit('/test.dart', (builder) {
+      builder.addLinkedPosition(SourceRange(1, 2), 'a');
+    });
+    var copy = builder.copy() as ChangeBuilderImpl;
+    await copy.addGenericFileEdit('/test.dart', (builder) {
+      builder.addLinkedPosition(SourceRange(3, 4), 'a');
+    });
+    var change = builder.sourceChange;
+    expect(change.linkedEditGroups[0].positions, hasLength(1));
+  }
+
+  Future<void> test_copy_selection() async {
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    builder.setSelection(Position('/test.dart', 5));
+    var copy = builder.copy() as ChangeBuilderImpl;
+    copy.setSelection(Position('/test.dart', 10));
+    var change = builder.sourceChange;
+    expect(change.selection!.offset, 5);
   }
 
   void test_getLinkedEditGroup() {
-    ChangeBuilderImpl builder = new ChangeBuilderImpl();
-    LinkedEditGroup group = builder.getLinkedEditGroup('a');
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    var group = builder.getLinkedEditGroup('a');
     expect(identical(builder.getLinkedEditGroup('b'), group), isFalse);
     expect(identical(builder.getLinkedEditGroup('a'), group), isTrue);
   }
 
   void test_setSelection() {
-    Position position = new Position('test.dart', 3);
-    ChangeBuilderImpl builder = new ChangeBuilderImpl();
+    var position = Position('test.dart', 3);
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
     builder.setSelection(position);
     expect(builder.sourceChange.selection, position);
   }
 
   void test_sourceChange_emptyEdit() async {
-    ChangeBuilderImpl builder = new ChangeBuilderImpl();
-    String path = '/test.dart';
-    await builder.addFileEdit(path, (FileEditBuilder builder) {});
-    SourceChange sourceChange = builder.sourceChange;
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    var path = '/test.dart';
+    await builder.addGenericFileEdit(path, (builder) {});
+    var sourceChange = builder.sourceChange;
     expect(sourceChange, isNotNull);
     expect(sourceChange.edits, isEmpty);
     expect(sourceChange.linkedEditGroups, isEmpty);
@@ -57,8 +119,8 @@ class ChangeBuilderImplTest {
   }
 
   void test_sourceChange_noEdits() {
-    ChangeBuilderImpl builder = new ChangeBuilderImpl();
-    SourceChange sourceChange = builder.sourceChange;
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    var sourceChange = builder.sourceChange;
     expect(sourceChange, isNotNull);
     expect(sourceChange.edits, isEmpty);
     expect(sourceChange.linkedEditGroups, isEmpty);
@@ -66,14 +128,14 @@ class ChangeBuilderImplTest {
     expect(sourceChange.selection, isNull);
   }
 
-  test_sourceChange_oneChange() async {
-    ChangeBuilderImpl builder = new ChangeBuilderImpl();
-    String path = '/test.dart';
-    await builder.addFileEdit(path, (FileEditBuilder builder) {
+  Future<void> test_sourceChange_oneChange() async {
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    var path = '/test.dart';
+    await builder.addGenericFileEdit(path, (builder) {
       builder.addSimpleInsertion(0, '_');
     });
     builder.getLinkedEditGroup('a');
-    SourceChange sourceChange = builder.sourceChange;
+    var sourceChange = builder.sourceChange;
     expect(sourceChange, isNotNull);
     expect(sourceChange.edits, hasLength(1));
     expect(sourceChange.linkedEditGroups, hasLength(1));
@@ -86,156 +148,154 @@ class ChangeBuilderImplTest {
 class EditBuilderImplTest {
   String path = '/test.dart';
 
-  test_addLinkedEdit() async {
-    ChangeBuilderImpl builder = new ChangeBuilderImpl();
-    int offset = 10;
-    String text = 'content';
-    await builder.addFileEdit(path, (FileEditBuilder builder) {
-      builder.addInsertion(10, (EditBuilder builder) {
-        builder.addLinkedEdit('a', (LinkedEditBuilder builder) {
+  Future<void> test_addLinkedEdit() async {
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    var offset = 10;
+    var text = 'content';
+    await builder.addGenericFileEdit(path, (builder) {
+      builder.addInsertion(10, (builder) {
+        builder.addLinkedEdit('a', (builder) {
           builder.write(text);
         });
-        SourceEdit sourceEdit = (builder as EditBuilderImpl).sourceEdit;
+        var sourceEdit = (builder as EditBuilderImpl).sourceEdit;
         expect(sourceEdit.replacement, text);
       });
     });
-    SourceChange sourceChange = builder.sourceChange;
+    var sourceChange = builder.sourceChange;
     expect(sourceChange, isNotNull);
-    List<LinkedEditGroup> groups = sourceChange.linkedEditGroups;
+    var groups = sourceChange.linkedEditGroups;
     expect(groups, hasLength(1));
-    LinkedEditGroup group = groups[0];
+    var group = groups[0];
     expect(group, isNotNull);
     expect(group.length, text.length);
-    List<Position> positions = group.positions;
+    var positions = group.positions;
     expect(positions, hasLength(1));
     expect(positions[0].offset, offset);
   }
 
-  test_addSimpleLinkedEdit() async {
-    ChangeBuilderImpl builder = new ChangeBuilderImpl();
-    int offset = 10;
-    String text = 'content';
-    await builder.addFileEdit(path, (FileEditBuilder builder) {
-      builder.addInsertion(10, (EditBuilder builder) {
+  Future<void> test_addSimpleLinkedEdit() async {
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    var offset = 10;
+    var text = 'content';
+    await builder.addGenericFileEdit(path, (builder) {
+      builder.addInsertion(10, (builder) {
         builder.addSimpleLinkedEdit('a', text);
-        SourceEdit sourceEdit = (builder as EditBuilderImpl).sourceEdit;
+        var sourceEdit = (builder as EditBuilderImpl).sourceEdit;
         expect(sourceEdit.replacement, text);
       });
     });
-    SourceChange sourceChange = builder.sourceChange;
+    var sourceChange = builder.sourceChange;
     expect(sourceChange, isNotNull);
-    List<LinkedEditGroup> groups = sourceChange.linkedEditGroups;
+    var groups = sourceChange.linkedEditGroups;
     expect(groups, hasLength(1));
-    LinkedEditGroup group = groups[0];
+    var group = groups[0];
     expect(group, isNotNull);
     expect(group.length, text.length);
-    List<Position> positions = group.positions;
+    var positions = group.positions;
     expect(positions, hasLength(1));
     expect(positions[0].offset, offset);
   }
 
-  test_createLinkedEditBuilder() async {
-    ChangeBuilderImpl builder = new ChangeBuilderImpl();
-    await builder.addFileEdit(path, (FileEditBuilder builder) {
-      builder.addInsertion(10, (EditBuilder builder) {
-        LinkedEditBuilderImpl linkBuilder =
+  Future<void> test_createLinkedEditBuilder() async {
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    await builder.addGenericFileEdit(path, (builder) {
+      builder.addInsertion(10, (builder) {
+        var linkBuilder =
             (builder as EditBuilderImpl).createLinkedEditBuilder();
         expect(linkBuilder, const TypeMatcher<LinkedEditBuilder>());
       });
     });
   }
 
-  test_selectHere() async {
-    ChangeBuilderImpl builder = new ChangeBuilderImpl();
-    await builder.addFileEdit(path, (FileEditBuilder builder) {
+  Future<void> test_selectHere() async {
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    await builder.addGenericFileEdit(path, (builder) {
       builder.addInsertion(10, (EditBuilder builder) {
         builder.selectHere();
       });
     });
-    expect(builder.sourceChange.selection.offset, 10);
+    expect(builder.sourceChange.selection!.offset, 10);
   }
 
-  test_write() async {
-    ChangeBuilderImpl builder = new ChangeBuilderImpl();
-    int offset = 10;
-    String text = 'write';
-    await builder.addFileEdit(path, (FileEditBuilder builder) {
-      builder.addInsertion(offset, (EditBuilder builder) {
+  Future<void> test_write() async {
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    var offset = 10;
+    var text = 'write';
+    await builder.addGenericFileEdit(path, (builder) {
+      builder.addInsertion(offset, (builder) {
         builder.write(text);
       });
     });
 
-    SourceChange sourceChange = builder.sourceChange;
+    var sourceChange = builder.sourceChange;
     expect(sourceChange, isNotNull);
 
-    List<SourceFileEdit> fileEdits = sourceChange.edits;
+    var fileEdits = sourceChange.edits;
     expect(fileEdits, hasLength(1));
-    SourceFileEdit fileEdit = fileEdits[0];
+    var fileEdit = fileEdits[0];
     expect(fileEdit, isNotNull);
     expect(fileEdit.file, path);
 
-    List<SourceEdit> edits = fileEdit.edits;
+    var edits = fileEdit.edits;
     expect(edits, hasLength(1));
-    SourceEdit edit = edits[0];
+    var edit = edits[0];
     expect(edit, isNotNull);
     expect(edit.offset, offset);
     expect(edit.length, 0);
     expect(edit.replacement, text);
   }
 
-  test_writeln_withoutText() async {
-    ChangeBuilderImpl builder = new ChangeBuilderImpl();
-    int offset = 52;
-    int length = 12;
-    await builder.addFileEdit(path, (FileEditBuilder builder) {
-      builder.addReplacement(new SourceRange(offset, length),
-          (EditBuilder builder) {
+  Future<void> test_writeln_withoutText() async {
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    var offset = 52;
+    var length = 12;
+    await builder.addGenericFileEdit(path, (builder) {
+      builder.addReplacement(SourceRange(offset, length), (builder) {
         builder.writeln();
       });
     });
 
-    SourceChange sourceChange = builder.sourceChange;
+    var sourceChange = builder.sourceChange;
     expect(sourceChange, isNotNull);
 
-    List<SourceFileEdit> fileEdits = sourceChange.edits;
+    var fileEdits = sourceChange.edits;
     expect(fileEdits, hasLength(1));
-    SourceFileEdit fileEdit = fileEdits[0];
+    var fileEdit = fileEdits[0];
     expect(fileEdit, isNotNull);
     expect(fileEdit.file, path);
 
-    List<SourceEdit> edits = fileEdit.edits;
+    var edits = fileEdit.edits;
     expect(edits, hasLength(1));
-    SourceEdit edit = edits[0];
+    var edit = edits[0];
     expect(edit, isNotNull);
     expect(edit.offset, offset);
     expect(edit.length, length);
     expect(edit.replacement == '\n' || edit.replacement == '\r\n', isTrue);
   }
 
-  test_writeln_withText() async {
-    ChangeBuilderImpl builder = new ChangeBuilderImpl();
-    int offset = 52;
-    int length = 12;
-    String text = 'writeln';
-    await builder.addFileEdit(path, (FileEditBuilder builder) {
-      builder.addReplacement(new SourceRange(offset, length),
-          (EditBuilder builder) {
+  Future<void> test_writeln_withText() async {
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    var offset = 52;
+    var length = 12;
+    var text = 'writeln';
+    await builder.addGenericFileEdit(path, (builder) {
+      builder.addReplacement(SourceRange(offset, length), (builder) {
         builder.writeln(text);
       });
     });
 
-    SourceChange sourceChange = builder.sourceChange;
+    var sourceChange = builder.sourceChange;
     expect(sourceChange, isNotNull);
 
-    List<SourceFileEdit> fileEdits = sourceChange.edits;
+    var fileEdits = sourceChange.edits;
     expect(fileEdits, hasLength(1));
-    SourceFileEdit fileEdit = fileEdits[0];
+    var fileEdit = fileEdits[0];
     expect(fileEdit, isNotNull);
     expect(fileEdit.file, path);
 
-    List<SourceEdit> edits = fileEdit.edits;
+    var edits = fileEdit.edits;
     expect(edits, hasLength(1));
-    SourceEdit edit = edits[0];
+    var edit = edits[0];
     expect(edit, isNotNull);
     expect(edit.offset, offset);
     expect(edit.length, length);
@@ -248,92 +308,233 @@ class EditBuilderImplTest {
 class FileEditBuilderImplTest {
   String path = '/test.dart';
 
-  test_addDeletion() async {
-    int offset = 23;
-    int length = 7;
-    ChangeBuilderImpl builder = new ChangeBuilderImpl();
-    await builder.addFileEdit(path, (FileEditBuilder builder) {
-      builder.addDeletion(new SourceRange(offset, length));
+  Future<void> test_addDeletion() async {
+    var offset = 23;
+    var length = 7;
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    await builder.addGenericFileEdit(path, (builder) {
+      builder.addDeletion(SourceRange(offset, length));
     });
-    List<SourceEdit> edits = builder.sourceChange.edits[0].edits;
+    var edits = builder.sourceChange.edits[0].edits;
     expect(edits, hasLength(1));
     expect(edits[0].offset, offset);
     expect(edits[0].length, length);
     expect(edits[0].replacement, isEmpty);
   }
 
-  test_addInsertion() async {
-    ChangeBuilderImpl builder = new ChangeBuilderImpl();
-    await builder.addFileEdit(path, (FileEditBuilder builder) {
-      builder.addInsertion(10, (EditBuilder builder) {
+  Future<void> test_addDeletion_adjacent_lowerOffsetFirst() async {
+    // TODO(brianwilkerson) This should also merge the deletions, but is written
+    //  to ensure that existing uses of FileEditBuilder continue to work even
+    //  without that change.
+    var firstOffset = 23;
+    var firstLength = 7;
+    var secondOffset = 30;
+    var secondLength = 5;
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    await builder.addGenericFileEdit(path, (builder) {
+      builder.addDeletion(SourceRange(firstOffset, firstLength));
+      builder.addDeletion(SourceRange(secondOffset, secondLength));
+    });
+    var edits = builder.sourceChange.edits[0].edits;
+    expect(edits, hasLength(2));
+    expect(edits[0].offset, secondOffset);
+    expect(edits[0].length, secondLength);
+    expect(edits[0].replacement, isEmpty);
+    expect(edits[1].offset, firstOffset);
+    expect(edits[1].length, firstLength);
+    expect(edits[1].replacement, isEmpty);
+  }
+
+  Future<void> test_addDeletion_adjacent_lowerOffsetSecond() async {
+    // TODO(brianwilkerson) This should also merge the deletions, but is written
+    //  to ensure that existing uses of FileEditBuilder continue to work even
+    //  without that change.
+    var firstOffset = 23;
+    var firstLength = 7;
+    var secondOffset = 30;
+    var secondLength = 5;
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    await builder.addGenericFileEdit(path, (builder) {
+      builder.addDeletion(SourceRange(secondOffset, secondLength));
+      builder.addDeletion(SourceRange(firstOffset, firstLength));
+    });
+    var edits = builder.sourceChange.edits[0].edits;
+    expect(edits, hasLength(2));
+    expect(edits[0].offset, secondOffset);
+    expect(edits[0].length, secondLength);
+    expect(edits[0].replacement, isEmpty);
+    expect(edits[1].offset, firstOffset);
+    expect(edits[1].length, firstLength);
+    expect(edits[1].replacement, isEmpty);
+  }
+
+  @failingTest
+  Future<void> test_addDeletion_overlapping() async {
+    // This support is not yet implemented.
+    var firstOffset = 23;
+    var firstLength = 7;
+    var secondOffset = 27;
+    var secondLength = 8;
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    await builder.addGenericFileEdit(path, (builder) {
+      builder.addDeletion(SourceRange(firstOffset, firstLength));
+      builder.addDeletion(SourceRange(secondOffset, secondLength));
+    });
+    var edits = builder.sourceChange.edits[0].edits;
+    expect(edits, hasLength(1));
+    expect(edits[0].offset, firstOffset);
+    expect(edits[0].length, secondOffset + secondLength - firstOffset);
+    expect(edits[0].replacement, isEmpty);
+  }
+
+  Future<void> test_addInsertion() async {
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    await builder.addGenericFileEdit(path, (builder) {
+      builder.addInsertion(10, (builder) {
         expect(builder, isNotNull);
       });
     });
   }
 
-  test_addLinkedPosition() async {
-    ChangeBuilderImpl builder = new ChangeBuilderImpl();
-    String groupName = 'a';
-    await builder.addFileEdit(path, (FileEditBuilder builder) {
-      builder.addLinkedPosition(new SourceRange(3, 6), groupName);
+  Future<void> test_addLinkedPosition() async {
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    var groupName = 'a';
+    await builder.addGenericFileEdit(path, (builder) {
+      builder.addLinkedPosition(SourceRange(3, 6), groupName);
     });
 
-    LinkedEditGroup group = builder.getLinkedEditGroup(groupName);
-    List<Position> positions = group.positions;
+    var group = builder.getLinkedEditGroup(groupName);
+    var positions = group.positions;
     expect(positions, hasLength(1));
-    Position position = positions[0];
+    var position = positions[0];
     expect(position.file, path);
     expect(position.offset, 3);
     expect(group.length, 6);
   }
 
-  test_addReplacement() async {
-    ChangeBuilderImpl builder = new ChangeBuilderImpl();
-    await builder.addFileEdit(path, (FileEditBuilder builder) {
-      builder.addReplacement(new SourceRange(4, 5), (EditBuilder builder) {
+  Future<void> test_addReplacement() async {
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    await builder.addGenericFileEdit(path, (builder) {
+      builder.addReplacement(SourceRange(4, 5), (builder) {
         expect(builder, isNotNull);
       });
     });
   }
 
-  test_addSimpleInsertion() async {
-    int offset = 23;
-    String text = 'xyz';
-    ChangeBuilderImpl builder = new ChangeBuilderImpl();
-    await builder.addFileEdit(path, (FileEditBuilder builder) {
+  Future<void> test_addSimpleInsertion() async {
+    var offset = 23;
+    var text = 'xyz';
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    await builder.addGenericFileEdit(path, (builder) {
       builder.addSimpleInsertion(offset, text);
     });
-    List<SourceEdit> edits = builder.sourceChange.edits[0].edits;
+    var edits = builder.sourceChange.edits[0].edits;
     expect(edits, hasLength(1));
     expect(edits[0].offset, offset);
     expect(edits[0].length, 0);
     expect(edits[0].replacement, text);
   }
 
-  test_addSimpleReplacement() async {
-    int offset = 23;
-    int length = 7;
-    String text = 'xyz';
-    ChangeBuilderImpl builder = new ChangeBuilderImpl();
-    await builder.addFileEdit(path, (FileEditBuilder builder) {
-      builder.addSimpleReplacement(new SourceRange(offset, length), text);
+  Future<void> test_addSimpleInsertion_sameOffset() async {
+    var offset = 23;
+    var text = 'xyz';
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    await builder.addGenericFileEdit(path, (builder) {
+      builder.addSimpleInsertion(offset, text);
+      builder.addSimpleInsertion(offset, 'abc');
     });
-    List<SourceEdit> edits = builder.sourceChange.edits[0].edits;
+    var edits = builder.sourceChange.edits[0].edits;
+    expect(edits, hasLength(2));
+    expect(edits[0].offset, offset);
+    expect(edits[0].length, 0);
+    expect(edits[0].replacement, 'abc');
+    expect(edits[1].offset, offset);
+    expect(edits[1].length, 0);
+    expect(edits[1].replacement, text);
+  }
+
+  Future<void> test_addSimpleReplacement() async {
+    var offset = 23;
+    var length = 7;
+    var text = 'xyz';
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    await builder.addGenericFileEdit(path, (builder) {
+      builder.addSimpleReplacement(SourceRange(offset, length), text);
+    });
+    var edits = builder.sourceChange.edits[0].edits;
     expect(edits, hasLength(1));
     expect(edits[0].offset, offset);
     expect(edits[0].length, length);
     expect(edits[0].replacement, text);
   }
 
-  test_createEditBuilder() async {
-    ChangeBuilderImpl builder = new ChangeBuilderImpl();
-    await builder.addFileEdit(path, (FileEditBuilder builder) {
-      int offset = 4;
-      int length = 5;
-      EditBuilderImpl editBuilder =
+  Future<void> test_addSimpleReplacement_adjacent() async {
+    var firstOffset = 23;
+    var firstLength = 7;
+    var secondOffset = firstOffset + firstLength;
+    var secondLength = 5;
+    var text = 'xyz';
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    await builder.addGenericFileEdit(path, (builder) {
+      builder.addSimpleReplacement(SourceRange(firstOffset, firstLength), text);
+      builder.addSimpleReplacement(
+          SourceRange(secondOffset, secondLength), text);
+    });
+    var edits = builder.sourceChange.edits[0].edits;
+    expect(edits, hasLength(2));
+    expect(edits[0].offset, secondOffset);
+    expect(edits[0].length, secondLength);
+    expect(edits[0].replacement, text);
+    expect(edits[1].offset, firstOffset);
+    expect(edits[1].length, firstLength);
+    expect(edits[1].replacement, text);
+  }
+
+  Future<void> test_addSimpleReplacement_overlapsHead() async {
+    var offset = 23;
+    var length = 7;
+    var text = 'xyz';
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    await builder.addGenericFileEdit(path, (builder) {
+      builder.addSimpleReplacement(SourceRange(offset, length), text);
+      expect(() {
+        builder.addSimpleReplacement(SourceRange(offset - 2, length), text);
+      }, throwsA(isA<ConflictingEditException>()));
+    });
+    var edits = builder.sourceChange.edits[0].edits;
+    expect(edits, hasLength(1));
+    expect(edits[0].offset, offset);
+    expect(edits[0].length, length);
+    expect(edits[0].replacement, text);
+  }
+
+  Future<void> test_addSimpleReplacement_overlapsTail() async {
+    var offset = 23;
+    var length = 7;
+    var text = 'xyz';
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    await builder.addGenericFileEdit(path, (builder) {
+      builder.addSimpleReplacement(SourceRange(offset, length), text);
+      expect(() {
+        builder.addSimpleReplacement(SourceRange(offset + 2, length), text);
+      }, throwsA(isA<ConflictingEditException>()));
+    });
+    var edits = builder.sourceChange.edits[0].edits;
+    expect(edits, hasLength(1));
+    expect(edits[0].offset, offset);
+    expect(edits[0].length, length);
+    expect(edits[0].replacement, text);
+  }
+
+  Future<void> test_createEditBuilder() async {
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    await builder.addGenericFileEdit(path, (builder) {
+      var offset = 4;
+      var length = 5;
+      var editBuilder =
           (builder as FileEditBuilderImpl).createEditBuilder(offset, length);
       expect(editBuilder, const TypeMatcher<EditBuilder>());
-      SourceEdit sourceEdit = editBuilder.sourceEdit;
+      var sourceEdit = editBuilder.sourceEdit;
       expect(sourceEdit.length, length);
       expect(sourceEdit.offset, offset);
       expect(sourceEdit.replacement, isEmpty);
@@ -345,28 +546,28 @@ class FileEditBuilderImplTest {
 class LinkedEditBuilderImplTest {
   String path = '/test.dart';
 
-  test_addSuggestion() async {
-    String groupName = 'a';
-    ChangeBuilderImpl builder = new ChangeBuilderImpl();
-    await builder.addFileEdit(path, (FileEditBuilder builder) {
-      builder.addInsertion(10, (EditBuilder builder) {
-        builder.addLinkedEdit(groupName, (LinkedEditBuilder builder) {
+  Future<void> test_addSuggestion() async {
+    var groupName = 'a';
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    await builder.addGenericFileEdit(path, (builder) {
+      builder.addInsertion(10, (builder) {
+        builder.addLinkedEdit(groupName, (builder) {
           builder.write('A');
           builder.addSuggestion(LinkedEditSuggestionKind.TYPE, 'B');
         });
       });
     });
 
-    LinkedEditGroup group = builder.getLinkedEditGroup(groupName);
+    var group = builder.getLinkedEditGroup(groupName);
     expect(group.suggestions, hasLength(1));
   }
 
-  test_addSuggestion_zeroLength() async {
-    String groupName = 'a';
-    ChangeBuilderImpl builder = new ChangeBuilderImpl();
-    await builder.addFileEdit(path, (FileEditBuilder builder) {
-      builder.addInsertion(10, (EditBuilder builder) {
-        builder.addLinkedEdit(groupName, (LinkedEditBuilder builder) {
+  Future<void> test_addSuggestion_zeroLength() async {
+    var groupName = 'a';
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    await builder.addGenericFileEdit(path, (builder) {
+      builder.addInsertion(10, (builder) {
+        builder.addLinkedEdit(groupName, (builder) {
           builder.addSuggestion(LinkedEditSuggestionKind.TYPE, 'A');
         });
       });
@@ -375,19 +576,19 @@ class LinkedEditBuilderImplTest {
     expect(builder.sourceChange.linkedEditGroups, isEmpty);
   }
 
-  test_addSuggestions() async {
-    String groupName = 'a';
-    ChangeBuilderImpl builder = new ChangeBuilderImpl();
-    await builder.addFileEdit(path, (FileEditBuilder builder) {
-      builder.addInsertion(10, (EditBuilder builder) {
-        builder.addLinkedEdit(groupName, (LinkedEditBuilder builder) {
+  Future<void> test_addSuggestions() async {
+    var groupName = 'a';
+    var builder = ChangeBuilderImpl(session: MockAnalysisSession());
+    await builder.addGenericFileEdit(path, (builder) {
+      builder.addInsertion(10, (builder) {
+        builder.addLinkedEdit(groupName, (builder) {
           builder.write('A');
           builder.addSuggestions(LinkedEditSuggestionKind.TYPE, ['B', 'C']);
         });
       });
     });
 
-    LinkedEditGroup group = builder.getLinkedEditGroup(groupName);
+    var group = builder.getLinkedEditGroup(groupName);
     expect(group.suggestions, hasLength(2));
   }
 }

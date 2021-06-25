@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import "package:expect/expect.dart";
 
 class Foo {}
@@ -25,18 +27,18 @@ const
     int //   //# 10: ok
     String //# 11: compile-time error
     Foo //   //# 12: compile-time error
-    c = const int.fromEnvironment('c');
+    c = const int.fromEnvironment('c', defaultValue: 0);
 
 const
     bool //  //# 13: compile-time error
     int //   //# 14: compile-time error
     String //# 15: ok
     Foo //   //# 16: compile-time error
-    d = const String.fromEnvironment('d');
+    d = const String.fromEnvironment('d', defaultValue: '');
 
 main() {
-  Expect.equals(a, false);
-  Expect.equals(b, false);
-  Expect.equals(c, null);
-  Expect.equals(d, null);
+  Expect.equals(false, a);
+  Expect.equals(false, b);
+  Expect.equals(0, c);
+  Expect.equals('', d);
 }

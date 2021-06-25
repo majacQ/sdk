@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'assist_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(FlutterWrapPaddingTest);
   });
@@ -19,13 +19,20 @@ class FlutterWrapPaddingTest extends AssistProcessorTest {
   @override
   AssistKind get kind => DartAssistKind.FLUTTER_WRAP_PADDING;
 
-  test_aroundContainer() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  @override
+  void setUp() {
+    super.setUp();
+    writeTestPackageConfig(
+      flutter: true,
+    );
+  }
+
+  Future<void> test_aroundContainer() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 class FakeFlutter {
   main() {
-    return /*caret*/new Container();
+    return /*caret*/Container();
   }
 }
 ''');
@@ -33,25 +40,56 @@ class FakeFlutter {
 import 'package:flutter/widgets.dart';
 class FakeFlutter {
   main() {
-    return /*caret*/Padding(
+    return Padding(
       padding: const EdgeInsets.all(8.0),
-      child: new Container(),
+      child: Container(),
     );
   }
 }
 ''');
   }
 
-  test_aroundPadding() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  Future<void> test_aroundPadding() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 class FakeFlutter {
   main() {
-    return /*caret*/new Padding();
+    return Padding(
+      padding: const EdgeInsets.all(8.0),
+      child: Container(),
+    );
   }
 }
 ''');
     await assertNoAssist();
+  }
+
+  @failingTest
+  Future<void> test_inConstantContext() async {
+    // TODO(brianwilkerson) Get this test to pass again. Not clear whether it's
+    //  a problem with the test code or the mock flutter package.
+    await resolveTestCode('''
+import 'package:flutter/widgets.dart';
+class FakeFlutter {
+  Widget build() {
+    return const Center(
+      child: /*caret*/Text('x'),
+    );
+  }
+}
+''');
+    await assertHasAssist('''
+import 'package:flutter/widgets.dart';
+class FakeFlutter {
+  Widget build() {
+    return const Center(
+      child: Padding(
+        padding: EdgeInsets.all(8.0),
+        child: Text('x'),
+      ),
+    );
+  }
+}
+''');
   }
 }

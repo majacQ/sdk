@@ -12,7 +12,7 @@
 #include "bin/console.h"
 #include "bin/file.h"
 #include "bin/lockers.h"
-#include "bin/log.h"
+#include "platform/syslog.h"
 #if !defined(PLATFORM_DISABLE_SOCKET)
 #include "bin/socket.h"
 #endif
@@ -22,10 +22,6 @@
 
 
 namespace dart {
-
-// Defined in vm/os_thread_win.cc
-extern bool private_flag_windows_run_tls_destructors;
-
 namespace bin {
 
 const char* Platform::executable_name_ = NULL;
@@ -43,11 +39,21 @@ class PlatformWin {
     // Disable the message box for assertions in the CRT in Debug builds.
     // See: https://msdn.microsoft.com/en-us/library/1y71x448.aspx
     _CrtSetReportMode(_CRT_ASSERT, 0);
+
     // Disable dialog boxes for "critical" errors or when OpenFile cannot find
-    // the requested file. See:
+    // the requested file. However only disable error boxes for general
+    // protection faults if an environment variable is set. Passing
+    // SEM_NOGPFAULTERRORBOX completely disables WindowsErrorReporting (WER)
+    // for the process, which means users loose ability to enable local dump
+    // archiving to collect minidumps for Dart VM crashes.
+    // Our test runner would set DART_SUPPRESS_WER to suppress WER UI during
+    // test suite execution.
     // See: https://msdn.microsoft.com/en-us/library/windows/desktop/ms680621(v=vs.85).aspx
-    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX |
-                 SEM_NOGPFAULTERRORBOX);
+    UINT uMode = SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX;
+    if (getenv("DART_SUPPRESS_WER") != nullptr) {
+      uMode |= SEM_NOGPFAULTERRORBOX;
+    }
+    SetErrorMode(uMode);
 #ifndef PRODUCT
     // Set up global exception handler to be able to dump stack trace on crash.
     SetExceptionHandler();
@@ -63,16 +69,18 @@ class PlatformWin {
          EXCEPTION_ACCESS_VIOLATION) ||
         (ExceptionInfo->ExceptionRecord->ExceptionCode ==
          EXCEPTION_ILLEGAL_INSTRUCTION)) {
-      Log::PrintErr(
+      Syslog::PrintErr(
           "\n===== CRASH =====\n"
-          "version=%s\n"
           "ExceptionCode=%d, ExceptionFlags=%d, ExceptionAddress=%p\n",
-          Dart_VersionString(), ExceptionInfo->ExceptionRecord->ExceptionCode,
+          ExceptionInfo->ExceptionRecord->ExceptionCode,
           ExceptionInfo->ExceptionRecord->ExceptionFlags,
           ExceptionInfo->ExceptionRecord->ExceptionAddress);
       Dart_DumpNativeStackTrace(ExceptionInfo->ContextRecord);
-      const int kAbortExitCode = 3;
-      Platform::Exit(kAbortExitCode);
+      Console::RestoreConfig();
+      // Note: we want to abort(...) here instead of exiting because exiting
+      // would not cause WER to generate a minidump.
+      Dart_PrepareToAbort();
+      abort();
     }
     return EXCEPTION_CONTINUE_SEARCH;
   }
@@ -267,7 +275,7 @@ const char* Platform::ResolveExecutablePath() {
   // Ensure no last error before calling GetModuleFileNameW.
   SetLastError(ERROR_SUCCESS);
   // Get the required length of the buffer.
-  int path_length = GetModuleFileNameW(NULL, tmp_buffer, kTmpBufferSize);
+  GetModuleFileNameW(nullptr, tmp_buffer, kTmpBufferSize);
   if (GetLastError() != ERROR_SUCCESS) {
     return NULL;
   }
@@ -277,13 +285,30 @@ const char* Platform::ResolveExecutablePath() {
   return canon_path;
 }
 
+intptr_t Platform::ResolveExecutablePathInto(char* result, size_t result_size) {
+  // Ensure no last error before calling GetModuleFileNameW.
+  SetLastError(ERROR_SUCCESS);
+  const int kTmpBufferSize = 32768;
+  wchar_t tmp_buffer[kTmpBufferSize];
+  // Get the required length of the buffer.
+  GetModuleFileNameW(nullptr, tmp_buffer, kTmpBufferSize);
+  if (GetLastError() != ERROR_SUCCESS) {
+    return -1;
+  }
+  WideToUtf8Scope wide_to_utf8_scope(tmp_buffer);
+  if (wide_to_utf8_scope.length() <= result_size) {
+    strncpy(result, wide_to_utf8_scope.utf8(), result_size);
+    return wide_to_utf8_scope.length();
+  }
+  return -1;
+}
+
 void Platform::Exit(int exit_code) {
-  // TODO(zra): Remove once VM shuts down cleanly.
-  ::dart::private_flag_windows_run_tls_destructors = false;
   // Restore the console's output code page
   Console::RestoreConfig();
   // On Windows we use ExitProcess so that threads can't clobber the exit_code.
   // See: https://code.google.com/p/nativeclient/issues/detail?id=2870
+  Dart_PrepareToAbort();
   ::ExitProcess(exit_code);
 }
 

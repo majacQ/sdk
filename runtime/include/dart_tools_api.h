@@ -5,7 +5,7 @@
 #ifndef RUNTIME_INCLUDE_DART_TOOLS_API_H_
 #define RUNTIME_INCLUDE_DART_TOOLS_API_H_
 
-#include "dart_api.h"
+#include "dart_api.h" /* NOLINT */
 
 /** \mainpage Dart Tools Embedding API Reference
  *
@@ -222,6 +222,25 @@ DART_EXPORT char* Dart_SetServiceStreamCallbacks(
     Dart_ServiceStreamCancelCallback cancel_callback);
 
 /**
+ * A callback invoked when the VM service receives an event.
+ */
+typedef void (*Dart_NativeStreamConsumer)(const uint8_t* event_json,
+                                          intptr_t event_json_length);
+
+/**
+ * Sets the native VM service stream callbacks for a particular stream.
+ * Note: The function may be called on multiple threads concurrently.
+ *
+ * \param consumer A function pointer to an event handler callback function.
+ *   A NULL value removes the existing listen callback function if any.
+ *
+ * \param stream_id The ID of the stream on which to set the callback.
+ */
+DART_EXPORT void Dart_SetNativeServiceStreamCallback(
+    Dart_NativeStreamConsumer consumer,
+    const char* stream_id);
+
+/**
  * Sends a data event to clients of the VM Service.
  *
  * A data event is used to pass an array of bytes to subscribed VM
@@ -241,13 +260,76 @@ DART_EXPORT char* Dart_SetServiceStreamCallbacks(
  *
  * \param bytes_length The length of the byte array.
  *
- * \return Success if the arguments are well formed.  Otherwise, returns an
- *   error handle.
+ * \return NULL if the arguments are well formed.  Otherwise, returns an
+ *   error string. The caller is responsible for freeing the error message.
  */
-DART_EXPORT Dart_Handle Dart_ServiceSendDataEvent(const char* stream_id,
-                                                  const char* event_kind,
-                                                  const uint8_t* bytes,
-                                                  intptr_t bytes_length);
+DART_EXPORT char* Dart_ServiceSendDataEvent(const char* stream_id,
+                                            const char* event_kind,
+                                            const uint8_t* bytes,
+                                            intptr_t bytes_length);
+
+/**
+ * Usage statistics for a space/generation at a particular moment in time.
+ *
+ * \param used Amount of memory used, in bytes.
+ *
+ * \param capacity Memory capacity, in bytes.
+ *
+ * \param external External memory, in bytes.
+ *
+ * \param collections How many times the garbage collector has run in this
+ *   space.
+ *
+ * \param time Cumulative time spent collecting garbage in this space, in
+ *   seconds.
+ *
+ * \param avg_collection_period Average time between garbage collector running
+ *   in this space, in milliseconds.
+ */
+typedef struct {
+  intptr_t used;
+  intptr_t capacity;
+  intptr_t external;
+  intptr_t collections;
+  double time;
+  double avg_collection_period;
+} Dart_GCStats;
+
+/**
+ * A Garbage Collection event with memory usage statistics.
+ *
+ * \param type The event type. Static lifetime.
+ *
+ * \param reason The reason for the GC event. Static lifetime.
+ *
+ * \param new_space Data for New Space.
+ *
+ * \param old_space Data for Old Space.
+ */
+typedef struct {
+  const char* type;
+  const char* reason;
+  const char* isolate_id;
+
+  Dart_GCStats new_space;
+  Dart_GCStats old_space;
+} Dart_GCEvent;
+
+/**
+ * A callback invoked when the VM emits a GC event.
+ *
+ * \param event The GC event data. Pointer only valid for the duration of the
+ *   callback.
+ */
+typedef void (*Dart_GCEventCallback)(Dart_GCEvent* event);
+
+/**
+ * Sets the native GC event callback.
+ *
+ * \param callback A function pointer to an event handler callback function.
+ *   A NULL value removes the existing listen callback function if any.
+ */
+DART_EXPORT void Dart_SetGCEventCallback(Dart_GCEventCallback callback);
 
 /*
  * ========
@@ -282,7 +364,8 @@ DART_EXPORT bool Dart_IsReloading();
 
 /**
  * Returns a timestamp in microseconds. This timestamp is suitable for
- * passing into the timeline system.
+ * passing into the timeline system, and uses the same monotonic clock
+ * as dart:developer's Timeline.now.
  *
  * \return A timestamp that can be passed to the timeline system.
  */
@@ -325,58 +408,6 @@ DART_EXPORT int64_t Dart_TimelineGetMicros();
 DART_EXPORT void Dart_GlobalTimelineSetRecordedStreams(int64_t stream_mask);
 
 typedef enum {
-  /** Indicates a new stream is being output */
-  Dart_StreamConsumer_kStart = 0,
-  /** Data for the current stream */
-  Dart_StreamConsumer_kData = 1,
-  /** Indicates stream is finished */
-  Dart_StreamConsumer_kFinish = 2,
-} Dart_StreamConsumer_State;
-
-/**
- * A stream consumer callback function.
- *
- * This function will be called repeatedly until there is no more data in a
- * stream and there are no more streams.
- *
- * \param state Indicates a new stream, data, or a finished stream.
- * \param stream_name A name for this stream. Not guaranteed to be meaningful.
- * \param buffer A pointer to the stream data.
- * \param buffer_length The number of bytes at buffer that should be consumed.
- * \param stream_callback_data The pointer passed in when requesting the stream.
- *
- * At the start of each stream state will be DART_STREAM_CONSUMER_STATE_START
- * and buffer will be NULL.
- *
- * For each chunk of data the state will be DART_STREAM_CONSUMER_STATE_DATA
- * and buffer will not be NULL.
- *
- * At the end of each stream state will be DART_STREAM_CONSUMER_STATE_FINISH
- * and buffer will be NULL.
- */
-typedef void (*Dart_StreamConsumer)(Dart_StreamConsumer_State state,
-                                    const char* stream_name,
-                                    const uint8_t* buffer,
-                                    intptr_t buffer_length,
-                                    void* stream_callback_data);
-
-/**
- * Get the timeline for entire VM (including all isolates).
- *
- * NOTE: The timeline retrieved from this API call may not include the most
- * recent events.
- *
- * \param consumer A Dart_StreamConsumer.
- * \param user_data User data passed into consumer.
- *
- * NOTE: The trace-event format is documented here: https://goo.gl/hDZw5M
- *
- * \return True if a stream was output.
- */
-DART_EXPORT bool Dart_GlobalTimelineGetTrace(Dart_StreamConsumer consumer,
-                                             void* user_data);
-
-typedef enum {
   Dart_Timeline_Event_Begin,          // Phase = 'B'.
   Dart_Timeline_Event_End,            // Phase = 'E'.
   Dart_Timeline_Event_Instant,        // Phase = 'i'.
@@ -393,13 +424,17 @@ typedef enum {
 /**
  * Add a timeline event to the embedder stream.
  *
- * \param label The name of the evnet.
+ * \param label The name of the event. Its lifetime must extend at least until
+ *     Dart_Cleanup.
  * \param timestamp0 The first timestamp of the event.
  * \param timestamp1_or_async_id The second timestamp of the event or
  *     the async id.
  * \param argument_count The number of argument names and values.
- * \param argument_names An array of names of the arguments.
- * \param argument_values An array of values of the arguments.
+ * \param argument_names An array of names of the arguments. The lifetime of the
+ *     names must extend at least until Dart_Cleanup. The array may be reclaimed
+ *     when this call returns.
+ * \param argument_values An array of values of the arguments. The values and
+ *     the array may be reclaimed when this call returns.
  */
 DART_EXPORT void Dart_TimelineEvent(const char* label,
                                     int64_t timestamp0,
@@ -417,31 +452,6 @@ DART_EXPORT void Dart_TimelineEvent(const char* label,
  */
 DART_EXPORT void Dart_SetThreadName(const char* name);
 
-/**
- * Called by the VM to let the embedder know when to start recording into the
- * timeline. Can be called from any thread.
- */
-typedef void (*Dart_EmbedderTimelineStartRecording)();
-
-/**
- * Called by the VM to let the embedder know when to stop recording into the
- * timeline. Can be called from any thread.
- */
-typedef void (*Dart_EmbedderTimelineStopRecording)();
-
-/**
- * Sets the embedder timeline callbacks. These callbacks are used by the VM
- * to notify the embedder of timeline recording state changes.
- *
- * \param start_recording See Dart_EmbedderTimelineStartRecording.
- * \param stop_recording See Dart_EmbedderTimelineStopRecording.
- *
- * NOTE: To avoid races, this should be called before Dart_Initialize.
- */
-DART_EXPORT void Dart_SetEmbedderTimelineCallbacks(
-    Dart_EmbedderTimelineStartRecording start_recording,
-    Dart_EmbedderTimelineStopRecording stop_recording);
-
 /*
  * =======
  * Metrics
@@ -451,8 +461,8 @@ DART_EXPORT void Dart_SetEmbedderTimelineCallbacks(
 /**
  * Return metrics gathered for the VM and individual isolates.
  *
- * NOTE: Metrics are not available in PRODUCT builds of Dart.
- * Calling the metric functions on a PRODUCT build might return invalid metrics.
+ * NOTE: Non-heap metrics are not available in PRODUCT builds of Dart.
+ * Calling the non-heap metric functions on a PRODUCT build might return invalid metrics.
  */
 DART_EXPORT int64_t Dart_VMIsolateCountMetric();  // Counter
 DART_EXPORT int64_t Dart_VMCurrentRSSMetric();    // Byte
@@ -485,5 +495,54 @@ DART_EXPORT int64_t
 Dart_IsolateRunnableLatencyMetric(Dart_Isolate isolate);  // Microsecond
 DART_EXPORT int64_t
 Dart_IsolateRunnableHeapSizeMetric(Dart_Isolate isolate);  // Byte
+
+/*
+ * ========
+ * UserTags
+ * ========
+ */
+
+/*
+ * Gets the current isolate's currently set UserTag instance.
+ *
+ * \return The currently set UserTag instance.
+ */
+DART_EXPORT Dart_Handle Dart_GetCurrentUserTag();
+
+/*
+ * Gets the current isolate's default UserTag instance.
+ *
+ * \return The default UserTag with label 'Default'
+ */
+DART_EXPORT Dart_Handle Dart_GetDefaultUserTag();
+
+/*
+ * Creates a new UserTag instance.
+ *
+ * \param label The name of the new UserTag.
+ *
+ * \return The newly created UserTag instance or an error handle.
+ */
+DART_EXPORT Dart_Handle Dart_NewUserTag(const char* label);
+
+/*
+ * Updates the current isolate's UserTag to a new value.
+ *
+ * \param user_tag The UserTag to be set as the current UserTag.
+ *
+ * \return The previously set UserTag instance or an error handle.
+ */
+DART_EXPORT Dart_Handle Dart_SetCurrentUserTag(Dart_Handle user_tag);
+
+/*
+ * Returns the label of a given UserTag instance.
+ *
+ * \param user_tag The UserTag from which the label will be retrieved.
+ *
+ * \return The UserTag's label. NULL if the user_tag is invalid. The caller is
+ *   responsible for freeing the returned label.
+ */
+DART_WARN_UNUSED_RESULT DART_EXPORT char* Dart_GetUserTagLabel(
+    Dart_Handle user_tag);
 
 #endif  // RUNTIME_INCLUDE_DART_TOOLS_API_H_

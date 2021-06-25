@@ -7,7 +7,7 @@ import 'dart:async';
 import 'package:observatory/debugger.dart';
 import 'package:observatory/service.dart' as S;
 import 'package:observatory/service_io.dart';
-import 'package:unittest/unittest.dart';
+import 'package:test/test.dart';
 
 import 'service_test_common.dart';
 import 'test_helper.dart';
@@ -51,7 +51,7 @@ var tests = <IsolateTest>[
     if (loc.valid) {
       if (loc.function != null) {
         try {
-          await debugger.isolate.addBreakpointAtEntry(loc.function);
+          await debugger.isolate.addBreakpointAtEntry(loc.function!);
         } on S.ServerRpcException catch (e) {
           if (e.code == S.ServerRpcException.kCannotAddBreakpoint) {
             // Expected
@@ -66,7 +66,7 @@ var tests = <IsolateTest>[
       fail("Expected to find function");
     }
 
-    isolate.resume();
+    await isolate.resume();
   }
 ];
 

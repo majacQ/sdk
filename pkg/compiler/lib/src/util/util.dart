@@ -5,9 +5,8 @@
 library dart2js.util;
 
 import 'package:front_end/src/api_unstable/dart2js.dart'
-    show $BACKSLASH, $CR, $DEL, $DQ, $LF, $LS, $PS, $TAB, Link, LinkBuilder;
+    show $BACKSLASH, $CR, $DEL, $DQ, $LF, $LS, $PS, $TAB, Link;
 
-export 'emptyset.dart';
 export 'maplet.dart';
 export 'setlet.dart';
 
@@ -34,6 +33,15 @@ class Hashing {
     int high = existing >> 15;
     int low = existing & 0x7fff;
     return ((high * 13) ^ (low * 997) ^ h) & SMI_MASK;
+  }
+
+  /// Returns a hash value computed from all the characters in the string.
+  static int stringHash(String s) {
+    int hash = mixHashCodeBits(0, s.length);
+    for (int i = 0; i < s.length; i++) {
+      hash = mixHashCodeBits(hash, s.codeUnitAt(i));
+    }
+    return hash;
   }
 
   /// Mix the bits of `object.hashCode` with [existing].
@@ -64,14 +72,32 @@ class Hashing {
     return h;
   }
 
+  /// Mix the bits of the element hash codes of [iterable] with [existing].
+  static int setHash<E>(Iterable<E> iterable, [int existing = 0]) {
+    int h = existing;
+    if (iterable != null) {
+      for (E e in iterable) {
+        h += objectsHash(e);
+      }
+    }
+    return h & SMI_MASK;
+  }
+
   /// Mix the bits of the hash codes of the unordered key/value from [map] with
   /// [existing].
   static int unorderedMapHash(Map map, [int existing = 0]) {
-    int h = 0;
-    for (var key in map.keys) {
-      h ^= objectHash(key, objectHash(map[key]));
+    if (map.length == 0) return existing;
+    List<int> hashCodes = List.filled(map.length, 0);
+    int i = 0;
+    for (var entry in map.entries) {
+      hashCodes[i++] = objectHash(entry.key, objectHash(entry.value));
     }
-    return mixHashCodeBits(h, existing);
+    hashCodes.sort();
+    int h = existing;
+    for (int hashCode in hashCodes) {
+      h = mixHashCodeBits(h, hashCode);
+    }
+    return h;
   }
 
   /// Mix the bits of the key/value hash codes from [map] with [existing].
@@ -83,6 +109,18 @@ class Hashing {
     }
     return h;
   }
+}
+
+bool identicalElements<E>(List<E> a, List<E> b) {
+  if (identical(a, b)) return true;
+  if (a == null || b == null) return false;
+  if (a.length != b.length) return false;
+  for (int index = 0; index < a.length; index++) {
+    if (!identical(a[index], b[index])) {
+      return false;
+    }
+  }
+  return true;
 }
 
 bool equalElements<E>(List<E> a, List<E> b) {
@@ -97,10 +135,24 @@ bool equalElements<E>(List<E> a, List<E> b) {
   return true;
 }
 
-/**
- * File name prefix used to shorten the file name in stack traces printed by
- * [trace].
- */
+bool equalSets<E>(Set<E> a, Set<E> b) {
+  if (identical(a, b)) return true;
+  if (a == null || b == null) return false;
+  return a.length == b.length && a.containsAll(b) && b.containsAll(a);
+}
+
+bool equalMaps<K, V>(Map<K, V> a, Map<K, V> b) {
+  if (identical(a, b)) return true;
+  if (a == null || b == null) return false;
+  if (a.length != b.length) return false;
+  for (K key in a.keys) {
+    if (a[key] != b[key]) return false;
+  }
+  return true;
+}
+
+/// File name prefix used to shorten the file name in stack traces printed by
+/// [trace].
 String stackTraceFilePrefix = null;
 
 /// Writes the characters of [string] on [buffer].  The characters
@@ -190,43 +242,23 @@ int computeHashCode(part1, [part2, part3, part4, part5]) {
       0x3fffffff;
 }
 
-String modifiersToString(
-    {bool isStatic: false,
-    bool isAbstract: false,
-    bool isFinal: false,
-    bool isVar: false,
-    bool isConst: false,
-    bool isFactory: false,
-    bool isExternal: false,
-    bool isCovariant: false}) {
-  LinkBuilder<String> builder = new LinkBuilder<String>();
-  if (isStatic) builder.addLast('static');
-  if (isAbstract) builder.addLast('abstract');
-  if (isFinal) builder.addLast('final');
-  if (isVar) builder.addLast('var');
-  if (isConst) builder.addLast('const');
-  if (isFactory) builder.addLast('factory');
-  if (isExternal) builder.addLast('external');
-  if (isCovariant) builder.addLast('covariant');
-  StringBuffer buffer = new StringBuffer();
-  builder.toLink(const Link<String>()).printOn(buffer, ', ');
-  return buffer.toString();
-}
-
 class Pair<A, B> {
   final A a;
   final B b;
 
   Pair(this.a, this.b);
 
+  @override
   int get hashCode => 13 * a.hashCode + 17 * b.hashCode;
 
+  @override
   bool operator ==(var other) {
     if (identical(this, other)) return true;
     if (other is! Pair) return false;
     return a == other.a && b == other.b;
   }
 
+  @override
   String toString() => '($a,$b)';
 }
 

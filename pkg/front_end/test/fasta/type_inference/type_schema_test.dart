@@ -2,9 +2,10 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import 'package:front_end/src/fasta/type_inference/type_schema.dart';
 import 'package:kernel/ast.dart';
-import 'package:kernel/visitor.dart';
 import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
@@ -29,27 +30,37 @@ class UnknownTypeTest {
   void test_isKnown() {
     expect(isKnown(unknownType), isFalse);
     expect(isKnown(const DynamicType()), isTrue);
-    var classA = new Class(name: 'A');
-    var A = new InterfaceType(classA);
-    var typedefF = new Typedef('F', A);
+    var classA = new Class(name: 'A', fileUri: dummyUri);
+    var A = new InterfaceType(classA, Nullability.legacy);
+    var typedefF = new Typedef('F', A, fileUri: dummyUri);
     expect(isKnown(A), isTrue);
-    expect(isKnown(new InterfaceType(classA, [A])), isTrue);
-    expect(isKnown(new InterfaceType(classA, [unknownType])), isFalse);
-    expect(isKnown(new FunctionType([], const VoidType())), isTrue);
-    expect(isKnown(new FunctionType([], unknownType)), isFalse);
-    expect(isKnown(new FunctionType([A], const VoidType())), isTrue);
-    expect(isKnown(new FunctionType([unknownType], const VoidType())), isFalse);
+    expect(isKnown(new InterfaceType(classA, Nullability.legacy, [A])), isTrue);
     expect(
-        isKnown(new FunctionType([], const VoidType(),
+        isKnown(new InterfaceType(classA, Nullability.legacy, [unknownType])),
+        isFalse);
+    expect(isKnown(new FunctionType([], const VoidType(), Nullability.legacy)),
+        isTrue);
+    expect(isKnown(new FunctionType([], unknownType, Nullability.legacy)),
+        isFalse);
+    expect(isKnown(new FunctionType([A], const VoidType(), Nullability.legacy)),
+        isTrue);
+    expect(
+        isKnown(new FunctionType(
+            [unknownType], const VoidType(), Nullability.legacy)),
+        isFalse);
+    expect(
+        isKnown(new FunctionType([], const VoidType(), Nullability.legacy,
             namedParameters: [new NamedType('x', A)])),
         isTrue);
     expect(
-        isKnown(new FunctionType([], const VoidType(),
+        isKnown(new FunctionType([], const VoidType(), Nullability.legacy,
             namedParameters: [new NamedType('x', unknownType)])),
         isFalse);
-    expect(isKnown(new TypedefType(typedefF)), isTrue);
-    expect(isKnown(new TypedefType(typedefF, [A])), isTrue);
-    expect(isKnown(new TypedefType(typedefF, [unknownType])), isFalse);
+    expect(isKnown(new TypedefType(typedefF, Nullability.legacy)), isTrue);
+    expect(isKnown(new TypedefType(typedefF, Nullability.legacy, [A])), isTrue);
+    expect(
+        isKnown(new TypedefType(typedefF, Nullability.legacy, [unknownType])),
+        isFalse);
   }
 
   void test_ordinary_visitor_noOverrides() {
@@ -88,9 +99,9 @@ class UnknownTypeTest {
     expect(unknownType.toString(), isNot('?'));
     expect(typeSchemaToString(unknownType), '?');
     expect(
-        typeSchemaToString(
-            new FunctionType([unknownType, unknownType], unknownType)),
-        '(?, ?) → ?');
+        typeSchemaToString(new FunctionType(
+            [unknownType, unknownType], unknownType, Nullability.legacy)),
+        '(?, ?) →* ?');
   }
 
   void test_visitChildren() {
@@ -101,7 +112,7 @@ class UnknownTypeTest {
   }
 }
 
-class _OrdinaryVisitor<R> extends Visitor<R> {
+class _OrdinaryVisitor<R> extends Visitor<R> with VisitorNullMixin<R> {
   final _UnaryFunction<DartType, R> _defaultDartType;
 
   _OrdinaryVisitor({_UnaryFunction<DartType, R> defaultDartType})
@@ -117,7 +128,7 @@ class _OrdinaryVisitor<R> extends Visitor<R> {
   }
 }
 
-class _TypeSchemaVisitor<R> extends Visitor<R> implements TypeSchemaVisitor<R> {
+class _TypeSchemaVisitor<R> extends Visitor<R> with VisitorNullMixin<R> {
   final _UnaryFunction<DartType, R> _defaultDartType;
   final _UnaryFunction<UnknownType, R> _visitUnknownType;
 
@@ -129,19 +140,12 @@ class _TypeSchemaVisitor<R> extends Visitor<R> implements TypeSchemaVisitor<R> {
 
   @override
   R defaultDartType(DartType node) {
-    if (_defaultDartType != null) {
+    if (node is UnknownType && _visitUnknownType != null) {
+      return _visitUnknownType(node);
+    } else if (_defaultDartType != null) {
       return _defaultDartType(node);
     } else {
       return super.defaultDartType(node);
-    }
-  }
-
-  @override
-  R visitUnknownType(UnknownType node) {
-    if (_visitUnknownType != null) {
-      return _visitUnknownType(node);
-    } else {
-      return defaultDartType(node);
     }
   }
 }

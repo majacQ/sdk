@@ -19,7 +19,7 @@
 
 namespace dart {
 
-#if defined(DART_PRECOMPILER)
+#if defined(DART_PRECOMPILER) || !defined(DART_PRODUCT)
 
 class OffsetsTable : public ZoneAllocated {
  public:
@@ -29,15 +29,15 @@ class OffsetsTable : public ZoneAllocated {
   // Otherwise, the returned string is allocated in global static memory.
   const char* FieldNameForOffset(intptr_t cid, intptr_t offset);
 
- private:
   struct OffsetsTableEntry {
     const intptr_t class_id;
-    const char* field_name;
-    intptr_t offset;
+    const char* const field_name;
+    const intptr_t offset;
   };
 
-  static OffsetsTableEntry offsets_table[];
+  static const OffsetsTableEntry offsets_table[];
 
+ private:
   struct IntAndIntToStringMapTraits {
     typedef std::pair<intptr_t, intptr_t> Key;
     typedef const char* Value;
@@ -51,7 +51,9 @@ class OffsetsTable : public ZoneAllocated {
 
     static Value ValueOf(Pair pair) { return pair.value; }
     static Key KeyOf(Pair pair) { return pair.key; }
-    static size_t Hashcode(Key key) { return key.first ^ key.second; }
+    static uword Hash(Key key) {
+      return Utils::WordHash(key.first ^ key.second);
+    }
     static bool IsKeyEqual(Pair x, Key y) {
       return x.key.first == y.first && x.key.second == y.second;
     }

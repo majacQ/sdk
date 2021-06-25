@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, the Dart project authors. Please see the AUTHORS file
+ * Copyright (c) 2019, the Dart project authors. Please see the AUTHORS file
  * for details. All rights reserved. Use of this source code is governed by a
  * BSD-style license that can be found in the LICENSE file.
  *
@@ -14,6 +14,8 @@ package org.dartlang.analysis.server.protocol;
  * @coverage dart.server.generated.types
  */
 public class ServerService {
+
+  public static final String LOG = "LOG";
 
   public static final String STATUS = "STATUS";
 

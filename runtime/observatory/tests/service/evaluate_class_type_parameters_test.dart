@@ -4,7 +4,7 @@
 
 import 'dart:developer';
 import 'package:observatory/service_io.dart';
-import 'package:unittest/unittest.dart';
+import 'package:test/test.dart';
 import 'service_test_common.dart';
 import 'test_helper.dart';
 
@@ -35,7 +35,7 @@ var tests = <IsolateTest>[
     expect(stack.type, equals('Stack'));
     expect(await stack['frames'][topFrame].location.getLine(), 20);
 
-    Instance result = await isolate.evalFrame(topFrame, '"\$S"');
+    Instance result = await isolate.evalFrame(topFrame, '"\$S"') as Instance;
     print(result);
     expect(result.valueAsString, equals("String"));
   },
@@ -48,7 +48,7 @@ var tests = <IsolateTest>[
     expect(stack.type, equals('Stack'));
     expect(await stack['frames'][topFrame].location.getLine(), 14);
 
-    Instance result = await isolate.evalFrame(topFrame, '"\$T"');
+    Instance result = await isolate.evalFrame(topFrame, '"\$T"') as Instance;
     print(result);
     expect(result.valueAsString, equals("int"));
   },

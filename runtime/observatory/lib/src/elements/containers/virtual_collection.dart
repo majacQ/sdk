@@ -7,7 +7,7 @@ import 'dart:html';
 import 'dart:math' as math;
 import 'package:observatory/src/elements/containers/search_bar.dart';
 import 'package:observatory/src/elements/helpers/rendering_scheduler.dart';
-import 'package:observatory/src/elements/helpers/tag.dart';
+import 'package:observatory/src/elements/helpers/custom_element.dart';
 
 typedef HtmlElement VirtualCollectionCreateCallback();
 typedef List<HtmlElement> VirtualCollectionHeaderCallback();
@@ -15,30 +15,27 @@ typedef void VirtualCollectionUpdateCallback(
     HtmlElement el, dynamic item, int index);
 typedef bool VirtualCollectionSearchCallback(Pattern pattern, dynamic item);
 
-class VirtualCollectionElement extends HtmlElement implements Renderable {
-  static const tag = const Tag<VirtualCollectionElement>('virtual-collection',
-      dependencies: const [SearchBarElement.tag]);
-
-  RenderingScheduler<VirtualCollectionElement> _r;
+class VirtualCollectionElement extends CustomElement implements Renderable {
+  late RenderingScheduler<VirtualCollectionElement> _r;
 
   Stream<RenderedEvent<VirtualCollectionElement>> get onRendered =>
       _r.onRendered;
 
-  VirtualCollectionCreateCallback _create;
-  VirtualCollectionHeaderCallback _createHeader;
-  VirtualCollectionUpdateCallback _update;
-  VirtualCollectionSearchCallback _search;
-  double _itemHeight;
-  int _top;
-  double _height;
-  List _items;
-  StreamSubscription _onScrollSubscription;
-  StreamSubscription _onResizeSubscription;
+  late VirtualCollectionCreateCallback _create;
+  VirtualCollectionHeaderCallback? _createHeader;
+  late VirtualCollectionUpdateCallback _update;
+  VirtualCollectionSearchCallback? _search;
+  double? _itemHeight;
+  int? _top;
+  double? _height;
+  List? _items;
+  late StreamSubscription _onScrollSubscription;
+  late StreamSubscription _onResizeSubscription;
 
-  List get items => _items;
+  List? get items => _items;
 
-  set items(Iterable value) {
-    _items = new List.unmodifiable(value);
+  set items(Iterable? value) {
+    _items = new List.unmodifiable(value!);
     _top = null;
     _searcher?.update();
     _r.dirty();
@@ -47,13 +44,13 @@ class VirtualCollectionElement extends HtmlElement implements Renderable {
   factory VirtualCollectionElement(VirtualCollectionCreateCallback create,
       VirtualCollectionUpdateCallback update,
       {Iterable items: const [],
-      VirtualCollectionHeaderCallback createHeader,
-      VirtualCollectionSearchCallback search,
-      RenderingQueue queue}) {
+      VirtualCollectionHeaderCallback? createHeader,
+      VirtualCollectionSearchCallback? search,
+      RenderingQueue? queue}) {
     assert(create != null);
     assert(update != null);
     assert(items != null);
-    VirtualCollectionElement e = document.createElement(tag.name);
+    VirtualCollectionElement e = new VirtualCollectionElement.created();
     e._r = new RenderingScheduler<VirtualCollectionElement>(e, queue: queue);
     e._create = create;
     e._createHeader = createHeader;
@@ -63,7 +60,7 @@ class VirtualCollectionElement extends HtmlElement implements Renderable {
     return e;
   }
 
-  VirtualCollectionElement.created() : super.created();
+  VirtualCollectionElement.created() : super.created('virtual-collection');
 
   @override
   attached() {
@@ -84,22 +81,33 @@ class VirtualCollectionElement extends HtmlElement implements Renderable {
     _onResizeSubscription.cancel();
   }
 
-  DivElement _header;
-  SearchBarElement _searcher;
+  DivElement? _header;
+  SearchBarElement? _searcher;
   final DivElement _viewport = new DivElement()
     ..classes = ['viewport', 'container'];
   final DivElement _spacer = new DivElement()..classes = ['spacer'];
   final DivElement _buffer = new DivElement()..classes = ['buffer'];
+
+  static int safeFloor(double x) {
+    if (x.isNaN) return 0;
+    return x.floor();
+  }
+
+  static int safeCeil(double x) {
+    if (x.isNaN) return 0;
+    return x.ceil();
+  }
 
   dynamic getItemFromElement(HtmlElement element) {
     final el_index = _buffer.children.indexOf(element);
     if (el_index < 0) {
       return null;
     }
-    final item_index =
-        _top + el_index - (_buffer.children.length * _inverse_preload).floor();
-    if (0 <= item_index && item_index < items.length) {
-      return _items[item_index];
+    final item_index = _top! +
+        el_index -
+        safeFloor(_buffer.children.length * _inverse_preload);
+    if (0 <= item_index && item_index < items!.length) {
+      return _items![item_index];
     }
     return null;
   }
@@ -141,38 +149,39 @@ class VirtualCollectionElement extends HtmlElement implements Renderable {
               ..onSearchResultSelected.listen((e) {
                 takeIntoView(e.item);
               });
-        children.insert(0, _searcher);
+        children.insert(0, _searcher!.element);
       }
       if (_createHeader != null) {
         _header = new DivElement()
           ..classes = ['header', 'container']
-          ..children = _createHeader();
-        children.insert(0, _header);
-        final rect = _header.getBoundingClientRect();
-        _header.classes.add('attached');
+          ..children = _createHeader!();
+        children.insert(0, _header!);
+        final rect = _header!.getBoundingClientRect();
+        _header!.classes.add('attached');
         _viewport.style.top = '${rect.height}px';
-        final width = _header.children.fold(0.0, _foldWidth);
+        final width = _header!.children.fold(0.0, _foldWidth);
         _buffer.style.minWidth = '${width}px';
       }
-      _itemHeight = _buffer.children[0].getBoundingClientRect().height;
-      _height = getBoundingClientRect().height;
+      _itemHeight =
+          _buffer.children[0].getBoundingClientRect().height as double;
+      _height = getBoundingClientRect().height as double;
     }
 
     if (_takeIntoView != null) {
-      final index = items.indexOf(_takeIntoView);
+      final index = items!.indexOf(_takeIntoView);
       if (index >= 0) {
-        final minScrollTop = _itemHeight * (index + 1) - _height;
-        final maxScrollTop = _itemHeight * index;
+        final minScrollTop = _itemHeight! * (index + 1) - _height!;
+        final maxScrollTop = _itemHeight! * index;
         _viewport.scrollTop =
-            ((maxScrollTop - minScrollTop) / 2 + minScrollTop).floor();
+            safeFloor((maxScrollTop - minScrollTop) / 2 + minScrollTop);
       }
       _takeIntoView = null;
     }
 
-    final top = (_viewport.scrollTop / _itemHeight).floor();
+    final top = safeFloor(_viewport.scrollTop / _itemHeight!);
 
-    _spacer.style.height = '${_itemHeight*(_items.length)}px';
-    final tail_length = (_height / _itemHeight / _preload).ceil();
+    _spacer.style.height = '${_itemHeight! * (_items!.length)}px';
+    final tail_length = safeCeil(_height! / _itemHeight! / _preload);
     final length = tail_length * 2 + tail_length * _preload;
 
     if (_buffer.children.length < length) {
@@ -184,13 +193,13 @@ class VirtualCollectionElement extends HtmlElement implements Renderable {
       _top = null; // force update;
     }
 
-    if ((_top == null) || ((top - _top).abs() >= tail_length)) {
-      _buffer.style.top = '${_itemHeight*(top-tail_length)}px';
+    if ((_top == null) || ((top - _top!).abs() >= tail_length)) {
+      _buffer.style.top = '${_itemHeight! * (top - tail_length)}px';
       int i = top - tail_length;
-      for (final HtmlElement e in _buffer.children) {
-        if (0 <= i && i < _items.length) {
-          e..style.display = null;
-          _update(e, _items[i], i);
+      for (final e in _buffer.children) {
+        if (0 <= i && i < _items!.length) {
+          e.style.display = null;
+          _update(e as HtmlElement, _items![i], i);
         } else {
           e.style.display = 'hidden';
         }
@@ -200,11 +209,11 @@ class VirtualCollectionElement extends HtmlElement implements Renderable {
     }
 
     if (_searcher != null) {
-      final current = _searcher.current;
-      int i = _top - tail_length;
-      for (final HtmlElement e in _buffer.children) {
-        if (0 <= i && i < _items.length) {
-          if (_items[i] == current) {
+      final current = _searcher!.current;
+      int i = _top! - tail_length;
+      for (final e in _buffer.children) {
+        if (0 <= i && i < _items!.length) {
+          if (_items![i] == current) {
             e.classes.add('marked');
           } else {
             e.classes.remove('marked');
@@ -217,14 +226,14 @@ class VirtualCollectionElement extends HtmlElement implements Renderable {
   }
 
   double _foldWidth(double value, Element child) {
-    return math.max(value, child.getBoundingClientRect().width);
+    return math.max(value, child.getBoundingClientRect().width as double);
   }
 
   void _updateHeader() {
     if (_header != null) {
-      _header.style.left = '${-_viewport.scrollLeft}px';
+      _header!.style.left = '${-_viewport.scrollLeft}px';
       final width = _buffer.getBoundingClientRect().width;
-      _header.children.last.style.width = '${width}px';
+      _header!.children.last.style.width = '${width}px';
     }
   }
 
@@ -235,8 +244,8 @@ class VirtualCollectionElement extends HtmlElement implements Renderable {
   }
 
   void _onResize(_) {
-    final newHeight = getBoundingClientRect().height;
-    if (newHeight > _height) {
+    final newHeight = getBoundingClientRect().height as double;
+    if (newHeight > _height!) {
       _height = newHeight;
       _r.dirty();
     } else {
@@ -247,6 +256,6 @@ class VirtualCollectionElement extends HtmlElement implements Renderable {
   }
 
   Iterable<dynamic> _doSearch(Pattern search) {
-    return _items.where((item) => _search(search, item));
+    return _items!.where((item) => _search!(search, item));
   }
 }

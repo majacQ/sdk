@@ -2,11 +2,16 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library fasta.library_graph;
 
-import 'package:kernel/kernel.dart' show Library, LibraryDependency;
+import 'package:kernel/kernel.dart'
+    show Library, LibraryDependency, LibraryPart;
 
 import 'package:kernel/util/graph.dart' show Graph;
+
+import 'incremental_compiler.dart' show getPartUri;
 
 class LibraryGraph implements Graph<Uri> {
   final Map<Uri, Library> libraries;
@@ -21,7 +26,7 @@ class LibraryGraph implements Graph<Uri> {
       throw "Library not found: $vertex";
     }
 
-    // Imports and exports
+    // Imports and exports.
     for (LibraryDependency dependency in library.dependencies) {
       Uri uri1 = dependency.targetLibrary.importUri;
       Uri uri2 = dependency.targetLibrary.fileUri;
@@ -31,6 +36,19 @@ class LibraryGraph implements Graph<Uri> {
         if (libraries.containsKey(uri2)) {
           yield uri2;
         }
+      }
+    }
+
+    // Parts.
+    // Normally there won't be libraries for these, but if, for instance,
+    // the part didn't exist there will be a synthetic library.
+    for (LibraryPart part in library.parts) {
+      Uri partUri = getPartUri(library.importUri, part);
+      Uri fileUri = getPartUri(library.fileUri, part);
+      if (libraries.containsKey(partUri)) {
+        yield partUri;
+      } else if (fileUri != partUri && libraries.containsKey(fileUri)) {
+        yield fileUri;
       }
     }
   }

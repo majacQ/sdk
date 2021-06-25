@@ -8,22 +8,19 @@ import 'package:observatory/models.dart' as M;
 import 'package:observatory/src/elements/curly_block.dart';
 import 'package:observatory/src/elements/helpers/any_ref.dart';
 import 'package:observatory/src/elements/helpers/rendering_scheduler.dart';
-import 'package:observatory/src/elements/helpers/tag.dart';
+import 'package:observatory/src/elements/helpers/custom_element.dart';
 import 'package:observatory/src/elements/helpers/uris.dart';
 
-class ContextRefElement extends HtmlElement implements Renderable {
-  static const tag = const Tag<ContextRefElement>('context-ref',
-      dependencies: const [CurlyBlockElement.tag]);
-
-  RenderingScheduler<ContextRefElement> _r;
+class ContextRefElement extends CustomElement implements Renderable {
+  late RenderingScheduler<ContextRefElement> _r;
 
   Stream<RenderedEvent<ContextRefElement>> get onRendered => _r.onRendered;
 
-  M.IsolateRef _isolate;
-  M.ContextRef _context;
-  M.ObjectRepository _objects;
-  M.Context _loadedContext;
-  bool _expandable;
+  late M.IsolateRef _isolate;
+  late M.ContextRef _context;
+  late M.ObjectRepository _objects;
+  M.Context? _loadedContext;
+  late bool _expandable;
   bool _expanded = false;
 
   M.IsolateRef get isolate => _isolate;
@@ -31,11 +28,11 @@ class ContextRefElement extends HtmlElement implements Renderable {
 
   factory ContextRefElement(
       M.IsolateRef isolate, M.ContextRef context, M.ObjectRepository objects,
-      {RenderingQueue queue, bool expandable: true}) {
+      {RenderingQueue? queue, bool expandable: true}) {
     assert(isolate != null);
     assert(context != null);
     assert(objects != null);
-    ContextRefElement e = document.createElement(tag.name);
+    ContextRefElement e = new ContextRefElement.created();
     e._r = new RenderingScheduler<ContextRefElement>(e, queue: queue);
     e._isolate = isolate;
     e._context = context;
@@ -44,7 +41,7 @@ class ContextRefElement extends HtmlElement implements Renderable {
     return e;
   }
 
-  ContextRefElement.created() : super.created();
+  ContextRefElement.created() : super.created('context-ref');
 
   @override
   void attached() {
@@ -60,7 +57,7 @@ class ContextRefElement extends HtmlElement implements Renderable {
   }
 
   Future _refresh() async {
-    _loadedContext = await _objects.get(_isolate, _context.id);
+    _loadedContext = await _objects.get(_isolate, _context.id!) as M.Context;
     _r.dirty();
   }
 
@@ -77,20 +74,21 @@ class ContextRefElement extends HtmlElement implements Renderable {
     if (_expandable) {
       children.addAll([
         new SpanElement()..text = ' ',
-        new CurlyBlockElement(expanded: _expanded, queue: _r.queue)
-          ..content = <Element>[
-            new DivElement()
-              ..classes = ['indent']
-              ..children = _createValue()
-          ]
-          ..onToggle.listen((e) async {
-            _expanded = e.control.expanded;
-            if (_expanded) {
-              e.control.disabled = true;
-              await _refresh();
-              e.control.disabled = false;
-            }
-          })
+        (new CurlyBlockElement(expanded: _expanded, queue: _r.queue)
+              ..content = <Element>[
+                new DivElement()
+                  ..classes = ['indent']
+                  ..children = _createValue()
+              ]
+              ..onToggle.listen((e) async {
+                _expanded = e.control.expanded;
+                if (_expanded) {
+                  e.control.disabled = true;
+                  await _refresh();
+                  e.control.disabled = false;
+                }
+              }))
+            .element
       ]);
     }
     this.children = children;
@@ -100,8 +98,8 @@ class ContextRefElement extends HtmlElement implements Renderable {
     if (_loadedContext == null) {
       return [new SpanElement()..text = 'Loading...'];
     }
-    var members = new List<Element>();
-    if (_loadedContext.parentContext != null) {
+    var members = <Element>[];
+    if (_loadedContext!.parentContext != null) {
       members.add(new DivElement()
         ..classes = ['memberItem']
         ..children = <Element>[
@@ -112,13 +110,14 @@ class ContextRefElement extends HtmlElement implements Renderable {
             ..classes = ['memberName']
             ..children = <Element>[
               new ContextRefElement(
-                  _isolate, _loadedContext.parentContext, _objects,
-                  queue: _r.queue)
+                      _isolate, _loadedContext!.parentContext!, _objects,
+                      queue: _r.queue)
+                  .element
             ]
         ]);
     }
-    if (_loadedContext.variables.isNotEmpty) {
-      var variables = _loadedContext.variables.toList();
+    if (_loadedContext!.variables!.isNotEmpty) {
+      var variables = _loadedContext!.variables!.toList();
       for (var index = 0; index < variables.length; index++) {
         var variable = variables[index];
         members.add(new DivElement()

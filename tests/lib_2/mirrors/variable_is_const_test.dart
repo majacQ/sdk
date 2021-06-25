@@ -2,9 +2,10 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library test.variable_is_const;
 
-@MirrorsUsed(targets: "test.variable_is_const")
 import 'dart:mirrors';
 
 import 'package:expect/expect.dart';
@@ -30,7 +31,7 @@ main() {
   Expect.isTrue(isConst(cm, #staticConst));
   Expect.isFalse(isConst(cm, #staticNonConst));
 
-  LibraryMirror lm = cm.owner;
+  LibraryMirror lm = cm.owner as LibraryMirror;
   Expect.isTrue(isConst(lm, #topLevelConst));
   Expect.isFalse(isConst(lm, #topLevelNonConst));
 }

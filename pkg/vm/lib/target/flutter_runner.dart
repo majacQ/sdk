@@ -23,6 +23,7 @@ class FlutterRunnerTarget extends VmTarget {
         'dart:collection',
         'dart:convert',
         'dart:developer',
+        'dart:ffi',
         'dart:_internal',
         'dart:isolate',
         'dart:math',
@@ -31,7 +32,6 @@ class FlutterRunnerTarget extends VmTarget {
         // PRODUCT mode.
         'dart:mirrors',
 
-        'dart:profiler',
         'dart:typed_data',
         'dart:nativewrappers',
         'dart:io',
@@ -42,6 +42,8 @@ class FlutterRunnerTarget extends VmTarget {
         'dart:fuchsia',
         'dart:vmservice_io',
         'dart:ui',
-        'dart:mozart.internal',
       ];
+
+  @override
+  List<String> get extraRequiredLibrariesPlatform => const <String>[];
 }

@@ -1,8 +1,8 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-const List<int> _CRC32_TABLE = const [
+const List<int> _CRC32_TABLE = [
   0x00000000,
   0x77073096,
   0xEE0E612C,
@@ -261,10 +261,8 @@ const List<int> _CRC32_TABLE = const [
   0x2D02EF8D
 ];
 
-/**
- * Get the CRC-32 checksum of the given array. You can append bytes to an
- * already computed crc by specifying the previous [crc] value.
- */
+/// Get the CRC-32 checksum of the given array. You can append bytes to an
+/// already computed crc by specifying the previous [crc] value.
 int getCrc32(List<int> array, [int crc = 0]) {
   int len = array.length;
   crc = crc ^ 0xffffffff;
@@ -280,9 +278,10 @@ int getCrc32(List<int> array, [int crc = 0]) {
     crc = _CRC32_TABLE[(crc ^ array[ip++]) & 0xff] ^ (crc >> 8);
     len -= 8;
   }
-  if (len > 0)
+  if (len > 0) {
     do {
       crc = _CRC32_TABLE[(crc ^ array[ip++]) & 0xff] ^ (crc >> 8);
     } while (--len > 0);
+  }
   return crc ^ 0xffffffff;
 }

@@ -13,14 +13,19 @@
 
 #include "vm/simulator.h"
 
-#include "vm/compiler/assembler/assembler.h"
 #include "vm/compiler/assembler/disassembler.h"
-#include "vm/constants_arm64.h"
+#include "vm/constants.h"
+#include "vm/image_snapshot.h"
 #include "vm/native_arguments.h"
 #include "vm/os_thread.h"
 #include "vm/stack_frame.h"
 
 namespace dart {
+
+// constants_arm64.h does not define LR constant to prevent accidental direct
+// use of it during code generation. However using LR directly is okay in this
+// file because it is a simulator.
+constexpr Register LR = LR_DO_NOT_USE_DIRECTLY;
 
 DEFINE_FLAG(uint64_t,
             trace_sim_after,
@@ -30,6 +35,11 @@ DEFINE_FLAG(uint64_t,
             stop_sim_at,
             ULLONG_MAX,
             "Instruction address or instruction count to stop simulator at.");
+
+DEFINE_FLAG(bool,
+            sim_allow_unaligned_accesses,
+            true,
+            "Allow unaligned accesses to Normal memory.");
 
 // This macro provides a platform independent use of sscanf. The reason for
 // SScanF not being implemented in a platform independent way through
@@ -96,7 +106,9 @@ class SimulatorDebugger {
 
   static TokenPosition GetApproximateTokenIndex(const Code& code, uword pc);
 
-  static void PrintDartFrame(uword pc,
+  static void PrintDartFrame(uword vm_instructions,
+                             uword isolate_instructions,
+                             uword pc,
                              uword fp,
                              uword sp,
                              const Function& function,
@@ -127,7 +139,7 @@ void SimulatorDebugger::Stop(Instr* instr, const char* message) {
 }
 
 static Register LookupCpuRegisterByName(const char* name) {
-  static const char* kNames[] = {
+  static const char* const kNames[] = {
       "r0",  "r1",  "r2",  "r3",  "r4",  "r5",  "r6",  "r7",
       "r8",  "r9",  "r10", "r11", "r12", "r13", "r14", "r15",
       "r16", "r17", "r18", "r19", "r20", "r21", "r22", "r23",
@@ -254,7 +266,7 @@ TokenPosition SimulatorDebugger::GetApproximateTokenIndex(const Code& code,
   uword pc_offset = pc - code.PayloadStart();
   const PcDescriptors& descriptors =
       PcDescriptors::Handle(code.pc_descriptors());
-  PcDescriptors::Iterator iter(descriptors, RawPcDescriptors::kAnyKind);
+  PcDescriptors::Iterator iter(descriptors, UntaggedPcDescriptors::kAnyKind);
   while (iter.MoveNext()) {
     if (iter.PcOffset() == pc_offset) {
       return iter.TokenPos();
@@ -265,7 +277,29 @@ TokenPosition SimulatorDebugger::GetApproximateTokenIndex(const Code& code,
   return token_pos;
 }
 
-void SimulatorDebugger::PrintDartFrame(uword pc,
+#if defined(DART_PRECOMPILED_RUNTIME)
+static const char* ImageName(uword vm_instructions,
+                             uword isolate_instructions,
+                             uword pc,
+                             intptr_t* offset) {
+  const Image vm_image(vm_instructions);
+  const Image isolate_image(isolate_instructions);
+  if (vm_image.contains(pc)) {
+    *offset = pc - vm_instructions;
+    return kVmSnapshotInstructionsAsmSymbol;
+  } else if (isolate_image.contains(pc)) {
+    *offset = pc - isolate_instructions;
+    return kIsolateSnapshotInstructionsAsmSymbol;
+  } else {
+    *offset = 0;
+    return "<unknown>";
+  }
+}
+#endif
+
+void SimulatorDebugger::PrintDartFrame(uword vm_instructions,
+                                       uword isolate_instructions,
+                                       uword pc,
                                        uword fp,
                                        uword sp,
                                        const Function& function,
@@ -275,31 +309,52 @@ void SimulatorDebugger::PrintDartFrame(uword pc,
   const Script& script = Script::Handle(function.script());
   const String& func_name = String::Handle(function.QualifiedScrubbedName());
   const String& url = String::Handle(script.url());
-  intptr_t line = -1;
-  intptr_t column = -1;
-  if (token_pos.IsReal()) {
-    script.GetTokenLocation(token_pos, &line, &column);
+  intptr_t line, column;
+  if (script.GetTokenLocation(token_pos, &line, &column)) {
+    OS::PrintErr(
+        "pc=0x%" Px " fp=0x%" Px " sp=0x%" Px " %s%s (%s:%" Pd ":%" Pd ")", pc,
+        fp, sp, is_optimized ? (is_inlined ? "inlined " : "optimized ") : "",
+        func_name.ToCString(), url.ToCString(), line, column);
+  } else {
+    OS::PrintErr("pc=0x%" Px " fp=0x%" Px " sp=0x%" Px " %s%s (%s)", pc, fp, sp,
+                 is_optimized ? (is_inlined ? "inlined " : "optimized ") : "",
+                 func_name.ToCString(), url.ToCString());
   }
-  OS::PrintErr(
-      "pc=0x%" Px " fp=0x%" Px " sp=0x%" Px " %s%s (%s:%" Pd ":%" Pd ")\n", pc,
-      fp, sp, is_optimized ? (is_inlined ? "inlined " : "optimized ") : "",
-      func_name.ToCString(), url.ToCString(), line, column);
+#if defined(DART_PRECOMPILED_RUNTIME)
+  intptr_t offset;
+  auto const symbol_name =
+      ImageName(vm_instructions, isolate_instructions, pc, &offset);
+  OS::PrintErr(" %s+0x%" Px "", symbol_name, offset);
+#endif
+  OS::PrintErr("\n");
 }
 
 void SimulatorDebugger::PrintBacktrace() {
-  StackFrameIterator frames(
-      sim_->get_register(FP), sim_->get_register(SP), sim_->get_pc(),
-      ValidationPolicy::kDontValidateFrames, Thread::Current(),
-      StackFrameIterator::kNoCrossThreadIteration);
+  auto const T = Thread::Current();
+  auto const Z = T->zone();
+#if defined(DART_PRECOMPILED_RUNTIME)
+  auto const vm_instructions = reinterpret_cast<uword>(
+      Dart::vm_isolate_group()->source()->snapshot_instructions);
+  auto const isolate_instructions = reinterpret_cast<uword>(
+      T->isolate_group()->source()->snapshot_instructions);
+  OS::PrintErr("vm_instructions=0x%" Px ", isolate_instructions=0x%" Px "\n",
+               vm_instructions, isolate_instructions);
+#else
+  const uword vm_instructions = 0;
+  const uword isolate_instructions = 0;
+#endif
+  StackFrameIterator frames(sim_->get_register(FP), sim_->get_register(SP),
+                            sim_->get_pc(),
+                            ValidationPolicy::kDontValidateFrames, T,
+                            StackFrameIterator::kNoCrossThreadIteration);
   StackFrame* frame = frames.NextFrame();
   ASSERT(frame != NULL);
-  Function& function = Function::Handle();
-  Function& inlined_function = Function::Handle();
-  Code& code = Code::Handle();
-  Code& unoptimized_code = Code::Handle();
+  Function& function = Function::Handle(Z);
+  Function& inlined_function = Function::Handle(Z);
+  Code& code = Code::Handle(Z);
+  Code& unoptimized_code = Code::Handle(Z);
   while (frame != NULL) {
     if (frame->IsDartFrame()) {
-      ASSERT(!frame->is_interpreted());  // Not yet supported.
       code = frame->LookupDartCode();
       function = code.function();
       if (code.is_optimized()) {
@@ -315,24 +370,33 @@ void SimulatorDebugger::PrintBacktrace() {
           it.Advance();
           if (!it.Done()) {
             PrintDartFrame(
-                unoptimized_pc, frame->fp(), frame->sp(), inlined_function,
+                vm_instructions, isolate_instructions, unoptimized_pc,
+                frame->fp(), frame->sp(), inlined_function,
                 GetApproximateTokenIndex(unoptimized_code, unoptimized_pc),
                 true, true);
           }
         }
         // Print the optimized inlining frame below.
       }
-      PrintDartFrame(frame->pc(), frame->fp(), frame->sp(), function,
+      PrintDartFrame(vm_instructions, isolate_instructions, frame->pc(),
+                     frame->fp(), frame->sp(), function,
                      GetApproximateTokenIndex(code, frame->pc()),
                      code.is_optimized(), false);
     } else {
-      OS::PrintErr("pc=0x%" Px " fp=0x%" Px " sp=0x%" Px " %s frame\n",
+      OS::PrintErr("pc=0x%" Px " fp=0x%" Px " sp=0x%" Px " %s frame",
                    frame->pc(), frame->fp(), frame->sp(),
                    frame->IsEntryFrame()
                        ? "entry"
                        : frame->IsExitFrame()
                              ? "exit"
                              : frame->IsStubFrame() ? "stub" : "invalid");
+#if defined(DART_PRECOMPILED_RUNTIME)
+      intptr_t offset;
+      auto const symbol_name = ImageName(vm_instructions, isolate_instructions,
+                                         frame->pc(), &offset);
+      OS::PrintErr(" %s+0x%" Px "", symbol_name, offset);
+#endif
+      OS::PrintErr("\n");
     }
     frame = frames.NextFrame();
   }
@@ -375,7 +439,7 @@ void SimulatorDebugger::RedoBreakpoints() {
 }
 
 void SimulatorDebugger::Debug() {
-  intptr_t last_pc = -1;
+  uintptr_t last_pc = -1;
   bool done = false;
 
 #define COMMAND_SIZE 63
@@ -531,11 +595,11 @@ void SimulatorDebugger::Debug() {
           // Make the dereferencing '*' optional.
           if (((arg1[0] == '*') && GetValue(arg1 + 1, &value)) ||
               GetValue(arg1, &value)) {
-            if (Isolate::Current()->heap()->Contains(value)) {
+            if (IsolateGroup::Current()->heap()->Contains(value)) {
               OS::PrintErr("%s: \n", arg1);
 #if defined(DEBUG)
-              const Object& obj =
-                  Object::Handle(reinterpret_cast<RawObject*>(value));
+              const Object& obj = Object::Handle(
+                  static_cast<ObjectPtr>(static_cast<uword>(value)));
               obj.Print();
 #endif  // defined(DEBUG)
             } else {
@@ -633,7 +697,10 @@ void SimulatorDebugger::Debug() {
           OS::PrintErr("execution tracing off\n");
         }
       } else if (strcmp(cmd, "bt") == 0) {
+        Thread* thread = reinterpret_cast<Thread*>(sim_->get_register(THR));
+        thread->set_execution_state(Thread::kThreadInVM);
         PrintBacktrace();
+        thread->set_execution_state(Thread::kThreadInGenerated);
       } else {
         OS::PrintErr("Unknown command: %s\n", cmd);
       }
@@ -720,12 +787,14 @@ Simulator::Simulator() : exclusive_access_addr_(0), exclusive_access_value_(0) {
   // handling stack overflow exceptions. To be safe in potential
   // stack underflows we also add some underflow buffer space.
   stack_ =
-      new char[(OSThread::GetSpecifiedStackSize() + OSThread::kStackSizeBuffer +
-                kSimulatorStackUnderflowSize)];
+      new char[(OSThread::GetSpecifiedStackSize() +
+                OSThread::kStackSizeBufferMax + kSimulatorStackUnderflowSize)];
   // Low address.
-  stack_limit_ = reinterpret_cast<uword>(stack_) + OSThread::kStackSizeBuffer;
+  stack_limit_ = reinterpret_cast<uword>(stack_);
+  // Limit for StackOverflowError.
+  overflow_stack_limit_ = stack_limit_ + OSThread::kStackSizeBufferMax;
   // High address.
-  stack_base_ = stack_limit_ + OSThread::GetSpecifiedStackSize();
+  stack_base_ = overflow_stack_limit_ + OSThread::GetSpecifiedStackSize();
 
   pc_modified_ = false;
   icount_ = 0;
@@ -789,23 +858,20 @@ class Redirection {
                           int argument_count) {
     MutexLocker ml(mutex_);
 
-    for (Redirection* current = list_; current != NULL;
+    Redirection* old_head = list_.load(std::memory_order_relaxed);
+    for (Redirection* current = old_head; current != nullptr;
          current = current->next_) {
       if (current->external_function_ == external_function) return current;
     }
 
     Redirection* redirection =
         new Redirection(external_function, call_kind, argument_count);
-    redirection->next_ = list_;
+    redirection->next_ = old_head;
 
     // Use a memory fence to ensure all pending writes are written at the time
     // of updating the list head, so the profiling thread always has a valid
     // list to look at.
-    Redirection* old_head = list_;
-    Redirection* replaced_list_head =
-        AtomicOperations::CompareAndSwapPointer<Redirection>(&list_, old_head,
-                                                             redirection);
-    ASSERT(old_head == replaced_list_head);
+    list_.store(redirection, std::memory_order_release);
 
     return redirection;
   }
@@ -822,8 +888,8 @@ class Redirection {
   // allowed to hold any locks - which is precisely the reason why the list is
   // prepend-only and a memory fence is used when writing the list head [list_]!
   static uword FunctionForRedirect(uword address_of_hlt) {
-    Redirection* current;
-    for (current = list_; current != NULL; current = current->next_) {
+    for (Redirection* current = list_.load(std::memory_order_acquire);
+         current != nullptr; current = current->next_) {
       if (current->address_of_hlt_instruction() == address_of_hlt) {
         return current->external_function_;
       }
@@ -846,11 +912,11 @@ class Redirection {
   int argument_count_;
   uint32_t hlt_instruction_;
   Redirection* next_;
-  static Redirection* list_;
+  static std::atomic<Redirection*> list_;
   static Mutex* mutex_;
 };
 
-Redirection* Redirection::list_ = NULL;
+std::atomic<Redirection*> Redirection::list_ = {nullptr};
 Mutex* Redirection::mutex_ = new Mutex();
 
 uword Simulator::RedirectExternalReference(uword function,
@@ -867,10 +933,12 @@ uword Simulator::FunctionForRedirect(uword redirect) {
 
 // Get the active Simulator for the current isolate.
 Simulator* Simulator::Current() {
-  Simulator* simulator = Isolate::Current()->simulator();
+  Isolate* isolate = Isolate::Current();
+  Simulator* simulator = isolate->simulator();
   if (simulator == NULL) {
+    NoSafepointScope no_safepoint;
     simulator = new Simulator();
-    Isolate::Current()->set_simulator(simulator);
+    isolate->set_simulator(simulator);
   }
   return simulator;
 }
@@ -882,7 +950,10 @@ void Simulator::set_register(Instr* instr,
                              R31Type r31t) {
   // Register is in range.
   ASSERT((reg >= 0) && (reg < kNumberOfCpuRegisters));
+#if !defined(TARGET_OS_FUCHSIA)
   ASSERT(instr == NULL || reg != R18);  // R18 is globally reserved on iOS.
+#endif
+
   if ((reg != R31) || (r31t != R31IsZR)) {
     registers_[reg] = value;
     // If we're setting CSP, make sure it is 16-byte aligned. In truth, CSP
@@ -963,18 +1034,18 @@ void Simulator::set_vregister(VRegister reg, const simd_value_t& value) {
 }
 
 // Raw access to the PC register.
-void Simulator::set_pc(int64_t value) {
+void Simulator::set_pc(uint64_t value) {
   pc_modified_ = true;
   last_pc_ = pc_;
   pc_ = value;
 }
 
 // Raw access to the pc.
-int64_t Simulator::get_pc() const {
+uint64_t Simulator::get_pc() const {
   return pc_;
 }
 
-int64_t Simulator::get_last_pc() const {
+uint64_t Simulator::get_last_pc() const {
   return last_pc_;
 }
 
@@ -992,9 +1063,10 @@ void Simulator::HandleIllegalAccess(uword addr, Instr* instr) {
   FATAL("Cannot continue execution after illegal memory access.");
 }
 
-// The ARMv8 manual advises that an unaligned access may generate a fault,
-// and if not, will likely take a number of additional cycles to execute,
-// so let's just not generate any.
+// ARMv8 supports unaligned memory accesses to normal memory without trapping
+// for all instructions except Load-Exclusive/Store-Exclusive and
+// Load-Acquire/Store-Release.
+// See B2.4.2 "Alignment of data accesses" for more information.
 void Simulator::UnalignedAccess(const char* msg, uword addr, Instr* instr) {
   char buffer[128];
   snprintf(buffer, sizeof(buffer), "unaligned %s at 0x%" Px ", pc=%p\n", msg,
@@ -1020,8 +1092,12 @@ bool Simulator::IsTracingExecution() const {
   return icount_ > FLAG_trace_sim_after;
 }
 
-intptr_t Simulator::ReadX(uword addr, Instr* instr) {
-  if ((addr & 7) == 0) {
+intptr_t Simulator::ReadX(uword addr,
+                          Instr* instr,
+                          bool must_be_aligned /* = false */) {
+  const bool allow_unaligned_access =
+      FLAG_sim_allow_unaligned_accesses && !must_be_aligned;
+  if (allow_unaligned_access || (addr & 7) == 0) {
     intptr_t* ptr = reinterpret_cast<intptr_t*>(addr);
     return *ptr;
   }
@@ -1030,7 +1106,7 @@ intptr_t Simulator::ReadX(uword addr, Instr* instr) {
 }
 
 void Simulator::WriteX(uword addr, intptr_t value, Instr* instr) {
-  if ((addr & 7) == 0) {
+  if (FLAG_sim_allow_unaligned_accesses || (addr & 7) == 0) {
     intptr_t* ptr = reinterpret_cast<intptr_t*>(addr);
     *ptr = value;
     return;
@@ -1038,8 +1114,12 @@ void Simulator::WriteX(uword addr, intptr_t value, Instr* instr) {
   UnalignedAccess("write", addr, instr);
 }
 
-uint32_t Simulator::ReadWU(uword addr, Instr* instr) {
-  if ((addr & 3) == 0) {
+uint32_t Simulator::ReadWU(uword addr,
+                           Instr* instr,
+                           bool must_be_aligned /* = false */) {
+  const bool allow_unaligned_access =
+      FLAG_sim_allow_unaligned_accesses && !must_be_aligned;
+  if (allow_unaligned_access || (addr & 3) == 0) {
     uint32_t* ptr = reinterpret_cast<uint32_t*>(addr);
     return *ptr;
   }
@@ -1048,7 +1128,7 @@ uint32_t Simulator::ReadWU(uword addr, Instr* instr) {
 }
 
 int32_t Simulator::ReadW(uword addr, Instr* instr) {
-  if ((addr & 3) == 0) {
+  if (FLAG_sim_allow_unaligned_accesses || (addr & 3) == 0) {
     int32_t* ptr = reinterpret_cast<int32_t*>(addr);
     return *ptr;
   }
@@ -1057,7 +1137,7 @@ int32_t Simulator::ReadW(uword addr, Instr* instr) {
 }
 
 void Simulator::WriteW(uword addr, uint32_t value, Instr* instr) {
-  if ((addr & 3) == 0) {
+  if (FLAG_sim_allow_unaligned_accesses || (addr & 3) == 0) {
     uint32_t* ptr = reinterpret_cast<uint32_t*>(addr);
     *ptr = value;
     return;
@@ -1066,7 +1146,7 @@ void Simulator::WriteW(uword addr, uint32_t value, Instr* instr) {
 }
 
 uint16_t Simulator::ReadHU(uword addr, Instr* instr) {
-  if ((addr & 1) == 0) {
+  if (FLAG_sim_allow_unaligned_accesses || (addr & 1) == 0) {
     uint16_t* ptr = reinterpret_cast<uint16_t*>(addr);
     return *ptr;
   }
@@ -1075,7 +1155,7 @@ uint16_t Simulator::ReadHU(uword addr, Instr* instr) {
 }
 
 int16_t Simulator::ReadH(uword addr, Instr* instr) {
-  if ((addr & 1) == 0) {
+  if (FLAG_sim_allow_unaligned_accesses || (addr & 1) == 0) {
     int16_t* ptr = reinterpret_cast<int16_t*>(addr);
     return *ptr;
   }
@@ -1084,7 +1164,7 @@ int16_t Simulator::ReadH(uword addr, Instr* instr) {
 }
 
 void Simulator::WriteH(uword addr, uint16_t value, Instr* instr) {
-  if ((addr & 1) == 0) {
+  if (FLAG_sim_allow_unaligned_accesses || (addr & 1) == 0) {
     uint16_t* ptr = reinterpret_cast<uint16_t*>(addr);
     *ptr = value;
     return;
@@ -1114,13 +1194,13 @@ void Simulator::ClearExclusive() {
 
 intptr_t Simulator::ReadExclusiveX(uword addr, Instr* instr) {
   exclusive_access_addr_ = addr;
-  exclusive_access_value_ = ReadX(addr, instr);
+  exclusive_access_value_ = ReadX(addr, instr, /*must_be_aligned=*/true);
   return exclusive_access_value_;
 }
 
 intptr_t Simulator::ReadExclusiveW(uword addr, Instr* instr) {
   exclusive_access_addr_ = addr;
-  exclusive_access_value_ = ReadWU(addr, instr);
+  exclusive_access_value_ = ReadWU(addr, instr, /*must_be_aligned=*/true);
   return exclusive_access_value_;
 }
 
@@ -1132,11 +1212,11 @@ intptr_t Simulator::WriteExclusiveX(uword addr, intptr_t value, Instr* instr) {
     return 1;  // Failure.
   }
 
-  uword old_value = exclusive_access_value_;
+  int64_t old_value = exclusive_access_value_;
   ClearExclusive();
 
-  if (AtomicOperations::CompareAndSwapWord(reinterpret_cast<uword*>(addr),
-                                           old_value, value) == old_value) {
+  auto atomic_addr = reinterpret_cast<RelaxedAtomic<int64_t>*>(addr);
+  if (atomic_addr->compare_exchange_weak(old_value, value)) {
     return 0;  // Success.
   }
   return 1;  // Failure.
@@ -1150,14 +1230,50 @@ intptr_t Simulator::WriteExclusiveW(uword addr, intptr_t value, Instr* instr) {
     return 1;  // Failure.
   }
 
-  uint32_t old_value = static_cast<uint32_t>(exclusive_access_value_);
+  int32_t old_value = static_cast<uint32_t>(exclusive_access_value_);
   ClearExclusive();
 
-  if (AtomicOperations::CompareAndSwapUint32(reinterpret_cast<uint32_t*>(addr),
-                                             old_value, value) == old_value) {
+  auto atomic_addr = reinterpret_cast<RelaxedAtomic<int32_t>*>(addr);
+  if (atomic_addr->compare_exchange_weak(old_value, value)) {
     return 0;  // Success.
   }
   return 1;  // Failure.
+}
+
+intptr_t Simulator::ReadAcquire(uword addr, Instr* instr) {
+  // TODO(42074): Once we switch to C++20 we should change this to use use
+  // `std::atomic_ref<T>` which supports performing atomic operations on
+  // non-atomic data.
+  COMPILE_ASSERT(sizeof(std::atomic<intptr_t>) == sizeof(intptr_t));
+  return reinterpret_cast<std::atomic<intptr_t>*>(addr)->load(
+      std::memory_order_acquire);
+}
+
+uint32_t Simulator::ReadAcquireW(uword addr, Instr* instr) {
+  // TODO(42074): Once we switch to C++20 we should change this to use use
+  // `std::atomic_ref<T>` which supports performing atomic operations on
+  // non-atomic data.
+  COMPILE_ASSERT(sizeof(std::atomic<intptr_t>) == sizeof(intptr_t));
+  return reinterpret_cast<std::atomic<uint32_t>*>(addr)->load(
+      std::memory_order_acquire);
+}
+
+void Simulator::WriteRelease(uword addr, intptr_t value, Instr* instr) {
+  // TODO(42074): Once we switch to C++20 we should change this to use use
+  // `std::atomic_ref<T>` which supports performing atomic operations on
+  // non-atomic data.
+  COMPILE_ASSERT(sizeof(std::atomic<intptr_t>) == sizeof(intptr_t));
+  reinterpret_cast<std::atomic<intptr_t>*>(addr)->store(
+      value, std::memory_order_release);
+}
+
+void Simulator::WriteReleaseW(uword addr, uint32_t value, Instr* instr) {
+  // TODO(42074): Once we switch to C++20 we should change this to use use
+  // `std::atomic_ref<T>` which supports performing atomic operations on
+  // non-atomic data.
+  COMPILE_ASSERT(sizeof(std::atomic<intptr_t>) == sizeof(intptr_t));
+  reinterpret_cast<std::atomic<uint32_t>*>(addr)->store(
+      value, std::memory_order_release);
 }
 
 // Unsupported instructions use Format to print an error and stop execution.
@@ -1280,8 +1396,8 @@ void Simulator::DecodeAddSubImm(Instr* instr) {
                                        : (instr->Imm12Field());
   if (instr->SFField()) {
     // 64-bit add.
-    const int64_t rn_val = get_register(rn, instr->RnMode());
-    const int64_t alu_out = addition ? (rn_val + imm) : (rn_val - imm);
+    const uint64_t rn_val = get_register(rn, instr->RnMode());
+    const uint64_t alu_out = addition ? (rn_val + imm) : (rn_val - imm);
     set_register(instr, rd, alu_out, instr->RdMode());
     if (instr->HasS()) {
       SetNZFlagsX(alu_out);
@@ -1290,13 +1406,13 @@ void Simulator::DecodeAddSubImm(Instr* instr) {
     }
   } else {
     // 32-bit add.
-    const int32_t rn_val = get_wregister(rn, instr->RnMode());
-    int32_t carry_in = 0;
+    const uint32_t rn_val = get_wregister(rn, instr->RnMode());
+    uint32_t carry_in = 0;
     if (!addition) {
       carry_in = 1;
       imm = ~imm;
     }
-    const int32_t alu_out = rn_val + imm + carry_in;
+    const uint32_t alu_out = rn_val + imm + carry_in;
     set_wregister(rd, alu_out, instr->RdMode());
     if (instr->HasS()) {
       SetNZFlagsW(alu_out);
@@ -1328,13 +1444,13 @@ void Simulator::DecodeBitfield(Instr* instr) {
     mask >>= r_bit;
     result >>= r_bit;
   } else {
-    result <<= bitwidth - r_bit;
+    result = static_cast<uint64_t>(result) << (bitwidth - r_bit);
     mask <<= bitwidth - r_bit;
   }
   result &= mask;
   if (sign_extend) {
     int highest_bit = (s_bit - r_bit) & (bitwidth - 1);
-    int shift = bitwidth - highest_bit - 1;
+    int shift = 64 - highest_bit - 1;
     result <<= shift;
     result = static_cast<word>(result) >> shift;
   } else if (!zero_extend) {
@@ -1403,10 +1519,10 @@ void Simulator::DecodePCRel(Instr* instr) {
   if (op == 0) {
     // Format(instr, "adr 'rd, 'pcrel")
     const Register rd = instr->RdField();
-    const int64_t immhi = instr->SImm19Field();
-    const int64_t immlo = instr->Bits(29, 2);
-    const int64_t off = (immhi << 2) | immlo;
-    const int64_t dest = get_pc() + off;
+    const uint64_t immhi = instr->SImm19Field();
+    const uint64_t immlo = instr->Bits(29, 2);
+    const uint64_t off = (immhi << 2) | immlo;
+    const uint64_t dest = get_pc() + off;
     set_register(instr, rd, dest, instr->RdMode());
   } else {
     UnimplementedInstruction(instr);
@@ -1432,10 +1548,10 @@ void Simulator::DecodeDPImmediate(Instr* instr) {
 void Simulator::DecodeCompareAndBranch(Instr* instr) {
   const int op = instr->Bit(24);
   const Register rt = instr->RtField();
-  const int64_t imm19 = instr->SImm19Field();
-  const int64_t dest = get_pc() + (imm19 << 2);
-  const int64_t mask = instr->SFField() == 1 ? kXRegMask : kWRegMask;
-  const int64_t rt_val = get_register(rt, R31IsZR) & mask;
+  const uint64_t imm19 = instr->SImm19Field();
+  const uint64_t dest = get_pc() + (imm19 << 2);
+  const uint64_t mask = instr->SFField() == 1 ? kXRegMask : kWRegMask;
+  const uint64_t rt_val = get_register(rt, R31IsZR) & mask;
   if (op == 0) {
     // Format(instr, "cbz'sf 'rt, 'dest19");
     if (rt_val == 0) {
@@ -1498,8 +1614,8 @@ void Simulator::DecodeConditionalBranch(Instr* instr) {
   if ((instr->Bit(24) != 0) || (instr->Bit(4) != 0)) {
     UnimplementedInstruction(instr);
   }
-  const int64_t imm19 = instr->SImm19Field();
-  const int64_t dest = get_pc() + (imm19 << 2);
+  const uint64_t imm19 = instr->SImm19Field();
+  const uint64_t dest = get_pc() + (imm19 << 2);
   if (ConditionallyExecute(instr)) {
     set_pc(dest);
   }
@@ -1518,6 +1634,23 @@ typedef int64_t (*SimulatorLeafRuntimeCall)(int64_t r0,
                                             int64_t r6,
                                             int64_t r7);
 
+// [target] has several different signatures that differ from
+// SimulatorLeafRuntimeCall. We can call them all from here only because in
+// X64's calling conventions a function can be called with extra arguments
+// and the callee will see the first arguments and won't unbalance the stack.
+NO_SANITIZE_UNDEFINED("function")
+static int64_t InvokeLeafRuntime(SimulatorLeafRuntimeCall target,
+                                 int64_t r0,
+                                 int64_t r1,
+                                 int64_t r2,
+                                 int64_t r3,
+                                 int64_t r4,
+                                 int64_t r5,
+                                 int64_t r6,
+                                 int64_t r7) {
+  return target(r0, r1, r2, r3, r4, r5, r6, r7);
+}
+
 // Calls to leaf float Dart runtime functions are based on this interface.
 typedef double (*SimulatorLeafFloatRuntimeCall)(double d0,
                                                 double d1,
@@ -1528,9 +1661,26 @@ typedef double (*SimulatorLeafFloatRuntimeCall)(double d0,
                                                 double d6,
                                                 double d7);
 
+// [target] has several different signatures that differ from
+// SimulatorFloatLeafRuntimeCall. We can call them all from here only because in
+// X64's calling conventions a function can be called with extra arguments
+// and the callee will see the first arguments and won't unbalance the stack.
+NO_SANITIZE_UNDEFINED("function")
+static double InvokeFloatLeafRuntime(SimulatorLeafFloatRuntimeCall target,
+                                     double d0,
+                                     double d1,
+                                     double d2,
+                                     double d3,
+                                     double d4,
+                                     double d5,
+                                     double d6,
+                                     double d7) {
+  return target(d0, d1, d2, d3, d4, d5, d6, d7);
+}
+
 // Calls to native Dart functions are based on this interface.
-typedef void (*SimulatorBootstrapNativeCall)(NativeArguments* arguments);
-typedef void (*SimulatorNativeCall)(NativeArguments* arguments, uword target);
+typedef void (*SimulatorNativeCallWrapper)(Dart_NativeArguments arguments,
+                                           Dart_NativeFunction target);
 
 void Simulator::DoRedirectedCall(Instr* instr) {
   SimulatorSetjmpBuffer buffer(this);
@@ -1564,7 +1714,8 @@ void Simulator::DoRedirectedCall(Instr* instr) {
       const int64_t r5 = get_register(R5);
       const int64_t r6 = get_register(R6);
       const int64_t r7 = get_register(R7);
-      const int64_t res = target(r0, r1, r2, r3, r4, r5, r6, r7);
+      const int64_t res =
+          InvokeLeafRuntime(target, r0, r1, r2, r3, r4, r5, r6, r7);
       set_register(instr, R0, res);      // Set returned result from function.
       set_register(instr, R1, icount_);  // Zap unused result register.
     } else if (redirection->call_kind() == kLeafFloatRuntimeCall) {
@@ -1580,26 +1731,19 @@ void Simulator::DoRedirectedCall(Instr* instr) {
       const double d5 = bit_cast<double, int64_t>(get_vregisterd(V5, 0));
       const double d6 = bit_cast<double, int64_t>(get_vregisterd(V6, 0));
       const double d7 = bit_cast<double, int64_t>(get_vregisterd(V7, 0));
-      const double res = target(d0, d1, d2, d3, d4, d5, d6, d7);
+      const double res =
+          InvokeFloatLeafRuntime(target, d0, d1, d2, d3, d4, d5, d6, d7);
       set_vregisterd(V0, 0, bit_cast<int64_t, double>(res));
       set_vregisterd(V0, 1, 0);
-    } else if (redirection->call_kind() == kBootstrapNativeCall) {
-      ASSERT(redirection->argument_count() == 1);
-      NativeArguments* arguments;
-      arguments = reinterpret_cast<NativeArguments*>(get_register(R0));
-      SimulatorBootstrapNativeCall target =
-          reinterpret_cast<SimulatorBootstrapNativeCall>(external);
-      target(arguments);
-      // Zap result register from void function.
-      set_register(instr, R0, icount_);
     } else {
-      ASSERT(redirection->call_kind() == kNativeCall);
-      NativeArguments* arguments;
-      arguments = reinterpret_cast<NativeArguments*>(get_register(R0));
-      uword target_func = get_register(R1);
-      SimulatorNativeCall target =
-          reinterpret_cast<SimulatorNativeCall>(external);
-      target(arguments, target_func);
+      ASSERT(redirection->call_kind() == kNativeCallWrapper);
+      SimulatorNativeCallWrapper wrapper =
+          reinterpret_cast<SimulatorNativeCallWrapper>(external);
+      Dart_NativeArguments arguments =
+          reinterpret_cast<Dart_NativeArguments>(get_register(R0));
+      Dart_NativeFunction target =
+          reinterpret_cast<Dart_NativeFunction>(get_register(R1));
+      wrapper(arguments, target);
       // Zap result register from void function.
       set_register(instr, R0, icount_);
       set_register(instr, R1, icount_);
@@ -1645,20 +1789,10 @@ void Simulator::DecodeExceptionGen(Instr* instr) {
     // Format(instr, "brk 'imm16");
     SimulatorDebugger dbg(this);
     int32_t imm = instr->Imm16Field();
-    if (imm == Instr::kStopMessageCode) {
-      const char* message = "Stop messages not enabled";
-      if (FLAG_print_stop_message) {
-        message = *reinterpret_cast<const char**>(
-            reinterpret_cast<intptr_t>(instr) - 2 * Instr::kInstrSize);
-      }
-      set_pc(get_pc() + Instr::kInstrSize);
-      dbg.Stop(instr, message);
-    } else {
-      char buffer[32];
-      snprintf(buffer, sizeof(buffer), "brk #0x%x", imm);
-      set_pc(get_pc() + Instr::kInstrSize);
-      dbg.Stop(instr, buffer);
-    }
+    char buffer[32];
+    snprintf(buffer, sizeof(buffer), "brk #0x%x", imm);
+    set_pc(get_pc() + Instr::kInstrSize);
+    dbg.Stop(instr, buffer);
   } else if ((instr->Bits(0, 2) == 0) && (instr->Bits(2, 3) == 0) &&
              (instr->Bits(21, 3) == 2)) {
     // Format(instr, "hlt 'imm16");
@@ -1699,18 +1833,18 @@ void Simulator::DecodeSystem(Instr* instr) {
 void Simulator::DecodeTestAndBranch(Instr* instr) {
   const int op = instr->Bit(24);
   const int bitpos = instr->Bits(19, 5) | (instr->Bit(31) << 5);
-  const int64_t imm14 = instr->SImm14Field();
-  const int64_t dest = get_pc() + (imm14 << 2);
+  const uint64_t imm14 = instr->SImm14Field();
+  const uint64_t dest = get_pc() + (imm14 << 2);
   const Register rt = instr->RtField();
-  const int64_t rt_val = get_register(rt, R31IsZR);
+  const uint64_t rt_val = get_register(rt, R31IsZR);
   if (op == 0) {
     // Format(instr, "tbz'sf 'rt, 'bitpos, 'dest14");
-    if ((rt_val & (1ll << bitpos)) == 0) {
+    if ((rt_val & (1ull << bitpos)) == 0) {
       set_pc(dest);
     }
   } else {
     // Format(instr, "tbnz'sf 'rt, 'bitpos, 'dest14");
-    if ((rt_val & (1ll << bitpos)) != 0) {
+    if ((rt_val & (1ull << bitpos)) != 0) {
       set_pc(dest);
     }
   }
@@ -1718,9 +1852,9 @@ void Simulator::DecodeTestAndBranch(Instr* instr) {
 
 void Simulator::DecodeUnconditionalBranch(Instr* instr) {
   const bool link = instr->Bit(31) == 1;
-  const int64_t imm26 = instr->SImm26Field();
-  const int64_t dest = get_pc() + (imm26 << 2);
-  const int64_t ret = get_pc() + Instr::kInstrSize;
+  const uint64_t imm26 = instr->SImm26Field();
+  const uint64_t dest = get_pc() + (imm26 << 2);
+  const uint64_t ret = get_pc() + Instr::kInstrSize;
   set_pc(dest);
   if (link) {
     set_register(instr, LR, ret);
@@ -1984,7 +2118,7 @@ void Simulator::DecodeLoadStoreRegPair(Instr* instr) {
   const int64_t rn_val = get_register(rn, R31IsSP);
   const intptr_t shift = 2 + instr->SFField();
   const intptr_t size = 1 << shift;
-  const int32_t offset = (instr->SImm7Field() << shift);
+  const int32_t offset = (static_cast<uint32_t>(instr->SImm7Field()) << shift);
   uword address = 0;
   uword wb_address = 0;
   bool wb = false;
@@ -2090,7 +2224,7 @@ void Simulator::DecodeLoadRegLiteral(Instr* instr) {
 }
 
 void Simulator::DecodeLoadStoreExclusive(Instr* instr) {
-  if ((instr->Bit(23) != 0) || (instr->Bit(21) != 0) || (instr->Bit(15) != 0)) {
+  if (instr->Bit(21) != 0 || instr->Bit(23) != instr->Bit(15)) {
     UNIMPLEMENTED();
   }
   const int32_t size = instr->Bits(30, 2);
@@ -2102,29 +2236,45 @@ void Simulator::DecodeLoadStoreExclusive(Instr* instr) {
   const Register rt = instr->RtField();
   ASSERT(instr->Rt2Field() == R31);  // Should-Be-One
   const bool is_load = instr->Bit(22) == 1;
+  const bool is_exclusive = instr->Bit(23) == 0;
+  const bool is_ordered = instr->Bit(15) == 1;
   if (is_load) {
-    ASSERT(rs == R31);  // Should-Be-One
-    // Format(instr, "ldxr 'rt, 'rn");
-    if (size == 3) {
+    const bool is_load_acquire = !is_exclusive && is_ordered;
+    if (is_load_acquire) {
+      ASSERT(rs == R31);  // Should-Be-One
+      // Format(instr, "ldar 'rt, 'rn");
       const int64_t addr = get_register(rn, R31IsSP);
-      intptr_t value = ReadExclusiveX(addr, instr);
+      const intptr_t value =
+          (size == 3) ? ReadAcquire(addr, instr) : ReadAcquireW(addr, instr);
       set_register(instr, rt, value, R31IsSP);
     } else {
+      ASSERT(rs == R31);  // Should-Be-One
+      // Format(instr, "ldxr 'rt, 'rn");
       const int64_t addr = get_register(rn, R31IsSP);
-      intptr_t value = ReadExclusiveW(addr, instr);
+      const intptr_t value = (size == 3) ? ReadExclusiveX(addr, instr)
+                                         : ReadExclusiveW(addr, instr);
       set_register(instr, rt, value, R31IsSP);
     }
   } else {
-    // Format(instr, "stxr 'rs, 'rt, 'rn");
-    if (size == 3) {
-      uword value = get_register(rt, R31IsSP);
-      uword addr = get_register(rn, R31IsSP);
-      intptr_t status = WriteExclusiveX(addr, value, instr);
-      set_register(instr, rs, status, R31IsSP);
+    const bool is_store_release = !is_exclusive && is_ordered;
+    if (is_store_release) {
+      ASSERT(rs == R31);  // Should-Be-One
+      // Format(instr, "stlr 'rt, 'rn");
+      const uword value = get_register(rt, R31IsSP);
+      const uword addr = get_register(rn, R31IsSP);
+      if (size == 3) {
+        WriteRelease(addr, value, instr);
+      } else {
+        WriteReleaseW(addr, static_cast<uint32_t>(value), instr);
+      }
     } else {
-      uint32_t value = get_register(rt, R31IsSP);
-      uword addr = get_register(rn, R31IsSP);
-      intptr_t status = WriteExclusiveW(addr, value, instr);
+      // Format(instr, "stxr 'rs, 'rt, 'rn");
+      const uword value = get_register(rt, R31IsSP);
+      const uword addr = get_register(rn, R31IsSP);
+      const intptr_t status =
+          (size == 3)
+              ? WriteExclusiveX(addr, value, instr)
+              : WriteExclusiveW(addr, static_cast<uint32_t>(value), instr);
       set_register(instr, rs, status, R31IsSP);
     }
   }
@@ -2154,7 +2304,7 @@ int64_t Simulator::ShiftOperand(uint8_t reg_size,
   int64_t mask = reg_size == kXRegSizeInBits ? kXRegMask : kWRegMask;
   switch (shift_type) {
     case LSL:
-      return (value << amount) & mask;
+      return (static_cast<uint64_t>(value) << amount) & mask;
     case LSR:
       return static_cast<uint64_t>(value) >> amount;
     case ASR: {
@@ -2193,13 +2343,13 @@ int64_t Simulator::ExtendOperand(uint8_t reg_size,
       value &= 0xffffffff;
       break;
     case SXTB:
-      value = (value << 56) >> 56;
+      value = static_cast<int64_t>(static_cast<uint64_t>(value) << 56) >> 56;
       break;
     case SXTH:
-      value = (value << 48) >> 48;
+      value = static_cast<int64_t>(static_cast<uint64_t>(value) << 48) >> 48;
       break;
     case SXTW:
-      value = (value << 32) >> 32;
+      value = static_cast<int64_t>(static_cast<uint64_t>(value) << 32) >> 32;
       break;
     case UXTX:
     case SXTX:
@@ -2209,7 +2359,7 @@ int64_t Simulator::ExtendOperand(uint8_t reg_size,
       break;
   }
   int64_t mask = (reg_size == kXRegSizeInBits) ? kXRegMask : kWRegMask;
-  return (value << amount) & mask;
+  return (static_cast<uint64_t>(value) << amount) & mask;
 }
 
 int64_t Simulator::DecodeShiftExtendOperand(Instr* instr) {
@@ -2236,11 +2386,11 @@ void Simulator::DecodeAddSubShiftExt(Instr* instr) {
   const bool addition = (instr->Bit(30) == 0);
   const Register rd = instr->RdField();
   const Register rn = instr->RnField();
-  const int64_t rm_val = DecodeShiftExtendOperand(instr);
+  const uint64_t rm_val = DecodeShiftExtendOperand(instr);
   if (instr->SFField()) {
     // 64-bit add.
-    const int64_t rn_val = get_register(rn, instr->RnMode());
-    const int64_t alu_out = rn_val + (addition ? rm_val : -rm_val);
+    const uint64_t rn_val = get_register(rn, instr->RnMode());
+    const uint64_t alu_out = rn_val + (addition ? rm_val : -rm_val);
     set_register(instr, rd, alu_out, instr->RdMode());
     if (instr->HasS()) {
       SetNZFlagsX(alu_out);
@@ -2249,14 +2399,14 @@ void Simulator::DecodeAddSubShiftExt(Instr* instr) {
     }
   } else {
     // 32-bit add.
-    const int32_t rn_val = get_wregister(rn, instr->RnMode());
-    int32_t rm_val32 = static_cast<int32_t>(rm_val & kWRegMask);
-    int32_t carry_in = 0;
+    const uint32_t rn_val = get_wregister(rn, instr->RnMode());
+    uint32_t rm_val32 = static_cast<uint32_t>(rm_val & kWRegMask);
+    uint32_t carry_in = 0;
     if (!addition) {
       carry_in = 1;
       rm_val32 = ~rm_val32;
     }
-    const int32_t alu_out = rn_val + rm_val32 + carry_in;
+    const uint32_t alu_out = rn_val + rm_val32 + carry_in;
     set_wregister(rd, alu_out, instr->RdMode());
     if (instr->HasS()) {
       SetNZFlagsW(alu_out);
@@ -2273,14 +2423,14 @@ void Simulator::DecodeAddSubWithCarry(Instr* instr) {
   const Register rd = instr->RdField();
   const Register rn = instr->RnField();
   const Register rm = instr->RmField();
-  const int64_t rn_val64 = get_register(rn, R31IsZR);
-  const int32_t rn_val32 = get_wregister(rn, R31IsZR);
-  const int64_t rm_val64 = get_register(rm, R31IsZR);
-  int32_t rm_val32 = get_wregister(rm, R31IsZR);
-  const int32_t carry_in = c_flag_ ? 1 : 0;
+  const uint64_t rn_val64 = get_register(rn, R31IsZR);
+  const uint32_t rn_val32 = get_wregister(rn, R31IsZR);
+  const uint64_t rm_val64 = get_register(rm, R31IsZR);
+  uint32_t rm_val32 = get_wregister(rm, R31IsZR);
+  const uint32_t carry_in = c_flag_ ? 1 : 0;
   if (instr->SFField()) {
     // 64-bit add.
-    const int64_t alu_out =
+    const uint64_t alu_out =
         rn_val64 + (addition ? rm_val64 : ~rm_val64) + carry_in;
     set_register(instr, rd, alu_out, R31IsZR);
     if (instr->HasS()) {
@@ -2293,7 +2443,7 @@ void Simulator::DecodeAddSubWithCarry(Instr* instr) {
     if (!addition) {
       rm_val32 = ~rm_val32;
     }
-    const int32_t alu_out = rn_val32 + rm_val32 + carry_in;
+    const uint32_t alu_out = rn_val32 + rm_val32 + carry_in;
     set_wregister(rd, alu_out, R31IsZR);
     if (instr->HasS()) {
       SetNZFlagsW(alu_out);
@@ -2423,19 +2573,22 @@ void Simulator::DecodeMiscDP1Source(Instr* instr) {
   switch (op) {
     case 4: {
       // Format(instr, "clz'sf 'rd, 'rn");
-      int64_t rd_val = 0;
-      int64_t rn_val = (instr->SFField() == 1) ? rn_val64 : rn_val32;
-      if (rn_val != 0) {
-        while (rn_val > 0) {
-          rd_val++;
-          rn_val <<= 1;
-        }
-      } else {
-        rd_val = (instr->SFField() == 1) ? 64 : 32;
-      }
       if (instr->SFField() == 1) {
+        const uint64_t rd_val = Utils::CountLeadingZeros64(rn_val64);
         set_register(instr, rd, rd_val, R31IsZR);
       } else {
+        const uint32_t rd_val = Utils::CountLeadingZeros32(rn_val32);
+        set_wregister(rd, rd_val, R31IsZR);
+      }
+      break;
+    }
+    case 0: {
+      // Format(instr, "rbit'sf 'rd, 'rn");
+      if (instr->SFField() == 1) {
+        const uint64_t rd_val = Utils::ReverseBits64(rn_val64);
+        set_register(instr, rd, rd_val, R31IsZR);
+      } else {
+        const uint32_t rd_val = Utils::ReverseBits32(rn_val32);
         set_wregister(rd, rd_val, R31IsZR);
       }
       break;
@@ -2475,10 +2628,12 @@ void Simulator::DecodeMiscDP2Source(Instr* instr) {
     case 8: {
       // Format(instr, "lsl'sf 'rd, 'rn, 'rm");
       if (instr->SFField() == 1) {
-        const int64_t alu_out = rn_val64 << (rm_val64 & (kXRegSizeInBits - 1));
+        const uint64_t rn_u64 = static_cast<uint64_t>(rn_val64);
+        const int64_t alu_out = rn_u64 << (rm_val64 & (kXRegSizeInBits - 1));
         set_register(instr, rd, alu_out, R31IsZR);
       } else {
-        const int32_t alu_out = rn_val32 << (rm_val32 & (kXRegSizeInBits - 1));
+        const uint32_t rn_u32 = static_cast<uint32_t>(rn_val32);
+        const int32_t alu_out = rn_u32 << (rm_val32 & (kXRegSizeInBits - 1));
         set_wregister(rd, alu_out, R31IsZR);
       }
       break;
@@ -2522,32 +2677,32 @@ void Simulator::DecodeMiscDP3Source(Instr* instr) {
       (instr->Bit(15) == 0)) {
     // Format(instr, "madd'sf 'rd, 'rn, 'rm, 'ra");
     if (instr->SFField() == 1) {
-      const int64_t rn_val = get_register(rn, R31IsZR);
-      const int64_t rm_val = get_register(rm, R31IsZR);
-      const int64_t ra_val = get_register(ra, R31IsZR);
-      const int64_t alu_out = ra_val + (rn_val * rm_val);
+      const uint64_t rn_val = get_register(rn, R31IsZR);
+      const uint64_t rm_val = get_register(rm, R31IsZR);
+      const uint64_t ra_val = get_register(ra, R31IsZR);
+      const uint64_t alu_out = ra_val + (rn_val * rm_val);
       set_register(instr, rd, alu_out, R31IsZR);
     } else {
-      const int32_t rn_val = get_wregister(rn, R31IsZR);
-      const int32_t rm_val = get_wregister(rm, R31IsZR);
-      const int32_t ra_val = get_wregister(ra, R31IsZR);
-      const int32_t alu_out = ra_val + (rn_val * rm_val);
+      const uint32_t rn_val = get_wregister(rn, R31IsZR);
+      const uint32_t rm_val = get_wregister(rm, R31IsZR);
+      const uint32_t ra_val = get_wregister(ra, R31IsZR);
+      const uint32_t alu_out = ra_val + (rn_val * rm_val);
       set_wregister(rd, alu_out, R31IsZR);
     }
   } else if ((instr->Bits(29, 2) == 0) && (instr->Bits(21, 3) == 0) &&
              (instr->Bit(15) == 1)) {
     // Format(instr, "msub'sf 'rd, 'rn, 'rm, 'ra");
     if (instr->SFField() == 1) {
-      const int64_t rn_val = get_register(rn, R31IsZR);
-      const int64_t rm_val = get_register(rm, R31IsZR);
-      const int64_t ra_val = get_register(ra, R31IsZR);
-      const int64_t alu_out = ra_val - (rn_val * rm_val);
+      const uint64_t rn_val = get_register(rn, R31IsZR);
+      const uint64_t rm_val = get_register(rm, R31IsZR);
+      const uint64_t ra_val = get_register(ra, R31IsZR);
+      const uint64_t alu_out = ra_val - (rn_val * rm_val);
       set_register(instr, rd, alu_out, R31IsZR);
     } else {
-      const int32_t rn_val = get_wregister(rn, R31IsZR);
-      const int32_t rm_val = get_wregister(rm, R31IsZR);
-      const int32_t ra_val = get_wregister(ra, R31IsZR);
-      const int32_t alu_out = ra_val - (rn_val * rm_val);
+      const uint32_t rn_val = get_wregister(rn, R31IsZR);
+      const uint32_t rm_val = get_wregister(rm, R31IsZR);
+      const uint32_t ra_val = get_wregister(ra, R31IsZR);
+      const uint32_t alu_out = ra_val - (rn_val * rm_val);
       set_wregister(rd, alu_out, R31IsZR);
     }
   } else if ((instr->Bits(29, 3) == 4) && (instr->Bits(21, 3) == 2) &&
@@ -2838,11 +2993,11 @@ void Simulator::DecodeSIMDThreeSame(Instr* instr) {
       } else if ((U == 0) && (opcode == 0x1e)) {
         if (instr->Bit(23) == 1) {
           // Format(instr, "vmin'vsz 'vd, 'vn, 'vm");
-          const float m = (vn_flt > vm_flt) ? vm_flt : vn_flt;
+          const float m = fminf(vn_flt, vm_flt);
           res = bit_cast<int32_t, float>(m);
         } else {
           // Format(instr, "vmax'vsz 'vd, 'vn, 'vm");
-          const float m = (vn_flt < vm_flt) ? vm_flt : vn_flt;
+          const float m = fmaxf(vn_flt, vm_flt);
           res = bit_cast<int32_t, float>(m);
         }
       } else if ((U == 0) && (opcode == 0x1f)) {
@@ -2912,11 +3067,11 @@ void Simulator::DecodeSIMDThreeSame(Instr* instr) {
       } else if ((U == 0) && (opcode == 0x1e)) {
         if (instr->Bit(23) == 1) {
           // Format(instr, "vmin'vsz 'vd, 'vn, 'vm");
-          const double m = (vn_dbl > vm_dbl) ? vm_dbl : vn_dbl;
+          const double m = fmin(vn_dbl, vm_dbl);
           res = bit_cast<int64_t, double>(m);
         } else {
           // Format(instr, "vmax'vsz 'vd, 'vn, 'vm");
-          const double m = (vn_dbl < vm_dbl) ? vm_dbl : vn_dbl;
+          const double m = fmax(vn_dbl, vm_dbl);
           res = bit_cast<int64_t, double>(m);
         }
       } else {
@@ -3197,13 +3352,21 @@ void Simulator::DecodeFPIntCvt(Instr* instr) {
       set_vregisterd(vd, 1, 0);
     } else if (instr->Bits(16, 5) == 24) {
       // Format(instr, "fcvtzds'sf 'rd, 'vn");
+      const intptr_t max = instr->Bit(31) == 1 ? INT64_MAX : INT32_MAX;
+      const intptr_t min = instr->Bit(31) == 1 ? INT64_MIN : INT32_MIN;
       const double vn_val = bit_cast<double, int64_t>(get_vregisterd(vn, 0));
-      if (vn_val >= static_cast<double>(INT64_MAX)) {
-        set_register(instr, rd, INT64_MAX, instr->RdMode());
-      } else if (vn_val <= static_cast<double>(INT64_MIN)) {
-        set_register(instr, rd, INT64_MIN, instr->RdMode());
+      int64_t result;
+      if (vn_val >= static_cast<double>(max)) {
+        result = max;
+      } else if (vn_val <= static_cast<double>(min)) {
+        result = min;
       } else {
-        set_register(instr, rd, static_cast<int64_t>(vn_val), instr->RdMode());
+        result = static_cast<int64_t>(vn_val);
+      }
+      if (instr->Bit(31) == 1) {
+        set_register(instr, rd, result, instr->RdMode());
+      } else {
+        set_register(instr, rd, result & 0xffffffffll, instr->RdMode());
       }
     } else {
       UnimplementedInstruction(instr);
@@ -3551,23 +3714,36 @@ void Simulator::JumpToFrame(uword pc, uword sp, uword fp, Thread* thread) {
   // in the previous C++ frames.
   StackResource::Unwind(thread);
 
+  // Keep the following code in sync with `StubCode::JumpToFrameStub()`.
+
   // Unwind the C++ stack and continue simulation in the target frame.
   set_pc(static_cast<int64_t>(pc));
   set_register(NULL, SP, static_cast<int64_t>(sp));
   set_register(NULL, FP, static_cast<int64_t>(fp));
   set_register(NULL, THR, reinterpret_cast<int64_t>(thread));
   // Set the tag.
-  thread->set_vm_tag(VMTag::kDartCompiledTagId);
+  thread->set_vm_tag(VMTag::kDartTagId);
   // Clear top exit frame.
   thread->set_top_exit_frame_info(0);
   // Restore pool pointer.
   int64_t code =
       *reinterpret_cast<int64_t*>(fp + kPcMarkerSlotFromFp * kWordSize);
-  int64_t pp = *reinterpret_cast<int64_t*>(code + Code::object_pool_offset() -
-                                           kHeapObjectTag);
+  int64_t pp = (FLAG_precompiled_mode && FLAG_use_bare_instructions)
+                   ? static_cast<int64_t>(thread->global_object_pool())
+                   : *reinterpret_cast<int64_t*>(
+                         code + Code::object_pool_offset() - kHeapObjectTag);
   pp -= kHeapObjectTag;  // In the PP register, the pool pointer is untagged.
   set_register(NULL, CODE_REG, code);
   set_register(NULL, PP, pp);
+  set_register(
+      NULL, HEAP_BITS,
+      (thread->write_barrier_mask() << 32) | (thread->heap_base() >> 32));
+  set_register(NULL, NULL_REG, static_cast<int64_t>(Object::null()));
+  if (FLAG_precompiled_mode && FLAG_use_bare_instructions) {
+    set_register(NULL, DISPATCH_TABLE_REG,
+                 reinterpret_cast<int64_t>(thread->dispatch_table_array()));
+  }
+
   buf->Longjmp();
 }
 

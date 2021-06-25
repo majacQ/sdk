@@ -81,7 +81,7 @@ class NoDynamicUsesAnnotator {
   }
 
   visitField(Field node) {
-    if (node.isStatic || node.name.name == 'call') {
+    if (node.isStatic || node.name.text == 'call') {
       return;
     }
 
@@ -93,7 +93,10 @@ class NoDynamicUsesAnnotator {
     ProcedureAttributesMetadata metadata;
     if (!_selectors.nonThisSelectors.contains(selector)) {
       metadata = const ProcedureAttributesMetadata(
-          hasDynamicUses: false, hasNonThisUses: true, hasTearOffUses: false);
+          methodOrSetterCalledDynamically: false,
+          getterCalledDynamically: false,
+          hasNonThisUses: true,
+          hasTearOffUses: false);
     } else {
       metadata = const ProcedureAttributesMetadata.noDynamicUses();
     }
@@ -101,7 +104,7 @@ class NoDynamicUsesAnnotator {
   }
 
   visitProcedure(Procedure node) {
-    if (node.isStatic || node.name.name == 'call') {
+    if (node.isStatic || node.name.text == 'call') {
       return;
     }
 
@@ -123,13 +126,22 @@ class NoDynamicUsesAnnotator {
     ProcedureAttributesMetadata metadata;
     if (!hasNonThisUses && !hasTearOffUses) {
       metadata = const ProcedureAttributesMetadata(
-          hasDynamicUses: false, hasNonThisUses: false, hasTearOffUses: false);
+          methodOrSetterCalledDynamically: false,
+          getterCalledDynamically: false,
+          hasNonThisUses: false,
+          hasTearOffUses: false);
     } else if (!hasNonThisUses && hasTearOffUses) {
       metadata = const ProcedureAttributesMetadata(
-          hasDynamicUses: false, hasNonThisUses: false, hasTearOffUses: true);
+          methodOrSetterCalledDynamically: false,
+          getterCalledDynamically: false,
+          hasNonThisUses: false,
+          hasTearOffUses: true);
     } else if (hasNonThisUses && !hasTearOffUses) {
       metadata = const ProcedureAttributesMetadata(
-          hasDynamicUses: false, hasNonThisUses: true, hasTearOffUses: false);
+          methodOrSetterCalledDynamically: false,
+          getterCalledDynamically: false,
+          hasNonThisUses: true,
+          hasTearOffUses: false);
     } else {
       metadata = const ProcedureAttributesMetadata.noDynamicUses();
     }
@@ -137,7 +149,7 @@ class NoDynamicUsesAnnotator {
   }
 }
 
-class DynamicSelectorsCollector extends RecursiveVisitor<Null> {
+class DynamicSelectorsCollector extends RecursiveVisitor {
   final Set<Selector> dynamicSelectors = new Set<Selector>();
   final Set<Selector> nonThisSelectors = new Set<Selector>();
   final Set<Selector> tearOffSelectors = new Set<Selector>();
@@ -164,84 +176,61 @@ class DynamicSelectorsCollector extends RecursiveVisitor<Null> {
   }
 
   @override
-  visitMethodInvocation(MethodInvocation node) {
-    super.visitMethodInvocation(node);
-
-    Selector selector;
-    if (node.interfaceTarget == null) {
-      dynamicSelectors.add(new Selector.doInvoke(node.name));
-    } else {
-      if (node.receiver is! ThisExpression) {
-        nonThisSelectors.add(selector ??= new Selector.doInvoke(node.name));
-      }
-    }
-  }
-
-  @override
-  visitDirectMethodInvocation(DirectMethodInvocation node) {
-    super.visitDirectMethodInvocation(node);
-
-    Selector selector;
+  visitInstanceInvocation(InstanceInvocation node) {
+    super.visitInstanceInvocation(node);
     if (node.receiver is! ThisExpression) {
-      nonThisSelectors
-          .add(selector ??= new Selector.doInvoke(node.target.name));
+      nonThisSelectors.add(new Selector.doInvoke(node.name));
     }
   }
 
   @override
-  visitPropertyGet(PropertyGet node) {
-    super.visitPropertyGet(node);
+  visitDynamicInvocation(DynamicInvocation node) {
+    super.visitDynamicInvocation(node);
+    dynamicSelectors.add(new Selector.doInvoke(node.name));
+  }
 
-    Selector selector;
-    if (node.interfaceTarget == null) {
-      dynamicSelectors.add(selector = new Selector.doGet(node.name));
-    } else {
-      if (node.receiver is! ThisExpression) {
-        nonThisSelectors.add(selector ??= new Selector.doGet(node.name));
-      }
-
-      final target = node.interfaceTarget;
-      if (target is Procedure && target.kind == ProcedureKind.Method) {
-        tearOffSelectors.add(new Selector.doInvoke(node.name));
-      }
+  @override
+  visitEqualsCall(EqualsCall node) {
+    super.visitEqualsCall(node);
+    if (node.left is! ThisExpression) {
+      nonThisSelectors.add(new Selector.doInvoke(Name('==')));
     }
   }
 
   @override
-  visitDirectPropertyGet(DirectPropertyGet node) {
-    super.visitDirectPropertyGet(node);
-
+  visitInstanceGet(InstanceGet node) {
+    super.visitInstanceGet(node);
     if (node.receiver is! ThisExpression) {
-      nonThisSelectors.add(new Selector.doGet(node.target.name));
-    }
-
-    final target = node.target;
-    if (target is Procedure && target.kind == ProcedureKind.Method) {
-      tearOffSelectors.add(new Selector.doInvoke(target.name));
+      nonThisSelectors.add(new Selector.doGet(node.name));
     }
   }
 
   @override
-  visitPropertySet(PropertySet node) {
-    super.visitPropertySet(node);
-
-    Selector selector;
-    if (node.interfaceTarget == null) {
-      dynamicSelectors.add(selector = new Selector.doSet(node.name));
-    } else {
-      if (node.receiver is! ThisExpression) {
-        nonThisSelectors.add(selector ??= new Selector.doSet(node.name));
-      }
-    }
+  visitDynamicGet(DynamicGet node) {
+    super.visitDynamicGet(node);
+    dynamicSelectors.add(new Selector.doGet(node.name));
   }
 
   @override
-  visitDirectPropertySet(DirectPropertySet node) {
-    super.visitDirectPropertySet(node);
-
-    Selector selector;
+  visitInstanceTearOff(InstanceTearOff node) {
+    super.visitInstanceTearOff(node);
     if (node.receiver is! ThisExpression) {
-      nonThisSelectors.add(selector ??= new Selector.doSet(node.target.name));
+      nonThisSelectors.add(new Selector.doGet(node.name));
     }
+    tearOffSelectors.add(new Selector.doInvoke(node.name));
+  }
+
+  @override
+  visitInstanceSet(InstanceSet node) {
+    super.visitInstanceSet(node);
+    if (node.receiver is! ThisExpression) {
+      nonThisSelectors.add(new Selector.doSet(node.name));
+    }
+  }
+
+  @override
+  visitDynamicSet(DynamicSet node) {
+    super.visitDynamicSet(node);
+    dynamicSelectors.add(new Selector.doSet(node.name));
   }
 }

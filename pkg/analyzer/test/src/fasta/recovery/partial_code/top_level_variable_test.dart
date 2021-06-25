@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -8,7 +8,7 @@ import 'package:analyzer/src/error/codes.dart';
 import 'partial_code_support.dart';
 
 main() {
-  new TopLevelVariableTest().buildAll();
+  TopLevelVariableTest().buildAll();
 }
 
 class TopLevelVariableTest extends PartialCodeTest {
@@ -16,7 +16,7 @@ class TopLevelVariableTest extends PartialCodeTest {
     buildTests(
         'top_level_variable',
         [
-          new TestDescriptor(
+          TestDescriptor(
             'const',
             'const',
             [
@@ -35,7 +35,7 @@ class TopLevelVariableTest extends PartialCodeTest {
               CompileTimeErrorCode.CONST_NOT_INITIALIZED
             ],
           ),
-          new TestDescriptor(
+          TestDescriptor(
             'constName',
             'const a',
             [
@@ -48,7 +48,7 @@ class TopLevelVariableTest extends PartialCodeTest {
               CompileTimeErrorCode.CONST_NOT_INITIALIZED
             ],
           ),
-          new TestDescriptor(
+          TestDescriptor(
             'constTypeName',
             'const int a',
             [
@@ -60,7 +60,7 @@ class TopLevelVariableTest extends PartialCodeTest {
               CompileTimeErrorCode.CONST_NOT_INITIALIZED
             ],
           ),
-          new TestDescriptor(
+          TestDescriptor(
             'constNameComma',
             'const a,',
             [
@@ -75,7 +75,7 @@ class TopLevelVariableTest extends PartialCodeTest {
               CompileTimeErrorCode.CONST_NOT_INITIALIZED
             ],
           ),
-          new TestDescriptor(
+          TestDescriptor(
             'constTypeNameComma',
             'const int a,',
             [
@@ -90,7 +90,7 @@ class TopLevelVariableTest extends PartialCodeTest {
               CompileTimeErrorCode.CONST_NOT_INITIALIZED
             ],
           ),
-          new TestDescriptor(
+          TestDescriptor(
             'constNameCommaName',
             'const a, b',
             [
@@ -104,7 +104,7 @@ class TopLevelVariableTest extends PartialCodeTest {
               CompileTimeErrorCode.CONST_NOT_INITIALIZED
             ],
           ),
-          new TestDescriptor(
+          TestDescriptor(
             'constTypeNameCommaName',
             'const int a, b',
             [
@@ -118,7 +118,7 @@ class TopLevelVariableTest extends PartialCodeTest {
               CompileTimeErrorCode.CONST_NOT_INITIALIZED
             ],
           ),
-          new TestDescriptor(
+          TestDescriptor(
             'final',
             'final',
             [
@@ -134,35 +134,35 @@ class TopLevelVariableTest extends PartialCodeTest {
               'setter'
             ],
             expectedErrorsInValidCode: [
-              StaticWarningCode.FINAL_NOT_INITIALIZED
+              CompileTimeErrorCode.FINAL_NOT_INITIALIZED
             ],
           ),
-          new TestDescriptor(
+          TestDescriptor(
             'finalName',
             'final a',
             [
               ParserErrorCode.EXPECTED_TOKEN,
-              StaticWarningCode.FINAL_NOT_INITIALIZED
+              CompileTimeErrorCode.FINAL_NOT_INITIALIZED
             ],
             "final a;",
             failing: ['functionNonVoid', 'getter', 'setter', 'mixin'],
             expectedErrorsInValidCode: [
-              StaticWarningCode.FINAL_NOT_INITIALIZED
+              CompileTimeErrorCode.FINAL_NOT_INITIALIZED
             ],
           ),
-          new TestDescriptor(
+          TestDescriptor(
             'finalTypeName',
             'final int a',
             [
               ParserErrorCode.EXPECTED_TOKEN,
-              StaticWarningCode.FINAL_NOT_INITIALIZED
+              CompileTimeErrorCode.FINAL_NOT_INITIALIZED
             ],
             "final int a;",
             expectedErrorsInValidCode: [
-              StaticWarningCode.FINAL_NOT_INITIALIZED
+              CompileTimeErrorCode.FINAL_NOT_INITIALIZED
             ],
           ),
-          new TestDescriptor(
+          TestDescriptor(
             'type',
             'int',
             [
@@ -172,13 +172,13 @@ class TopLevelVariableTest extends PartialCodeTest {
             "int _s_;",
             allFailing: true,
           ),
-          new TestDescriptor(
+          TestDescriptor(
             'typeName',
             'int a',
             [ParserErrorCode.EXPECTED_TOKEN],
             "int a;",
           ),
-          new TestDescriptor(
+          TestDescriptor(
             'var',
             'var',
             [
@@ -188,14 +188,14 @@ class TopLevelVariableTest extends PartialCodeTest {
             "var _s_;",
             failing: ['functionVoid', 'functionNonVoid', 'getter', 'setter'],
           ),
-          new TestDescriptor(
+          TestDescriptor(
             'varName',
             'var a',
             [ParserErrorCode.EXPECTED_TOKEN],
             "var a;",
             failing: ['functionNonVoid', 'getter', 'mixin', 'setter'],
           ),
-          new TestDescriptor(
+          TestDescriptor(
             'varNameEquals',
             'var a =',
             [
@@ -215,7 +215,7 @@ class TopLevelVariableTest extends PartialCodeTest {
               'setter'
             ],
           ),
-          new TestDescriptor(
+          TestDescriptor(
             'varNameEqualsExpression',
             'var a = b',
             [ParserErrorCode.EXPECTED_TOKEN],

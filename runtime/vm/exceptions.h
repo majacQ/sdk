@@ -7,6 +7,7 @@
 
 #include "vm/allocation.h"
 #include "vm/bitfield.h"
+#include "vm/tagged_pointer.h"
 #include "vm/token_position.h"
 
 namespace dart {
@@ -19,35 +20,31 @@ class Error;
 class LanguageError;
 class Instance;
 class Integer;
-class RawInstance;
-class RawObject;
-class RawScript;
-class RawStackTrace;
 class ReadStream;
-class WriteStream;
+class BaseWriteStream;
 class String;
 class Thread;
+class TypedData;
 
 class Exceptions : AllStatic {
  public:
-  static void Throw(Thread* thread, const Instance& exception);
-  static void ReThrow(Thread* thread,
-                      const Instance& exception,
-                      const Instance& stacktrace);
-  static void PropagateError(const Error& error);
+  DART_NORETURN static void Throw(Thread* thread, const Instance& exception);
+  DART_NORETURN static void ReThrow(Thread* thread,
+                                    const Instance& exception,
+                                    const Instance& stacktrace);
+  DART_NORETURN static void PropagateError(const Error& error);
 
   // Propagate an error to the entry frame, skipping over Dart frames.
-  static void PropagateToEntry(const Error& error);
+  DART_NORETURN static void PropagateToEntry(const Error& error);
 
   // Helpers to create and throw errors.
-  static RawStackTrace* CurrentStackTrace();
-  static RawScript* GetCallerScript(DartFrameIterator* iterator);
-  static RawInstance* NewInstance(const char* class_name);
+  static StackTracePtr CurrentStackTrace();
+  static ScriptPtr GetCallerScript(DartFrameIterator* iterator);
+  static InstancePtr NewInstance(const char* class_name);
   static void CreateAndThrowTypeError(TokenPosition location,
                                       const AbstractType& src_type,
                                       const AbstractType& dst_type,
-                                      const String& dst_name,
-                                      const String& bound_error_msg);
+                                      const String& dst_name);
 
   enum ExceptionType {
     kNone,
@@ -70,30 +67,42 @@ class Exceptions : AllStatic {
     kAbstractClassInstantiation,
     kCyclicInitializationError,
     kCompileTimeError,
+    kLateFieldAssignedDuringInitialization,
+    kLateFieldNotInitialized,
   };
 
-  static void ThrowByType(ExceptionType type, const Array& arguments);
+  DART_NORETURN static void ThrowByType(ExceptionType type,
+                                        const Array& arguments);
   // Uses the preallocated out of memory exception to avoid calling
   // into Dart code or allocating any code.
-  static void ThrowOOM();
-  static void ThrowStackOverflow();
-  static void ThrowArgumentError(const Instance& arg);
-  static void ThrowRangeError(const char* argument_name,
-                              const Integer& argument_value,
-                              intptr_t expected_from,
-                              intptr_t expected_to);
-  static void ThrowRangeErrorMsg(const char* msg);
-  static void ThrowCompileTimeError(const LanguageError& error);
+  DART_NORETURN static void ThrowOOM();
+  DART_NORETURN static void ThrowStackOverflow();
+  DART_NORETURN static void ThrowArgumentError(const Instance& arg);
+  DART_NORETURN static void ThrowRangeError(const char* argument_name,
+                                            const Integer& argument_value,
+                                            intptr_t expected_from,
+                                            intptr_t expected_to);
+  DART_NORETURN static void ThrowUnsupportedError(const char* msg);
+  DART_NORETURN static void ThrowCompileTimeError(const LanguageError& error);
+  DART_NORETURN static void ThrowLateFieldAssignedDuringInitialization(
+      const String& name);
+  DART_NORETURN static void ThrowLateFieldNotInitialized(const String& name);
 
-  // Returns a RawInstance if the exception is successfully created,
-  // otherwise returns a RawError.
-  static RawObject* Create(ExceptionType type, const Array& arguments);
+  // Returns an InstancePtr if the exception is successfully created,
+  // otherwise returns an ErrorPtr.
+  static ObjectPtr Create(ExceptionType type, const Array& arguments);
 
-  static void JumpToFrame(Thread* thread,
-                          uword program_counter,
-                          uword stack_pointer,
-                          uword frame_pointer,
-                          bool clear_deopt_at_target);
+  // Returns RawUnhandledException that wraps exception of type [type] with
+  // [msg] as a single argument.
+  static UnhandledExceptionPtr CreateUnhandledException(Zone* zone,
+                                                        ExceptionType type,
+                                                        const char* msg);
+
+  DART_NORETURN static void JumpToFrame(Thread* thread,
+                                        uword program_counter,
+                                        uword stack_pointer,
+                                        uword frame_pointer,
+                                        bool clear_deopt_at_target);
 
  private:
   DISALLOW_COPY_AND_ASSIGN(Exceptions);
@@ -156,12 +165,12 @@ class CatchEntryMove {
 
   intptr_t src_lo_slot() const {
     ASSERT(source_kind() == SourceKind::kInt64PairSlot);
-    return LoSourceSlot::decode(src_);
+    return index_to_pair_slot(LoSourceSlot::decode(src_));
   }
 
   intptr_t src_hi_slot() const {
     ASSERT(source_kind() == SourceKind::kInt64PairSlot);
-    return HiSourceSlot::decode(src_);
+    return index_to_pair_slot(HiSourceSlot::decode(src_));
   }
 
   intptr_t dest_slot() const {
@@ -175,14 +184,14 @@ class CatchEntryMove {
   static CatchEntryMove FromSlot(SourceKind kind,
                                  intptr_t src_slot,
                                  intptr_t dest_slot) {
-    return CatchEntryMove(src_slot,
-                          SourceKindField::encode(kind) |
-                              (dest_slot << SourceKindField::bitsize()));
+    return CatchEntryMove(src_slot, SourceKindField::encode(kind) |
+                                        (static_cast<uintptr_t>(dest_slot)
+                                         << SourceKindField::bitsize()));
   }
 
   static intptr_t EncodePairSource(intptr_t src_lo_slot, intptr_t src_hi_slot) {
-    return LoSourceSlot::encode(src_lo_slot) |
-           HiSourceSlot::encode(src_hi_slot);
+    return LoSourceSlot::encode(pair_slot_to_index(src_lo_slot)) |
+           HiSourceSlot::encode(pair_slot_to_index(src_hi_slot));
   }
 
   bool IsRedundant() const {
@@ -190,32 +199,45 @@ class CatchEntryMove {
            (dest_slot() == src_slot());
   }
 
-  bool operator==(const CatchEntryMove& rhs) {
+  bool operator==(const CatchEntryMove& rhs) const {
     return src_ == rhs.src_ && dest_and_kind_ == rhs.dest_and_kind_;
   }
 
   static CatchEntryMove ReadFrom(ReadStream* stream);
 
 #if !defined(DART_PRECOMPILED_RUNTIME)
-  void WriteTo(WriteStream* stream);
+  void WriteTo(BaseWriteStream* stream);
+#endif
+
+#if !defined(PRODUCT) || defined(FORCE_INCLUDE_DISASSEMBLER)
+  const char* ToCString() const;
 #endif
 
  private:
-  CatchEntryMove(intptr_t src, intptr_t dest_and_kind)
+  static intptr_t pair_slot_to_index(intptr_t slot) {
+    return (slot < 0) ? -2 * slot : 2 * slot + 1;
+  }
+
+  static intptr_t index_to_pair_slot(intptr_t index) {
+    ASSERT(index >= 0);
+    return ((index & 1) != 0) ? (index >> 1) : -(index >> 1);
+  }
+
+  CatchEntryMove(int32_t src, int32_t dest_and_kind)
       : src_(src), dest_and_kind_(dest_and_kind) {}
 
   // Note: BitField helper does not work with signed values of size that does
   // not match the destination size - thus we don't use BitField for declaring
   // DestinationField and instead encode and decode it manually.
-  using SourceKindField = BitField<intptr_t, SourceKind, 0, 4>;
+  using SourceKindField = BitField<int32_t, SourceKind, 0, 4>;
 
-  static constexpr intptr_t kHalfSourceBits = kBitsPerWord / 2;
-  using LoSourceSlot = BitField<intptr_t, intptr_t, 0, kHalfSourceBits>;
+  static constexpr intptr_t kHalfSourceBits = 16;
+  using LoSourceSlot = BitField<int32_t, int32_t, 0, kHalfSourceBits>;
   using HiSourceSlot =
-      BitField<intptr_t, intptr_t, kHalfSourceBits, kHalfSourceBits>;
+      BitField<int32_t, int32_t, kHalfSourceBits, kHalfSourceBits>;
 
-  intptr_t src_;
-  intptr_t dest_and_kind_;
+  int32_t src_;
+  int32_t dest_and_kind_;
 };
 
 // A sequence of moves that needs to be executed to create a state expected
@@ -251,6 +273,34 @@ class CatchEntryMoves {
 
   intptr_t count_;
   // Followed by CatchEntryMove[count_]
+};
+
+// Used for reading the [CatchEntryMoves] from the compressed form.
+class CatchEntryMovesMapReader : public ValueObject {
+ public:
+  explicit CatchEntryMovesMapReader(const TypedData& bytes) : bytes_(bytes) {}
+
+  // The returned [CatchEntryMoves] must be freed by the caller via [free].
+  CatchEntryMoves* ReadMovesForPcOffset(intptr_t pc_offset);
+
+#if !defined(PRODUCT) || defined(FORCE_INCLUDE_DISASSEMBLER)
+  void PrintEntries();
+#endif
+
+ private:
+  // Given the [pc_offset] this function will find the [position] at which to
+  // read the catch entries and the [length] of the catch entry moves array.
+  void FindEntryForPc(ReadStream* stream,
+                      intptr_t pc_offset,
+                      intptr_t* position,
+                      intptr_t* length);
+
+  // Reads the [length] catch entry moves from [offset] in the [stream].
+  CatchEntryMoves* ReadCompressedCatchEntryMovesSuffix(ReadStream* stream,
+                                                       intptr_t offset,
+                                                       intptr_t length);
+
+  const TypedData& bytes_;
 };
 
 // A simple reference counting wrapper for CatchEntryMoves.

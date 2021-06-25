@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'server_abstract.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(ReferencesTest);
   });
@@ -16,7 +16,7 @@ main() {
 
 @reflectiveTest
 class ReferencesTest extends AbstractLspAnalysisServerTest {
-  test_acrossFiles_includeDeclaration() async {
+  Future<void> test_acrossFiles_includeDeclaration() async {
     final mainContents = '''
     import 'referenced.dart';
 
@@ -54,15 +54,17 @@ class ReferencesTest extends AbstractLspAnalysisServerTest {
     expect(res, hasLength(2));
     expect(
         res,
-        contains(new Location(
-            mainFileUri.toString(), rangeFromMarkers(mainContents))));
+        contains(Location(
+            uri: mainFileUri.toString(),
+            range: rangeFromMarkers(mainContents))));
     expect(
         res,
-        contains(new Location(referencedFileUri.toString(),
-            rangeFromMarkers(referencedContents))));
+        contains(Location(
+            uri: referencedFileUri.toString(),
+            range: rangeFromMarkers(referencedContents))));
   }
 
-  test_acrossFiles_withoutDeclaration() async {
+  Future<void> test_acrossFiles_withoutDeclaration() async {
     final mainContents = '''
     import 'referenced.dart';
 
@@ -94,12 +96,20 @@ class ReferencesTest extends AbstractLspAnalysisServerTest {
         referencedFileUri, positionFromMarker(referencedContents));
 
     expect(res, hasLength(1));
-    Location loc = res.single;
+    var loc = res.single;
     expect(loc.range, equals(rangeFromMarkers(mainContents)));
     expect(loc.uri, equals(mainFileUri.toString()));
   }
 
-  test_singleFile_withoutDeclaration() async {
+  Future<void> test_nonDartFile() async {
+    newFile(pubspecFilePath, content: simplePubspecContent);
+    await initialize();
+
+    final res = await getReferences(pubspecFileUri, startOfDocPos);
+    expect(res, isEmpty);
+  }
+
+  Future<void> test_singleFile_withoutDeclaration() async {
     final contents = '''
     f^oo() {
       [[foo]]();
@@ -114,12 +124,13 @@ class ReferencesTest extends AbstractLspAnalysisServerTest {
     expect(
       res,
       contains(
-        new Location(mainFileUri.toString(), rangeFromMarkers(contents)),
+        Location(
+            uri: mainFileUri.toString(), range: rangeFromMarkers(contents)),
       ),
     );
   }
 
-  test_unopenFile() async {
+  Future<void> test_unopenFile() async {
     final contents = '''
     f^oo() {
       [[foo]]();
@@ -134,7 +145,8 @@ class ReferencesTest extends AbstractLspAnalysisServerTest {
     expect(
       res,
       contains(
-        new Location(mainFileUri.toString(), rangeFromMarkers(contents)),
+        Location(
+            uri: mainFileUri.toString(), range: rangeFromMarkers(contents)),
       ),
     );
   }

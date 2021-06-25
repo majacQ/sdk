@@ -31,9 +31,10 @@ class IOHandle : public ReferenceCounted<IOHandle> {
  public:
   explicit IOHandle(intptr_t fd)
       : ReferenceCounted(),
-        mutex_(new Mutex()),
+        mutex_(),
         write_events_enabled_(true),
         read_events_enabled_(true),
+        close_events_enabled_(true),
         fd_(fd),
         handle_(ZX_HANDLE_INVALID),
         wait_key_(0),
@@ -65,15 +66,16 @@ class IOHandle : public ReferenceCounted<IOHandle> {
     if (fdio_ != NULL) {
       fdio_unsafe_release(fdio_);
     }
-    delete mutex_;
   }
 
   bool AsyncWaitLocked(zx_handle_t port, uint32_t events, uint64_t key);
 
   // Mutex that protects the state here.
-  Mutex* mutex_;
+  Mutex mutex_;
   bool write_events_enabled_;
   bool read_events_enabled_;
+  bool close_events_enabled_;
+
   // Bytes remaining to be read from the socket. Read events should only be
   // re-enabled when this drops to zero.
   intptr_t available_bytes_;

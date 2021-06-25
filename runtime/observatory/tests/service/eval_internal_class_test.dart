@@ -3,45 +3,36 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:observatory/service_io.dart';
-import 'package:unittest/unittest.dart';
+import 'package:test/test.dart';
 import 'test_helper.dart';
 
 var tests = <IsolateTest>[
   (Isolate isolate) async {
-    Library root = await isolate.rootLibrary.load();
+    Library root = await isolate.rootLibrary.load() as Library;
 
-    Class classLibrary = await root.clazz.load();
+    Class classLibrary = await root.clazz!.load() as Class;
     print(classLibrary);
     {
-      bool caughtExceptions = false;
-      try {
-        dynamic result = await classLibrary.evaluate('3 + 4');
-        print(result);
-      } on ServerRpcException catch (e) {
-        expect(e.toString(), contains('can be evaluated only'));
-        caughtExceptions = true;
-      }
-      expect(caughtExceptions, isTrue);
+      final DartError errorResult =
+          await classLibrary.evaluate('3 + 4') as DartError;
+      print(errorResult);
+      expect(errorResult.toString(), contains('can be evaluated only'));
     }
 
-    Class classClass = await classLibrary.clazz.load();
+    Class classClass = await classLibrary.clazz!.load() as Class;
     print(classClass);
     {
-      bool caughtExceptions = false;
-      try {
-        dynamic result = await classClass.evaluate('3 + 4');
-        print(result);
-      } on ServerRpcException catch (e) {
-        expect(e.toString(), contains('can be evaluated only'));
-        caughtExceptions = true;
-      }
-      expect(caughtExceptions, isTrue);
+      final DartError errorResult =
+          await classClass.evaluate('3 + 4') as DartError;
+      print(errorResult);
+      expect(errorResult.toString(), contains('can be evaluated only'));
     }
 
-    Instance someArray = await root.evaluate("new List(2)");
+    Instance someArray =
+        await root.evaluate("new List<dynamic>.filled(2, null)") as Instance;
     print(someArray);
     expect(someArray is Instance, isTrue);
-    Class classArray = await someArray.clazz.load();
+    Class classArray = await someArray.clazz!.load() as Class;
     print(classArray);
     dynamic result = await classArray.evaluate('3 + 4');
     print(result);

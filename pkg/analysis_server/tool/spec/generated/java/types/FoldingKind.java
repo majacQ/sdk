@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, the Dart project authors. Please see the AUTHORS file
+ * Copyright (c) 2019, the Dart project authors. Please see the AUTHORS file
  * for details. All rights reserved. Use of this source code is governed by a
  * BSD-style license that can be found in the LICENSE file.
  *
@@ -17,7 +17,11 @@ public class FoldingKind {
 
   public static final String ANNOTATIONS = "ANNOTATIONS";
 
+  public static final String BLOCK = "BLOCK";
+
   public static final String CLASS_BODY = "CLASS_BODY";
+
+  public static final String COMMENT = "COMMENT";
 
   public static final String DIRECTIVES = "DIRECTIVES";
 
@@ -30,5 +34,7 @@ public class FoldingKind {
   public static final String INVOCATION = "INVOCATION";
 
   public static final String LITERAL = "LITERAL";
+
+  public static final String PARAMETERS = "PARAMETERS";
 
 }

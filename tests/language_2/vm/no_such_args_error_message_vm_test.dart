@@ -2,6 +2,9 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 // VMOptions=--optimization-counter-threshold=10 --no-use-osr --no-background-compilation
+// VMOptions=--optimization-counter-threshold=10 --no-use-osr --no-background-compilation --no-lazy-dispatchers
+
+// @dart = 2.9
 
 import "package:expect/expect.dart";
 
@@ -14,8 +17,11 @@ testClosureMessage() {
   try {
     call_with_bar(() {});
   } catch (e) {
-    Expect.isTrue(e.toString().contains(
-        "Tried calling: testClosureMessage.<anonymous closure>(\"bar\")"));
+    // The latter may happen if in --dwarf-stack-traces mode.
+    final possibleNames = ['testClosureMessage', '<optimized out>'];
+    Expect.containsOneOf(
+        possibleNames.map((s) => s + '.<anonymous closure>("bar")'),
+        e.toString());
   }
 }
 
@@ -25,7 +31,10 @@ testFunctionMessage() {
   try {
     call_with_bar(noargs);
   } catch (e) {
-    Expect.isTrue(e.toString().contains("Tried calling: noargs(\"bar\")"));
+    final expectedStrings = [
+      'Tried calling: noargs("bar")',
+    ];
+    Expect.stringContainsInOrder(e.toString(), expectedStrings);
   }
 }
 

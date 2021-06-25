@@ -1,20 +1,16 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 
+import 'package:analyzer/src/dart/analysis/byte_store.dart';
+import 'package:analyzer/src/dart/analysis/fletcher16.dart';
 import 'package:path/path.dart';
 
-import 'byte_store.dart';
-import 'fletcher16.dart';
-
-/**
- * The request that is sent from the main isolate to the clean-up isolate.
- */
+/// The request that is sent from the main isolate to the clean-up isolate.
 class CacheCleanUpRequest {
   final String cachePath;
   final int maxSizeBytes;
@@ -23,16 +19,14 @@ class CacheCleanUpRequest {
   CacheCleanUpRequest(this.cachePath, this.maxSizeBytes, this.replyTo);
 }
 
-/**
- * [ByteStore] that stores values as files and performs cache eviction.
- *
- * Only the process that manages the cache, e.g. Analysis Server, should use
- * this class. Other processes, e.g. Analysis Server plugins, should use
- * [FileByteStore] instead and let the main process to perform eviction.
- */
+/// [ByteStore] that stores values as files and performs cache eviction.
+///
+/// Only the process that manages the cache, e.g. Analysis Server, should use
+/// this class. Other processes, e.g. Analysis Server plugins, should use
+/// [FileByteStore] instead and let the main process to perform eviction.
 class EvictingFileByteStore implements ByteStore {
   static bool _cleanUpSendPortShouldBePrepared = true;
-  static SendPort _cleanUpSendPort;
+  static SendPort? _cleanUpSendPort;
 
   final String _cachePath;
   final int _maxSizeBytes;
@@ -42,12 +36,12 @@ class EvictingFileByteStore implements ByteStore {
   bool _evictionIsolateIsRunning = false;
 
   EvictingFileByteStore(this._cachePath, this._maxSizeBytes)
-      : _fileByteStore = new FileByteStore(_cachePath) {
+      : _fileByteStore = FileByteStore(_cachePath) {
     _requestCacheCleanUp();
   }
 
   @override
-  List<int> get(String key) => _fileByteStore.get(key);
+  List<int>? get(String key) => _fileByteStore.get(key);
 
   @override
   void put(String key, List<int> bytes) {
@@ -59,27 +53,25 @@ class EvictingFileByteStore implements ByteStore {
     }
   }
 
-  /**
-   * If the cache clean up process has not been requested yet, request it.
-   */
-  Future<Null> _requestCacheCleanUp() async {
+  /// If the cache clean up process has not been requested yet, request it.
+  Future<void> _requestCacheCleanUp() async {
     if (_cleanUpSendPortShouldBePrepared) {
       _cleanUpSendPortShouldBePrepared = false;
-      ReceivePort response = new ReceivePort();
+      ReceivePort response = ReceivePort();
       await Isolate.spawn(_cacheCleanUpFunction, response.sendPort);
       _cleanUpSendPort = await response.first as SendPort;
     } else {
       while (_cleanUpSendPort == null) {
-        await new Future.delayed(new Duration(milliseconds: 100), () {});
+        await Future.delayed(Duration(milliseconds: 100), () {});
       }
     }
 
     if (!_evictionIsolateIsRunning) {
       _evictionIsolateIsRunning = true;
       try {
-        ReceivePort response = new ReceivePort();
-        _cleanUpSendPort.send(new CacheCleanUpRequest(
-            _cachePath, _maxSizeBytes, response.sendPort));
+        ReceivePort response = ReceivePort();
+        _cleanUpSendPort!.send(
+            CacheCleanUpRequest(_cachePath, _maxSizeBytes, response.sendPort));
         await response.first;
       } finally {
         _evictionIsolateIsRunning = false;
@@ -88,13 +80,11 @@ class EvictingFileByteStore implements ByteStore {
     }
   }
 
-  /**
-   * This function is started in a new isolate, receives cache folder clean up
-   * requests and evicts older files from the folder.
-   */
-  static void _cacheCleanUpFunction(message) {
-    SendPort initialReplyTo = message;
-    ReceivePort port = new ReceivePort();
+  /// This function is started in a new isolate, receives cache folder clean up
+  /// requests and evicts older files from the folder.
+  static void _cacheCleanUpFunction(Object message) {
+    var initialReplyTo = message as SendPort;
+    ReceivePort port = ReceivePort();
     initialReplyTo.send(port.sendPort);
     port.listen((request) {
       if (request is CacheCleanUpRequest) {
@@ -106,11 +96,17 @@ class EvictingFileByteStore implements ByteStore {
   }
 
   static void _cleanUpFolder(String cachePath, int maxSizeBytes) {
+    List<FileSystemEntity> resources;
+    try {
+      resources = Directory(cachePath).listSync(recursive: true);
+    } catch (_) {
+      return;
+    }
+
     // Prepare the list of files and their statistics.
     List<File> files = <File>[];
     Map<File, FileStat> fileStatMap = {};
     int currentSizeBytes = 0;
-    List<FileSystemEntity> resources = new Directory(cachePath).listSync();
     for (FileSystemEntity resource in resources) {
       if (resource is File) {
         try {
@@ -126,8 +122,8 @@ class EvictingFileByteStore implements ByteStore {
       }
     }
     files.sort((a, b) {
-      return fileStatMap[a].accessed.millisecondsSinceEpoch -
-          fileStatMap[b].accessed.millisecondsSinceEpoch;
+      return fileStatMap[a]!.accessed.millisecondsSinceEpoch -
+          fileStatMap[b]!.accessed.millisecondsSinceEpoch;
     });
 
     // Delete files until the current size is less than the max.
@@ -138,43 +134,41 @@ class EvictingFileByteStore implements ByteStore {
       try {
         file.deleteSync();
       } catch (_) {}
-      currentSizeBytes -= fileStatMap[file].size;
+      currentSizeBytes -= fileStatMap[file]!.size;
     }
   }
 }
 
-/**
- * [ByteStore] that stores values as files.
- */
+/// [ByteStore] that stores values as files.
 class FileByteStore implements ByteStore {
-  static final FileByteStoreValidator _validator = new FileByteStoreValidator();
+  static final FileByteStoreValidator _validator = FileByteStoreValidator();
+  static final _dotCodeUnit = '.'.codeUnitAt(0);
 
   final String _cachePath;
   final String _tempSuffix;
   final Map<String, List<int>> _writeInProgress = {};
-  final FuturePool _pool = new FuturePool(20);
+  final FuturePool _pool = FuturePool(20);
 
-  /**
-   * If the same cache path is used from more than one isolate of the same
-   * process, then a unique [tempNameSuffix] must be provided for each isolate.
-   */
-  FileByteStore(this._cachePath, {String tempNameSuffix: ''})
+  /// If the same cache path is used from more than one isolate of the same
+  /// process, then a unique [tempNameSuffix] must be provided for each isolate.
+  FileByteStore(this._cachePath, {String tempNameSuffix = ''})
       : _tempSuffix =
             '-temp-$pid${tempNameSuffix.isEmpty ? '' : '-$tempNameSuffix'}';
 
   @override
-  List<int> get(String key) {
-    List<int> bytes = _writeInProgress[key];
+  List<int>? get(String key) {
+    if (!_canShard(key)) return null;
+
+    var bytes = _writeInProgress[key];
     if (bytes != null) {
       return bytes;
     }
 
     try {
-      final File file = _getFileForKey(key);
-      if (!file.existsSync()) {
-        return null;
-      }
-      return _validator.getData(file.readAsBytesSync());
+      var shardPath = _getShardPath(key);
+      var path = join(shardPath, key);
+      var bytes = File(path).readAsBytesSync();
+      return _validator.getData(bytes);
     } catch (_) {
       // ignore exceptions
       return null;
@@ -183,44 +177,55 @@ class FileByteStore implements ByteStore {
 
   @override
   void put(String key, List<int> bytes) {
+    if (!_canShard(key)) return;
+
     _writeInProgress[key] = bytes;
 
     final List<int> wrappedBytes = _validator.wrapData(bytes);
 
     // We don't wait for the write and rename to complete.
-    _pool.execute(() {
-      final File tempFile = _getFileForKey('$key$_tempSuffix');
-      return tempFile.writeAsBytes(wrappedBytes).then((_) {
-        return tempFile.rename(join(_cachePath, key));
-      }).catchError((_) {
-        // ignore exceptions
-      }).whenComplete(() {
+    _pool.execute(() async {
+      var tempPath = join(_cachePath, '$key$_tempSuffix');
+      var tempFile = File(tempPath);
+      try {
+        await tempFile.writeAsBytes(wrappedBytes);
+        var shardPath = _getShardPath(key);
+        await Directory(shardPath).create(recursive: true);
+        var path = join(shardPath, key);
+        await tempFile.rename(path);
         if (_writeInProgress[key] == bytes) {
           _writeInProgress.remove(key);
         }
-      });
+      } catch (_) {
+        // ignore exceptions
+      }
     });
   }
 
-  File _getFileForKey(String key) => new File(join(_cachePath, key));
+  String _getShardPath(String key) {
+    var shardName = key.substring(0, 2);
+    return join(_cachePath, shardName);
+  }
+
+  static bool _canShard(String key) {
+    return key.length > 2 &&
+        key.codeUnitAt(0) != _dotCodeUnit &&
+        key.codeUnitAt(1) != _dotCodeUnit;
+  }
 }
 
-/**
- * Generally speaking, we cannot guarantee that any data written into a file
- * will stay the same - there is always a chance of a hardware problem, file
- * system problem, truncated data, etc.
- *
- * So, we need to embed some validation into data itself. This class append the
- * version and the checksum to data.
- */
+/// Generally speaking, we cannot guarantee that any data written into a file
+/// will stay the same - there is always a chance of a hardware problem, file
+/// system problem, truncated data, etc.
+///
+/// So, we need to embed some validation into data itself. This class append the
+/// version and the checksum to data.
 class FileByteStoreValidator {
-  static const List<int> _VERSION = const [0x01, 0x00];
+  static const List<int> _VERSION = [0x01, 0x00];
 
-  /**
-   * If the [rawBytes] have the valid version and checksum, extract and
-   * return the data from it. Otherwise return `null`.
-   */
-  List<int> getData(List<int> rawBytes) {
+  /// If the [rawBytes] have the valid version and checksum, extract and
+  /// return the data from it. Otherwise return `null`.
+  List<int>? getData(List<int> rawBytes) {
     // There must be at least the version and the checksum in the raw bytes.
     if (rawBytes.length < 4) {
       return null;
@@ -244,13 +249,11 @@ class FileByteStoreValidator {
     return data;
   }
 
-  /**
-   * Return bytes that include the given [data] plus the current version and
-   * the checksum of the [data].
-   */
+  /// Return bytes that include the given [data] plus the current version and
+  /// the checksum of the [data].
   List<int> wrapData(List<int> data) {
     int len = data.length;
-    var bytes = new Uint8List(len + 4);
+    var bytes = Uint8List(len + 4);
 
     // Put the data.
     bytes.setRange(0, len, data);

@@ -6,7 +6,7 @@ import 'dart:async';
 import 'dart:html';
 import 'package:observatory/models.dart' as M show Target;
 import 'package:observatory/src/elements/helpers/rendering_scheduler.dart';
-import 'package:observatory/src/elements/helpers/tag.dart';
+import 'package:observatory/src/elements/helpers/custom_element.dart';
 
 class TargetEvent {
   final M.Target target;
@@ -14,10 +14,8 @@ class TargetEvent {
   TargetEvent(this.target);
 }
 
-class VMConnectTargetElement extends HtmlElement implements Renderable {
-  static const tag = const Tag<VMConnectTargetElement>('vm-connect-target');
-
-  RenderingScheduler<VMConnectTargetElement> _r;
+class VMConnectTargetElement extends CustomElement implements Renderable {
+  late RenderingScheduler<VMConnectTargetElement> _r;
 
   Stream<RenderedEvent<VMConnectTargetElement>> get onRendered => _r.onRendered;
 
@@ -28,24 +26,24 @@ class VMConnectTargetElement extends HtmlElement implements Renderable {
       new StreamController<TargetEvent>.broadcast();
   Stream<TargetEvent> get onDelete => _onDelete.stream;
 
-  M.Target _target;
-  bool _current;
+  late M.Target _target;
+  late bool _current;
 
   M.Target get target => _target;
   bool get current => _current;
 
   factory VMConnectTargetElement(M.Target target,
-      {bool current: false, RenderingQueue queue}) {
+      {bool current: false, RenderingQueue? queue}) {
     assert(target != null);
     assert(current != null);
-    VMConnectTargetElement e = document.createElement(tag.name);
+    VMConnectTargetElement e = new VMConnectTargetElement.created();
     e._r = new RenderingScheduler<VMConnectTargetElement>(e, queue: queue);
     e._target = target;
     e._current = current;
     return e;
   }
 
-  VMConnectTargetElement.created() : super.created();
+  VMConnectTargetElement.created() : super.created('vm-connect-target');
 
   @override
   void attached() {

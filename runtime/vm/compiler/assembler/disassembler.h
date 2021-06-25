@@ -6,15 +6,20 @@
 #define RUNTIME_VM_COMPILER_ASSEMBLER_DISASSEMBLER_H_
 
 #include "vm/allocation.h"
-#include "vm/compiler/assembler/assembler.h"
 #include "vm/globals.h"
 #include "vm/log.h"
+#include "vm/object.h"
+
+#if !defined(DART_PRECOMPILED_RUNTIME)
+#include "vm/compiler/assembler/assembler.h"
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
 
 namespace dart {
 
 // Forward declaration.
-class MemoryRegion;
+class CodeComments;
 class JSONArray;
+class MemoryRegion;
 
 // Disassembly formatter interface, which consumes the
 // disassembled instructions in any desired form.
@@ -117,12 +122,20 @@ class Disassembler : public AllStatic {
   static void Disassemble(uword start,
                           uword end,
                           DisassemblyFormatter* formatter,
-                          const Code& code);
+                          const Code& code,
+                          const CodeComments* comments = nullptr);
 
   static void Disassemble(uword start,
                           uword end,
                           DisassemblyFormatter* formatter) {
     Disassemble(start, end, formatter, Code::Handle());
+  }
+
+  static void Disassemble(uword start,
+                          uword end,
+                          DisassemblyFormatter* formatter,
+                          const CodeComments* comments) {
+    Disassemble(start, end, formatter, Code::Handle(), comments);
   }
 
   static void Disassemble(uword start, uword end, const Code& code) {
@@ -175,8 +188,11 @@ class Disassembler : public AllStatic {
                               const Code& code,
                               bool optimized);
 
+  static void DisassembleStub(const char* name, const Code& code);
+
  private:
   static void DisassembleCodeHelper(const char* function_fullname,
+                                    const char* function_info,
                                     const Code& code,
                                     bool optimized);
 

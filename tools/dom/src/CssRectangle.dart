@@ -75,9 +75,9 @@ class _ContentCssRect extends CssRect {
 class _ContentCssListRect extends _ContentCssRect {
   List<Element> _elementList;
 
-  _ContentCssListRect(List<Element> elementList) : super(elementList.first) {
-    _elementList = elementList;
-  }
+  _ContentCssListRect(List<Element> elementList)
+      : _elementList = elementList,
+        super(elementList.first);
 
   /**
    * Set the height to `newHeight`.
@@ -238,7 +238,7 @@ abstract class CssRect implements Rectangle<num> {
     // always dealing with pixels in this method.
     var styles = _element.getComputedStyle();
 
-    var val = 0;
+    num val = 0;
 
     for (String measurement in dimensions) {
       // The border-box and default box model both exclude margin in the regular
@@ -269,8 +269,8 @@ abstract class CssRect implements Rectangle<num> {
   }
 
   // TODO(jacobr): these methods are duplicated from _RectangleBase in dart:math
-  // Ideally we would provide a RectangleMixin class that provides this implementation.
-  // In an ideal world we would exp
+  // Ideally we would provide a RectangleMixin class that provides this
+  // implementation. In an ideal world we would exp
   /** The x-coordinate of the right edge. */
   num get right => left + width;
   /** The y-coordinate of the bottom edge. */
@@ -280,13 +280,12 @@ abstract class CssRect implements Rectangle<num> {
     return 'Rectangle ($left, $top) $width x $height';
   }
 
-  bool operator ==(other) {
-    if (other is! Rectangle) return false;
-    return left == other.left &&
-        top == other.top &&
-        right == other.right &&
-        bottom == other.bottom;
-  }
+  bool operator ==(other) =>
+      other is Rectangle &&
+      left == other.left &&
+      top == other.top &&
+      right == other.right &&
+      bottom == other.bottom;
 
   int get hashCode => _JenkinsSmiHash.hash4(
       left.hashCode, top.hashCode, right.hashCode, bottom.hashCode);
@@ -300,7 +299,7 @@ abstract class CssRect implements Rectangle<num> {
    * Returns the intersection of this and `other`, or `null` if they don't
    * intersect.
    */
-  Rectangle<num> intersection(Rectangle<num> other) {
+  Rectangle<num>? intersection(Rectangle<num> other) {
     var x0 = max(left, other.left);
     var x1 = min(left + width, other.left + other.width);
 

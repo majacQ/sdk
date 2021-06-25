@@ -1,4 +1,4 @@
-// Copyright (c) 2016, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2016, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -25,7 +25,7 @@ class DependencyWalkerTest {
   }
 
   TestNode getNode(String name) =>
-      nodes.putIfAbsent(name, () => new TestNode(name));
+      nodes.putIfAbsent(name, () => TestNode(name));
 
   void makeGraph(Map<String, List<String>> graph) {
     graph.forEach((name, deps) {
@@ -171,7 +171,7 @@ class DependencyWalkerTest {
   }
 
   TestWalker walk(String startingNodeName) =>
-      new TestWalker()..walk(getNode(startingNodeName));
+      TestWalker()..walk(getNode(startingNodeName));
 }
 
 class TestNode extends Node<TestNode> {
@@ -201,7 +201,7 @@ class TestWalker extends DependencyWalker<TestNode> {
   @override
   void evaluate(TestNode v) {
     v.isEvaluated = true;
-    _evaluations.add([v._name].toSet());
+    _evaluations.add({v._name});
     _sccFlags.add(false);
   }
 

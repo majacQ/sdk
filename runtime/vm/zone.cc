@@ -5,14 +5,18 @@
 #include "vm/zone.h"
 
 #include "platform/assert.h"
+#include "platform/leak_sanitizer.h"
 #include "platform/utils.h"
 #include "vm/dart_api_state.h"
 #include "vm/flags.h"
 #include "vm/handles_impl.h"
 #include "vm/heap/heap.h"
 #include "vm/os.h"
+#include "vm/virtual_memory.h"
 
 namespace dart {
+
+RelaxedAtomic<intptr_t> Zone::total_size_ = {0};
 
 // Zone segments represent chunks of memory: They have starting
 // address encoded in the this pointer and a size in bytes. They are
@@ -21,6 +25,7 @@ class Zone::Segment {
  public:
   Segment* next() const { return next_; }
   intptr_t size() const { return size_; }
+  VirtualMemory* memory() const { return memory_; }
 
   uword start() { return address(sizeof(Segment)); }
   uword end() { return address(size_); }
@@ -34,28 +39,72 @@ class Zone::Segment {
  private:
   Segment* next_;
   intptr_t size_;
+  VirtualMemory* memory_;
+  void* alignment_;
 
   // Computes the address of the nth byte in this segment.
-  uword address(int n) { return reinterpret_cast<uword>(this) + n; }
-
-  static void Delete(Segment* segment) { free(segment); }
+  uword address(intptr_t n) { return reinterpret_cast<uword>(this) + n; }
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(Segment);
 };
 
+// tcmalloc and jemalloc have both been observed to hold onto lots of free'd
+// zone segments (jemalloc to the point of causing OOM), so instead of using
+// malloc to allocate segments, we allocate directly from mmap/zx_vmo_create/
+// VirtualAlloc, and cache a small number of the normal sized segments.
+static constexpr intptr_t kSegmentCacheCapacity = 16;  // 1 MB of Segments
+static Mutex* segment_cache_mutex = nullptr;
+static VirtualMemory* segment_cache[kSegmentCacheCapacity] = {nullptr};
+static intptr_t segment_cache_size = 0;
+
+void Zone::Init() {
+  ASSERT(segment_cache_mutex == nullptr);
+  segment_cache_mutex = new Mutex(NOT_IN_PRODUCT("segment_cache_mutex"));
+}
+
+void Zone::Cleanup() {
+  {
+    MutexLocker ml(segment_cache_mutex);
+    ASSERT(segment_cache_size >= 0);
+    ASSERT(segment_cache_size <= kSegmentCacheCapacity);
+    while (segment_cache_size > 0) {
+      delete segment_cache[--segment_cache_size];
+    }
+  }
+  delete segment_cache_mutex;
+  segment_cache_mutex = nullptr;
+}
+
 Zone::Segment* Zone::Segment::New(intptr_t size, Zone::Segment* next) {
-  ASSERT(size >= 0);
-  Segment* result = reinterpret_cast<Segment*>(malloc(size));
-  if (result == NULL) {
+  size = Utils::RoundUp(size, VirtualMemory::PageSize());
+  VirtualMemory* memory = nullptr;
+  if (size == kSegmentSize) {
+    MutexLocker ml(segment_cache_mutex);
+    ASSERT(segment_cache_size >= 0);
+    ASSERT(segment_cache_size <= kSegmentCacheCapacity);
+    if (segment_cache_size > 0) {
+      memory = segment_cache[--segment_cache_size];
+    }
+  }
+  if (memory == nullptr) {
+    memory = VirtualMemory::Allocate(size, false, "dart-zone");
+    total_size_.fetch_add(size);
+  }
+  if (memory == nullptr) {
     OUT_OF_MEMORY();
   }
-  ASSERT(Utils::IsAligned(result->start(), Zone::kAlignment));
+  Segment* result = reinterpret_cast<Segment*>(memory->start());
 #ifdef DEBUG
   // Zap the entire allocated segment (including the header).
-  memset(result, kZapUninitializedByte, size);
+  memset(reinterpret_cast<void*>(result), kZapUninitializedByte, size);
 #endif
   result->next_ = next;
   result->size_ = size;
+  result->memory_ = memory;
+  result->alignment_ = nullptr;  // Avoid unused variable warnings.
+
+  LSAN_REGISTER_ROOT_REGION(result, sizeof(*result));
+
   IncrementMemoryCapacity(size);
   return result;
 }
@@ -63,19 +112,35 @@ Zone::Segment* Zone::Segment::New(intptr_t size, Zone::Segment* next) {
 void Zone::Segment::DeleteSegmentList(Segment* head) {
   Segment* current = head;
   while (current != NULL) {
-    DecrementMemoryCapacity(current->size());
+    intptr_t size = current->size();
+    DecrementMemoryCapacity(size);
     Segment* next = current->next();
+    VirtualMemory* memory = current->memory();
 #ifdef DEBUG
     // Zap the entire current segment (including the header).
-    memset(current, kZapDeletedByte, current->size());
+    memset(reinterpret_cast<void*>(current), kZapDeletedByte, current->size());
 #endif
-    Segment::Delete(current);
+    LSAN_UNREGISTER_ROOT_REGION(current, sizeof(*current));
+
+    if (size == kSegmentSize) {
+      MutexLocker ml(segment_cache_mutex);
+      ASSERT(segment_cache_size >= 0);
+      ASSERT(segment_cache_size <= kSegmentCacheCapacity);
+      if (segment_cache_size < kSegmentCacheCapacity) {
+        segment_cache[segment_cache_size++] = memory;
+        memory = nullptr;
+      }
+    }
+    if (memory != nullptr) {
+      total_size_.fetch_sub(size);
+      delete memory;
+    }
     current = next;
   }
 }
 
 void Zone::Segment::IncrementMemoryCapacity(uintptr_t size) {
-  Thread* current_thread = Thread::Current();
+  ThreadState* current_thread = ThreadState::Current();
   if (current_thread != NULL) {
     current_thread->IncrementMemoryCapacity(size);
   } else if (ApiNativeScope::Current() != NULL) {
@@ -85,7 +150,7 @@ void Zone::Segment::IncrementMemoryCapacity(uintptr_t size) {
 }
 
 void Zone::Segment::DecrementMemoryCapacity(uintptr_t size) {
-  Thread* current_thread = Thread::Current();
+  ThreadState* current_thread = ThreadState::Current();
   if (current_thread != NULL) {
     current_thread->DecrementMemoryCapacity(size);
   } else if (ApiNativeScope::Current() != NULL) {
@@ -137,6 +202,7 @@ void Zone::DeleteAll() {
 #endif
   position_ = initial_buffer_.start();
   limit_ = initial_buffer_.end();
+  small_segment_capacity_ = 0;
   head_ = NULL;
   large_segments_ = NULL;
   previous_ = NULL;
@@ -194,8 +260,22 @@ uword Zone::AllocateExpand(intptr_t size) {
     return AllocateLargeSegment(size);
   }
 
+  const intptr_t kSuperPageSize = 2 * MB;
+  intptr_t next_size;
+  if (small_segment_capacity_ < kSuperPageSize) {
+    // When the Zone is small, grow linearly to reduce size and use the segment
+    // cache to avoid expensive mmap calls.
+    next_size = kSegmentSize;
+  } else {
+    // When the Zone is large, grow geometrically to avoid Page Table Entry
+    // exhaustion. Using 1.125 ratio.
+    next_size = Utils::RoundUp(small_segment_capacity_ >> 3, kSuperPageSize);
+  }
+  ASSERT(next_size >= kSegmentSize);
+
   // Allocate another segment and chain it up.
-  head_ = Segment::New(kSegmentSize, head_);
+  head_ = Segment::New(next_size, head_);
+  small_segment_capacity_ += next_size;
 
   // Recompute 'position' and 'limit' based on the new head segment.
   uword result = Utils::RoundUp(head_->start(), kAlignment);
@@ -214,8 +294,8 @@ uword Zone::AllocateLargeSegment(intptr_t size) {
   ASSERT(free_size < size);
 
   // Create a new large segment and chain it up.
-  ASSERT(Utils::IsAligned(sizeof(Segment), kAlignment));
-  size += sizeof(Segment);  // Account for book keeping fields in size.
+  // Account for book keeping fields in size.
+  size += Utils::RoundUp(sizeof(Segment), kAlignment);
   large_segments_ = Segment::New(size, large_segments_);
 
   uword result = Utils::RoundUp(large_segments_->start(), kAlignment);
@@ -288,24 +368,36 @@ char* Zone::VPrint(const char* format, va_list args) {
   return OS::VSCreate(this, format, args);
 }
 
-StackZone::StackZone(Thread* thread) : StackResource(thread), zone_() {
+StackZone::StackZone(ThreadState* thread)
+    : StackResource(thread), zone_(new Zone()) {
   if (FLAG_trace_zones) {
     OS::PrintErr("*** Starting a new Stack zone 0x%" Px "(0x%" Px ")\n",
                  reinterpret_cast<intptr_t>(this),
-                 reinterpret_cast<intptr_t>(&zone_));
+                 reinterpret_cast<intptr_t>(zone_));
   }
-  zone_.Link(thread->zone());
-  thread->set_zone(&zone_);
+
+  // This thread must be preventing safepoints or the GC could be visiting the
+  // chain of handle blocks we're about the mutate.
+  ASSERT(Thread::Current()->MayAllocateHandles());
+
+  zone_->Link(thread->zone());
+  thread->set_zone(zone_);
 }
 
 StackZone::~StackZone() {
-  ASSERT(thread()->zone() == &zone_);
-  thread()->set_zone(zone_.previous_);
+  // This thread must be preventing safepoints or the GC could be visiting the
+  // chain of handle blocks we're about the mutate.
+  ASSERT(Thread::Current()->MayAllocateHandles());
+
+  ASSERT(thread()->zone() == zone_);
+  thread()->set_zone(zone_->previous_);
   if (FLAG_trace_zones) {
     OS::PrintErr("*** Deleting Stack zone 0x%" Px "(0x%" Px ")\n",
                  reinterpret_cast<intptr_t>(this),
-                 reinterpret_cast<intptr_t>(&zone_));
+                 reinterpret_cast<intptr_t>(zone_));
   }
+
+  delete zone_;
 }
 
 }  // namespace dart

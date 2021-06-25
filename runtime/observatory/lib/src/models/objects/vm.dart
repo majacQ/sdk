@@ -6,11 +6,11 @@ part of models;
 
 abstract class VMRef {
   /// A name identifying this vm. Not guaranteed to be unique.
-  String get name;
+  String? get name;
 
   /// [Not actually from the apis]
   /// A name used to identify the VM in the UI.
-  String get displayName;
+  String? get displayName;
 }
 
 abstract class VM implements VMRef {
@@ -35,21 +35,24 @@ abstract class VM implements VMRef {
   int get pid;
 
   /// The current amount of native heap allocated memory within the VM.
-  int get heapAllocatedMemoryUsage;
+  int get mallocUsed;
+  int get mallocCapacity;
+  String get mallocImplementation;
 
-  /// The current number of allocations on the native heap within the VM.
-  int get heapAllocationCount;
-
+  int get currentMemory;
   int get maxRSS;
   int get currentRSS;
 
   /// The time that the VM started in milliseconds since the epoch.
   ///
   /// Suitable to pass to DateTime.fromMillisecondsSinceEpoch.
-  DateTime get startTime;
+  DateTime? get startTime;
 
   // A list of isolates running in the VM.
   Iterable<IsolateRef> get isolates;
+  Iterable<IsolateRef> get systemIsolates;
+  Iterable<IsolateGroupRef> get isolateGroups;
+  Iterable<IsolateGroupRef> get systemIsolateGroups;
 
   /// Enable the sampling profiler.
   Future enableProfiler();

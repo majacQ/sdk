@@ -11,17 +11,14 @@ import '../elements/entities.dart';
 import '../elements/jumps.dart';
 import '../elements/names.dart';
 import '../elements/types.dart';
+import '../inferrer/abstract_value_domain.dart';
 import '../ir/closure.dart';
+import '../ir/static_type_provider.dart';
 import '../ir/util.dart';
-import '../js/js.dart' as js;
-import '../js_backend/namer.dart';
-import '../js_emitter/code_emitter_task.dart';
-import '../js_model/closure.dart' show JRecordField;
 import '../js_model/elements.dart' show JGeneratorBody;
 import '../native/behavior.dart';
 import '../serialization/serialization.dart';
 import '../ssa/type_builder.dart';
-import '../types/abstract_value_domain.dart';
 import '../universe/call_structure.dart';
 import '../universe/selector.dart';
 import '../world.dart';
@@ -49,7 +46,7 @@ abstract class JsToElementMap {
   FunctionType getFunctionType(ir.FunctionNode node);
 
   /// Return the [InterfaceType] corresponding to the [cls] with the given
-  /// [typeArguments].
+  /// [typeArguments] and [nullability].
   InterfaceType createInterfaceType(
       ir.Class cls, List<ir.DartType> typeArguments);
 
@@ -76,14 +73,6 @@ abstract class JsToElementMap {
   /// Returns the [ClassEntity] corresponding to the class [node].
   ClassEntity getClass(ir.Class node);
 
-  /// Returns the [TypedefType] corresponding to raw type of the typedef [node].
-  TypedefType getTypedefType(ir.Typedef node);
-
-  /// Returns the super [MemberEntity] for a super invocation, get or set of
-  /// [name] from the member [context].
-  MemberEntity getSuperMember(MemberEntity context, ir.Name name,
-      {bool setter: false});
-
   /// Returns the `noSuchMethod` [FunctionEntity] call from a
   /// `super.noSuchMethod` invocation within [cls].
   FunctionEntity getSuperNoSuchMethod(ClassEntity cls);
@@ -103,24 +92,26 @@ abstract class JsToElementMap {
   NativeBehavior getNativeBehaviorForJsEmbeddedGlobalCall(
       ir.StaticInvocation node);
 
-  /// Returns the [js.Name] for the `JsGetName` [constant] value.
-  js.Name getNameForJsGetName(ConstantValue constant, Namer namer);
-
   /// Computes the [ConstantValue] for the constant [expression].
-  // TODO(johnniwinther): Move to [KernelToElementMapForBuilding]. This is only
-  // used in impact builder for symbol constants.
-  ConstantValue getConstantValue(ir.Expression expression,
+  // TODO(johnniwinther,sigmund): Remove the need for [memberContext]. This is
+  //  only needed because effectively constant expressions are not replaced by
+  //  constant expressions during resolution.
+  ConstantValue getConstantValue(
+      ir.Member memberContext, ir.Expression expression,
       {bool requireConstant: true, bool implicitNull: false});
+
+  /// Returns the [ConstantValue] for the sentinel used to indicate that a
+  /// parameter is required.
+  ///
+  /// These should only appear within the defaultValues object attached to
+  /// closures and tearoffs when emitting Function.apply.
+  ConstantValue getRequiredSentinelConstantValue();
 
   /// Return the [ImportEntity] corresponding to [node].
   ImportEntity getImport(ir.LibraryDependency node);
 
   /// Returns the definition information for [cls].
   ClassDefinition getClassDefinition(covariant ClassEntity cls);
-
-  /// Returns the static type of [node].
-  // TODO(johnniwinther): This should be provided directly from kernel.
-  DartType getStaticType(ir.Expression node);
 
   /// [ElementEnvironment] for library, class and member lookup.
   JElementEnvironment get elementEnvironment;
@@ -129,11 +120,14 @@ abstract class JsToElementMap {
   List<DartType> getDartTypes(List<ir.DartType> types);
 
   /// Returns the definition information for [member].
-  MemberDefinition getMemberDefinition(covariant MemberEntity member);
+  MemberDefinition getMemberDefinition(MemberEntity member);
+
+  /// Returns the [ir.Member] containing the definition of [member], if any.
+  ir.Member getMemberContextNode(MemberEntity member);
 
   /// Returns the type of `this` in [member], or `null` if member is defined in
   /// a static context.
-  InterfaceType getMemberThisType(covariant MemberEntity member);
+  InterfaceType getMemberThisType(MemberEntity member);
 
   /// Returns how [member] has access to type variables of the this type
   /// returned by [getMemberThisType].
@@ -142,14 +136,6 @@ abstract class JsToElementMap {
 
   /// Returns the [LibraryEntity] corresponding to the library [node].
   LibraryEntity getLibrary(ir.Library node);
-
-  /// Returns the [js.Template] for the `JsBuiltin` [constant] value.
-  js.Template getJsBuiltinTemplate(
-      ConstantValue constant, CodeEmitterTask emitter);
-
-  /// Return the [ConstantValue] the initial value of [field] or `null` if
-  /// the initializer is not a constant expression.
-  ConstantValue getFieldConstantValue(FieldEntity field);
 
   /// Returns a [Spannable] for a message pointing to the IR [node] in the
   /// context of [member].
@@ -163,8 +149,11 @@ abstract class JsToElementMap {
 
   /// Make a record to ensure variables that are are declared in one scope and
   /// modified in another get their values updated correctly.
-  Map<Local, JRecordField> makeRecordContainer(
-      KernelScopeInfo info, MemberEntity member, KernelToLocalsMap localsMap);
+  Map<ir.VariableDeclaration, JRecordField> makeRecordContainer(
+      KernelScopeInfo info, MemberEntity member);
+
+  /// Returns a provider for static types for [member].
+  StaticTypeProvider getStaticTypeProvider(MemberEntity member);
 }
 
 /// Interface for type inference results for kernel IR nodes.
@@ -173,18 +162,21 @@ abstract class KernelToTypeInferenceMap {
   AbstractValue getReturnTypeOf(FunctionEntity function);
 
   /// Returns the inferred receiver type of the dynamic [invocation].
+  // TODO(johnniwinther): Improve the type of the [invocation] once the new
+  // method invocation encoding is fully utilized.
   AbstractValue receiverTypeOfInvocation(
-      ir.MethodInvocation invocation, AbstractValueDomain abstractValueDomain);
+      ir.Expression invocation, AbstractValueDomain abstractValueDomain);
 
   /// Returns the inferred receiver type of the dynamic [read].
-  AbstractValue receiverTypeOfGet(ir.PropertyGet read);
-
-  /// Returns the inferred receiver type of the direct [read].
-  AbstractValue receiverTypeOfDirectGet(ir.DirectPropertyGet read);
+  // TODO(johnniwinther): Improve the type of the [invocation] once the new
+  // method invocation encoding is fully utilized.
+  AbstractValue receiverTypeOfGet(ir.Expression read);
 
   /// Returns the inferred receiver type of the dynamic [write].
+  // TODO(johnniwinther): Improve the type of the [invocation] once the new
+  // method invocation encoding is fully utilized.
   AbstractValue receiverTypeOfSet(
-      ir.PropertySet write, AbstractValueDomain abstractValueDomain);
+      ir.Expression write, AbstractValueDomain abstractValueDomain);
 
   /// Returns the inferred type of [listLiteral].
   AbstractValue typeOfListLiteral(
@@ -213,9 +205,9 @@ abstract class KernelToTypeInferenceMap {
   /// Returns the inferred type of the [parameter].
   AbstractValue getInferredTypeOfParameter(Local parameter);
 
-  /// Returns the inferred type of a dynamic [selector] access on the
+  /// Returns the inferred result type of a dynamic [selector] access on the
   /// [receiver].
-  AbstractValue selectorTypeOf(Selector selector, AbstractValue receiver);
+  AbstractValue resultTypeOfSelector(Selector selector, AbstractValue receiver);
 
   /// Returns the returned type annotation in the [nativeBehavior].
   AbstractValue typeFromNativeBehavior(
@@ -230,8 +222,8 @@ abstract class KernelToLocalsMap {
   /// Returns the [Local] for [node].
   Local getLocalVariable(ir.VariableDeclaration node);
 
-  Local getLocalTypeVariable(
-      ir.TypeParameterType node, JsToElementMap elementMap);
+  /// Returns the [Local] for the [typeVariable].
+  Local getLocalTypeVariableEntity(TypeVariableEntity typeVariable);
 
   /// Returns the [ir.FunctionNode] that declared [parameter].
   ir.FunctionNode getFunctionNodeForParameter(Local parameter);
@@ -287,28 +279,15 @@ ir.FunctionNode getFunctionNode(
   MemberDefinition definition = elementMap.getMemberDefinition(member);
   switch (definition.kind) {
     case MemberKind.regular:
-      ir.Node node = definition.node;
-      if (node is ir.Procedure) {
-        return node.function;
-      }
-      break;
+      ir.Member node = definition.node;
+      return node.function;
     case MemberKind.constructor:
     case MemberKind.constructorBody:
-      ir.Node node = definition.node;
-      if (node is ir.Procedure) {
-        return node.function;
-      } else if (node is ir.Constructor) {
-        return node.function;
-      }
-      break;
+      ir.Member node = definition.node;
+      return node.function;
     case MemberKind.closureCall:
-      ir.Node node = definition.node;
-      if (node is ir.FunctionDeclaration) {
-        return node.function;
-      } else if (node is ir.FunctionExpression) {
-        return node.function;
-      }
-      break;
+      ir.LocalFunction node = definition.node;
+      return node.function;
     default:
   }
   return null;
@@ -317,23 +296,29 @@ ir.FunctionNode getFunctionNode(
 // TODO(johnniwinther,efortuna): Add more when needed.
 // TODO(johnniwinther): Should we split regular into method, field, etc.?
 enum MemberKind {
-  // A regular member defined by an [ir.Node].
+  /// A regular member defined by an [ir.Node].
   regular,
-  // A constructor whose initializer is defined by an [ir.Constructor] node.
+
+  /// A constructor whose initializer is defined by an [ir.Constructor] node.
   constructor,
-  // A constructor whose body is defined by an [ir.Constructor] node.
+
+  /// A constructor whose body is defined by an [ir.Constructor] node.
   constructorBody,
-  // A closure class `call` method whose body is defined by an
-  // [ir.FunctionExpression] or [ir.FunctionDeclaration].
+
+  /// A closure class `call` method whose body is defined by an
+  /// [ir.LocalFunction].
   closureCall,
-  // A field corresponding to a captured variable in the closure. It does not
-  // have a corresponding ir.Node.
+
+  /// A field corresponding to a captured variable in the closure. It does not
+  /// have a corresponding ir.Node.
   closureField,
-  // A method that describes the type of a function (in this case the type of
-  // the closure class. It does not have a corresponding ir.Node or a method
-  // body.
+
+  /// A method that describes the type of a function (in this case the type of
+  /// the closure class. It does not have a corresponding ir.Node or a method
+  /// body.
   signature,
-  // A separated body of a generator (sync*/async/async*) function.
+
+  /// A separated body of a generator (sync*/async/async*) function.
   generatorBody,
 }
 
@@ -388,6 +373,7 @@ class RegularMemberDefinition implements MemberDefinition {
   /// debugging data stream.
   static const String tag = 'regular-member-definition';
 
+  @override
   final ir.Member node;
 
   RegularMemberDefinition(this.node);
@@ -407,10 +393,13 @@ class RegularMemberDefinition implements MemberDefinition {
     sink.end(tag);
   }
 
+  @override
   SourceSpan get location => computeSourceSpanFromTreeNode(node);
 
+  @override
   MemberKind get kind => MemberKind.regular;
 
+  @override
   String toString() => 'RegularMemberDefinition(kind:$kind,'
       'node:$node,location:$location)';
 }
@@ -421,7 +410,9 @@ class SpecialMemberDefinition implements MemberDefinition {
   /// debugging data stream.
   static const String tag = 'special-member-definition';
 
+  @override
   final ir.TreeNode node;
+  @override
   final MemberKind kind;
 
   SpecialMemberDefinition(this.node, this.kind);
@@ -442,8 +433,10 @@ class SpecialMemberDefinition implements MemberDefinition {
     sink.end(tag);
   }
 
+  @override
   SourceSpan get location => computeSourceSpanFromTreeNode(node);
 
+  @override
   String toString() => 'SpecialMemberDefinition(kind:$kind,'
       'node:$node,location:$location)';
 }
@@ -484,6 +477,7 @@ class RegularClassDefinition implements ClassDefinition {
   /// debugging data stream.
   static const String tag = 'regular-class-definition';
 
+  @override
   final ir.Class node;
 
   RegularClassDefinition(this.node);
@@ -495,6 +489,7 @@ class RegularClassDefinition implements ClassDefinition {
     return new RegularClassDefinition(node);
   }
 
+  @override
   void writeToDataSink(DataSink sink) {
     sink.writeEnum(kind);
     sink.begin(tag);
@@ -502,10 +497,13 @@ class RegularClassDefinition implements ClassDefinition {
     sink.end(tag);
   }
 
+  @override
   SourceSpan get location => computeSourceSpanFromTreeNode(node);
 
+  @override
   ClassKind get kind => ClassKind.regular;
 
+  @override
   String toString() => 'RegularClassDefinition(kind:$kind,'
       'node:$node,location:$location)';
 }
@@ -519,8 +517,81 @@ ir.Node getFieldInitializer(JsToElementMap elementMap, FieldEntity field) {
   ir.Field node = definition.node;
   if (node.isInstanceMember &&
       !node.isFinal &&
-      node.initializer is ir.NullLiteral) {
+      isNullLiteral(node.initializer)) {
     return null;
   }
   return node.initializer;
+}
+
+void forEachOrderedParameterByFunctionNode(
+    ir.FunctionNode node,
+    ParameterStructure parameterStructure,
+    void f(ir.VariableDeclaration parameter, {bool isOptional, bool isElided}),
+    {bool useNativeOrdering: false}) {
+  for (int position = 0;
+      position < node.positionalParameters.length;
+      position++) {
+    ir.VariableDeclaration variable = node.positionalParameters[position];
+    f(variable,
+        isOptional: position >= parameterStructure.requiredPositionalParameters,
+        isElided: position >= parameterStructure.positionalParameters);
+  }
+
+  if (node.namedParameters.isEmpty) {
+    return;
+  }
+
+  List<ir.VariableDeclaration> namedParameters = node.namedParameters.toList();
+  if (useNativeOrdering) {
+    namedParameters.sort(nativeOrdering);
+  } else {
+    namedParameters.sort(namedOrdering);
+  }
+  for (ir.VariableDeclaration variable in namedParameters) {
+    f(variable,
+        isOptional: true,
+        isElided: !parameterStructure.namedParameters.contains(variable.name));
+  }
+}
+
+void forEachOrderedParameter(JsToElementMap elementMap, FunctionEntity function,
+    void f(ir.VariableDeclaration parameter, {bool isElided})) {
+  ParameterStructure parameterStructure = function.parameterStructure;
+
+  void handleParameter(ir.VariableDeclaration parameter,
+      {bool isOptional, bool isElided}) {
+    f(parameter, isElided: isElided);
+  }
+
+  MemberDefinition definition = elementMap.getMemberDefinition(function);
+  switch (definition.kind) {
+    case MemberKind.regular:
+      ir.Node node = definition.node;
+      if (node is ir.Procedure) {
+        forEachOrderedParameterByFunctionNode(
+            node.function, parameterStructure, handleParameter);
+        return;
+      }
+      break;
+    case MemberKind.constructor:
+    case MemberKind.constructorBody:
+      ir.Node node = definition.node;
+      if (node is ir.Procedure) {
+        forEachOrderedParameterByFunctionNode(
+            node.function, parameterStructure, handleParameter);
+        return;
+      } else if (node is ir.Constructor) {
+        forEachOrderedParameterByFunctionNode(
+            node.function, parameterStructure, handleParameter);
+        return;
+      }
+      break;
+    case MemberKind.closureCall:
+      ir.LocalFunction node = definition.node;
+      forEachOrderedParameterByFunctionNode(
+          node.function, parameterStructure, handleParameter);
+      return;
+    default:
+  }
+  failedAt(function, "Unexpected function definition $definition.");
 }

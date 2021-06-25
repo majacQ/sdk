@@ -2,13 +2,15 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-main() {
+// @dart = 2.9
+
+void main() {
   var c = Class();
   c. /*1:main*/ test();
 }
 
 class Class {
-  test() {
+  void test() {
     /*2:Class.new.test*/ throw '>ExceptionMarker<';
   }
 }

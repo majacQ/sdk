@@ -141,13 +141,13 @@ void FUNCTION_NAME(SynchronousSocket_WriteList)(Dart_NativeArguments args) {
   buffer += offset;
   intptr_t bytes_written =
       SynchronousSocket::Write(socket->fd(), buffer, length);
+  Dart_TypedDataReleaseData(buffer_obj);
   if (bytes_written >= 0) {
     Dart_SetIntegerReturnValue(args, bytes_written);
   } else {
     OSError os_error;
     Dart_SetReturnValue(args, DartUtils::NewDartOSError(&os_error));
   }
-  Dart_TypedDataReleaseData(buffer_obj);
 }
 
 void FUNCTION_NAME(SynchronousSocket_ReadList)(Dart_NativeArguments args) {
@@ -313,9 +313,7 @@ void FUNCTION_NAME(SynchronousSocket_GetRemotePeer)(Dart_NativeArguments args) {
   delete addr;
 }
 
-static void SynchronousSocketFinalizer(void* isolate_data,
-                                       Dart_WeakPersistentHandle handle,
-                                       void* data) {
+static void SynchronousSocketFinalizer(void* isolate_data, void* data) {
   SynchronousSocket* socket = reinterpret_cast<SynchronousSocket*>(data);
   if (socket->fd() >= 0) {
     SynchronousSocket::Close(socket->fd());
@@ -334,9 +332,9 @@ Dart_Handle SynchronousSocket::SetSocketIdNativeField(
     return error;
   }
 
-  Dart_NewWeakPersistentHandle(handle, reinterpret_cast<void*>(socket),
-                               sizeof(SynchronousSocket),
-                               SynchronousSocketFinalizer);
+  Dart_NewFinalizableHandle(handle, reinterpret_cast<void*>(socket),
+                            sizeof(SynchronousSocket),
+                            SynchronousSocketFinalizer);
   return error;
 }
 
@@ -351,6 +349,10 @@ Dart_Handle SynchronousSocket::GetSocketIdNativeField(
     return result;
   }
   *socket = reinterpret_cast<SynchronousSocket*>(id);
+  if (*socket == NULL) {
+    Dart_PropagateError(Dart_NewUnhandledExceptionError(
+        DartUtils::NewInternalError("No native peer")));
+  }
   return result;
 }
 

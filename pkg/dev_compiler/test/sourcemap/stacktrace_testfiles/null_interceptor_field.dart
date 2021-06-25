@@ -2,15 +2,17 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 class MyType {
-  get length => 3; // ensures we build an interceptor for `.length`
+  int get length => 3; // ensures we build an interceptor for `.length`
 }
 
-main() {
+void main() {
   confuse('').trim(); // includes some code above the interceptors
   confuse([]).length;
   confuse(MyType()).length;
   confuse(null). /*1:main*/ length; // called through the interceptor
 }
 
-confuse(x) => x;
+dynamic confuse(x) => x;

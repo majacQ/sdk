@@ -2,13 +2,15 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import 'dart:collection' show HashMap, HashSet, Queue;
 
 import 'package:kernel/core_types.dart';
 import 'package:kernel/kernel.dart';
 import 'package:kernel/type_environment.dart';
-import '../compiler/js_names.dart' as JS;
-import '../js_ast/js_ast.dart' as JS;
+
+import '../compiler/js_names.dart' as js_ast;
 import 'kernel_helpers.dart';
 import 'native_types.dart';
 
@@ -44,19 +46,34 @@ class _LibraryVirtualFieldModel {
   /// Private classes that can be extended outside of this library.
   ///
   /// Normally private classes cannot be accessed outside this library, however,
-  /// this can happen if they are extended by a public class, for example:
+  /// this can happen if they are extended by a public class or exposed by a
+  /// public typedef, for example:
   ///
   ///     class _A { int x = 42; }
   ///     class _B { int x = 42; }
+  ///     class _C { int x = 42; }
   ///
-  ///     // _A is now effectively public for the purpose of overrides.
-  ///     class C extends _A {}
+  ///     // _A and _B are now effectively public for the purpose of overrides.
+  ///     class D extends _A {}
+  ///     typedef E = _B;
   ///
-  /// The class _A must treat is "x" as virtual, however _B does not.
+  /// The classes _A and _B must treat is "x" as virtual, however _C does not.
   final _extensiblePrivateClasses = HashSet<Class>();
 
   _LibraryVirtualFieldModel.build(Library library) {
     var allClasses = library.classes;
+
+    for (var typedef in library.typedefs) {
+      // Ignore private typedefs.
+      if (typedef.name.startsWith('_')) continue;
+
+      var type = typedef.type;
+      if (type is InterfaceType && type.classNode.name.startsWith('_')) {
+        // Public typedefs of private classes expose those classes for
+        // extension.
+        _extensiblePrivateClasses.add(type.classNode);
+      }
+    }
 
     // The set of public types is our initial extensible type set.
     // From there, visit all immediate private types in this library, and so on
@@ -85,7 +102,7 @@ class _LibraryVirtualFieldModel {
     Map<String, Field> getInstanceFieldMap(Class c) {
       var instanceFields = c.fields.where((f) => !f.isStatic);
       return HashMap.fromIterables(
-          instanceFields.map((f) => f.name.name), instanceFields);
+          instanceFields.map((f) => f.name.text), instanceFields);
     }
 
     var allFields =
@@ -113,7 +130,7 @@ class _LibraryVirtualFieldModel {
         }
 
         if (superclasses == null) {
-          superclasses = Set();
+          superclasses = <Class>{};
           void collectSupertypes(Class c) {
             if (!superclasses.add(c)) return;
             var s = c.superclass;
@@ -129,7 +146,7 @@ class _LibraryVirtualFieldModel {
 
         // Look in all super classes to see if we're overriding a field in our
         // library, if so mark that field as overridden.
-        var name = member.name.name;
+        var name = member.name.text;
         _overriddenPrivateFields.addAll(superclasses
             .map((c) => allFields[c][name])
             .where((f) => f != null));
@@ -147,11 +164,6 @@ class _LibraryVirtualFieldModel {
       // Enums are not extensible.
       return false;
     }
-    var libraryUri = class_.enclosingLibrary.importUri;
-    if (libraryUri.scheme == 'dart' && libraryUri.path.startsWith('_')) {
-      // There should be no extensible fields in private SDK libraries.
-      return false;
-    }
 
     if (!field.name.isPrivate) {
       // Public fields in public classes (or extensible private classes)
@@ -159,6 +171,13 @@ class _LibraryVirtualFieldModel {
       // They could be overridden by someone using our library.
       if (!class_.name.startsWith('_')) return true;
       if (_extensiblePrivateClasses.contains(class_)) return true;
+    }
+
+    if (class_.constructors.any((c) => c.isConst)) {
+      // Always virtualize fields of a (might be) non-enum (see above) const
+      // class.  The way these are lowered by the CFE, they need to be
+      // writable from different modules even if overridden.
+      return true;
     }
 
     // Otherwise, the field is effectively private and we only need to make it
@@ -183,7 +202,7 @@ class ClassPropertyModel {
   /// pair in JavaScript.
   ///
   /// The value property stores the symbol used for the field's storage slot.
-  final virtualFields = <Field, JS.TemporaryId>{};
+  final virtualFields = <Field, js_ast.TemporaryId>{};
 
   /// The set of inherited getters, used because JS getters/setters are paired,
   /// so if we're generating a setter we may need to emit a getter that calls
@@ -195,16 +214,26 @@ class ClassPropertyModel {
   /// super.
   final inheritedSetters = HashSet<String>();
 
-  final extensionMethods = Set<String>();
+  final extensionMethods = <String>{};
 
-  final extensionAccessors = Set<String>();
+  final extensionAccessors = <String>{};
 
   ClassPropertyModel.build(this.types, this.extensionTypes,
       VirtualFieldModel fieldModel, Class class_) {
     // Visit superclasses to collect information about their fields/accessors.
     // This is expensive so we try to collect everything in one pass.
-    for (var base in getSuperclasses(class_)) {
+    var superclasses = [class_, ...getSuperclasses(class_)];
+    for (var base in superclasses) {
       for (var member in base.members) {
+        // Note, we treat noSuchMethodForwarders in the current class as
+        // inherited / potentially virtual.  Skip all other members of the
+        // current class.
+        if (base == class_ &&
+            (member is Field ||
+                (member is Procedure && !member.isNoSuchMethodForwarder))) {
+          continue;
+        }
+
         if (member is Constructor ||
             member is Procedure && (!member.isAccessor || member.isStatic)) {
           continue;
@@ -216,7 +245,7 @@ class ClassPropertyModel {
           continue;
         }
 
-        var name = member.name.name;
+        var name = member.name.text;
         if (member is Field) {
           inheritedGetters.add(name);
           if (!member.isFinal) inheritedSetters.add(name);
@@ -241,12 +270,12 @@ class ClassPropertyModel {
       // Also ignore abstract fields.
       if (field.isAbstract || field.isStatic) continue;
 
-      var name = field.name.name;
+      var name = field.name.text;
       if (virtualAccessorNames.contains(name) ||
           fieldModel.isVirtual(field) ||
           field.isCovariant ||
           field.isGenericCovariantImpl) {
-        virtualFields[field] = JS.TemporaryId(name);
+        virtualFields[field] = js_ast.TemporaryId(js_ast.toJSIdentifier(name));
       }
     }
   }
@@ -316,7 +345,7 @@ class ClassPropertyModel {
     // we've seen, and visit starting from the class, then mixins in
     // reverse order, then superclasses.
     for (var m in c.members) {
-      var name = m.name.name;
+      var name = m.name.text;
       if (m.isAbstract || m is Constructor) continue;
       if (m is Procedure) {
         if (m.isStatic) continue;
@@ -340,7 +369,7 @@ class ClassPropertyModel {
       for (var m in c.members) {
         if (!m.name.isPrivate &&
             (m is Procedure && !m.isStatic || m is Field && !m.isStatic)) {
-          members.add(m.name.name);
+          members.add(m.name.text);
         }
       }
     }

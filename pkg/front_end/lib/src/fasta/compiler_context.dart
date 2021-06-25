@@ -4,7 +4,15 @@
 
 library fasta.compiler_context;
 
-import 'dart:async' show Future, Zone, runZoned;
+import 'dart:async' show Zone, runZoned;
+
+import 'package:_fe_analyzer_shared/src/messages/codes.dart';
+import 'package:_fe_analyzer_shared/src/messages/severity.dart' show Severity;
+
+import 'package:_fe_analyzer_shared/src/util/colors.dart' as colors;
+
+import 'package:_fe_analyzer_shared/src/scanner/token_impl.dart'
+    show StringToken;
 
 import 'package:kernel/ast.dart' show Source;
 
@@ -12,16 +20,7 @@ import '../api_prototype/file_system.dart' show FileSystem;
 
 import '../base/processed_options.dart' show ProcessedOptions;
 
-import 'scanner/token.dart' show StringToken;
-
 import 'command_line_reporting.dart' as command_line_reporting;
-
-import 'colors.dart' show computeEnableColors;
-
-import 'fasta_codes.dart'
-    show LocatedMessage, Message, messageInternalProblemMissingContext;
-
-import 'severity.dart' show Severity;
 
 final Object compilerContextKey = new Object();
 
@@ -52,18 +51,21 @@ class CompilerContext {
 
   FileSystem get fileSystem => options.fileSystem;
 
-  bool enableColorsCached = null;
+  Uri? cachedSdkRoot = null;
 
-  CompilerContext(this.options);
+  bool compilingPlatform = false;
 
-  void disableColors() {
-    enableColorsCached = false;
+  CompilerContext(this.options) {
+    if (options.verbose) {
+      colors.printEnableColorsReason = print;
+    }
   }
 
   /// Report [message], for example, by printing it.
   void report(LocatedMessage message, Severity severity,
-      {List<LocatedMessage> context}) {
-    options.report(message, severity, context: context);
+      {List<LocatedMessage>? context, List<Uri>? involvedFiles}) {
+    options.report(message, severity,
+        context: context, involvedFiles: involvedFiles);
   }
 
   /// Report [message], for example, by printing it.
@@ -73,14 +75,8 @@ class CompilerContext {
   }
 
   /// Format [message] as a text string that can be included in generated code.
-  String format(LocatedMessage message, Severity severity) {
+  PlainAndColorizedString format(LocatedMessage message, Severity severity) {
     return command_line_reporting.format(message, severity);
-  }
-
-  /// Format [message] as a text string that can be included in generated code.
-  // TODO(askesc): Remove this and direct callers directly to format.
-  String formatWithoutLocation(Message message, Severity severity) {
-    return command_line_reporting.format(message.withoutLocation(), severity);
   }
 
   // TODO(ahe): Remove this.
@@ -90,22 +86,22 @@ class CompilerContext {
   }
 
   static void recordDependency(Uri uri) {
-    if (uri.scheme != "file") {
-      throw new ArgumentError("Expected a file-URI, but got: '$uri'.");
+    if (uri.scheme != "file" && uri.scheme != "http") {
+      throw new ArgumentError("Expected a file or http URI, but got: '$uri'.");
     }
-    CompilerContext context = Zone.current[compilerContextKey];
+    CompilerContext? context = Zone.current[compilerContextKey];
     if (context != null) {
       context.dependencies.add(uri);
     }
   }
 
   static CompilerContext get current {
-    CompilerContext context = Zone.current[compilerContextKey];
+    CompilerContext? context = Zone.current[compilerContextKey];
     if (context == null) {
       // Note: we throw directly and don't use internalProblem, because
       // internalProblem depends on having a compiler context available.
-      var message = messageInternalProblemMissingContext.message;
-      var tip = messageInternalProblemMissingContext.tip;
+      String message = messageInternalProblemMissingContext.message;
+      String tip = messageInternalProblemMissingContext.tip!;
       throw "Internal problem: $message\nTip: $tip";
     }
     return context;
@@ -136,10 +132,6 @@ class CompilerContext {
   static Future<T> runWithDefaultOptions<T>(
       Future<T> action(CompilerContext c)) {
     return new CompilerContext(new ProcessedOptions()).runInContext<T>(action);
-  }
-
-  static bool get enableColors {
-    return current.enableColorsCached ??= computeEnableColors(current);
   }
 
   void clear() {

@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 /// This tests HTML validation and sanitization, which is very important
 /// for prevent XSS or other attacks. If you suppress this, or parts of it
 /// please make it a critical bug and bring it to the attention of the
@@ -428,6 +430,31 @@ main() {
         "<form id='single_node_clobbering' onmouseover='alert(1)'><input name='attributes'>",
         "");
 
+    testHtml('DOM clobbering of previousSibling',
+      validator,
+      'https://example.com/<div><img/src="x"/onerror="alert();"/><form><input/name="previousSibling"></form></div>',
+      'https://example.com/<div><img src="x"></div>'
+    );
+
+    // The lastChild and childNodes clobbering corrupts iterating the tree. They
+    // get removed, but in the meantime the evil node has been skipped. Note
+    // that we end up deleting the entire form because the clobbering makes its
+    // lastChild incorrect and we detect this, but only on the second time
+    // through.
+    testHtml('DOM clobbering of both childNodes and lastChild',
+      validator,
+      "abc<form><div><img src='x' onerror='alert(document.domain)'></div><div><input name='childNodes'><input id='lastChild' name='childNodes'></div></form>",
+      'abc'
+    );
+
+    test('DOM clobbering of previousSibling via append', () {
+      var div = Element.div();
+      var bad =
+          'https://example.com/<div><img/src="x"/onerror="alert();"/><form><input/name="previousSibling"></form></div>';
+      div.innerHtml = bad;
+      expect(div.innerHtml, 'https://example.com/<div><img src="x"></div>');
+    });
+
     testHtml(
         'DOM clobbering of attributes with multiple nodes',
         validator,
@@ -451,6 +478,20 @@ main() {
         "<form><input name='children'><input name='children'>"
         "<input id='children' name='lastChild'>"
         "<input id='bad' onmouseover='alert(1)'>",
+        "");
+
+    // Walking templates triggers a recursive sanitization call, which shouldn't
+    // invalidate the information collected from the previous visit of the later
+    // nodes in the walk.
+    testHtml(
+        'DOM clobbering with recursive sanitize call using templates',
+        validator,
+        "<form><div>"
+          "<input id=childNodes />"
+          "<template></template>"
+          "<input id=childNodes name=lastChild />"
+          "<img id=exploitImg src=0 onerror='alert(1)' />"
+          "</div></form>",
         "");
 
     test('tagName makes containing form invalid', () {

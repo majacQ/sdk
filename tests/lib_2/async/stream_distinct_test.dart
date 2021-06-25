@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import 'dart:async';
 import "package:expect/expect.dart";
 import "package:async_helper/async_helper.dart";
@@ -66,7 +68,7 @@ main() {
       new Stream.fromIterable([1, 1, 2, 2, 1, 3])
           .map((v) => new T(v))
           .distinct()
-          .transform(reifyErrors)
+          .transform(reifyErrors.cast<T, dynamic>())
           .map((v) => v is T ? v.value : "$v"),
       [1, "[2]", "[2]", 3],
       "==-throws");

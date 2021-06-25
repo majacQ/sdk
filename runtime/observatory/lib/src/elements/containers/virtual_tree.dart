@@ -8,7 +8,7 @@ import 'dart:collection';
 import 'dart:math' as Math;
 import 'package:observatory/src/elements/containers/virtual_collection.dart';
 import 'package:observatory/src/elements/helpers/rendering_scheduler.dart';
-import 'package:observatory/src/elements/helpers/tag.dart';
+import 'package:observatory/src/elements/helpers/custom_element.dart';
 
 typedef HtmlElement VirtualTreeCreateCallback(
     toggle({bool autoToggleSingleChildNodes, bool autoToggleWholeTree}));
@@ -26,17 +26,14 @@ void virtualTreeUpdateLines(SpanElement element, int n) {
   }
 }
 
-class VirtualTreeElement extends HtmlElement implements Renderable {
-  static const tag = const Tag<VirtualTreeElement>('virtual-tree',
-      dependencies: const [VirtualCollectionElement.tag]);
-
-  RenderingScheduler<VirtualTreeElement> _r;
+class VirtualTreeElement extends CustomElement implements Renderable {
+  late RenderingScheduler<VirtualTreeElement> _r;
 
   Stream<RenderedEvent<VirtualTreeElement>> get onRendered => _r.onRendered;
 
-  VritualTreeGetChildrenCallback _children;
-  List _items;
-  List _depths;
+  late VritualTreeGetChildrenCallback _children;
+  late List _items;
+  late List _depths;
   final Set _expanded = new Set();
 
   List get items => _items;
@@ -50,13 +47,13 @@ class VirtualTreeElement extends HtmlElement implements Renderable {
   factory VirtualTreeElement(VirtualTreeCreateCallback create,
       VirtualTreeUpdateCallback update, VritualTreeGetChildrenCallback children,
       {Iterable items: const [],
-      VirtualTreeSearchCallback search,
-      RenderingQueue queue}) {
+      VirtualTreeSearchCallback? search,
+      RenderingQueue? queue}) {
     assert(create != null);
     assert(update != null);
     assert(children != null);
     assert(items != null);
-    VirtualTreeElement e = document.createElement(tag.name);
+    VirtualTreeElement e = new VirtualTreeElement.created();
     e._r = new RenderingScheduler<VirtualTreeElement>(e, queue: queue);
     e._children = children;
     e._collection = new VirtualCollectionElement(() {
@@ -64,7 +61,7 @@ class VirtualTreeElement extends HtmlElement implements Renderable {
       return element = create((
           {bool autoToggleSingleChildNodes: false,
           bool autoToggleWholeTree: false}) {
-        var item = e._collection.getItemFromElement(element);
+        var item = e._collection!.getItemFromElement(element);
         if (e.isExpanded(item)) {
           e.collapse(item,
               autoCollapseWholeTree: autoToggleWholeTree,
@@ -82,7 +79,7 @@ class VirtualTreeElement extends HtmlElement implements Renderable {
     return e;
   }
 
-  VirtualTreeElement.created() : super.created();
+  VirtualTreeElement.created() : super.created('virtual-tree');
 
   bool isExpanded(item) {
     return _expanded.contains(item);
@@ -147,11 +144,11 @@ class VirtualTreeElement extends HtmlElement implements Renderable {
     children = const [];
   }
 
-  VirtualCollectionElement _collection;
+  VirtualCollectionElement? _collection;
 
   void render() {
     if (children.length == 0) {
-      children = <Element>[_collection];
+      children = <Element>[_collection!.element];
     }
 
     final items = [];
@@ -179,8 +176,8 @@ class VirtualTreeElement extends HtmlElement implements Renderable {
     }
 
     _depths = depths;
-    _collection.items = items;
+    _collection!.items = items;
 
-    _r.waitFor([_collection.onRendered.first]);
+    _r.waitFor([_collection!.onRendered.first]);
   }
 }

@@ -17,6 +17,8 @@
 //   *) Automatically resolving package_root when script is fetched over HTTP.
 //   *) Spawning a URI over HTTP.
 
+// @dart = 2.9
+
 library http_launch_test;
 
 import 'dart:async';
@@ -24,6 +26,9 @@ import 'dart:io';
 import 'package:expect/expect.dart';
 
 String pathToExecutable = Platform.executable;
+List<String> executableArguments = Platform.executableArguments
+    .where((arg) => !arg.startsWith('--packages='))
+    .toList();
 Uri pathOfData = Platform.script.resolve('http_launch_data/');
 int port;
 
@@ -38,7 +43,7 @@ handleRequest(HttpRequest request) {
   final File file = new File(requestPath.toFilePath());
   file.exists().then((bool found) {
     if (found) {
-      file.openRead().pipe(request.response).catchError((e) {
+      file.openRead().cast<List<int>>().pipe(request.response).catchError((e) {
         _sendNotFound(request.response);
       });
     } else {
@@ -50,16 +55,30 @@ handleRequest(HttpRequest request) {
 serverRunning(HttpServer server) {
   port = server.port;
   server.listen(handleRequest);
-  Future<ProcessResult> no_http_run = Process.run(pathToExecutable,
-      [pathOfData.resolve('http_launch_main.dart').toFilePath()]);
-  Future<ProcessResult> http_run = Process
-      .run(pathToExecutable, ['http://127.0.0.1:$port/http_launch_main.dart']);
-  Future<ProcessResult> http_pkg_root_run = Process.run(pathToExecutable, [
-    '--package-root=http://127.0.0.1:$port/the_packages/',
-    'http://127.0.0.1:$port/http_launch_main.dart'
-  ]);
-  Future<ProcessResult> isolate_run = Process.run(pathToExecutable,
-      ['http://127.0.0.1:$port/http_spawn_main.dart', '$port']);
+  Future<ProcessResult> no_http_run = Process.run(
+      pathToExecutable,
+      []
+        ..add('--verbosity=warning')
+        ..addAll(executableArguments)
+        ..add(pathOfData.resolve('http_launch_main.dart').toFilePath()));
+  Future<ProcessResult> http_run = Process.run(
+      pathToExecutable,
+      []
+        ..add('--verbosity=warning')
+        ..addAll(executableArguments)
+        ..add('http://127.0.0.1:$port/http_launch_main.dart'));
+  Future<ProcessResult> http_pkg_root_run = Process.run(
+      pathToExecutable,
+      []
+        ..add('--verbosity=warning')
+        ..addAll(executableArguments)
+        ..addAll(['http://127.0.0.1:$port/http_launch_main.dart']));
+  Future<ProcessResult> isolate_run = Process.run(
+      pathToExecutable,
+      []
+        ..add('--verbosity=warning')
+        ..addAll(executableArguments)
+        ..addAll(['http://127.0.0.1:$port/http_spawn_main.dart', '$port']));
   Future<List<ProcessResult>> results =
       Future.wait([no_http_run, http_run, http_pkg_root_run, isolate_run]);
   results.then((results) {

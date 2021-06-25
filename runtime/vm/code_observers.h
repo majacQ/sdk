@@ -8,23 +8,12 @@
 #include "vm/allocation.h"
 #include "vm/globals.h"
 
+#include "include/dart_api.h"
+
+#if !defined(PRODUCT)
 namespace dart {
 
-#ifndef PRODUCT
-
-class Mutex;
-
-// An abstract representation of comments associated with the given code
-// object. We assume that comments are sorted by PCOffset.
-class CodeComments : public ValueObject {
- public:
-  CodeComments() = default;
-  virtual ~CodeComments() = default;
-
-  virtual intptr_t Length() const = 0;
-  virtual intptr_t PCOffsetAt(intptr_t index) const = 0;
-  virtual const char* CommentAt(intptr_t index) const = 0;
-};
+class CodeComments;
 
 // Object observing code creation events. Used by external profilers and
 // debuggers to map address ranges to function names.
@@ -51,9 +40,13 @@ class CodeObserver {
   DISALLOW_COPY_AND_ASSIGN(CodeObserver);
 };
 
+class Mutex;
+
 class CodeObservers : public AllStatic {
  public:
   static void Init();
+
+  static void RegisterExternal(Dart_CodeObserver observer);
 
   static void Register(CodeObserver* observer);
 
@@ -78,8 +71,7 @@ class CodeObservers : public AllStatic {
   static CodeObserver** observers_;
 };
 
-#endif  // !PRODUCT
-
 }  // namespace dart
+#endif  // !defined(PRODUCT)
 
 #endif  // RUNTIME_VM_CODE_OBSERVERS_H_

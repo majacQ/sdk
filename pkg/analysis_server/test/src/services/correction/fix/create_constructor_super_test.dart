@@ -3,12 +3,13 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:analysis_server/src/services/correction/fix.dart';
+import 'package:analysis_server/src/services/linter/lint_names.dart';
 import 'package:analyzer_plugin/utilities/fixes/fixes.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'fix_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(CreateConstructorSuperTest);
   });
@@ -19,15 +20,15 @@ class CreateConstructorSuperTest extends FixProcessorTest {
   @override
   FixKind get kind => DartFixKind.CREATE_CONSTRUCTOR_SUPER;
 
-  test_fieldInitializer() async {
-    await resolveTestUnit('''
+  Future<void> test_fieldInitializer() async {
+    await resolveTestCode('''
 class A {
   int _field;
   A(this._field);
   int get field => _field;
 }
 class B extends A {
-  int existingField;
+  int existingField = 0;
 
   void existingMethod() {}
 }
@@ -39,7 +40,7 @@ class A {
   int get field => _field;
 }
 class B extends A {
-  int existingField;
+  int existingField = 0;
 
   B(int field) : super(field);
 
@@ -48,7 +49,7 @@ class B extends A {
 ''');
   }
 
-  test_importType() async {
+  Future<void> test_importType() async {
     addSource('/home/test/lib/a.dart', r'''
 class A {}
 ''');
@@ -59,7 +60,7 @@ class B {
   B(A a);
 }
 ''');
-    await resolveTestUnit('''
+    await resolveTestCode('''
 import 'package:test/b.dart';
 
 class C extends B {
@@ -75,13 +76,41 @@ class C extends B {
 ''');
   }
 
-  test_named() async {
-    await resolveTestUnit('''
+  Future<void> test_lint_sortConstructorsFirst() async {
+    createAnalysisOptionsFile(lints: [LintNames.sort_constructors_first]);
+    await resolveTestCode('''
+class A {
+  A(this.field);
+
+  int field;
+}
+class B extends A {
+  int existingField = 0;
+  void existingMethod() {}
+}
+''');
+    await assertHasFix('''
+class A {
+  A(this.field);
+
+  int field;
+}
+class B extends A {
+  B(int field) : super(field);
+
+  int existingField = 0;
+  void existingMethod() {}
+}
+''');
+  }
+
+  Future<void> test_named() async {
+    await resolveTestCode('''
 class A {
   A.named(p1, int p2);
 }
 class B extends A {
-  int existingField;
+  int existingField = 0;
 
   void existingMethod() {}
 }
@@ -91,7 +120,7 @@ class A {
   A.named(p1, int p2);
 }
 class B extends A {
-  int existingField;
+  int existingField = 0;
 
   B.named(p1, int p2) : super.named(p1, p2);
 
@@ -100,23 +129,23 @@ class B extends A {
 ''');
   }
 
-  test_optional() async {
-    await resolveTestUnit('''
+  Future<void> test_optional() async {
+    await resolveTestCode('''
 class A {
-  A(p1, int p2, List<String> p3, [int p4]);
+  A(p1, int p2, List<String> p3, [int p4 = 0]);
 }
 class B extends A {
-  int existingField;
+  int existingField = 0;
 
   void existingMethod() {}
 }
 ''');
     await assertHasFix('''
 class A {
-  A(p1, int p2, List<String> p3, [int p4]);
+  A(p1, int p2, List<String> p3, [int p4 = 0]);
 }
 class B extends A {
-  int existingField;
+  int existingField = 0;
 
   B(p1, int p2, List<String> p3) : super(p1, p2, p3);
 
@@ -125,8 +154,8 @@ class B extends A {
 ''');
   }
 
-  test_private() async {
-    await resolveTestUnit('''
+  Future<void> test_private() async {
+    await resolveTestCode('''
 class A {
   A._named(p);
 }
@@ -136,8 +165,8 @@ class B extends A {
     await assertNoFix();
   }
 
-  test_typeArgument() async {
-    await resolveTestUnit('''
+  Future<void> test_typeArgument() async {
+    await resolveTestCode('''
 class C<T> {
   final T x;
   C(this.x);

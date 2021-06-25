@@ -24,7 +24,7 @@ class FileSystemWatcher {
     kModifyContent = 1 << 1,
     kDelete = 1 << 2,
     kMove = 1 << 3,
-    kModefyAttribute = 1 << 4,
+    kModifyAttribute = 1 << 4,
     kDeleteSelf = 1 << 5,
     kIsDir = 1 << 6
   };
@@ -48,7 +48,15 @@ class FileSystemWatcher {
   static intptr_t GetSocketId(intptr_t id, intptr_t path_id);
   static Dart_Handle ReadEvents(intptr_t id, intptr_t path_id);
 
+  static void set_delayed_filewatch_callback(bool value) {
+    delayed_filewatch_callback_ = value;
+  }
+  static bool delayed_filewatch_callback() {
+    return delayed_filewatch_callback_;
+  }
+
  private:
+  static bool delayed_filewatch_callback_;
   DISALLOW_COPY_AND_ASSIGN(FileSystemWatcher);
 };
 

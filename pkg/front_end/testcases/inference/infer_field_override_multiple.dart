@@ -1,8 +1,8 @@
 // Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-
-/*@testedFeatures=inference,error*/
+// @dart=2.9
+/*@testedFeatures=inference*/
 library test;
 
 abstract class A {
@@ -21,23 +21,23 @@ abstract class D {
   double get x;
 }
 
-// Superclasses have a consistent type for `x` so inferrence succeeds.
+// Superclasses have a consistent type for `x` so inference succeeds.
 class E extends A implements B {
-  var /*@topType=int*/ x;
+  var x;
 }
 
 // Superclasses don't have a consistent type for `x` so inference fails, even if
 // the types are related.
 class F extends A implements C {
-  var /*@topType=dynamic*/ /*@error=CantInferTypeDueToInconsistentOverrides*/ /*@error=OverrideTypeMismatchReturnType*/ /*@error=OverrideTypeMismatchReturnType*/ x;
+  var x;
 }
 
 class G extends A implements D {
-  var /*@topType=dynamic*/ /*@error=CantInferTypeDueToInconsistentOverrides*/ /*@error=OverrideTypeMismatchReturnType*/ /*@error=OverrideTypeMismatchReturnType*/ x;
+  var x;
 }
 
 class H extends C implements D {
-  var /*@topType=dynamic*/ /*@error=CantInferTypeDueToInconsistentOverrides*/ /*@error=OverrideTypeMismatchReturnType*/ /*@error=OverrideTypeMismatchReturnType*/ x;
+  var x;
 }
 
 main() {}

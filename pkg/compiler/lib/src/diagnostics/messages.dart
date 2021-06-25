@@ -14,11 +14,9 @@
 /// location of the existing element.
 library dart2js.messages;
 
-import 'package:front_end/src/api_unstable/dart2js.dart' show tokenToString;
-
 import 'generated/shared_messages.dart' as shared_messages;
-import '../constants/expressions.dart' show ConstantExpression;
 import '../commandline_options.dart';
+import '../options.dart';
 import 'invariant.dart' show failedAt;
 import 'spannable.dart' show CURRENT_ELEMENT_SPANNABLE;
 
@@ -37,6 +35,7 @@ enum MessageKind {
   CYCLIC_COMPILE_TIME_CONSTANTS,
   DIRECTLY_THROWING_NSM,
   EQUAL_MAP_ENTRY_KEY,
+  EQUAL_SET_ENTRY,
   EXTRANEOUS_MODIFIER,
   EXTRANEOUS_MODIFIER_REPLACE,
   FORIN_NOT_ASSIGNABLE,
@@ -74,20 +73,14 @@ enum MessageKind {
   INVALID_PACKAGE_CONFIG,
   INVALID_PACKAGE_URI,
   INVALID_STRING_FROM_ENVIRONMENT_DEFAULT_VALUE_TYPE,
-  JS_INTEROP_CLASS_CANNOT_EXTEND_DART_CLASS,
-  JS_INTEROP_CLASS_NON_EXTERNAL_CONSTRUCTOR,
-  JS_INTEROP_CLASS_NON_EXTERNAL_MEMBER,
   JS_INTEROP_FIELD_NOT_SUPPORTED,
-  JS_INTEROP_INDEX_NOT_SUPPORTED,
   JS_INTEROP_NON_EXTERNAL_MEMBER,
-  JS_INTEROP_MEMBER_IN_NON_JS_INTEROP_CLASS,
-  JS_INTEROP_METHOD_WITH_NAMED_ARGUMENTS,
   JS_OBJECT_LITERAL_CONSTRUCTOR_WITH_POSITIONAL_ARGUMENTS,
   JS_PLACEHOLDER_CAPTURE,
   LIBRARY_NOT_FOUND,
   MIRRORS_LIBRARY_NOT_SUPPORT_WITH_CFE,
   MISSING_EXPRESSION_IN_THROW,
-  MULTI_INHERITANCE,
+  NATIVE_NON_INSTANCE_IN_NON_NATIVE_CLASS,
   NO_SUCH_SUPER_MEMBER,
   NON_NATIVE_EXTERNAL,
   NOT_A_COMPILE_TIME_CONSTANT,
@@ -97,8 +90,7 @@ enum MessageKind {
   RETHROW_OUTSIDE_CATCH,
   RETURN_IN_GENERATIVE_CONSTRUCTOR,
   RETURN_IN_GENERATOR,
-  RUNTIME_TYPE_TO_STRING_OBJECT,
-  RUNTIME_TYPE_TO_STRING_SUBTYPE,
+  RUNTIME_TYPE_TO_STRING,
   STRING_EXPECTED,
   UNDEFINED_GETTER,
   UNDEFINED_INSTANCE_GETTER_BUT_SETTER,
@@ -133,14 +125,12 @@ class MessageTemplate {
   /// Should describe how to fix the problem. Elided when using --terse option.
   final String howToFix;
 
-  /**
-   *  Examples will be checked by
-   *  tests/compiler/dart2js/message_kind_test.dart.
-   *
-   *  An example is either a String containing the example source code or a Map
-   *  from filenames to source code. In the latter case, the filename for the
-   *  main library code must be 'main.dart'.
-   */
+  ///  Examples will be checked by
+  ///  pkg/compiler/test/message_kind_test.dart.
+  ///
+  ///  An example is either a String containing the example source code or a Map
+  ///  from filenames to source code. In the latter case, the filename for the
+  ///  main library code must be 'main.dart'.
   final List examples;
 
   /// Additional options needed for the examples to work.
@@ -174,12 +164,6 @@ class MessageTemplate {
           MessageKind.CYCLIC_COMPILE_TIME_CONSTANTS,
           "Cycle in the compile-time constant computation."),
 
-      MessageKind.MULTI_INHERITANCE: const MessageTemplate(
-          MessageKind.MULTI_INHERITANCE,
-          "Dart2js does not currently support inheritance of the same class "
-          "with different type arguments: Both #{firstType} and #{secondType} "
-          "are supertypes of #{thisType}."),
-
       MessageKind.UNDEFINED_STATIC_SETTER_BUT_GETTER: const MessageTemplate(
           MessageKind.UNDEFINED_STATIC_SETTER_BUT_GETTER,
           "Cannot resolve setter."),
@@ -188,137 +172,10 @@ class MessageTemplate {
           MessageKind.STRING_EXPECTED,
           "Expected a 'String', but got an instance of '#{type}'."),
 
-      MessageKind.JS_INTEROP_CLASS_CANNOT_EXTEND_DART_CLASS:
-          const MessageTemplate(
-              MessageKind.JS_INTEROP_CLASS_CANNOT_EXTEND_DART_CLASS,
-              "Js-interop class '#{cls}' cannot extend from the non js-interop "
-              "class '#{superclass}'.",
-              howToFix: "Annotate the superclass with @JS.",
-              examples: const [
-            """
-              import 'package:js/js.dart';
-
-              class Foo { }
-
-              @JS()
-              class Bar extends Foo { }
-
-              main() {
-                new Bar();
-              }
-              """
-          ]),
-
-      MessageKind.JS_INTEROP_INDEX_NOT_SUPPORTED: const MessageTemplate(
-          MessageKind.JS_INTEROP_INDEX_NOT_SUPPORTED,
-          "Js-interop does not support [] and []= operator methods.",
-          howToFix: "Try replacing [] and []= operator methods with normal "
-              "methods.",
-          examples: const [
-            """
-        import 'package:js/js.dart';
-
-        @JS()
-        class Foo {
-          external operator [](arg);
-        }
-
-        main() {
-          new Foo()[0];
-        }
-        """,
-            """
-        import 'package:js/js.dart';
-
-        @JS()
-        class Foo {
-          external operator []=(arg, value);
-        }
-
-        main() {
-          new Foo()[0] = 1;
-        }
-        """
-          ]),
-
-      MessageKind.JS_OBJECT_LITERAL_CONSTRUCTOR_WITH_POSITIONAL_ARGUMENTS:
-          const MessageTemplate(
-              MessageKind
-                  .JS_OBJECT_LITERAL_CONSTRUCTOR_WITH_POSITIONAL_ARGUMENTS,
-              "Some parameters in anonymous js-interop class '#{cls}' "
-              "object literal constructor are positional instead of named."
-              ".",
-              howToFix: "Make all arguments in external factory object literal "
-                  "constructors named.",
-              examples: const [
-            """
-class Super {
-  factory Super.foo() => null;
-}
-class Class extends Super {
-  Class() : super.foo();
-}
-main() => new Class();
-"""
-          ]),
-
       MessageKind.JS_INTEROP_NON_EXTERNAL_MEMBER: const MessageTemplate(
           MessageKind.JS_INTEROP_NON_EXTERNAL_MEMBER,
           "Js-interop members must be 'external'."),
 
-      MessageKind.JS_INTEROP_MEMBER_IN_NON_JS_INTEROP_CLASS: const MessageTemplate(
-          MessageKind.JS_INTEROP_MEMBER_IN_NON_JS_INTEROP_CLASS,
-          "Js-interop class members are only supported in js-interop classes.",
-          howToFix: "Try marking the enclosing class as js-interop or "
-              "remove the js-interop annotation from the member."),
-
-      MessageKind.JS_INTEROP_CLASS_NON_EXTERNAL_CONSTRUCTOR:
-          const MessageTemplate(
-              MessageKind.JS_INTEROP_CLASS_NON_EXTERNAL_CONSTRUCTOR,
-              "Constructor '#{constructor}' in js-interop class '#{cls}' is "
-              "not external.",
-              howToFix: "Try adding the 'external' to '#{constructor}'."),
-
-      MessageKind.JS_INTEROP_CLASS_NON_EXTERNAL_MEMBER: const MessageTemplate(
-          MessageKind.JS_INTEROP_CLASS_NON_EXTERNAL_MEMBER,
-          "Member '#{member}' in js-interop class '#{cls}' is not external.",
-          howToFix: "Try adding the 'external' to '#{member}'.",
-          examples: const [
-            """
-              import 'package:js/js.dart';
-
-              @JS()
-              class Foo {
-                bar() {}
-              }
-
-              main() {
-                new Foo().bar();
-              }
-              """
-          ]),
-
-      MessageKind.JS_INTEROP_METHOD_WITH_NAMED_ARGUMENTS: const MessageTemplate(
-          MessageKind.JS_INTEROP_METHOD_WITH_NAMED_ARGUMENTS,
-          "Js-interop method '#{method}' has named arguments but is not "
-          "a factory constructor of an @anonymous @JS class.",
-          howToFix: "Remove all named arguments from js-interop method or "
-              "in the case of a factory constructor annotate the class "
-              "as @anonymous.",
-          examples: const [
-            """
-              import 'package:js/js.dart';
-
-              @JS()
-              class Foo {
-                external bar(foo, {baz});
-              }
-
-              main() {
-                new Foo().bar(4, baz: 5);
-              }
-              """
-          ]),
       MessageKind.IMPLICIT_JS_INTEROP_FIELD_NOT_SUPPORTED:
           const MessageTemplate(
               MessageKind.IMPLICIT_JS_INTEROP_FIELD_NOT_SUPPORTED,
@@ -439,6 +296,16 @@ class C<T> {
             """
 main() {
   var m = const {'foo': 1, 'foo': 2};
+}"""
+          ]),
+
+      MessageKind.EQUAL_SET_ENTRY: const MessageTemplate(
+          MessageKind.EQUAL_SET_ENTRY, "An entry appears twice in the set.",
+          howToFix: "Try removing one of the entries.",
+          examples: const [
+            """
+main() {
+  var m = const {'foo', 'bar', 'foo'};
 }"""
           ]),
 
@@ -605,7 +472,7 @@ Please include the following information:
 
       MessageKind.INVALID_LOGICAL_OR_OPERAND_TYPE: const MessageTemplate(
           MessageKind.INVALID_LOGICAL_OR_OPERAND_TYPE,
-          "`#{constant}` of type '#{type}' is not a valid logical and operand. "
+          "`#{constant}` of type '#{type}' is not a valid logical or operand. "
           "Must be a value of type 'bool'."),
 
       MessageKind.INVALID_CONSTANT_CONSTRUCTOR: const MessageTemplate(
@@ -649,31 +516,25 @@ become a compile-time error in the future."""),
           "more code and prevents the compiler from doing some optimizations.",
           howToFix: "Consider removing this 'noSuchMethod' implementation."),
 
-      MessageKind.RUNTIME_TYPE_TO_STRING_OBJECT: const MessageTemplate(
-          MessageKind.RUNTIME_TYPE_TO_STRING_OBJECT,
+      MessageKind.RUNTIME_TYPE_TO_STRING: const MessageTemplate(
+          MessageKind.RUNTIME_TYPE_TO_STRING,
           "Using '.runtimeType.toString()' causes the compiler to generate "
-          "more code because it needs to preserve type arguments on all "
+          "more code because it needs to preserve type arguments on "
           "generic classes, even if they are not necessary elsewhere.",
-          howToFix: "If used only for debugging, consider using option "
-              "${Flags.laxRuntimeTypeToString} to reduce the code size "
-              "impact."),
-
-      MessageKind.RUNTIME_TYPE_TO_STRING_SUBTYPE: const MessageTemplate(
-          MessageKind.RUNTIME_TYPE_TO_STRING_SUBTYPE,
-          "Using '.runtimeType.toString()' here causes the compiler to "
-          "generate more code because it needs to preserve type arguments on "
-          "all generic subtypes of '#{receiverType}', even if they are not "
-          "necessary elsewhere.",
           howToFix: "If used only for debugging, consider using option "
               "${Flags.laxRuntimeTypeToString} to reduce the code size "
               "impact."),
 
       MessageKind.NON_NATIVE_EXTERNAL: const MessageTemplate(
           MessageKind.NON_NATIVE_EXTERNAL,
-          "Only external js-interop functions are supported.",
+          "Non-native external members must be js-interop.",
           howToFix:
-              "Try removing 'external' keyword or annotating the function "
-              "as a js-interop function."),
+              "Try removing the 'external' keyword, making it 'native', or "
+              "annotating the function as a js-interop function."),
+
+      MessageKind.NATIVE_NON_INSTANCE_IN_NON_NATIVE_CLASS: const MessageTemplate(
+          MessageKind.NATIVE_NON_INSTANCE_IN_NON_NATIVE_CLASS,
+          "Native non-instance members are only allowed in native classes."),
 
       // TODO(32557): Remove these when issue 32557 is fixed.
       MessageKind.SWITCH_CASE_VALUE_OVERRIDES_EQUALS: const MessageTemplate(
@@ -690,10 +551,11 @@ become a compile-time error in the future."""),
           "'case' expression of type '#{type}'."),
     }); // End of TEMPLATES.
 
+  @override
   String toString() => template;
 
-  Message message([Map arguments = const {}, bool terse = false]) {
-    return new Message(this, arguments, terse);
+  Message message(Map<String, String> arguments, CompilerOptions options) {
+    return new Message(this, arguments, options);
   }
 
   bool get hasHowToFix => howToFix != null && howToFix != DONT_KNOW_HOW_TO_FIX;
@@ -701,11 +563,12 @@ become a compile-time error in the future."""),
 
 class Message {
   final MessageTemplate template;
-  final Map arguments;
-  final bool terse;
+  final Map<String, String> arguments;
+  final CompilerOptions _options;
+  bool get terse => _options?.terseDiagnostics ?? false;
   String message;
 
-  Message(this.template, this.arguments, this.terse) {
+  Message(this.template, this.arguments, this._options) {
     assert(() {
       computeMessage();
       return true;
@@ -717,8 +580,8 @@ class Message {
   String computeMessage() {
     if (message == null) {
       message = template.template;
-      arguments.forEach((key, value) {
-        message = message.replaceAll('#{${key}}', convertToString(value));
+      arguments.forEach((String key, String value) {
+        message = message.replaceAll('#{$key}', value);
       });
       assert(
           kind == MessageKind.GENERIC ||
@@ -727,8 +590,8 @@ class Message {
               'Missing arguments in error message: "$message"'));
       if (!terse && template.hasHowToFix) {
         String howToFix = template.howToFix;
-        arguments.forEach((key, value) {
-          howToFix = howToFix.replaceAll('#{${key}}', convertToString(value));
+        arguments.forEach((String key, String value) {
+          howToFix = howToFix.replaceAll('#{$key}', value);
         });
         message = '$message\n$howToFix';
       }
@@ -736,23 +599,17 @@ class Message {
     return message;
   }
 
+  @override
   String toString() {
     return computeMessage();
   }
 
+  @override
   bool operator ==(other) {
     if (other is! Message) return false;
     return (template == other.template) && (toString() == other.toString());
   }
 
+  @override
   int get hashCode => throw new UnsupportedError('Message.hashCode');
-
-  static String convertToString(value) {
-    if (value is ConstantExpression) {
-      value = value.toDartText();
-    } else {
-      value = tokenToString(value);
-    }
-    return '$value';
-  }
 }

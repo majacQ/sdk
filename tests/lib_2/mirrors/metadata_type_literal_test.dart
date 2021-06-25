@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import 'dart:mirrors';
 import 'package:expect/expect.dart';
 
@@ -16,7 +18,7 @@ class Annotation {
 class Annotated {}
 
 main(List<String> args) {
-  ClassMirror mirror = reflectType(Annotated);
+  ClassMirror mirror = reflectType(Annotated) as ClassMirror;
   Expect.equals("ClassMirror on 'Annotated'", mirror.toString());
 
   var bindings = mirror.metadata[0].reflectee.bindings;

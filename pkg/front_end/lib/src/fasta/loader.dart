@@ -2,47 +2,65 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-library fasta.loader;
+// @dart = 2.9
 
-import 'dart:async' show Future;
+library fasta.loader;
 
 import 'dart:collection' show Queue;
 
-import 'builder/builder.dart' show Declaration, LibraryBuilder;
+import 'package:_fe_analyzer_shared/src/messages/severity.dart' show Severity;
+
+import 'package:kernel/ast.dart' show Class, DartType, Library, Version;
+import 'package:package_config/package_config.dart';
+
+import 'scope.dart';
+
+import 'builder/class_builder.dart';
+import 'builder/declaration_builder.dart';
+import 'builder/library_builder.dart';
+import 'builder/member_builder.dart';
+import 'builder/modifier_builder.dart';
+import 'builder/type_builder.dart';
 
 import 'crash.dart' show firstSourceUri;
 
+import 'kernel/body_builder.dart' show BodyBuilder;
+
 import 'messages.dart'
     show
+        FormattedMessage,
         LocatedMessage,
         Message,
         noLength,
         SummaryTemplate,
         Template,
+        messageLanguageVersionInvalidInDotPackages,
         messagePlatformPrivateLibraryAccess,
         templateInternalProblemContextSeverity,
+        templateLanguageVersionTooHigh,
         templateSourceBodySummary;
 
 import 'problems.dart' show internalProblem, unhandled;
 
-import 'rewrite_severity.dart' show rewriteSeverity;
-
-import 'severity.dart' show Severity;
+import 'source/source_library_builder.dart' as src
+    show
+        LanguageVersion,
+        InvalidLanguageVersion,
+        ImplicitLanguageVersion,
+        SourceLibraryBuilder;
 
 import 'target_implementation.dart' show TargetImplementation;
 
 import 'ticker.dart' show Ticker;
 
-import 'type_inference/type_inference_engine.dart' show TypeInferenceEngine;
-
 const String untranslatableUriScheme = "org-dartlang-untranslatable-uri";
 
-abstract class Loader<L> {
+abstract class Loader {
   final Map<Uri, LibraryBuilder> builders = <Uri, LibraryBuilder>{};
 
   final Queue<LibraryBuilder> unparsedLibraries = new Queue<LibraryBuilder>();
 
-  final List<L> libraries = <L>[];
+  final List<Library> libraries = <Library>[];
 
   final TargetImplementation target;
 
@@ -60,9 +78,14 @@ abstract class Loader<L> {
   /// [handledErrors].
   final List<LocatedMessage> unhandledErrors = <LocatedMessage>[];
 
+  /// List of all problems seen so far by libraries loaded by this loader that
+  /// does not belong directly to a library.
+  final List<FormattedMessage> allComponentProblems = <FormattedMessage>[];
+
   final Set<String> seenMessages = new Set<String>();
 
   LibraryBuilder coreLibrary;
+  LibraryBuilder typedDataLibrary;
 
   /// The first library that we've been asked to compile. When compiling a
   /// program (aka script), this is the library that should have a main method.
@@ -78,8 +101,6 @@ abstract class Loader<L> {
 
   Template<SummaryTemplate> get outlineSummaryTemplate;
 
-  TypeInferenceEngine get typeInferenceEngine => null;
-
   bool get isSourceLoader => false;
 
   /// Look up a library builder by the name [uri], or if such doesn't
@@ -94,7 +115,11 @@ abstract class Loader<L> {
   /// directive. If [accessor] isn't allowed to access [uri], it's a
   /// compile-time error.
   LibraryBuilder read(Uri uri, int charOffset,
-      {Uri fileUri, LibraryBuilder accessor, LibraryBuilder origin}) {
+      {Uri fileUri,
+      LibraryBuilder accessor,
+      LibraryBuilder origin,
+      Library referencesFrom,
+      bool referenceIsPartOwner}) {
     LibraryBuilder builder = builders.putIfAbsent(uri, () {
       if (fileUri != null &&
           (fileUri.scheme == "dart" ||
@@ -102,6 +127,7 @@ abstract class Loader<L> {
               fileUri.scheme == "dart-ext")) {
         fileUri = null;
       }
+      Package packageForLanguageVersion;
       if (fileUri == null) {
         switch (uri.scheme) {
           case "package":
@@ -110,17 +136,86 @@ abstract class Loader<L> {
                 new Uri(
                     scheme: untranslatableUriScheme,
                     path: Uri.encodeComponent("$uri"));
+            if (uri.scheme == "package") {
+              packageForLanguageVersion = target.uriTranslator.getPackage(uri);
+            } else {
+              packageForLanguageVersion =
+                  target.uriTranslator.packages.packageOf(fileUri);
+            }
             break;
 
           default:
             fileUri = uri;
+            packageForLanguageVersion =
+                target.uriTranslator.packages.packageOf(fileUri);
             break;
         }
+      } else {
+        packageForLanguageVersion =
+            target.uriTranslator.packages.packageOf(fileUri);
       }
-      LibraryBuilder library =
-          target.createLibraryBuilder(uri, fileUri, origin);
-      if (uri.scheme == "dart" && uri.path == "core") {
-        coreLibrary = library;
+      src.LanguageVersion packageLanguageVersion;
+      Uri packageUri;
+      Message packageLanguageVersionProblem;
+      if (packageForLanguageVersion != null) {
+        Uri importUri = origin?.importUri ?? uri;
+        if (importUri.scheme != 'dart' &&
+            importUri.scheme != 'package' &&
+            packageForLanguageVersion.name != null) {
+          packageUri =
+              new Uri(scheme: 'package', path: packageForLanguageVersion.name);
+        }
+        if (packageForLanguageVersion.languageVersion != null) {
+          if (packageForLanguageVersion.languageVersion
+              is InvalidLanguageVersion) {
+            packageLanguageVersionProblem =
+                messageLanguageVersionInvalidInDotPackages;
+            packageLanguageVersion = new src.InvalidLanguageVersion(
+                fileUri, 0, noLength, target.currentSdkVersion, false);
+          } else {
+            Version version = new Version(
+                packageForLanguageVersion.languageVersion.major,
+                packageForLanguageVersion.languageVersion.minor);
+            if (version > target.currentSdkVersion) {
+              packageLanguageVersionProblem =
+                  templateLanguageVersionTooHigh.withArguments(
+                      target.currentSdkVersion.major,
+                      target.currentSdkVersion.minor);
+              packageLanguageVersion = new src.InvalidLanguageVersion(
+                  fileUri, 0, noLength, target.currentSdkVersion, false);
+            } else {
+              packageLanguageVersion = new src.ImplicitLanguageVersion(version);
+            }
+          }
+        }
+      }
+      packageLanguageVersion ??=
+          new src.ImplicitLanguageVersion(target.currentSdkVersion);
+
+      LibraryBuilder library = target.createLibraryBuilder(
+          uri,
+          fileUri,
+          packageUri,
+          packageLanguageVersion,
+          origin,
+          referencesFrom,
+          referenceIsPartOwner);
+      if (library == null) {
+        throw new StateError("createLibraryBuilder for uri $uri, "
+            "fileUri $fileUri returned null.");
+      }
+      if (packageLanguageVersionProblem != null &&
+          library is src.SourceLibraryBuilder) {
+        library.addPostponedProblem(
+            packageLanguageVersionProblem, 0, noLength, library.fileUri);
+      }
+
+      if (uri.scheme == "dart") {
+        if (uri.path == "core") {
+          coreLibrary = library;
+        } else if (uri.path == "typed_data") {
+          typedDataLibrary = library;
+        }
       }
       if (library.loader != this) {
         if (coreLibrary == library) {
@@ -141,7 +236,8 @@ abstract class Loader<L> {
       if (coreLibrary == library) {
         target.loadExtraRequiredLibraries(this);
       }
-      if (target.backendTarget.mayDefineRestrictedType(origin?.uri ?? uri)) {
+      Uri libraryUri = origin?.importUri ?? uri;
+      if (target.backendTarget.mayDefineRestrictedType(libraryUri)) {
         library.mayImplementRestrictedTypes = true;
       }
       if (uri.scheme == "dart") {
@@ -159,7 +255,7 @@ abstract class Loader<L> {
       if (!accessor.isPatch &&
           !accessor.isPart &&
           !target.backendTarget
-              .allowPlatformPrivateLibraryAccess(accessor.uri, uri)) {
+              .allowPlatformPrivateLibraryAccess(accessor.importUri, uri)) {
         accessor.addProblem(messagePlatformPrivateLibraryAccess, charOffset,
             noLength, accessor.fileUri);
       }
@@ -170,6 +266,10 @@ abstract class Loader<L> {
   void ensureCoreLibrary() {
     if (coreLibrary == null) {
       read(Uri.parse("dart:core"), 0, accessor: first);
+      // TODO(askesc): When all backends support set literals, we no longer
+      // need to index dart:collection, as it is only needed for desugaring of
+      // const sets. We can remove it from this list at that time.
+      read(Uri.parse("dart:collection"), 0, accessor: first);
       assert(coreLibrary != null);
     }
   }
@@ -178,7 +278,7 @@ abstract class Loader<L> {
     assert(coreLibrary != null);
     for (LibraryBuilder library in builders.values) {
       if (library.loader == this) {
-        currentUriForCrashReporting = library.uri;
+        currentUriForCrashReporting = library.importUri;
         await buildBody(library);
       }
     }
@@ -190,7 +290,7 @@ abstract class Loader<L> {
     ensureCoreLibrary();
     while (unparsedLibraries.isNotEmpty) {
       LibraryBuilder library = unparsedLibraries.removeFirst();
-      currentUriForCrashReporting = library.uri;
+      currentUriForCrashReporting = library.importUri;
       await buildOutline(library);
     }
     currentUriForCrashReporting = null;
@@ -200,9 +300,9 @@ abstract class Loader<L> {
   void logSummary(Template<SummaryTemplate> template) {
     ticker.log((Duration elapsed, Duration sinceStart) {
       int libraryCount = 0;
-      builders.forEach((Uri uri, LibraryBuilder library) {
+      for (LibraryBuilder library in builders.values) {
         if (library.loader == this) libraryCount++;
-      });
+      }
       double ms = elapsed.inMicroseconds / Duration.microsecondsPerMillisecond;
       Message message = template.withArguments(
           libraryCount, byteCount, ms, byteCount / ms, ms / libraryCount);
@@ -217,52 +317,46 @@ abstract class Loader<L> {
 
   /// Register [message] as a problem with a severity determined by the
   /// intrinsic severity of the message.
-  void addProblem(Message message, int charOffset, int length, Uri fileUri,
+  FormattedMessage addProblem(
+      Message message, int charOffset, int length, Uri fileUri,
       {bool wasHandled: false,
       List<LocatedMessage> context,
-      Severity severity}) {
-    severity ??= message.code.severity;
-    if (severity == Severity.errorLegacyWarning) {
-      severity =
-          target.backendTarget.legacyMode ? Severity.warning : Severity.error;
-    }
-    addMessage(message, charOffset, length, fileUri, severity,
-        wasHandled: wasHandled, context: context);
+      Severity severity,
+      bool problemOnLibrary: false,
+      List<Uri> involvedFiles}) {
+    return addMessage(message, charOffset, length, fileUri, severity,
+        wasHandled: wasHandled,
+        context: context,
+        problemOnLibrary: problemOnLibrary,
+        involvedFiles: involvedFiles);
   }
 
   /// All messages reported by the compiler (errors, warnings, etc.) are routed
   /// through this method.
   ///
-  /// Returns true if the message is new, that is, not previously
+  /// Returns a FormattedMessage if the message is new, that is, not previously
   /// reported. This is important as some parser errors may be reported up to
   /// three times by `OutlineBuilder`, `DietListener`, and `BodyBuilder`.
+  /// If the message is not new, [null] is reported.
   ///
   /// If [severity] is `Severity.error`, the message is added to
   /// [handledErrors] if [wasHandled] is true or to [unhandledErrors] if
   /// [wasHandled] is false.
-  bool addMessage(Message message, int charOffset, int length, Uri fileUri,
-      Severity severity,
-      {bool wasHandled: false, List<LocatedMessage> context}) {
-    severity = rewriteSeverity(severity, message.code, fileUri);
-    if (severity == Severity.ignored) return false;
+  FormattedMessage addMessage(Message message, int charOffset, int length,
+      Uri fileUri, Severity severity,
+      {bool wasHandled: false,
+      List<LocatedMessage> context,
+      bool problemOnLibrary: false,
+      List<Uri> involvedFiles}) {
+    severity ??= message.code.severity;
+    if (severity == Severity.ignored) return null;
     String trace = """
 message: ${message.message}
 charOffset: $charOffset
 fileUri: $fileUri
 severity: $severity
 """;
-    // TODO(askesc): Swap message and context around for interface checks
-    // and mixin overrides to make comparing context here unnecessary.
-    if (context != null) {
-      for (LocatedMessage contextMessage in context) {
-        trace += """
-message: ${contextMessage.message}
-charOffset: ${contextMessage.charOffset}
-fileUri: ${contextMessage.uri}
-""";
-      }
-    }
-    if (!seenMessages.add(trace)) return false;
+    if (!seenMessages.add(trace)) return null;
     if (message.code.severity == Severity.context) {
       internalProblem(
           templateInternalProblemContextSeverity
@@ -272,29 +366,43 @@ fileUri: ${contextMessage.uri}
     }
     target.context.report(
         message.withLocation(fileUri, charOffset, length), severity,
-        context: context);
-    recordMessage(severity, message, charOffset, length, fileUri,
-        context: context);
+        context: context, involvedFiles: involvedFiles);
     if (severity == Severity.error) {
       (wasHandled ? handledErrors : unhandledErrors)
           .add(message.withLocation(fileUri, charOffset, length));
     }
-    return true;
+    FormattedMessage formattedMessage = target.createFormattedMessage(
+        message, charOffset, length, fileUri, context, severity,
+        involvedFiles: involvedFiles);
+    if (!problemOnLibrary) {
+      allComponentProblems.add(formattedMessage);
+    }
+    return formattedMessage;
   }
 
-  Declaration getAbstractClassInstantiationError() {
+  MemberBuilder getAbstractClassInstantiationError() {
     return target.getAbstractClassInstantiationError(this);
   }
 
-  Declaration getCompileTimeError() => target.getCompileTimeError(this);
+  MemberBuilder getCompileTimeError() => target.getCompileTimeError(this);
 
-  Declaration getDuplicatedFieldInitializerError() {
+  MemberBuilder getDuplicatedFieldInitializerError() {
     return target.getDuplicatedFieldInitializerError(this);
   }
 
-  Declaration getNativeAnnotation() => target.getNativeAnnotation(this);
+  MemberBuilder getNativeAnnotation() => target.getNativeAnnotation(this);
 
-  void recordMessage(Severity severity, Message message, int charOffset,
-      int length, Uri fileUri,
-      {List<LocatedMessage> context}) {}
+  ClassBuilder computeClassBuilderFromTargetClass(Class cls);
+
+  TypeBuilder computeTypeBuilder(DartType type);
+
+  BodyBuilder createBodyBuilderForOutlineExpression(
+      LibraryBuilder library,
+      DeclarationBuilder declarationBuilder,
+      ModifierBuilder member,
+      Scope scope,
+      Uri fileUri) {
+    return new BodyBuilder.forOutlineExpression(
+        library, declarationBuilder, member, scope, fileUri);
+  }
 }

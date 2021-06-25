@@ -4,9 +4,10 @@
 
 #include "platform/assert.h"
 
+#include "platform/unicode.h"
+#include "vm/double_conversion.h"
 #include "vm/json_writer.h"
 #include "vm/object.h"
-#include "vm/unicode.h"
 
 namespace dart {
 
@@ -68,7 +69,7 @@ void JSONWriter::OpenObject(const char* property_name) {
 void JSONWriter::UncloseObject() {
   intptr_t len = buffer_.length();
   ASSERT(len > 0);
-  ASSERT(buffer_.buf()[len - 1] == '}');
+  ASSERT(buffer_.buffer()[len - 1] == '}');
   open_objects_++;
   buffer_.set_length(len - 1);
 }
@@ -117,8 +118,13 @@ void JSONWriter::PrintValue64(int64_t i) {
 }
 
 void JSONWriter::PrintValue(double d) {
+  // Max length of a double in characters (including \0).
+  // See double_conversion.cc.
+  const size_t kBufferLen = 25;
+  char buffer[kBufferLen];
+  DoubleToCString(d, buffer, kBufferLen);
   PrintCommaIfNeeded();
-  buffer_.Printf("%f", d);
+  buffer_.Printf("%s", buffer);
 }
 
 static const char base64_digits[65] =
@@ -309,7 +315,7 @@ void JSONWriter::PrintCommaIfNeeded() {
 }
 
 bool JSONWriter::NeedComma() {
-  const char* buffer = buffer_.buf();
+  const char* buffer = buffer_.buffer();
   intptr_t length = buffer_.length();
   if (length == 0) {
     return false;

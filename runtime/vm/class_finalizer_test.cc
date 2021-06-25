@@ -9,23 +9,25 @@
 
 namespace dart {
 
-static RawClass* CreateTestClass(const char* name) {
-  const String& class_name =
-      String::Handle(Symbols::New(Thread::Current(), name));
+static ClassPtr CreateTestClass(const char* name) {
+  Thread* thread = Thread::Current();
+  const String& class_name = String::Handle(Symbols::New(thread, name));
   const Script& script = Script::Handle();
   const Class& cls = Class::Handle(Class::New(
       Library::Handle(), class_name, script, TokenPosition::kNoSource));
   cls.set_interfaces(Object::empty_array());
+  SafepointWriteRwLocker ml(thread, thread->isolate_group()->program_lock());
+  cls.set_is_declaration_loaded();
   cls.SetFunctions(Object::empty_array());
   cls.SetFields(Object::empty_array());
-  return cls.raw();
+  return cls.ptr();
 }
 
 ISOLATE_UNIT_TEST_CASE(ClassFinalizer) {
   Zone* zone = thread->zone();
-  Isolate* isolate = thread->isolate();
-  ObjectStore* object_store = isolate->object_store();
-  const GrowableObjectArray& pending_classes =
+  auto isolate_group = thread->isolate_group();
+  ObjectStore* object_store = isolate_group->object_store();
+  const auto& pending_classes =
       GrowableObjectArray::Handle(zone, object_store->pending_classes());
   GrowableArray<const Class*> classes_1;
   classes_1.Add(&Class::Handle(CreateTestClass("BMW")));
@@ -49,25 +51,6 @@ ISOLATE_UNIT_TEST_CASE(ClassFinalizer) {
   }
   EXPECT(ClassFinalizer::AllClassesFinalized());
   EXPECT(ClassFinalizer::ProcessPendingClasses());
-}
-
-ISOLATE_UNIT_TEST_CASE(ClassFinalize_Cycles) {
-  Zone* zone = thread->zone();
-  Isolate* isolate = thread->isolate();
-  ObjectStore* object_store = isolate->object_store();
-  const GrowableObjectArray& pending_classes =
-      GrowableObjectArray::Handle(zone, object_store->pending_classes());
-  GrowableArray<const Class*> classes;
-  classes.Add(&Class::Handle(CreateTestClass("Jungfrau")));
-  pending_classes.Add(*classes[0]);
-  classes.Add(&Class::Handle(CreateTestClass("Eiger")));
-  pending_classes.Add(*classes[1]);
-  // Create a cycle.
-  classes[0]->set_super_type(
-      Type::Handle(Type::NewNonParameterizedType(*classes[1])));
-  classes[1]->set_super_type(
-      Type::Handle(Type::NewNonParameterizedType(*classes[0])));
-  EXPECT(!ClassFinalizer::ProcessPendingClasses());
 }
 
 }  // namespace dart

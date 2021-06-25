@@ -5,6 +5,9 @@
 #ifndef RUNTIME_VM_SNAPSHOT_H_
 #define RUNTIME_VM_SNAPSHOT_H_
 
+#include <memory>
+#include <utility>
+
 #include "platform/assert.h"
 #include "vm/allocation.h"
 #include "vm/bitfield.h"
@@ -26,8 +29,10 @@ class ClassTable;
 class Closure;
 class Code;
 class ExternalTypedData;
+class TypedDataBase;
 class GrowableObjectArray;
 class Heap;
+class Instance;
 class Instructions;
 class LanguageError;
 class Library;
@@ -37,60 +42,7 @@ class PassiveObject;
 class ObjectStore;
 class MegamorphicCache;
 class PageSpace;
-class RawApiError;
-class RawArray;
-class RawBoundedType;
-class RawCapability;
-class RawClass;
-class RawClosure;
-class RawClosureData;
-class RawCodeSourceMap;
-class RawContext;
-class RawContextScope;
-class RawDouble;
-class RawExceptionHandlers;
-class RawField;
-class RawFloat32x4;
-class RawFloat64x2;
-class RawFunction;
-class RawGrowableObjectArray;
-class RawICData;
-class RawImmutableArray;
-class RawInstructions;
-class RawInt32x4;
-class RawRegExp;
-class RawLanguageError;
-class RawLibrary;
-class RawLibraryPrefix;
-class RawLinkedHashMap;
-class RawLocalVarDescriptors;
-class RawMegamorphicCache;
-class RawMint;
-class RawMixinAppType;
-class RawNamespace;
-class RawObject;
-class RawObjectPool;
-class RawOneByteString;
-class RawPatchClass;
-class RawPcDescriptors;
-class RawReceivePort;
-class RawRedirectionData;
-class RawNativeEntryData;
-class RawScript;
-class RawSignatureData;
-class RawSendPort;
-class RawSmi;
-class RawStackMap;
-class RawStackTrace;
-class RawSubtypeTestCache;
-class RawTwoByteString;
-class RawType;
-class RawTypeArguments;
-class RawTypedData;
-class RawTypeParameter;
-class RawTypeRef;
-class RawUnhandledException;
-class RawWeakProperty;
+class TypedDataView;
 class String;
 class TypeArguments;
 class TypedData;
@@ -99,8 +51,8 @@ class UnhandledException;
 // Serialized object header encoding is as follows:
 // - Smi: the Smi value is written as is (last bit is not tagged).
 // - VM object (from VM isolate): (object id in vm isolate | 0x3)
-//   This valus is serialized as a negative number.
-//   (note VM objects are never serialized they are expected to be found
+//   This value is serialized as a negative number.
+//   (note VM objects are never serialized, they are expected to be found
 //    using ths unique ID assigned to them).
 // - Reference to object that has already been written: (object id | 0x3)
 //   This valus is serialized as a positive number.
@@ -139,11 +91,12 @@ enum SerializeState {
 class Snapshot {
  public:
   enum Kind {
-    kFull,     // Full snapshot of core libraries or an application.
-    kFullJIT,  // Full + JIT code
-    kFullAOT,  // Full + AOT code
-    kMessage,  // A partial snapshot used only for isolate messaging.
-    kNone,     // gen_snapshot
+    kFull,      // Full snapshot of an application.
+    kFullCore,  // Full snapshot of core libraries. Agnostic to null safety.
+    kFullJIT,   // Full + JIT code
+    kFullAOT,   // Full + AOT code
+    kMessage,   // A partial snapshot used only for isolate messaging.
+    kNone,      // gen_snapshot
     kInvalid
   };
   static const char* KindToCString(Kind kind);
@@ -178,13 +131,20 @@ class Snapshot {
   void set_kind(Kind value) { return Write<int64_t>(kKindOffset, value); }
 
   static bool IsFull(Kind kind) {
-    return (kind == kFull) || (kind == kFullJIT) || (kind == kFullAOT);
+    return (kind == kFull) || (kind == kFullCore) || (kind == kFullJIT) ||
+           (kind == kFullAOT);
   }
+  static bool IsAgnosticToNullSafety(Kind kind) { return (kind == kFullCore); }
   static bool IncludesCode(Kind kind) {
     return (kind == kFullJIT) || (kind == kFullAOT);
   }
-  static bool IncludesBytecode(Kind kind) {
-    return (kind == kFull) || (kind == kFullJIT);
+
+  static bool IncludesStringsInROData(Kind kind) {
+#if !defined(DART_COMPRESSED_POINTERS)
+    return IncludesCode(kind);
+#else
+    return false;
+#endif
   }
 
   const uint8_t* Addr() const { return reinterpret_cast<const uint8_t*>(this); }
@@ -193,7 +153,7 @@ class Snapshot {
     if (!IncludesCode(kind())) {
       return NULL;
     }
-    uword offset = Utils::RoundUp(length(), OS::kMaxPreferredCodeAlignment);
+    uword offset = Utils::RoundUp(length(), kMaxObjectAlignment);
     return Addr() + offset;
   }
 
@@ -203,7 +163,7 @@ class Snapshot {
 
   template <typename T>
   T Read(intptr_t offset) const {
-    return ReadUnaligned(
+    return LoadUnaligned(
         reinterpret_cast<const T*>(reinterpret_cast<uword>(this) + offset));
   }
 
@@ -215,6 +175,15 @@ class Snapshot {
 
   DISALLOW_COPY_AND_ASSIGN(Snapshot);
 };
+
+inline static bool IsSnapshotCompatible(Snapshot::Kind vm_kind,
+                                        Snapshot::Kind isolate_kind) {
+  if (vm_kind == isolate_kind) return true;
+  if (((vm_kind == Snapshot::kFull) || (vm_kind == Snapshot::kFullCore)) &&
+      isolate_kind == Snapshot::kFullJIT)
+    return true;
+  return Snapshot::IsFull(isolate_kind);
+}
 
 class BaseReader {
  public:
@@ -249,11 +218,12 @@ class BaseReader {
     return stream_.AddressOfCurrentPosition();
   }
 
+  void Align(intptr_t value) { stream_.Align(value); }
   void Advance(intptr_t value) { stream_.Advance(value); }
 
   intptr_t PendingBytes() const { return stream_.PendingBytes(); }
 
-  RawSmi* ReadAsSmi();
+  SmiPtr ReadAsSmi();
   intptr_t ReadSmiValue();
 
   // Negative header value indicates VM isolate object id.
@@ -265,48 +235,29 @@ class BaseReader {
     return SerializedHeaderData::decode(value);
   }
 
+  uword ReadWordWith32BitReads() { return stream_.ReadWordWith32BitReads(); }
+
  private:
   ReadStream stream_;  // input stream.
 };
 
 class BackRefNode : public ValueObject {
  public:
-  BackRefNode(Object* reference,
-              DeserializeState state,
-              bool defer_canonicalization)
-      : reference_(reference),
-        state_(state),
-        defer_canonicalization_(defer_canonicalization),
-        patch_records_(NULL) {}
+  BackRefNode(Object* reference, DeserializeState state)
+      : reference_(reference), state_(state) {}
   Object* reference() const { return reference_; }
   bool is_deserialized() const { return state_ == kIsDeserialized; }
   void set_state(DeserializeState state) { state_ = state; }
-  bool defer_canonicalization() const { return defer_canonicalization_; }
-  ZoneGrowableArray<intptr_t>* patch_records() const { return patch_records_; }
 
   BackRefNode& operator=(const BackRefNode& other) {
     reference_ = other.reference_;
     state_ = other.state_;
-    defer_canonicalization_ = other.defer_canonicalization_;
-    patch_records_ = other.patch_records_;
     return *this;
-  }
-
-  void AddPatchRecord(intptr_t patch_object_id, intptr_t patch_offset) {
-    if (defer_canonicalization_) {
-      if (patch_records_ == NULL) {
-        patch_records_ = new ZoneGrowableArray<intptr_t>();
-      }
-      patch_records_->Add(patch_object_id);
-      patch_records_->Add(patch_offset);
-    }
   }
 
  private:
   Object* reference_;
   DeserializeState state_;
-  bool defer_canonicalization_;
-  ZoneGrowableArray<intptr_t>* patch_records_;
 };
 
 // Reads a snapshot into objects.
@@ -315,39 +266,41 @@ class SnapshotReader : public BaseReader {
   Thread* thread() const { return thread_; }
   Zone* zone() const { return zone_; }
   Isolate* isolate() const { return thread_->isolate(); }
+  IsolateGroup* isolate_group() const { return thread_->isolate_group(); }
   Heap* heap() const { return heap_; }
-  ObjectStore* object_store() const { return isolate()->object_store(); }
-  ClassTable* class_table() const { return isolate()->class_table(); }
+  ObjectStore* object_store() const { return isolate_group()->object_store(); }
+  ClassTable* class_table() const { return isolate_group()->class_table(); }
   PassiveObject* PassiveObjectHandle() { return &pobj_; }
   Array* ArrayHandle() { return &array_; }
   Class* ClassHandle() { return &cls_; }
   Code* CodeHandle() { return &code_; }
+  Instance* InstanceHandle() { return &instance_; }
   Instructions* InstructionsHandle() { return &instructions_; }
   String* StringHandle() { return &str_; }
   AbstractType* TypeHandle() { return &type_; }
   TypeArguments* TypeArgumentsHandle() { return &type_arguments_; }
   GrowableObjectArray* TokensHandle() { return &tokens_; }
   ExternalTypedData* DataHandle() { return &data_; }
+  TypedDataBase* TypedDataBaseHandle() { return &typed_data_base_; }
   TypedData* TypedDataHandle() { return &typed_data_; }
+  TypedDataView* TypedDataViewHandle() { return &typed_data_view_; }
   Function* FunctionHandle() { return &function_; }
+  Smi* SmiHandle() { return &smi_; }
   Snapshot::Kind kind() const { return kind_; }
 
   // Reads an object.
-  RawObject* ReadObject();
+  ObjectPtr ReadObject();
 
   // Add object to backward references.
-  void AddBackRef(intptr_t id,
-                  Object* obj,
-                  DeserializeState state,
-                  bool defer_canonicalization = false);
+  void AddBackRef(intptr_t id, Object* obj, DeserializeState state);
 
   // Get an object from the backward references list.
   Object* GetBackRef(intptr_t id);
 
   // Read version number of snapshot and verify.
-  RawApiError* VerifyVersionAndFeatures(Isolate* isolate);
+  ApiErrorPtr VerifyVersionAndFeatures(IsolateGroup* isolate_group);
 
-  RawObject* NewInteger(int64_t value);
+  ObjectPtr NewInteger(int64_t value);
 
  protected:
   SnapshotReader(const uint8_t* buffer,
@@ -368,40 +321,25 @@ class SnapshotReader : public BaseReader {
   void RunDelayedTypePostprocessing();
 
   void EnqueueRehashingOfMap(const LinkedHashMap& map);
-  RawObject* RunDelayedRehashingOfMaps();
+  void EnqueueRehashingOfSet(const Object& set);
+  ObjectPtr RunDelayedRehashingOfMaps();
 
-  RawClass* ReadClassId(intptr_t object_id);
-  RawObject* ReadStaticImplicitClosure(intptr_t object_id, intptr_t cls_header);
+  ClassPtr ReadClassId(intptr_t object_id);
+  ObjectPtr ReadStaticImplicitClosure(intptr_t object_id, intptr_t cls_header);
 
   // Implementation to read an object.
-  RawObject* ReadObjectImpl(bool as_reference,
-                            intptr_t patch_object_id = kInvalidPatchIndex,
-                            intptr_t patch_offset = 0);
-  RawObject* ReadObjectImpl(intptr_t header,
-                            bool as_reference,
-                            intptr_t patch_object_id,
-                            intptr_t patch_offset);
+  ObjectPtr ReadObjectImpl(bool as_reference);
+  ObjectPtr ReadObjectImpl(intptr_t header, bool as_reference);
 
   // Read a Dart Instance object.
-  RawObject* ReadInstance(intptr_t object_id, intptr_t tags, bool as_reference);
+  ObjectPtr ReadInstance(intptr_t object_id, intptr_t tags, bool as_reference);
 
   // Read a VM isolate object that was serialized as an Id.
-  RawObject* ReadVMIsolateObject(intptr_t object_id);
+  ObjectPtr ReadVMIsolateObject(intptr_t object_id);
 
   // Read an object that was serialized as an Id (singleton in object store,
   // or an object that was already serialized before).
-  RawObject* ReadIndexedObject(intptr_t object_id,
-                               intptr_t patch_object_id,
-                               intptr_t patch_offset);
-
-  // Add a patch record for the object so that objects whose canonicalization
-  // is deferred can be back patched after they are canonicalized.
-  void AddPatchRecord(intptr_t object_id,
-                      intptr_t patch_object_id,
-                      intptr_t patch_offset);
-
-  // Process all the deferred canonicalization entries and patch all references.
-  void ProcessDeferredCanonicalizations();
+  ObjectPtr ReadIndexedObject(intptr_t object_id);
 
   // Decode class id from the header field.
   intptr_t LookupInternalClass(intptr_t class_header);
@@ -415,7 +353,7 @@ class SnapshotReader : public BaseReader {
 
   void SetReadException(const char* msg);
 
-  RawObject* VmIsolateSnapshotObject(intptr_t index) const;
+  ObjectPtr VmIsolateSnapshotObject(intptr_t index) const;
 
   bool is_vm_isolate() const;
 
@@ -426,6 +364,7 @@ class SnapshotReader : public BaseReader {
   PageSpace* old_space_;           // Old space of the current isolate.
   Class& cls_;                     // Temporary Class handle.
   Code& code_;                     // Temporary Code handle.
+  Instance& instance_;             // Temporary Instance handle
   Instructions& instructions_;     // Temporary Instructions handle
   Object& obj_;                    // Temporary Object handle.
   PassiveObject& pobj_;            // Temporary PassiveObject handle.
@@ -437,9 +376,13 @@ class SnapshotReader : public BaseReader {
   TypeArguments& type_arguments_;  // Temporary type argument handle.
   GrowableObjectArray& tokens_;    // Temporary tokens handle.
   ExternalTypedData& data_;        // Temporary stream data handle.
+  TypedDataBase& typed_data_base_;  // Temporary typed data base handle.
   TypedData& typed_data_;          // Temporary typed data handle.
+  TypedDataView& typed_data_view_;  // Temporary typed data view handle.
   Function& function_;             // Temporary function handle.
+  Smi& smi_;                       // Temporary Smi handle.
   UnhandledException& error_;      // Error handle.
+  const Class& set_class_;         // The LinkedHashSet class.
   intptr_t max_vm_isolate_object_id_;
   ZoneGrowableArray<BackRefNode>* backward_references_;
   GrowableObjectArray& types_to_postprocess_;
@@ -447,7 +390,6 @@ class SnapshotReader : public BaseReader {
 
   friend class ApiError;
   friend class Array;
-  friend class BoundedType;
   friend class Class;
   friend class Closure;
   friend class ClosureData;
@@ -465,20 +407,22 @@ class SnapshotReader : public BaseReader {
   friend class LibraryPrefix;
   friend class LinkedHashMap;
   friend class MirrorReference;
-  friend class MixinAppType;
   friend class Namespace;
   friend class PatchClass;
-  friend class RedirectionData;
   friend class RegExp;
   friend class Script;
-  friend class SignatureData;
   friend class SubtypeTestCache;
+  friend class TransferableTypedData;
   friend class Type;
+  friend class FunctionType;
+  friend class TypedDataView;
+  friend class TypeParameters;
   friend class TypeArguments;
   friend class TypeParameter;
   friend class TypeRef;
   friend class UnhandledException;
   friend class WeakProperty;
+  friend class WeakSerializationReference;
   DISALLOW_COPY_AND_ASSIGN(SnapshotReader);
 };
 
@@ -497,14 +441,14 @@ class MessageSnapshotReader : public SnapshotReader {
 
 class BaseWriter : public StackResource {
  public:
-  uint8_t* buffer() { return stream_.buffer(); }
+  uint8_t* Steal(intptr_t* length) { return stream_.Steal(length); }
   intptr_t BytesWritten() const { return stream_.bytes_written(); }
 
   // Writes raw data to the stream (basic type).
   // sizeof(T) must be in {1,2,4,8}.
   template <typename T>
   void Write(T value) {
-    WriteStream::Raw<sizeof(T), T>::Write(&stream_, value);
+    MallocWriteStream::Raw<sizeof(T), T>::Write(&stream_, value);
   }
 
   void WriteClassIDValue(classid_t value) { Write<uint32_t>(value); }
@@ -543,6 +487,8 @@ class BaseWriter : public StackResource {
     Write<int8_t>(static_cast<int8_t>(flags));
   }
 
+  void Align(intptr_t value) { stream_.Align(value); }
+
   // Write out a buffer of bytes.
   void WriteBytes(const uint8_t* addr, intptr_t len) {
     stream_.WriteBytes(addr, len);
@@ -552,14 +498,13 @@ class BaseWriter : public StackResource {
     stream_.WriteBytes(reinterpret_cast<const uint8_t*>(&value), sizeof(value));
   }
 
- protected:
-  BaseWriter(ReAlloc alloc, DeAlloc dealloc, intptr_t initial_size)
-      : StackResource(Thread::Current()),
-        buffer_(NULL),
-        stream_(&buffer_, alloc, initial_size),
-        dealloc_(dealloc) {
-    ASSERT(alloc != NULL);
+  void WriteWordWith32BitWrites(uword value) {
+    stream_.WriteWordWith32BitWrites(value);
   }
+
+ protected:
+  explicit BaseWriter(intptr_t initial_size)
+      : StackResource(Thread::Current()), stream_(initial_size) {}
   ~BaseWriter() {}
 
   void ReserveHeader() {
@@ -568,21 +513,20 @@ class BaseWriter : public StackResource {
   }
 
   void FillHeader(Snapshot::Kind kind) {
-    Snapshot* header = reinterpret_cast<Snapshot*>(stream_.buffer());
+    intptr_t length;
+    Snapshot* header = reinterpret_cast<Snapshot*>(Steal(&length));
     header->set_magic();
-    header->set_length(stream_.bytes_written());
+    header->set_length(length);
     header->set_kind(kind);
   }
 
   void FreeBuffer() {
-    dealloc_(stream_.buffer());
-    stream_.set_buffer(NULL);
+    intptr_t unused;
+    free(Steal(&unused));
   }
 
  private:
-  uint8_t* buffer_;
-  WriteStream stream_;
-  DeAlloc dealloc_;
+  MallocWriteStream stream_;
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(BaseWriter);
 };
@@ -614,10 +558,10 @@ class ForwardList {
   }
 
   // Returns the id for the added object.
-  intptr_t AddObject(Zone* zone, RawObject* raw, SerializeState state);
+  intptr_t AddObject(Zone* zone, ObjectPtr raw, SerializeState state);
 
   // Returns the id for the object it it exists in the list.
-  intptr_t FindObject(RawObject* raw);
+  intptr_t FindObject(ObjectPtr raw);
 
   // Exhaustively processes all unserialized objects in this list. 'writer' may
   // concurrently add more objects.
@@ -631,12 +575,15 @@ class ForwardList {
  private:
   intptr_t first_object_id() const { return first_object_id_; }
   intptr_t next_object_id() const { return nodes_.length() + first_object_id_; }
-  Heap* heap() const { return thread_->isolate()->heap(); }
+  Isolate* isolate() const { return thread_->isolate(); }
 
   Thread* thread_;
   const intptr_t first_object_id_;
   GrowableArray<Node*> nodes_;
   intptr_t first_unprocessed_object_id_;
+
+  void SetObjectId(ObjectPtr object, intptr_t id);
+  intptr_t GetObjectId(ObjectPtr object);
 
   DISALLOW_COPY_AND_ASSIGN(ForwardList);
 };
@@ -645,8 +592,6 @@ class SnapshotWriter : public BaseWriter {
  protected:
   SnapshotWriter(Thread* thread,
                  Snapshot::Kind kind,
-                 ReAlloc alloc,
-                 DeAlloc dealloc,
                  intptr_t initial_size,
                  ForwardList* forward_list,
                  bool can_send_any_object);
@@ -657,13 +602,15 @@ class SnapshotWriter : public BaseWriter {
   Thread* thread() const { return thread_; }
   Zone* zone() const { return thread_->zone(); }
   Isolate* isolate() const { return thread_->isolate(); }
-  Heap* heap() const { return isolate()->heap(); }
+  IsolateGroup* isolate_group() const { return thread_->isolate_group(); }
+  Heap* heap() const { return isolate_group()->heap(); }
 
   // Serialize an object into the buffer.
-  void WriteObject(RawObject* raw);
+  void WriteObject(ObjectPtr raw);
 
-  static uint32_t GetObjectTags(RawObject* raw);
-  static uword GetObjectTagsAndHash(RawObject* raw);
+  static uint32_t GetObjectTags(ObjectPtr raw);
+  static uint32_t GetObjectTags(UntaggedObject* raw);
+  static uword GetObjectTagsAndHash(ObjectPtr raw);
 
   Exceptions::ExceptionType exception_type() const { return exception_type_; }
   void set_exception_type(Exceptions::ExceptionType type) {
@@ -677,19 +624,20 @@ class SnapshotWriter : public BaseWriter {
   // Write a version string for the snapshot.
   void WriteVersionAndFeatures();
 
-  RawFunction* IsSerializableClosure(RawClosure* closure);
+  FunctionPtr IsSerializableClosure(ClosurePtr closure);
 
   void WriteStaticImplicitClosure(intptr_t object_id,
-                                  RawFunction* func,
-                                  intptr_t tags);
+                                  FunctionPtr func,
+                                  intptr_t tags,
+                                  TypeArgumentsPtr delayed_type_arguments);
 
  protected:
-  bool CheckAndWritePredefinedObject(RawObject* raw);
-  bool HandleVMIsolateObject(RawObject* raw);
+  bool CheckAndWritePredefinedObject(ObjectPtr raw);
+  bool HandleVMIsolateObject(ObjectPtr raw);
 
-  void WriteClassId(RawClass* cls);
-  void WriteObjectImpl(RawObject* raw, bool as_reference);
-  void WriteMarkedObjectImpl(RawObject* raw,
+  void WriteClassId(UntaggedClass* cls);
+  void WriteObjectImpl(ObjectPtr raw, bool as_reference);
+  void WriteMarkedObjectImpl(ObjectPtr raw,
                              intptr_t tags,
                              intptr_t object_id,
                              bool as_reference);
@@ -697,20 +645,20 @@ class SnapshotWriter : public BaseWriter {
   void ArrayWriteTo(intptr_t object_id,
                     intptr_t array_kind,
                     intptr_t tags,
-                    RawSmi* length,
-                    RawTypeArguments* type_arguments,
-                    RawObject* data[],
+                    SmiPtr length,
+                    TypeArgumentsPtr type_arguments,
+                    CompressedObjectPtr data[],
                     bool as_reference);
-  RawClass* GetFunctionOwner(RawFunction* func);
-  void CheckForNativeFields(RawClass* cls);
+  ClassPtr GetFunctionOwner(FunctionPtr func);
+  void CheckForNativeFields(ClassPtr cls);
   void SetWriteException(Exceptions::ExceptionType type, const char* msg);
-  void WriteInstance(RawObject* raw,
-                     RawClass* cls,
+  void WriteInstance(ObjectPtr raw,
+                     ClassPtr cls,
                      intptr_t tags,
                      intptr_t object_id,
                      bool as_reference);
-  bool AllowObjectsInDartLibrary(RawLibrary* library);
-  intptr_t FindVmSnapshotObject(RawObject* rawobj);
+  bool AllowObjectsInDartLibrary(LibraryPtr library);
+  intptr_t FindVmSnapshotObject(ObjectPtr rawobj);
 
   ObjectStore* object_store() const { return object_store_; }
 
@@ -724,33 +672,37 @@ class SnapshotWriter : public BaseWriter {
   const char* exception_msg_;  // Message associated with exception.
   bool can_send_any_object_;   // True if any Dart instance can be sent.
 
-  friend class RawArray;
-  friend class RawClass;
-  friend class RawClosureData;
-  friend class RawCode;
-  friend class RawContextScope;
-  friend class RawExceptionHandlers;
-  friend class RawField;
-  friend class RawFunction;
-  friend class RawGrowableObjectArray;
-  friend class RawImmutableArray;
-  friend class RawInstructions;
-  friend class RawLibrary;
-  friend class RawLinkedHashMap;
-  friend class RawLocalVarDescriptors;
-  friend class RawMirrorReference;
-  friend class RawObjectPool;
-  friend class RawReceivePort;
-  friend class RawRegExp;
-  friend class RawScript;
-  friend class RawStackTrace;
-  friend class RawSubtypeTestCache;
-  friend class RawType;
-  friend class RawTypeRef;
-  friend class RawBoundedType;
-  friend class RawTypeArguments;
-  friend class RawTypeParameter;
-  friend class RawUserTag;
+  friend class UntaggedArray;
+  friend class UntaggedClass;
+  friend class UntaggedCode;
+  friend class UntaggedContextScope;
+  friend class UntaggedDynamicLibrary;
+  friend class UntaggedExceptionHandlers;
+  friend class UntaggedField;
+  friend class UntaggedFunction;
+  friend class UntaggedFunctionType;
+  friend class UntaggedGrowableObjectArray;
+  friend class UntaggedImmutableArray;
+  friend class UntaggedInstructions;
+  friend class UntaggedLibrary;
+  friend class UntaggedLinkedHashMap;
+  friend class UntaggedLocalVarDescriptors;
+  friend class UntaggedMirrorReference;
+  friend class UntaggedObjectPool;
+  friend class UntaggedPointer;
+  friend class UntaggedReceivePort;
+  friend class UntaggedRegExp;
+  friend class UntaggedScript;
+  friend class UntaggedStackTrace;
+  friend class UntaggedSubtypeTestCache;
+  friend class UntaggedTransferableTypedData;
+  friend class UntaggedType;
+  friend class UntaggedTypeArguments;
+  friend class UntaggedTypeParameter;
+  friend class UntaggedTypeRef;
+  friend class UntaggedTypedDataView;
+  friend class UntaggedUserTag;
+  friend class UntaggedWeakSerializationReference;
   friend class SnapshotWriterVisitor;
   friend class WriteInlinedObjectVisitor;
   DISALLOW_COPY_AND_ASSIGN(SnapshotWriter);
@@ -758,22 +710,17 @@ class SnapshotWriter : public BaseWriter {
 
 class SerializedObjectBuffer : public StackResource {
  public:
-  SerializedObjectBuffer() : StackResource(Thread::Current()), message_(NULL) {}
+  SerializedObjectBuffer()
+      : StackResource(Thread::Current()), message_(nullptr) {}
 
-  virtual ~SerializedObjectBuffer() { delete message_; }
-
-  void set_message(Message* message) {
-    ASSERT(message_ == NULL);
-    message_ = message;
+  void set_message(std::unique_ptr<Message> message) {
+    ASSERT(message_ == nullptr);
+    message_ = std::move(message);
   }
-  Message* StealMessage() {
-    Message* result = message_;
-    message_ = NULL;
-    return result;
-  }
+  std::unique_ptr<Message> StealMessage() { return std::move(message_); }
 
  private:
-  Message* message_;
+  std::unique_ptr<Message> message_;
 };
 
 class MessageWriter : public SnapshotWriter {
@@ -782,9 +729,9 @@ class MessageWriter : public SnapshotWriter {
   explicit MessageWriter(bool can_send_any_object);
   ~MessageWriter();
 
-  Message* WriteMessage(const Object& obj,
-                        Dart_Port dest_port,
-                        Message::Priority priority);
+  std::unique_ptr<Message> WriteMessage(const Object& obj,
+                                        Dart_Port dest_port,
+                                        Message::Priority priority);
 
   MessageFinalizableData* finalizable_data() const { return finalizable_data_; }
 
@@ -796,15 +743,18 @@ class MessageWriter : public SnapshotWriter {
 };
 
 // An object pointer visitor implementation which writes out
-// objects to a snap shot.
+// objects to a snapshot.
 class SnapshotWriterVisitor : public ObjectPointerVisitor {
  public:
   SnapshotWriterVisitor(SnapshotWriter* writer, bool as_references)
-      : ObjectPointerVisitor(Isolate::Current()),
+      : ObjectPointerVisitor(Isolate::Current()->group()),
         writer_(writer),
         as_references_(as_references) {}
 
-  virtual void VisitPointers(RawObject** first, RawObject** last);
+  void VisitPointers(ObjectPtr* first, ObjectPtr* last);
+  void VisitCompressedPointers(uword heap_base,
+                               CompressedObjectPtr* first,
+                               CompressedObjectPtr* last);
 
  private:
   SnapshotWriter* writer_;

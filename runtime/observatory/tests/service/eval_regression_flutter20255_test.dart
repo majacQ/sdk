@@ -1,18 +1,15 @@
 // Copyright (c) 2018, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-// VMOptions=--no-background-compilation --enable-inlining-annotations
 
 import 'dart:async';
 import 'dart:developer';
 
 import 'package:observatory/service_io.dart';
-import 'package:unittest/unittest.dart';
+import 'package:test/test.dart';
 
 import 'service_test_common.dart';
 import 'test_helper.dart';
-
-const String NeverInline = 'NeverInline';
 
 class Base<T> {
   String field;
@@ -39,9 +36,9 @@ class ISub<T> implements Base<T> {
 }
 
 class Box<T> {
-  T value;
+  late T value;
 
-  @NeverInline
+  @pragma('vm:never-inline')
   void setValue(T value) {
     this.value = value;
   }

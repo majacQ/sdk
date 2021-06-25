@@ -33,9 +33,9 @@ UNIT_TEST_CASE(DartAPI_DartInitializeAfterCleanup) {
   memset(&params, 0, sizeof(Dart_InitializeParams));
   params.version = DART_INITIALIZE_PARAMS_CURRENT_VERSION;
   params.vm_snapshot_data = TesterState::vm_snapshot_data;
-  params.create = TesterState::create_callback;
-  params.shutdown = TesterState::shutdown_callback;
-  params.cleanup = TesterState::cleanup_callback;
+  params.create_group = TesterState::create_callback;
+  params.shutdown_isolate = TesterState::shutdown_callback;
+  params.cleanup_group = TesterState::group_cleanup_callback;
   params.start_kernel_isolate = true;
 
   // Reinitialize and ensure we can execute Dart code.
@@ -55,6 +55,111 @@ UNIT_TEST_CASE(DartAPI_DartInitializeAfterCleanup) {
     EXPECT_EQ(42, value);
   }
   EXPECT(Dart_Cleanup() == NULL);
+}
+
+UNIT_TEST_CASE(DartAPI_DartInitializeCallsCodeObserver) {
+  EXPECT(Dart_SetVMFlags(TesterState::argc, TesterState::argv) == NULL);
+  Dart_InitializeParams params;
+  memset(&params, 0, sizeof(Dart_InitializeParams));
+  params.version = DART_INITIALIZE_PARAMS_CURRENT_VERSION;
+  params.vm_snapshot_data = TesterState::vm_snapshot_data;
+  params.create_group = TesterState::create_callback;
+  params.shutdown_isolate = TesterState::shutdown_callback;
+  params.cleanup_group = TesterState::group_cleanup_callback;
+  params.start_kernel_isolate = true;
+
+  bool was_called = false;
+  Dart_CodeObserver code_observer;
+  code_observer.data = &was_called;
+  code_observer.on_new_code = [](Dart_CodeObserver* observer, const char* name,
+                                 uintptr_t base, uintptr_t size) {
+    *static_cast<bool*>(observer->data) = true;
+  };
+  params.code_observer = &code_observer;
+
+  // Reinitialize and ensure we can execute Dart code.
+  EXPECT(Dart_Initialize(&params) == NULL);
+
+  // Wait for 5 seconds to let the kernel service load the snapshot,
+  // which should trigger calls to the code observer.
+  OS::Sleep(5);
+
+  EXPECT(was_called);
+  EXPECT(Dart_Cleanup() == NULL);
+}
+
+TEST_CASE(Dart_KillIsolate) {
+  const char* kScriptChars =
+      "int testMain() {\n"
+      "  return 42;\n"
+      "}\n";
+  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
+  EXPECT_VALID(lib);
+  Dart_Handle result = Dart_Invoke(lib, NewString("testMain"), 0, NULL);
+  EXPECT_VALID(result);
+  int64_t value = 0;
+  EXPECT_VALID(Dart_IntegerToInt64(result, &value));
+  EXPECT_EQ(42, value);
+  Dart_Isolate isolate = reinterpret_cast<Dart_Isolate>(Isolate::Current());
+  Dart_KillIsolate(isolate);
+  result = Dart_Invoke(lib, NewString("testMain"), 0, NULL);
+  EXPECT(Dart_IsError(result));
+  EXPECT_STREQ("isolate terminated by Isolate.kill", Dart_GetError(result));
+}
+
+class InfiniteLoopTask : public ThreadPool::Task {
+ public:
+  InfiniteLoopTask(Dart_Isolate* isolate, Monitor* monitor, bool* interrupted)
+      : isolate_(isolate), monitor_(monitor), interrupted_(interrupted) {}
+  virtual void Run() {
+    TestIsolateScope scope;
+    const char* kScriptChars =
+        "testMain() {\n"
+        "  while(true) {};"
+        "}\n";
+    Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
+    EXPECT_VALID(lib);
+    *isolate_ = reinterpret_cast<Dart_Isolate>(Isolate::Current());
+    {
+      MonitorLocker ml(monitor_);
+      ml.Notify();
+    }
+    Dart_Handle result = Dart_Invoke(lib, NewString("testMain"), 0, NULL);
+    // Test should run an inifinite loop and expect that to be killed.
+    EXPECT(Dart_IsError(result));
+    EXPECT_STREQ("isolate terminated by Isolate.kill", Dart_GetError(result));
+    {
+      MonitorLocker ml(monitor_);
+      *interrupted_ = true;
+      ml.Notify();
+    }
+  }
+
+ private:
+  Dart_Isolate* isolate_;
+  Monitor* monitor_;
+  bool* interrupted_;
+};
+
+TEST_CASE(Dart_KillIsolatePriority) {
+  Monitor monitor;
+  bool interrupted = false;
+  Dart_Isolate isolate;
+  Dart::thread_pool()->Run<InfiniteLoopTask>(&isolate, &monitor, &interrupted);
+  {
+    MonitorLocker ml(&monitor);
+    ml.Wait();
+  }
+
+  Dart_KillIsolate(isolate);
+
+  {
+    MonitorLocker ml(&monitor);
+    while (!interrupted) {
+      ml.Wait();
+    }
+  }
+  EXPECT(interrupted);
 }
 
 TEST_CASE(DartAPI_ErrorHandleBasics) {
@@ -433,7 +538,7 @@ static Dart_NativeFunction CurrentStackTraceNativeLookup(
     bool* auto_setup_scope) {
   ASSERT(auto_setup_scope != NULL);
   *auto_setup_scope = true;
-  return reinterpret_cast<Dart_NativeFunction>(&CurrentStackTraceNative);
+  return CurrentStackTraceNative;
 }
 
 TEST_CASE(DartAPI_CurrentStackTraceInfo) {
@@ -571,8 +676,7 @@ void PropagateErrorNative(Dart_NativeArguments args) {
     EXPECT_VALID(result);  // We do not expect to reach here.
     UNREACHABLE();
   } else {
-    result = Dart_PropagateError(result);
-    EXPECT_VALID(result);  // We do not expect to reach here.
+    Dart_PropagateError(result);
     UNREACHABLE();
   }
 }
@@ -583,7 +687,7 @@ static Dart_NativeFunction PropagateError_native_lookup(
     bool* auto_setup_scope) {
   ASSERT(auto_setup_scope != NULL);
   *auto_setup_scope = true;
-  return reinterpret_cast<Dart_NativeFunction>(&PropagateErrorNative);
+  return PropagateErrorNative;
 }
 
 TEST_CASE(DartAPI_PropagateCompileTimeError) {
@@ -694,6 +798,46 @@ TEST_CASE(DartAPI_EmptyString) {
   Dart_Handle empty = Dart_EmptyString();
   EXPECT_VALID(empty);
   EXPECT(!Dart_IsNull(empty));
+  EXPECT(Dart_IsString(empty));
+  intptr_t length = -1;
+  EXPECT_VALID(Dart_StringLength(empty, &length));
+  EXPECT_EQ(0, length);
+}
+
+TEST_CASE(DartAPI_TypeDynamic) {
+  Dart_Handle type = Dart_TypeDynamic();
+  EXPECT_VALID(type);
+  EXPECT(Dart_IsType(type));
+
+  Dart_Handle str = Dart_ToString(type);
+  EXPECT_VALID(str);
+  const char* cstr = nullptr;
+  EXPECT_VALID(Dart_StringToCString(str, &cstr));
+  EXPECT_STREQ("dynamic", cstr);
+}
+
+TEST_CASE(DartAPI_TypeVoid) {
+  Dart_Handle type = Dart_TypeVoid();
+  EXPECT_VALID(type);
+  EXPECT(Dart_IsType(type));
+
+  Dart_Handle str = Dart_ToString(type);
+  EXPECT_VALID(str);
+  const char* cstr = nullptr;
+  EXPECT_VALID(Dart_StringToCString(str, &cstr));
+  EXPECT_STREQ("void", cstr);
+}
+
+TEST_CASE(DartAPI_TypeNever) {
+  Dart_Handle type = Dart_TypeNever();
+  EXPECT_VALID(type);
+  EXPECT(Dart_IsType(type));
+
+  Dart_Handle str = Dart_ToString(type);
+  EXPECT_VALID(str);
+  const char* cstr = nullptr;
+  EXPECT_VALID(Dart_StringToCString(str, &cstr));
+  EXPECT_STREQ("Never", cstr);
 }
 
 TEST_CASE(DartAPI_IdentityEquals) {
@@ -786,7 +930,7 @@ TEST_CASE(DartAPI_InstanceGetType) {
   {
     TransitionNativeToVM transition(thread);
     const Type& null_type_obj = Api::UnwrapTypeHandle(zone, type);
-    EXPECT(null_type_obj.raw() == Type::NullType());
+    EXPECT(null_type_obj.ptr() == Type::NullType());
   }
 
   Dart_Handle instance = Dart_True();
@@ -796,7 +940,7 @@ TEST_CASE(DartAPI_InstanceGetType) {
   {
     TransitionNativeToVM transition(thread);
     const Type& bool_type_obj = Api::UnwrapTypeHandle(zone, type);
-    EXPECT(bool_type_obj.raw() == Type::BoolType());
+    EXPECT(bool_type_obj.ptr() == Type::BoolType());
   }
 
   // Errors propagate.
@@ -935,7 +1079,7 @@ TEST_CASE(DartAPI_FunctionIsStatic) {
   EXPECT_VALID(result);
   EXPECT(is_static);
 
-  Dart_Handle klass = Dart_GetType(lib, NewString("Foo"), 0, NULL);
+  Dart_Handle klass = Dart_GetNonNullableType(lib, NewString("Foo"), 0, NULL);
   EXPECT_VALID(klass);
 
   Dart_Handle instance = Dart_Allocate(klass);
@@ -1030,7 +1174,7 @@ TEST_CASE(DartAPI_GetStaticMethodClosure) {
 TEST_CASE(DartAPI_ClassLibrary) {
   Dart_Handle lib = Dart_LookupLibrary(NewString("dart:core"));
   EXPECT_VALID(lib);
-  Dart_Handle type = Dart_GetType(lib, NewString("int"), 0, NULL);
+  Dart_Handle type = Dart_GetNonNullableType(lib, NewString("int"), 0, NULL);
   EXPECT_VALID(type);
   Dart_Handle result = Dart_ClassLibrary(type);
   EXPECT_VALID(result);
@@ -1038,11 +1182,6 @@ TEST_CASE(DartAPI_ClassLibrary) {
   const char* str = NULL;
   Dart_StringToCString(lib_url, &str);
   EXPECT_STREQ("dart:core", str);
-
-  // Case with no library.
-  type = Dart_GetType(lib, NewString("dynamic"), 0, NULL);
-  EXPECT_VALID(type);
-  EXPECT(Dart_IsNull(Dart_ClassLibrary(type)));
 }
 
 TEST_CASE(DartAPI_BooleanValues) {
@@ -1291,9 +1430,7 @@ TEST_CASE(DartAPI_ArrayValues) {
   }
 }
 
-static void NoopFinalizer(void* isolate_callback_data,
-                          Dart_WeakPersistentHandle handle,
-                          void* peer) {}
+static void NoopFinalizer(void* isolate_callback_data, void* peer) {}
 
 TEST_CASE(DartAPI_IsString) {
   uint8_t latin1[] = {'o', 'n', 'e', 0xC2, 0xA2};
@@ -1418,12 +1555,13 @@ TEST_CASE(DartAPI_MalformedStringToUTF8) {
   Dart_Handle result = Dart_StringToUTF8(str1, &utf8_encoded, &utf8_length);
   EXPECT_VALID(result);
   EXPECT_EQ(3, utf8_length);
-  EXPECT_EQ(237, static_cast<intptr_t>(utf8_encoded[0]));
-  EXPECT_EQ(180, static_cast<intptr_t>(utf8_encoded[1]));
-  EXPECT_EQ(158, static_cast<intptr_t>(utf8_encoded[2]));
+  // Unpaired surrogate is encoded as replacement character.
+  EXPECT_EQ(239, static_cast<intptr_t>(utf8_encoded[0]));
+  EXPECT_EQ(191, static_cast<intptr_t>(utf8_encoded[1]));
+  EXPECT_EQ(189, static_cast<intptr_t>(utf8_encoded[2]));
 
   Dart_Handle str2 = Dart_NewStringFromUTF8(utf8_encoded, utf8_length);
-  EXPECT_VALID(str2);  // Standalone low surrogate, but still valid
+  EXPECT_VALID(str2);  // Replacement character, but still valid
 
   Dart_Handle reversed = Dart_Invoke(lib, NewString("reversed"), 0, NULL);
   EXPECT_VALID(reversed);  // This is also allowed.
@@ -1433,34 +1571,14 @@ TEST_CASE(DartAPI_MalformedStringToUTF8) {
                              &utf8_length_reversed);
   EXPECT_VALID(result);
   EXPECT_EQ(6, utf8_length_reversed);
-  uint8_t expected[6] = {237, 180, 158, 237, 160, 180};
+  // Two unpaired surrogates are encoded as two replacement characters.
+  uint8_t expected[6] = {239, 191, 189, 239, 191, 189};
   for (int i = 0; i < 6; i++) {
     EXPECT_EQ(expected[i], utf8_encoded_reversed[i]);
   }
 }
 
-// Helper class to ensure new gen GC is triggered without any side effects.
-// The normal call to CollectGarbage(Heap::kNew) could potentially trigger
-// an old gen collection if there is a promotion failure and this could
-// perturb the test.
-class GCTestHelper : public AllStatic {
- public:
-  static void CollectNewSpace() {
-    Isolate::Current()->heap()->new_space()->Scavenge();
-  }
-
-  static void WaitForGCTasks() {
-    Thread* thread = Thread::Current();
-    PageSpace* old_space = thread->isolate()->heap()->old_space();
-    MonitorLocker ml(old_space->tasks_lock());
-    while (old_space->tasks() > 0) {
-      ml.WaitWithSafepointCheck(thread);
-    }
-  }
-};
-
 static void ExternalStringCallbackFinalizer(void* isolate_callback_data,
-                                            Dart_WeakPersistentHandle handle,
                                             void* peer) {
   *static_cast<int*>(peer) *= 2;
 }
@@ -1491,12 +1609,10 @@ TEST_CASE(DartAPI_ExternalStringCallback) {
     TransitionNativeToVM transition(thread);
     EXPECT_EQ(40, peer8);
     EXPECT_EQ(41, peer16);
-    Isolate::Current()->heap()->CollectGarbage(Heap::kOld);
-    GCTestHelper::WaitForGCTasks();
+    GCTestHelper::CollectOldSpace();
     EXPECT_EQ(40, peer8);
     EXPECT_EQ(41, peer16);
-    Isolate::Current()->heap()->CollectGarbage(Heap::kNew);
-    GCTestHelper::WaitForGCTasks();
+    GCTestHelper::CollectNewSpace();
     EXPECT_EQ(80, peer8);
     EXPECT_EQ(82, peer16);
   }
@@ -1578,7 +1694,7 @@ TEST_CASE(DartAPI_ExternalTypedDataPretenure) {
 TEST_CASE(DartAPI_ListAccess) {
   const char* kScriptChars =
       "List testMain() {"
-      "  List a = new List();"
+      "  List a = List.empty(growable: true);"
       "  a.add(10);"
       "  a.add(20);"
       "  a.add(30);"
@@ -1847,7 +1963,7 @@ TEST_CASE(DartAPI_TypedDataViewListGetAsBytes) {
 
   const char* kScriptChars =
       "import 'dart:typed_data';\n"
-      "List main(int size) {\n"
+      "List testMain(int size) {\n"
       "  var a = new Int8List(size);\n"
       "  var view = new Int8List.view(a.buffer, 0, size);\n"
       "  return view;\n"
@@ -1858,7 +1974,7 @@ TEST_CASE(DartAPI_TypedDataViewListGetAsBytes) {
   // Test with a typed data view object.
   Dart_Handle dart_args[1];
   dart_args[0] = Dart_NewInteger(kSize);
-  Dart_Handle view_obj = Dart_Invoke(lib, NewString("main"), 1, dart_args);
+  Dart_Handle view_obj = Dart_Invoke(lib, NewString("testMain"), 1, dart_args);
   EXPECT_VALID(view_obj);
   for (intptr_t i = 0; i < kSize; ++i) {
     EXPECT_VALID(Dart_ListSetAt(view_obj, i, Dart_NewInteger(i & 0xff)));
@@ -1879,7 +1995,7 @@ TEST_CASE(DartAPI_TypedDataViewListIsTypedData) {
 
   const char* kScriptChars =
       "import 'dart:typed_data';\n"
-      "List main(int size) {\n"
+      "List testMain(int size) {\n"
       "  var a = new Int8List(size);\n"
       "  var view = new Int8List.view(a.buffer, 0, size);\n"
       "  return view;\n"
@@ -1890,7 +2006,7 @@ TEST_CASE(DartAPI_TypedDataViewListIsTypedData) {
   // Create a typed data view object.
   Dart_Handle dart_args[1];
   dart_args[0] = Dart_NewInteger(kSize);
-  Dart_Handle view_obj = Dart_Invoke(lib, NewString("main"), 1, dart_args);
+  Dart_Handle view_obj = Dart_Invoke(lib, NewString("testMain"), 1, dart_args);
   EXPECT_VALID(view_obj);
   // Test that the API considers it a TypedData object.
   EXPECT(Dart_IsTypedData(view_obj));
@@ -2139,9 +2255,7 @@ TEST_CASE(DartAPI_ExternalByteDataAccess) {
 }
 
 static bool byte_data_finalizer_run = false;
-void ByteDataFinalizer(void* isolate_data,
-                       Dart_WeakPersistentHandle handle,
-                       void* peer) {
+void ByteDataFinalizer(void* isolate_data, void* peer) {
   ASSERT(!byte_data_finalizer_run);
   free(peer);
   byte_data_finalizer_run = true;
@@ -2166,6 +2280,9 @@ TEST_CASE(DartAPI_ExternalByteDataFinalizer) {
 
     const intptr_t kBufferSize = 100;
     void* buffer = malloc(kBufferSize);
+    // The buffer becomes readable by Dart, so ensure it is initialized to
+    // satisfy our eager MSAN check.
+    memset(buffer, 0, kBufferSize);
     Dart_Handle byte_data = Dart_NewExternalTypedDataWithFinalizer(
         Dart_TypedData_kByteData, buffer, kBufferSize, buffer, kBufferSize,
         ByteDataFinalizer);
@@ -2184,7 +2301,7 @@ TEST_CASE(DartAPI_ExternalByteDataFinalizer) {
 
   {
     TransitionNativeToVM transition(Thread::Current());
-    Isolate::Current()->heap()->CollectAllGarbage();
+    GCTestHelper::CollectAllGarbage();
   }
 
   EXPECT(!byte_data_finalizer_run);
@@ -2194,7 +2311,7 @@ TEST_CASE(DartAPI_ExternalByteDataFinalizer) {
 
   {
     TransitionNativeToVM transition(Thread::Current());
-    Isolate::Current()->heap()->CollectAllGarbage();
+    GCTestHelper::CollectAllGarbage();
   }
 
   EXPECT(byte_data_finalizer_run);
@@ -2338,6 +2455,7 @@ static void TestDirectAccess(Dart_Handle lib,
   void* data;
   intptr_t len;
   result = Dart_TypedDataAcquireData(array, &type, &data, &len);
+  EXPECT(!Thread::Current()->IsAtSafepoint());
   EXPECT_VALID(result);
   EXPECT_EQ(expected_type, type);
   EXPECT_EQ(kLength, len);
@@ -2346,14 +2464,12 @@ static void TestDirectAccess(Dart_Handle lib,
     EXPECT_EQ(i, dataP[i]);
   }
 
-  if (!is_external) {
-    // Now try allocating a string with outstanding Acquires and it should
-    // return an error.
-    result = NewString("We expect an error here");
-    EXPECT_ERROR(result,
-                 "Internal Dart data pointers have been acquired, "
-                 "please release them using Dart_TypedDataReleaseData.");
-  }
+  // Now try allocating a string with outstanding Acquires and it should
+  // return an error.
+  result = NewString("We expect an error here");
+  EXPECT_ERROR(result,
+               "Internal Dart data pointers have been acquired, "
+               "please release them using Dart_TypedDataReleaseData.");
 
   // Now modify the values in the directly accessible array and then check
   // it we see the changes back in dart.
@@ -2362,6 +2478,7 @@ static void TestDirectAccess(Dart_Handle lib,
   }
 
   // Release direct access to the typed data object.
+  EXPECT(!Thread::Current()->IsAtSafepoint());
   result = Dart_TypedDataReleaseData(array);
   EXPECT_VALID(result);
 
@@ -2369,6 +2486,29 @@ static void TestDirectAccess(Dart_Handle lib,
   result = Dart_Invoke(lib, NewString("testMain"), 1, dart_args);
   EXPECT_VALID(result);
 }
+
+class BackgroundGCTask : public ThreadPool::Task {
+ public:
+  BackgroundGCTask(Isolate* isolate, Monitor* monitor, bool* done)
+      : isolate_(isolate), monitor_(monitor), done_(done) {}
+  virtual void Run() {
+    Thread::EnterIsolateAsHelper(isolate_, Thread::kUnknownTask);
+    for (intptr_t i = 0; i < 10; i++) {
+      GCTestHelper::CollectAllGarbage();
+    }
+    Thread::ExitIsolateAsHelper();
+    {
+      MonitorLocker ml(monitor_);
+      *done_ = true;
+      ml.Notify();
+    }
+  }
+
+ private:
+  Isolate* isolate_;
+  Monitor* monitor_;
+  bool* done_;
+};
 
 static void TestTypedDataDirectAccess1() {
   const char* kScriptChars =
@@ -2398,20 +2538,35 @@ static void TestTypedDataDirectAccess1() {
   // Create a test library and Load up a test script in it.
   Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
 
-  // Test with an regular typed data object.
-  Dart_Handle list_access_test_obj;
-  list_access_test_obj = Dart_Invoke(lib, NewString("main"), 0, NULL);
-  EXPECT_VALID(list_access_test_obj);
-  TestDirectAccess(lib, list_access_test_obj, Dart_TypedData_kInt8, false);
+  Monitor monitor;
+  bool done = false;
+  Dart::thread_pool()->Run<BackgroundGCTask>(Isolate::Current(), &monitor,
+                                             &done);
 
-  // Test with an external typed data object.
-  uint8_t data[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-  intptr_t data_length = ARRAY_SIZE(data);
-  Dart_Handle ext_list_access_test_obj;
-  ext_list_access_test_obj =
-      Dart_NewExternalTypedData(Dart_TypedData_kUint8, data, data_length);
-  EXPECT_VALID(ext_list_access_test_obj);
-  TestDirectAccess(lib, ext_list_access_test_obj, Dart_TypedData_kUint8, true);
+  for (intptr_t i = 0; i < 10; i++) {
+    // Test with an regular typed data object.
+    Dart_Handle list_access_test_obj;
+    list_access_test_obj = Dart_Invoke(lib, NewString("main"), 0, NULL);
+    EXPECT_VALID(list_access_test_obj);
+    TestDirectAccess(lib, list_access_test_obj, Dart_TypedData_kInt8, false);
+
+    // Test with an external typed data object.
+    uint8_t data[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    intptr_t data_length = ARRAY_SIZE(data);
+    Dart_Handle ext_list_access_test_obj;
+    ext_list_access_test_obj =
+        Dart_NewExternalTypedData(Dart_TypedData_kUint8, data, data_length);
+    EXPECT_VALID(ext_list_access_test_obj);
+    TestDirectAccess(lib, ext_list_access_test_obj, Dart_TypedData_kUint8,
+                     true);
+  }
+
+  {
+    MonitorLocker ml(&monitor);
+    while (!done) {
+      ml.Wait();
+    }
+  }
 }
 
 TEST_CASE(DartAPI_TypedDataDirectAccess1Unverified) {
@@ -2629,18 +2784,13 @@ TEST_CASE(DartAPI_ExternalUint8ClampedArrayAccess) {
   EXPECT(value);
 }
 
-static void NopCallback(void* isolate_callback_data,
-                        Dart_WeakPersistentHandle handle,
-                        void* peer) {}
+static void NopCallback(void* isolate_callback_data, void* peer) {}
 
-static void UnreachedCallback(void* isolate_callback_data,
-                              Dart_WeakPersistentHandle handle,
-                              void* peer) {
+static void UnreachedCallback(void* isolate_callback_data, void* peer) {
   UNREACHABLE();
 }
 
 static void ExternalTypedDataFinalizer(void* isolate_callback_data,
-                                       Dart_WeakPersistentHandle handle,
                                        void* peer) {
   *static_cast<int*>(peer) = 42;
 }
@@ -2659,18 +2809,14 @@ TEST_CASE(DartAPI_ExternalTypedDataCallback) {
   {
     TransitionNativeToVM transition(thread);
     EXPECT(peer == 0);
-    Isolate::Current()->heap()->CollectGarbage(Heap::kOld);
-    GCTestHelper::WaitForGCTasks();
+    GCTestHelper::CollectOldSpace();
     EXPECT(peer == 0);
-    Isolate::Current()->heap()->CollectGarbage(Heap::kNew);
-    GCTestHelper::WaitForGCTasks();
+    GCTestHelper::CollectNewSpace();
     EXPECT(peer == 42);
   }
 }
 
-static void SlowFinalizer(void* isolate_callback_data,
-                          Dart_WeakPersistentHandle handle,
-                          void* peer) {
+static void SlowFinalizer(void* isolate_callback_data, void* peer) {
   OS::Sleep(10);
   intptr_t* count = reinterpret_cast<intptr_t*>(peer);
   (*count)++;
@@ -2681,23 +2827,51 @@ TEST_CASE(DartAPI_SlowFinalizer) {
   for (intptr_t i = 0; i < 10; i++) {
     Dart_EnterScope();
     Dart_Handle str1 = Dart_NewStringFromCString("Live fast");
-    Dart_NewWeakPersistentHandle(str1, &count, 0, SlowFinalizer);
+    Dart_NewFinalizableHandle(str1, &count, 0, SlowFinalizer);
     Dart_Handle str2 = Dart_NewStringFromCString("Die young");
-    Dart_NewWeakPersistentHandle(str2, &count, 0, SlowFinalizer);
+    Dart_NewFinalizableHandle(str2, &count, 0, SlowFinalizer);
     Dart_ExitScope();
 
     {
       TransitionNativeToVM transition(thread);
-      Isolate::Current()->heap()->CollectAllGarbage();
+      GCTestHelper::CollectAllGarbage();
     }
   }
 
-  {
-    TransitionNativeToVM transition(thread);
-    GCTestHelper::WaitForGCTasks();
+  EXPECT_EQ(20, count);
+}
+
+static void SlowWeakPersistentHandle(void* isolate_callback_data, void* peer) {
+  OS::Sleep(10);
+  intptr_t* count = reinterpret_cast<intptr_t*>(peer);
+  (*count)++;
+}
+
+TEST_CASE(DartAPI_SlowWeakPersistenhandle) {
+  Dart_WeakPersistentHandle handles[20];
+  intptr_t count = 0;
+
+  for (intptr_t i = 0; i < 10; i++) {
+    Dart_EnterScope();
+    Dart_Handle str1 = Dart_NewStringFromCString("Live fast");
+    handles[i] =
+        Dart_NewWeakPersistentHandle(str1, &count, 0, SlowWeakPersistentHandle);
+    Dart_Handle str2 = Dart_NewStringFromCString("Die young");
+    handles[i + 10] =
+        Dart_NewWeakPersistentHandle(str2, &count, 0, SlowWeakPersistentHandle);
+    Dart_ExitScope();
+
+    {
+      TransitionNativeToVM transition(thread);
+      GCTestHelper::CollectAllGarbage();
+    }
   }
 
   EXPECT_EQ(20, count);
+
+  for (intptr_t i = 0; i < 20; i++) {
+    Dart_DeleteWeakPersistentHandle(handles[i]);
+  }
 }
 
 static void CheckFloat32x4Data(Dart_Handle obj) {
@@ -2748,8 +2922,7 @@ TEST_CASE(DartAPI_Float32x4List) {
   Dart_ExitScope();
   {
     TransitionNativeToVM transition(thread);
-    Isolate::Current()->heap()->CollectGarbage(Heap::kNew);
-    GCTestHelper::WaitForGCTasks();
+    GCTestHelper::CollectNewSpace();
     EXPECT(peer == 42);
   }
 }
@@ -2769,7 +2942,7 @@ VM_UNIT_TEST_CASE(DartAPI_EnterExitScope) {
     HANDLESCOPE(thread);
     String& str1 = String::Handle();
     str1 = String::New("Test String");
-    Dart_Handle ref = Api::NewHandle(thread, str1.raw());
+    Dart_Handle ref = Api::NewHandle(thread, str1.ptr());
     String& str2 = String::Handle();
     str2 ^= Api::UnwrapHandle(ref);
     EXPECT(str1.Equals(str2));
@@ -2786,9 +2959,12 @@ VM_UNIT_TEST_CASE(DartAPI_PersistentHandles) {
   Thread* thread = Thread::Current();
   Isolate* isolate = thread->isolate();
   EXPECT(isolate != NULL);
-  ApiState* state = isolate->api_state();
+  ApiState* state = isolate->group()->api_state();
   EXPECT(state != NULL);
   ApiLocalScope* scope = thread->api_top_scope();
+
+  const intptr_t handle_count_start = state->CountPersistentHandles();
+
   Dart_PersistentHandle handles[2000];
   Dart_EnterScope();
   {
@@ -2811,7 +2987,6 @@ VM_UNIT_TEST_CASE(DartAPI_PersistentHandles) {
     for (int i = 1000; i < 1500; i++) {
       handles[i] = Dart_NewPersistentHandle(ref1);
     }
-    VERIFY_ON_TRANSITION;
     Dart_ExitScope();
   }
   Dart_ExitScope();
@@ -2821,27 +2996,27 @@ VM_UNIT_TEST_CASE(DartAPI_PersistentHandles) {
     HANDLESCOPE(thread);
     for (int i = 0; i < 500; i++) {
       String& str = String::Handle();
-      str ^= PersistentHandle::Cast(handles[i])->raw();
+      str ^= PersistentHandle::Cast(handles[i])->ptr();
       EXPECT(str.Equals(kTestString1));
     }
     for (int i = 500; i < 1000; i++) {
       String& str = String::Handle();
-      str ^= PersistentHandle::Cast(handles[i])->raw();
+      str ^= PersistentHandle::Cast(handles[i])->ptr();
       EXPECT(str.Equals(kTestString2));
     }
     for (int i = 1000; i < 1500; i++) {
       String& str = String::Handle();
-      str ^= PersistentHandle::Cast(handles[i])->raw();
+      str ^= PersistentHandle::Cast(handles[i])->ptr();
       EXPECT(str.Equals(kTestString1));
     }
     for (int i = 1500; i < 2000; i++) {
       String& str = String::Handle();
-      str ^= PersistentHandle::Cast(handles[i])->raw();
+      str ^= PersistentHandle::Cast(handles[i])->ptr();
       EXPECT(str.Equals(kTestString2));
     }
   }
   EXPECT(scope == thread->api_top_scope());
-  EXPECT_EQ(2001, state->CountPersistentHandles());
+  EXPECT_EQ(handle_count_start + 2000, state->CountPersistentHandles());
   Dart_ShutdownIsolate();
 }
 
@@ -2852,7 +3027,7 @@ VM_UNIT_TEST_CASE(DartAPI_NewPersistentHandle_FromPersistentHandle) {
 
   Isolate* isolate = Isolate::Current();
   EXPECT(isolate != NULL);
-  ApiState* state = isolate->api_state();
+  ApiState* state = isolate->group()->api_state();
   EXPECT(state != NULL);
   Thread* thread = Thread::Current();
   CHECK_API_SCOPE(thread);
@@ -2885,7 +3060,7 @@ VM_UNIT_TEST_CASE(DartAPI_AssignToPersistentHandle) {
   CHECK_API_SCOPE(T);
   Isolate* isolate = T->isolate();
   EXPECT(isolate != NULL);
-  ApiState* state = isolate->api_state();
+  ApiState* state = isolate->group()->api_state();
   EXPECT(state != NULL);
 
   // Start with a known persistent handle.
@@ -2896,7 +3071,7 @@ VM_UNIT_TEST_CASE(DartAPI_AssignToPersistentHandle) {
     TransitionNativeToVM transition(T);
     HANDLESCOPE(T);
     String& str = String::Handle();
-    str ^= PersistentHandle::Cast(obj)->raw();
+    str ^= PersistentHandle::Cast(obj)->ptr();
     EXPECT(str.Equals(kTestString1));
   }
 
@@ -2907,7 +3082,7 @@ VM_UNIT_TEST_CASE(DartAPI_AssignToPersistentHandle) {
     TransitionNativeToVM transition(T);
     HANDLESCOPE(T);
     String& str = String::Handle();
-    str ^= PersistentHandle::Cast(obj)->raw();
+    str ^= PersistentHandle::Cast(obj)->ptr();
     EXPECT(str.Equals(kTestString2));
   }
 
@@ -2936,60 +3111,45 @@ static Dart_Handle AsHandle(Dart_WeakPersistentHandle weak) {
   return Dart_HandleFromWeakPersistent(weak);
 }
 
-static Dart_WeakPersistentHandle weak_new_ref = NULL;
-static Dart_WeakPersistentHandle weak_old_ref = NULL;
-
-static void WeakPersistentHandleCallback(void* isolate_callback_data,
-                                         Dart_WeakPersistentHandle handle,
-                                         void* peer) {
-  if (handle == weak_new_ref) {
-    weak_new_ref = NULL;
-  } else if (handle == weak_old_ref) {
-    weak_old_ref = NULL;
-  }
-}
-
 TEST_CASE(DartAPI_WeakPersistentHandle) {
-  // GCs due to allocations or weak handle creation can cause early promotion
-  // and interfer with the scenario this test is verifying.
-  NoHeapGrowthControlScope force_growth;
-
-  Dart_Handle local_new_ref = Dart_Null();
-  weak_new_ref = Dart_NewWeakPersistentHandle(local_new_ref, NULL, 0,
-                                              WeakPersistentHandleCallback);
-
-  Dart_Handle local_old_ref = Dart_Null();
-  weak_old_ref = Dart_NewWeakPersistentHandle(local_old_ref, NULL, 0,
-                                              WeakPersistentHandleCallback);
+  Dart_WeakPersistentHandle weak_new_ref = nullptr;
+  Dart_WeakPersistentHandle weak_old_ref = nullptr;
 
   {
     Dart_EnterScope();
 
-    // Create an object in new space.
-    Dart_Handle new_ref = AllocateNewString("new string");
-    EXPECT_VALID(new_ref);
+    Dart_Handle new_ref, old_ref;
+    {
+      // GCs due to allocations or weak handle creation can cause early
+      // promotion and interfere with the scenario this test is verifying.
+      NoHeapGrowthControlScope force_growth;
 
-    // Create an object in old space.
-    Dart_Handle old_ref = AllocateOldString("old string");
-    EXPECT_VALID(old_ref);
+      // Create an object in new space.
+      new_ref = AllocateNewString("new string");
+      EXPECT_VALID(new_ref);
 
-    // Create a weak ref to the new space object.
-    weak_new_ref = Dart_NewWeakPersistentHandle(new_ref, NULL, 0,
-                                                WeakPersistentHandleCallback);
-    EXPECT_VALID(AsHandle(weak_new_ref));
-    EXPECT(!Dart_IsNull(AsHandle(weak_new_ref)));
+      // Create an object in old space.
+      old_ref = AllocateOldString("old string");
+      EXPECT_VALID(old_ref);
 
-    // Create a weak ref to the old space object.
-    weak_old_ref = Dart_NewWeakPersistentHandle(old_ref, NULL, 0,
-                                                WeakPersistentHandleCallback);
-    EXPECT_VALID(AsHandle(weak_old_ref));
-    EXPECT(!Dart_IsNull(AsHandle(weak_old_ref)));
+      // Create a weak ref to the new space object.
+      weak_new_ref =
+          Dart_NewWeakPersistentHandle(new_ref, nullptr, 0, NopCallback);
+      EXPECT_VALID(AsHandle(weak_new_ref));
+      EXPECT(!Dart_IsNull(AsHandle(weak_new_ref)));
+
+      // Create a weak ref to the old space object.
+      weak_old_ref =
+          Dart_NewWeakPersistentHandle(old_ref, nullptr, 0, NopCallback);
+
+      EXPECT_VALID(AsHandle(weak_old_ref));
+      EXPECT(!Dart_IsNull(AsHandle(weak_old_ref)));
+    }
 
     {
       TransitionNativeToVM transition(thread);
       // Garbage collect new space.
       GCTestHelper::CollectNewSpace();
-      GCTestHelper::WaitForGCTasks();
     }
 
     // Nothing should be invalidated or cleared.
@@ -3009,8 +3169,7 @@ TEST_CASE(DartAPI_WeakPersistentHandle) {
     {
       TransitionNativeToVM transition(thread);
       // Garbage collect old space.
-      Isolate::Current()->heap()->CollectGarbage(Heap::kOld);
-      GCTestHelper::WaitForGCTasks();
+      GCTestHelper::CollectOldSpace();
     }
 
     // Nothing should be invalidated or cleared.
@@ -3035,13 +3194,13 @@ TEST_CASE(DartAPI_WeakPersistentHandle) {
     TransitionNativeToVM transition(thread);
     // Garbage collect new space again.
     GCTestHelper::CollectNewSpace();
-    GCTestHelper::WaitForGCTasks();
   }
 
   {
     Dart_EnterScope();
     // Weak ref to new space object should now be cleared.
-    EXPECT(weak_new_ref == NULL);
+    EXPECT_VALID(AsHandle(weak_new_ref));
+    EXPECT(Dart_IsNull(AsHandle(weak_new_ref)));
     EXPECT_VALID(AsHandle(weak_old_ref));
     EXPECT(!Dart_IsNull(AsHandle(weak_old_ref)));
     Dart_ExitScope();
@@ -3050,24 +3209,145 @@ TEST_CASE(DartAPI_WeakPersistentHandle) {
   {
     TransitionNativeToVM transition(thread);
     // Garbage collect old space again.
-    Isolate::Current()->heap()->CollectGarbage(Heap::kOld);
-    GCTestHelper::WaitForGCTasks();
+    GCTestHelper::CollectOldSpace();
   }
 
   {
     Dart_EnterScope();
     // Weak ref to old space object should now be cleared.
-    EXPECT(weak_new_ref == NULL);
-    EXPECT(weak_old_ref == NULL);
+    EXPECT_VALID(AsHandle(weak_new_ref));
+    EXPECT(Dart_IsNull(AsHandle(weak_new_ref)));
+    EXPECT_VALID(AsHandle(weak_old_ref));
+    EXPECT(Dart_IsNull(AsHandle(weak_old_ref)));
     Dart_ExitScope();
   }
 
   {
     TransitionNativeToVM transition(thread);
     // Garbage collect one last time to revisit deleted handles.
-    Isolate::Current()->heap()->CollectGarbage(Heap::kNew);
-    Isolate::Current()->heap()->CollectGarbage(Heap::kOld);
-    GCTestHelper::WaitForGCTasks();
+    GCTestHelper::CollectAllGarbage();
+  }
+
+  Dart_DeleteWeakPersistentHandle(weak_new_ref);
+  Dart_DeleteWeakPersistentHandle(weak_old_ref);
+}
+
+static Dart_FinalizableHandle finalizable_new_ref = nullptr;
+static void* finalizable_new_ref_peer = 0;
+static Dart_FinalizableHandle finalizable_old_ref = nullptr;
+static void* finalizable_old_ref_peer = 0;
+
+static void FinalizableHandleCallback(void* isolate_callback_data, void* peer) {
+  if (peer == finalizable_new_ref_peer) {
+    finalizable_new_ref_peer = 0;
+    finalizable_new_ref = nullptr;
+  } else if (peer == finalizable_old_ref_peer) {
+    finalizable_old_ref_peer = 0;
+    finalizable_old_ref = nullptr;
+  }
+}
+
+TEST_CASE(DartAPI_FinalizableHandle) {
+  void* peer = reinterpret_cast<void*>(0);
+  Dart_Handle local_new_ref = Dart_Null();
+  finalizable_new_ref = Dart_NewFinalizableHandle(local_new_ref, peer, 0,
+                                                  FinalizableHandleCallback);
+  finalizable_new_ref_peer = peer;
+
+  peer = reinterpret_cast<void*>(1);
+  Dart_Handle local_old_ref = Dart_Null();
+  finalizable_old_ref = Dart_NewFinalizableHandle(local_old_ref, peer, 0,
+                                                  FinalizableHandleCallback);
+  finalizable_old_ref_peer = peer;
+
+  {
+    Dart_EnterScope();
+
+    Dart_Handle new_ref, old_ref;
+    {
+      // GCs due to allocations or weak handle creation can cause early
+      // promotion and interfere with the scenario this test is verifying.
+      NoHeapGrowthControlScope force_growth;
+
+      // Create an object in new space.
+      new_ref = AllocateNewString("new string");
+      EXPECT_VALID(new_ref);
+
+      // Create an object in old space.
+      old_ref = AllocateOldString("old string");
+      EXPECT_VALID(old_ref);
+
+      // Create a weak ref to the new space object.
+      peer = reinterpret_cast<void*>(2);
+      finalizable_new_ref = Dart_NewFinalizableHandle(
+          new_ref, peer, 0, FinalizableHandleCallback);
+      finalizable_new_ref_peer = peer;
+
+      // Create a weak ref to the old space object.
+      peer = reinterpret_cast<void*>(3);
+      finalizable_old_ref = Dart_NewFinalizableHandle(
+          old_ref, peer, 0, FinalizableHandleCallback);
+      finalizable_old_ref_peer = peer;
+    }
+
+    {
+      TransitionNativeToVM transition(thread);
+      // Garbage collect new space.
+      GCTestHelper::CollectNewSpace();
+    }
+
+    // Nothing should be invalidated or cleared.
+    EXPECT_VALID(new_ref);
+    EXPECT(!Dart_IsNull(new_ref));
+    EXPECT_VALID(old_ref);
+    EXPECT(!Dart_IsNull(old_ref));
+
+    {
+      TransitionNativeToVM transition(thread);
+      // Garbage collect old space.
+      GCTestHelper::CollectOldSpace();
+    }
+
+    // Nothing should be invalidated or cleared.
+    EXPECT_VALID(new_ref);
+    EXPECT(!Dart_IsNull(new_ref));
+    EXPECT_VALID(old_ref);
+    EXPECT(!Dart_IsNull(old_ref));
+
+    // Delete local (strong) references.
+    Dart_ExitScope();
+  }
+
+  {
+    TransitionNativeToVM transition(thread);
+    // Garbage collect new space again.
+    GCTestHelper::CollectNewSpace();
+  }
+
+  {
+    Dart_EnterScope();
+    // Weak ref to new space object should now be cleared.
+    EXPECT(finalizable_new_ref == nullptr);
+    Dart_ExitScope();
+  }
+
+  {
+    TransitionNativeToVM transition(thread);
+    // Garbage collect old space again.
+    GCTestHelper::CollectOldSpace();
+  }
+
+  {
+    Dart_EnterScope();
+    // Weak ref to old space object should now be cleared.
+    EXPECT(finalizable_new_ref == nullptr);
+    EXPECT(finalizable_old_ref == nullptr);
+    Dart_ExitScope();
+  }
+
+  {
+    TransitionNativeToVM transition(thread);
+    GCTestHelper::CollectAllGarbage();
   }
 }
 
@@ -3085,14 +3365,194 @@ TEST_CASE(DartAPI_WeakPersistentHandleErrors) {
   Dart_Handle obj2 = Dart_NewInteger(0);
   EXPECT_VALID(obj2);
   Dart_WeakPersistentHandle ref2 =
-      Dart_NewWeakPersistentHandle(obj2, NULL, 0, WeakPersistentHandleCallback);
+      Dart_NewWeakPersistentHandle(obj2, NULL, 0, NopCallback);
   EXPECT_EQ(ref2, static_cast<void*>(NULL));
+
+  // Pointer object.
+  Dart_Handle ffi_lib = Dart_LookupLibrary(NewString("dart:ffi"));
+  Dart_Handle pointer_type =
+      Dart_GetNonNullableType(ffi_lib, NewString("Pointer"), 0, NULL);
+  Dart_Handle obj3 = Dart_Allocate(pointer_type);
+  EXPECT_VALID(obj3);
+  Dart_WeakPersistentHandle ref3 =
+      Dart_NewWeakPersistentHandle(obj3, nullptr, 0, FinalizableHandleCallback);
+  EXPECT_EQ(ref3, static_cast<void*>(nullptr));
+
+  // Subtype of Struct or Union object.
+  const char* kScriptChars = R"(
+      import 'dart:ffi';
+
+      class MyStruct extends Struct {
+        external Pointer notEmpty;
+      }
+
+      class MyUnion extends Union {
+        external Pointer notEmpty;
+      }
+  )";
+  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
+
+  Dart_Handle my_struct_type =
+      Dart_GetNonNullableType(lib, NewString("MyStruct"), 0, NULL);
+  Dart_Handle obj4 = Dart_Allocate(my_struct_type);
+  EXPECT_VALID(obj4);
+  Dart_WeakPersistentHandle ref4 =
+      Dart_NewWeakPersistentHandle(obj4, nullptr, 0, FinalizableHandleCallback);
+  EXPECT_EQ(ref4, static_cast<void*>(nullptr));
+
+  Dart_Handle my_union_type =
+      Dart_GetNonNullableType(lib, NewString("MyUnion"), 0, NULL);
+  Dart_Handle obj5 = Dart_Allocate(my_union_type);
+  EXPECT_VALID(obj5);
+  Dart_WeakPersistentHandle ref5 =
+      Dart_NewWeakPersistentHandle(obj4, nullptr, 0, FinalizableHandleCallback);
+  EXPECT_EQ(ref5, static_cast<void*>(nullptr));
 
   Dart_ExitScope();
 }
 
+TEST_CASE(DartAPI_FinalizableHandleErrors) {
+  Dart_EnterScope();
+
+  // NULL callback.
+  Dart_Handle obj1 = NewString("new string");
+  EXPECT_VALID(obj1);
+  Dart_FinalizableHandle ref1 =
+      Dart_NewFinalizableHandle(obj1, nullptr, 0, nullptr);
+  EXPECT_EQ(ref1, static_cast<void*>(nullptr));
+
+  // Immediate object.
+  Dart_Handle obj2 = Dart_NewInteger(0);
+  EXPECT_VALID(obj2);
+  Dart_FinalizableHandle ref2 =
+      Dart_NewFinalizableHandle(obj2, nullptr, 0, FinalizableHandleCallback);
+  EXPECT_EQ(ref2, static_cast<void*>(nullptr));
+
+  // Pointer object.
+  Dart_Handle ffi_lib = Dart_LookupLibrary(NewString("dart:ffi"));
+  Dart_Handle pointer_type =
+      Dart_GetNonNullableType(ffi_lib, NewString("Pointer"), 0, NULL);
+  Dart_Handle obj3 = Dart_Allocate(pointer_type);
+  EXPECT_VALID(obj3);
+  Dart_FinalizableHandle ref3 =
+      Dart_NewFinalizableHandle(obj3, nullptr, 0, FinalizableHandleCallback);
+  EXPECT_EQ(ref3, static_cast<void*>(nullptr));
+
+  // Subtype of Struct or Union object.
+  const char* kScriptChars = R"(
+      import 'dart:ffi';
+
+      class MyStruct extends Struct {
+        external Pointer notEmpty;
+      }
+
+      class MyUnion extends Union {
+        external Pointer notEmpty;
+      }
+  )";
+  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
+
+  Dart_Handle my_struct_type =
+      Dart_GetNonNullableType(lib, NewString("MyStruct"), 0, NULL);
+  Dart_Handle obj4 = Dart_Allocate(my_struct_type);
+  EXPECT_VALID(obj4);
+  Dart_FinalizableHandle ref4 =
+      Dart_NewFinalizableHandle(obj4, nullptr, 0, FinalizableHandleCallback);
+  EXPECT_EQ(ref4, static_cast<void*>(nullptr));
+
+  Dart_Handle my_union_type =
+      Dart_GetNonNullableType(lib, NewString("MyUnion"), 0, NULL);
+  Dart_Handle obj5 = Dart_Allocate(my_union_type);
+  EXPECT_VALID(obj5);
+  Dart_FinalizableHandle ref5 =
+      Dart_NewFinalizableHandle(obj4, nullptr, 0, FinalizableHandleCallback);
+  EXPECT_EQ(ref5, static_cast<void*>(nullptr));
+
+  Dart_ExitScope();
+}
+
+static Dart_PersistentHandle persistent_handle1;
+static Dart_WeakPersistentHandle weak_persistent_handle2;
+static Dart_WeakPersistentHandle weak_persistent_handle3;
+
+static void WeakPersistentHandlePeerCleanupFinalizer(
+    void* isolate_callback_data,
+    void* peer) {
+  Dart_DeletePersistentHandle(persistent_handle1);
+  Dart_DeleteWeakPersistentHandle(weak_persistent_handle2);
+  *static_cast<int*>(peer) = 42;
+}
+
+TEST_CASE(DartAPI_WeakPersistentHandleCleanupFinalizer) {
+  Heap* heap = IsolateGroup::Current()->heap();
+
+  const char* kTestString1 = "Test String1";
+  Dart_EnterScope();
+  CHECK_API_SCOPE(thread);
+  Dart_Handle ref1 = Dart_NewStringFromCString(kTestString1);
+  persistent_handle1 = Dart_NewPersistentHandle(ref1);
+  Dart_Handle ref2 = Dart_NewStringFromCString(kTestString1);
+  int peer2 = 0;
+  weak_persistent_handle2 =
+      Dart_NewWeakPersistentHandle(ref2, &peer2, 0, NopCallback);
+  int peer3 = 0;
+  {
+    Dart_EnterScope();
+    Dart_Handle ref3 = Dart_NewStringFromCString(kTestString1);
+    weak_persistent_handle3 = Dart_NewWeakPersistentHandle(
+        ref3, &peer3, 0, WeakPersistentHandlePeerCleanupFinalizer);
+    Dart_ExitScope();
+  }
+  {
+    TransitionNativeToVM transition(thread);
+    GCTestHelper::CollectAllGarbage();
+    EXPECT(heap->ExternalInWords(Heap::kOld) == 0);
+    EXPECT(peer3 == 42);
+  }
+  Dart_ExitScope();
+
+  Dart_DeleteWeakPersistentHandle(weak_persistent_handle3);
+}
+
+static Dart_FinalizableHandle finalizable_handle3;
+
+static void FinalizableHandlePeerCleanupFinalizer(void* isolate_callback_data,
+                                                  void* peer) {
+  Dart_DeletePersistentHandle(persistent_handle1);
+  Dart_DeleteWeakPersistentHandle(weak_persistent_handle2);
+  *static_cast<int*>(peer) = 42;
+}
+
+TEST_CASE(DartAPI_FinalizableHandleCleanupFinalizer) {
+  Heap* heap = IsolateGroup::Current()->heap();
+
+  const char* kTestString1 = "Test String1";
+  Dart_EnterScope();
+  CHECK_API_SCOPE(thread);
+  Dart_Handle ref1 = Dart_NewStringFromCString(kTestString1);
+  persistent_handle1 = Dart_NewPersistentHandle(ref1);
+  Dart_Handle ref2 = Dart_NewStringFromCString(kTestString1);
+  int peer2 = 0;
+  weak_persistent_handle2 =
+      Dart_NewWeakPersistentHandle(ref2, &peer2, 0, NopCallback);
+  int peer3 = 0;
+  {
+    Dart_EnterScope();
+    Dart_Handle ref3 = Dart_NewStringFromCString(kTestString1);
+    finalizable_handle3 = Dart_NewFinalizableHandle(
+        ref3, &peer3, 0, FinalizableHandlePeerCleanupFinalizer);
+    Dart_ExitScope();
+  }
+  {
+    TransitionNativeToVM transition(thread);
+    GCTestHelper::CollectAllGarbage();
+    EXPECT(heap->ExternalInWords(Heap::kOld) == 0);
+    EXPECT(peer3 == 42);
+  }
+  Dart_ExitScope();
+}
+
 static void WeakPersistentHandlePeerFinalizer(void* isolate_callback_data,
-                                              Dart_WeakPersistentHandle handle,
                                               void* peer) {
   *static_cast<int*>(peer) = 42;
 }
@@ -3112,10 +3572,34 @@ TEST_CASE(DartAPI_WeakPersistentHandleCallback) {
   }
   {
     TransitionNativeToVM transition(thread);
-    Isolate::Current()->heap()->CollectGarbage(Heap::kOld);
+    GCTestHelper::CollectOldSpace();
     EXPECT(peer == 0);
     GCTestHelper::CollectNewSpace();
-    GCTestHelper::WaitForGCTasks();
+    EXPECT(peer == 42);
+  }
+  Dart_DeleteWeakPersistentHandle(weak_ref);
+}
+
+static void FinalizableHandlePeerFinalizer(void* isolate_callback_data,
+                                           void* peer) {
+  *static_cast<int*>(peer) = 42;
+}
+
+TEST_CASE(DartAPI_FinalizableHandleCallback) {
+  int peer = 0;
+  {
+    Dart_EnterScope();
+    Dart_Handle obj = NewString("new string");
+    EXPECT_VALID(obj);
+    Dart_NewFinalizableHandle(obj, &peer, 0, FinalizableHandlePeerFinalizer);
+    EXPECT(peer == 0);
+    Dart_ExitScope();
+  }
+  {
+    TransitionNativeToVM transition(thread);
+    GCTestHelper::CollectOldSpace();
+    EXPECT(peer == 0);
+    GCTestHelper::CollectNewSpace();
     EXPECT(peer == 42);
   }
 }
@@ -3133,33 +3617,111 @@ TEST_CASE(DartAPI_WeakPersistentHandleNoCallback) {
   }
   // A finalizer is not invoked on a deleted handle.  Therefore, the
   // peer value should not change after the referent is collected.
-  Dart_Isolate isolate = reinterpret_cast<Dart_Isolate>(Isolate::Current());
-  Dart_DeleteWeakPersistentHandle(isolate, weak_ref);
+  Dart_DeleteWeakPersistentHandle(weak_ref);
   EXPECT(peer == 0);
   {
     TransitionNativeToVM transition(thread);
-    Isolate::Current()->heap()->CollectGarbage(Heap::kOld);
+    GCTestHelper::CollectOldSpace();
     EXPECT(peer == 0);
     GCTestHelper::CollectNewSpace();
-    GCTestHelper::WaitForGCTasks();
     EXPECT(peer == 0);
   }
 }
 
+TEST_CASE(DartAPI_FinalizableHandleNoCallback) {
+  Dart_FinalizableHandle weak_ref = nullptr;
+  Dart_PersistentHandle strong_ref = nullptr;
+  int peer = 0;
+  {
+    Dart_EnterScope();
+    Dart_Handle obj = NewString("new string");
+    EXPECT_VALID(obj);
+    weak_ref = Dart_NewFinalizableHandle(obj, &peer, 0,
+                                         FinalizableHandlePeerFinalizer);
+    strong_ref = Dart_NewPersistentHandle(obj);
+    Dart_ExitScope();
+  }
+  // A finalizer is not invoked on a deleted handle.  Therefore, the
+  // peer value should not change after the referent is collected.
+  Dart_DeleteFinalizableHandle(weak_ref, strong_ref);
+  Dart_DeletePersistentHandle(strong_ref);
+  EXPECT(peer == 0);
+  {
+    TransitionNativeToVM transition(thread);
+    GCTestHelper::CollectOldSpace();
+    EXPECT(peer == 0);
+    GCTestHelper::CollectNewSpace();
+    EXPECT(peer == 0);
+  }
+}
+
+Dart_WeakPersistentHandle delete_on_finalization;
+
+static void DeleteWeakHandleOnFinalization(void* isolate_callback_data,
+                                           void* peer) {
+  *static_cast<int*>(peer) = 42;
+  Dart_DeleteWeakPersistentHandle(delete_on_finalization);
+  delete_on_finalization = nullptr;
+}
+
+static void DontDeleteWeakHandleOnFinalization(void* isolate_callback_data,
+                                               void* peer) {
+  *static_cast<int*>(peer) = 42;
+  delete_on_finalization = nullptr;
+}
+
+// Mimicking the old handle behavior by deleting the handle itself in the
+// finalizer.
+TEST_CASE(DartAPI_WeakPersistentHandleCallbackSelfDelete) {
+  int peer = 0;
+  {
+    Dart_EnterScope();
+    Dart_Handle obj = NewString("new string");
+    EXPECT_VALID(obj);
+    delete_on_finalization = Dart_NewWeakPersistentHandle(
+        obj, &peer, 0, DeleteWeakHandleOnFinalization);
+    EXPECT_VALID(AsHandle(delete_on_finalization));
+    EXPECT(peer == 0);
+    Dart_ExitScope();
+  }
+  {
+    TransitionNativeToVM transition(thread);
+    GCTestHelper::CollectOldSpace();
+    EXPECT(peer == 0);
+    GCTestHelper::CollectNewSpace();
+    EXPECT(peer == 42);
+    ASSERT(delete_on_finalization == nullptr);
+  }
+}
+
+// Checking that the finalizer gets run on shutdown, but that the delete
+// handle does not get invoked. (The handles have already been deleted by
+// releasing the LocalApiState.)
 VM_UNIT_TEST_CASE(DartAPI_WeakPersistentHandlesCallbackShutdown) {
   TestCase::CreateTestIsolate();
   Dart_EnterScope();
   Dart_Handle ref = Dart_True();
   int peer = 1234;
-  Dart_NewWeakPersistentHandle(ref, &peer, 0,
-                               WeakPersistentHandlePeerFinalizer);
+  delete_on_finalization = Dart_NewWeakPersistentHandle(
+      ref, &peer, 0, DontDeleteWeakHandleOnFinalization);
+  Dart_ExitScope();
+  Dart_ShutdownIsolate();
+  EXPECT(peer == 42);
+}
+
+VM_UNIT_TEST_CASE(DartAPI_FinalizableHandlesCallbackShutdown) {
+  TestCase::CreateTestIsolate();
+  Dart_EnterScope();
+  Dart_Handle ref = Dart_True();
+  int peer = 1234;
+  Dart_NewFinalizableHandle(ref, &peer, 0, FinalizableHandlePeerFinalizer);
   Dart_ExitScope();
   Dart_ShutdownIsolate();
   EXPECT(peer == 42);
 }
 
 TEST_CASE(DartAPI_WeakPersistentHandleExternalAllocationSize) {
-  Heap* heap = Isolate::Current()->heap();
+  Heap* heap = IsolateGroup::Current()->heap();
   EXPECT(heap->ExternalInWords(Heap::kNew) == 0);
   EXPECT(heap->ExternalInWords(Heap::kOld) == 0);
   Dart_WeakPersistentHandle weak1 = NULL;
@@ -3184,35 +3746,74 @@ TEST_CASE(DartAPI_WeakPersistentHandleExternalAllocationSize) {
     weak2 = Dart_NewWeakPersistentHandle(obj, NULL, kWeak2ExternalSize,
                                          NopCallback);
     EXPECT_VALID(AsHandle(strong_ref));
+    EXPECT_VALID(AsHandle(weak2));
     Dart_ExitScope();
   }
   {
     TransitionNativeToVM transition(thread);
-    Isolate::Current()->heap()->CollectGarbage(Heap::kOld);
+    GCTestHelper::CollectOldSpace();
     EXPECT(heap->ExternalInWords(Heap::kNew) ==
            (kWeak1ExternalSize + kWeak2ExternalSize) / kWordSize);
     // Collect weakly referenced string, and promote strongly referenced string.
     GCTestHelper::CollectNewSpace();
     GCTestHelper::CollectNewSpace();
-    GCTestHelper::WaitForGCTasks();
     EXPECT(heap->ExternalInWords(Heap::kNew) == 0);
     EXPECT(heap->ExternalInWords(Heap::kOld) == kWeak2ExternalSize / kWordSize);
   }
-  Dart_Isolate isolate = reinterpret_cast<Dart_Isolate>(Isolate::Current());
-  Dart_DeleteWeakPersistentHandle(isolate, weak1);
-  Dart_DeleteWeakPersistentHandle(isolate, weak2);
   Dart_DeletePersistentHandle(strong_ref);
   {
     TransitionNativeToVM transition(thread);
-    Isolate::Current()->heap()->CollectGarbage(Heap::kOld);
-    GCTestHelper::WaitForGCTasks();
+    GCTestHelper::CollectOldSpace();
+    EXPECT(heap->ExternalInWords(Heap::kOld) == 0);
+  }
+  Dart_DeleteWeakPersistentHandle(weak1);
+  Dart_DeleteWeakPersistentHandle(weak2);
+}
+
+TEST_CASE(DartAPI_FinalizableHandleExternalAllocationSize) {
+  Heap* heap = IsolateGroup::Current()->heap();
+  EXPECT(heap->ExternalInWords(Heap::kNew) == 0);
+  EXPECT(heap->ExternalInWords(Heap::kOld) == 0);
+  static const intptr_t kWeak1ExternalSize = 1 * KB;
+  {
+    Dart_EnterScope();
+    Dart_Handle obj = NewString("weakly referenced string");
+    EXPECT_VALID(obj);
+    Dart_NewFinalizableHandle(obj, nullptr, kWeak1ExternalSize, NopCallback);
+    Dart_ExitScope();
+  }
+  Dart_PersistentHandle strong_ref = nullptr;
+  static const intptr_t kWeak2ExternalSize = 2 * KB;
+  {
+    Dart_EnterScope();
+    Dart_Handle obj = NewString("strongly referenced string");
+    EXPECT_VALID(obj);
+    strong_ref = Dart_NewPersistentHandle(obj);
+    Dart_NewFinalizableHandle(obj, nullptr, kWeak2ExternalSize, NopCallback);
+    EXPECT_VALID(AsHandle(strong_ref));
+    Dart_ExitScope();
+  }
+  {
+    TransitionNativeToVM transition(thread);
+    GCTestHelper::CollectOldSpace();
+    EXPECT(heap->ExternalInWords(Heap::kNew) ==
+           (kWeak1ExternalSize + kWeak2ExternalSize) / kWordSize);
+    // Collect weakly referenced string, and promote strongly referenced string.
+    GCTestHelper::CollectNewSpace();
+    GCTestHelper::CollectNewSpace();
+    EXPECT(heap->ExternalInWords(Heap::kNew) == 0);
+    EXPECT(heap->ExternalInWords(Heap::kOld) == kWeak2ExternalSize / kWordSize);
+  }
+  Dart_DeletePersistentHandle(strong_ref);
+  {
+    TransitionNativeToVM transition(thread);
+    GCTestHelper::CollectOldSpace();
     EXPECT(heap->ExternalInWords(Heap::kOld) == 0);
   }
 }
 
 TEST_CASE(DartAPI_WeakPersistentHandleExternalAllocationSizeNewspaceGC) {
-  Dart_Isolate isolate = reinterpret_cast<Dart_Isolate>(Isolate::Current());
-  Heap* heap = Isolate::Current()->heap();
+  Heap* heap = IsolateGroup::Current()->heap();
   Dart_WeakPersistentHandle weak1 = NULL;
   // Large enough to exceed any new space limit. Not actually allocated.
   const intptr_t kWeak1ExternalSize = 500 * MB;
@@ -3230,7 +3831,7 @@ TEST_CASE(DartAPI_WeakPersistentHandleExternalAllocationSizeNewspaceGC) {
     Dart_WeakPersistentHandle trigger =
         Dart_NewWeakPersistentHandle(obj, NULL, 1, NopCallback);
     EXPECT_VALID(AsHandle(trigger));
-    Dart_DeleteWeakPersistentHandle(isolate, trigger);
+    Dart_DeleteWeakPersistentHandle(trigger);
     // After the two scavenges above, 'obj' should now be promoted, hence its
     // external size charged to old space.
     {
@@ -3245,23 +3846,69 @@ TEST_CASE(DartAPI_WeakPersistentHandleExternalAllocationSizeNewspaceGC) {
     EXPECT(heap->ExternalInWords(Heap::kOld) == kWeak1ExternalSize / kWordSize);
     Dart_ExitScope();
   }
-  Dart_DeleteWeakPersistentHandle(isolate, weak1);
+  Dart_DeleteWeakPersistentHandle(weak1);
   {
     TransitionNativeToVM transition(thread);
-    Isolate::Current()->heap()->CollectGarbage(Heap::kOld);
-    GCTestHelper::WaitForGCTasks();
-    EXPECT(heap->ExternalInWords(Heap::kOld) == 0);
+    GCTestHelper::CollectOldSpace();
+    EXPECT_EQ(0, heap->ExternalInWords(Heap::kOld));
+  }
+}
+
+TEST_CASE(DartAPI_FinalizableHandleExternalAllocationSizeNewspaceGC) {
+  Heap* heap = IsolateGroup::Current()->heap();
+  Dart_FinalizableHandle weak1 = nullptr;
+  Dart_PersistentHandle strong1 = nullptr;
+  // Large enough to exceed any new space limit. Not actually allocated.
+  const intptr_t kWeak1ExternalSize = 500 * MB;
+  {
+    Dart_EnterScope();
+    Dart_Handle obj = NewString("weakly referenced string");
+    EXPECT_VALID(obj);
+    // Triggers a scavenge immediately, since kWeak1ExternalSize is above limit.
+    weak1 = Dart_NewFinalizableHandle(obj, nullptr, kWeak1ExternalSize,
+                                      NopCallback);
+    strong1 = Dart_NewPersistentHandle(obj);
+    // ... but the object is still alive and not yet promoted, so external size
+    // in new space is still above the limit. Thus, even the following tiny
+    // external allocation will trigger another scavenge.
+    Dart_FinalizableHandle trigger =
+        Dart_NewFinalizableHandle(obj, nullptr, 1, NopCallback);
+    Dart_DeleteFinalizableHandle(trigger, obj);
+    // After the two scavenges above, 'obj' should now be promoted, hence its
+    // external size charged to old space.
+    {
+      CHECK_API_SCOPE(thread);
+      TransitionNativeToVM transition(thread);
+      HANDLESCOPE(thread);
+      String& handle = String::Handle(thread->zone());
+      handle ^= Api::UnwrapHandle(obj);
+      EXPECT(handle.IsOld());
+    }
+    EXPECT(heap->ExternalInWords(Heap::kNew) == 0);
+    EXPECT(heap->ExternalInWords(Heap::kOld) == kWeak1ExternalSize / kWordSize);
+    Dart_ExitScope();
+  }
+  Dart_DeleteFinalizableHandle(weak1, strong1);
+  Dart_DeletePersistentHandle(strong1);
+  {
+    TransitionNativeToVM transition(thread);
+    GCTestHelper::CollectOldSpace();
+    EXPECT_EQ(0, heap->ExternalInWords(Heap::kOld));
   }
 }
 
 TEST_CASE(DartAPI_WeakPersistentHandleExternalAllocationSizeOldspaceGC) {
   // Check that external allocation in old space can trigger GC.
-  Isolate* isolate = Isolate::Current();
+  Heap* heap = IsolateGroup::Current()->heap();
   Dart_EnterScope();
   Dart_Handle live = AllocateOldString("live");
   EXPECT_VALID(live);
   Dart_WeakPersistentHandle weak = NULL;
-  EXPECT_EQ(0, isolate->heap()->ExternalInWords(Heap::kOld));
+  {
+    TransitionNativeToVM transition(thread);
+    GCTestHelper::WaitForGCTasks();  // Finalize GC for accurate live size.
+    EXPECT_EQ(0, heap->ExternalInWords(Heap::kOld));
+  }
   const intptr_t kSmallExternalSize = 1 * KB;
   {
     Dart_EnterScope();
@@ -3272,19 +3919,66 @@ TEST_CASE(DartAPI_WeakPersistentHandleExternalAllocationSizeOldspaceGC) {
     EXPECT_VALID(AsHandle(weak));
     Dart_ExitScope();
   }
-  EXPECT_EQ(kSmallExternalSize,
-            isolate->heap()->ExternalInWords(Heap::kOld) * kWordSize);
+  {
+    TransitionNativeToVM transition(thread);
+    GCTestHelper::WaitForGCTasks();  // Finalize GC for accurate live size.
+    EXPECT_EQ(kSmallExternalSize,
+              heap->ExternalInWords(Heap::kOld) * kWordSize);
+  }
   // Large enough to trigger GC in old space. Not actually allocated.
   const intptr_t kHugeExternalSize = (kWordSize == 4) ? 513 * MB : 1025 * MB;
-  Dart_NewWeakPersistentHandle(live, NULL, kHugeExternalSize, NopCallback);
-  // Expect small garbage to be collected.
-  EXPECT_EQ(kHugeExternalSize,
-            isolate->heap()->ExternalInWords(Heap::kOld) * kWordSize);
+  Dart_WeakPersistentHandle weak2 =
+      Dart_NewWeakPersistentHandle(live, NULL, kHugeExternalSize, NopCallback);
+  {
+    TransitionNativeToVM transition(thread);
+    GCTestHelper::WaitForGCTasks();  // Finalize GC for accurate live size.
+    // Expect small garbage to be collected.
+    EXPECT_EQ(kHugeExternalSize, heap->ExternalInWords(Heap::kOld) * kWordSize);
+  }
+  Dart_ExitScope();
+  Dart_DeleteWeakPersistentHandle(weak);
+  Dart_DeleteWeakPersistentHandle(weak2);
+}
+
+TEST_CASE(DartAPI_FinalizableHandleExternalAllocationSizeOldspaceGC) {
+  // Check that external allocation in old space can trigger GC.
+  Heap* heap = IsolateGroup::Current()->heap();
+  Dart_EnterScope();
+  Dart_Handle live = AllocateOldString("live");
+  EXPECT_VALID(live);
+  {
+    TransitionNativeToVM transition(thread);
+    GCTestHelper::WaitForGCTasks();  // Finalize GC for accurate live size.
+    EXPECT_EQ(0, heap->ExternalInWords(Heap::kOld));
+  }
+  const intptr_t kSmallExternalSize = 1 * KB;
+  {
+    Dart_EnterScope();
+    Dart_Handle dead = AllocateOldString("dead");
+    EXPECT_VALID(dead);
+    Dart_NewFinalizableHandle(dead, nullptr, kSmallExternalSize, NopCallback);
+    Dart_ExitScope();
+  }
+  {
+    TransitionNativeToVM transition(thread);
+    GCTestHelper::WaitForGCTasks();  // Finalize GC for accurate live size.
+    EXPECT_EQ(kSmallExternalSize,
+              heap->ExternalInWords(Heap::kOld) * kWordSize);
+  }
+  // Large enough to trigger GC in old space. Not actually allocated.
+  const intptr_t kHugeExternalSize = (kWordSize == 4) ? 513 * MB : 1025 * MB;
+  Dart_NewFinalizableHandle(live, nullptr, kHugeExternalSize, NopCallback);
+  {
+    TransitionNativeToVM transition(thread);
+    GCTestHelper::WaitForGCTasks();  // Finalize GC for accurate live size.
+    // Expect small garbage to be collected.
+    EXPECT_EQ(kHugeExternalSize, heap->ExternalInWords(Heap::kOld) * kWordSize);
+  }
   Dart_ExitScope();
 }
 
 TEST_CASE(DartAPI_WeakPersistentHandleExternalAllocationSizeOddReferents) {
-  Heap* heap = Isolate::Current()->heap();
+  Heap* heap = IsolateGroup::Current()->heap();
   Dart_WeakPersistentHandle weak1 = NULL;
   static const intptr_t kWeak1ExternalSize = 1 * KB;
   Dart_WeakPersistentHandle weak2 = NULL;
@@ -3307,15 +4001,169 @@ TEST_CASE(DartAPI_WeakPersistentHandleExternalAllocationSizeOddReferents) {
            (kWeak1ExternalSize + kWeak2ExternalSize) / kWordSize);
     Dart_ExitScope();
   }
-  Dart_Isolate isolate = reinterpret_cast<Dart_Isolate>(Isolate::Current());
-  Dart_DeleteWeakPersistentHandle(isolate, weak1);
-  Dart_DeleteWeakPersistentHandle(isolate, weak2);
+  Dart_DeleteWeakPersistentHandle(weak1);
+  Dart_DeleteWeakPersistentHandle(weak2);
   EXPECT_EQ(0, heap->ExternalInWords(Heap::kOld));
   {
     TransitionNativeToVM transition(thread);
-    Isolate::Current()->heap()->CollectGarbage(Heap::kOld);
+    GCTestHelper::CollectOldSpace();
     EXPECT_EQ(0, heap->ExternalInWords(Heap::kOld));
   }
+}
+
+TEST_CASE(DartAPI_FinalizableHandleExternalAllocationSizeOddReferents) {
+  Heap* heap = IsolateGroup::Current()->heap();
+  Dart_FinalizableHandle weak1 = nullptr;
+  Dart_PersistentHandle strong1 = nullptr;
+  static const intptr_t kWeak1ExternalSize = 1 * KB;
+  Dart_FinalizableHandle weak2 = nullptr;
+  Dart_PersistentHandle strong2 = nullptr;
+  static const intptr_t kWeak2ExternalSize = 2 * KB;
+  EXPECT_EQ(0, heap->ExternalInWords(Heap::kOld));
+  {
+    Dart_EnterScope();
+    Dart_Handle dart_true = Dart_True();  // VM heap object.
+    EXPECT_VALID(dart_true);
+    weak1 = Dart_NewFinalizableHandle(dart_true, nullptr, kWeak1ExternalSize,
+                                      UnreachedCallback);
+    strong1 = Dart_NewPersistentHandle(dart_true);
+    Dart_Handle zero = Dart_False();  // VM heap object.
+    EXPECT_VALID(zero);
+    weak2 = Dart_NewFinalizableHandle(zero, nullptr, kWeak2ExternalSize,
+                                      UnreachedCallback);
+    strong2 = Dart_NewPersistentHandle(zero);
+    // Both should be charged to old space.
+    EXPECT(heap->ExternalInWords(Heap::kOld) ==
+           (kWeak1ExternalSize + kWeak2ExternalSize) / kWordSize);
+    Dart_ExitScope();
+  }
+  Dart_DeleteFinalizableHandle(weak1, strong1);
+  Dart_DeletePersistentHandle(strong1);
+  Dart_DeleteFinalizableHandle(weak2, strong2);
+  Dart_DeletePersistentHandle(strong2);
+  EXPECT_EQ(0, heap->ExternalInWords(Heap::kOld));
+  {
+    TransitionNativeToVM transition(thread);
+    GCTestHelper::CollectOldSpace();
+    EXPECT_EQ(0, heap->ExternalInWords(Heap::kOld));
+  }
+}
+
+#define EXAMPLE_RESOURCE_NATIVE_LIST(V)                                        \
+  V(ExampleResource_Allocate, 1)                                               \
+  V(ExampleResource_Use, 1)                                                    \
+  V(ExampleResource_Dispose, 1)
+
+EXAMPLE_RESOURCE_NATIVE_LIST(DECLARE_FUNCTION);
+
+static struct NativeEntries {
+  const char* name_;
+  Dart_NativeFunction function_;
+  int argument_count_;
+} ExampleResourceEntries[] = {EXAMPLE_RESOURCE_NATIVE_LIST(REGISTER_FUNCTION)};
+
+static Dart_NativeFunction ExampleResourceNativeResolver(
+    Dart_Handle name,
+    int argument_count,
+    bool* auto_setup_scope) {
+  const char* function_name = nullptr;
+  Dart_Handle result = Dart_StringToCString(name, &function_name);
+  ASSERT(!Dart_IsError(result));
+  ASSERT(function_name != nullptr);
+  ASSERT(auto_setup_scope != nullptr);
+  *auto_setup_scope = true;
+  int num_entries =
+      sizeof(ExampleResourceEntries) / sizeof(struct NativeEntries);
+  for (int i = 0; i < num_entries; i++) {
+    struct NativeEntries* entry = &(ExampleResourceEntries[i]);
+    if ((strcmp(function_name, entry->name_) == 0) &&
+        (entry->argument_count_ == argument_count)) {
+      return reinterpret_cast<Dart_NativeFunction>(entry->function_);
+    }
+  }
+  return nullptr;
+}
+
+struct ExampleResource {
+  Dart_FinalizableHandle self;
+  void* lots_of_memory;
+};
+
+void ExampleResourceFinalizer(void* isolate_peer, void* peer) {
+  ExampleResource* resource = reinterpret_cast<ExampleResource*>(peer);
+  free(resource->lots_of_memory);
+  delete resource;
+}
+
+void FUNCTION_NAME(ExampleResource_Allocate)(Dart_NativeArguments native_args) {
+  Dart_Handle receiver = Dart_GetNativeArgument(native_args, 0);
+  intptr_t external_size = 10 * MB;
+  ExampleResource* resource = new ExampleResource();
+  resource->lots_of_memory = malloc(external_size);
+  resource->self = Dart_NewFinalizableHandle(receiver, resource, external_size,
+                                             ExampleResourceFinalizer);
+  EXPECT_VALID(Dart_SetNativeInstanceField(
+      receiver, 0, reinterpret_cast<intptr_t>(resource)));
+  // Some pretend resource initialization.
+  *reinterpret_cast<uint8_t*>(resource->lots_of_memory) = 123;
+}
+
+void FUNCTION_NAME(ExampleResource_Use)(Dart_NativeArguments native_args) {
+  Dart_Handle receiver = Dart_GetNativeArgument(native_args, 0);
+  intptr_t native_field = 0;
+  EXPECT_VALID(Dart_GetNativeInstanceField(receiver, 0, &native_field));
+  ExampleResource* resource = reinterpret_cast<ExampleResource*>(native_field);
+  if (resource->lots_of_memory == nullptr) {
+    Dart_ThrowException(Dart_NewStringFromCString(
+        "Attempt to use a disposed ExampleResource!"));
+    UNREACHABLE();
+  } else {
+    // Some pretend resource use.
+    EXPECT_EQ(123, *reinterpret_cast<uint8_t*>(resource->lots_of_memory));
+  }
+}
+
+void FUNCTION_NAME(ExampleResource_Dispose)(Dart_NativeArguments native_args) {
+  Dart_Handle receiver = Dart_GetNativeArgument(native_args, 0);
+  intptr_t native_field = 0;
+  EXPECT_VALID(Dart_GetNativeInstanceField(receiver, 0, &native_field));
+  ExampleResource* resource = reinterpret_cast<ExampleResource*>(native_field);
+  if (resource->lots_of_memory != nullptr) {
+    free(resource->lots_of_memory);
+    resource->lots_of_memory = nullptr;
+    Dart_UpdateFinalizableExternalSize(resource->self, receiver, 0);
+  }
+}
+
+TEST_CASE(DartAPI_WeakPersistentHandleUpdateSize) {
+  const char* kScriptChars = R"(
+    import "dart:nativewrappers";
+    class ExampleResource extends NativeFieldWrapperClass1 {
+      ExampleResource() { _allocate(); }
+      void _allocate() native "ExampleResource_Allocate";
+      void use() native "ExampleResource_Use";
+      void dispose() native "ExampleResource_Dispose";
+    }
+    main() {
+      var res = new ExampleResource();
+      res.use();
+      res.dispose();
+      res.dispose();  // Idempotent
+      bool threw = false;
+      try {
+        res.use();
+      } catch (_) {
+        threw = true;
+      }
+      if (!threw) {
+        throw "Exception expected";
+      }
+    }
+  )";
+
+  Dart_Handle lib =
+      TestCase::LoadTestScript(kScriptChars, ExampleResourceNativeResolver);
+  EXPECT_VALID(Dart_Invoke(lib, NewString("main"), 0, NULL));
 }
 
 static Dart_WeakPersistentHandle weak1 = NULL;
@@ -3323,13 +4171,12 @@ static Dart_WeakPersistentHandle weak2 = NULL;
 static Dart_WeakPersistentHandle weak3 = NULL;
 
 static void ImplicitReferencesCallback(void* isolate_callback_data,
-                                       Dart_WeakPersistentHandle handle,
                                        void* peer) {
-  if (handle == weak1) {
+  if (peer == &weak1) {
     weak1 = NULL;
-  } else if (handle == weak2) {
+  } else if (peer == &weak2) {
     weak2 = NULL;
-  } else if (handle == weak3) {
+  } else if (peer == &weak3) {
     weak3 = NULL;
   }
 }
@@ -3354,19 +4201,19 @@ TEST_CASE(DartAPI_ImplicitReferencesOldSpace) {
 
     weak1 =
         Dart_NewWeakPersistentHandle(AllocateOldString("weakly reachable 1"),
-                                     NULL, 0, ImplicitReferencesCallback);
+                                     &weak1, 0, ImplicitReferencesCallback);
     EXPECT(!Dart_IsNull(AsHandle(weak1)));
     EXPECT_VALID(AsHandle(weak1));
 
     weak2 =
         Dart_NewWeakPersistentHandle(AllocateOldString("weakly reachable 2"),
-                                     NULL, 0, ImplicitReferencesCallback);
+                                     &weak2, 0, ImplicitReferencesCallback);
     EXPECT(!Dart_IsNull(AsHandle(weak2)));
     EXPECT_VALID(AsHandle(weak2));
 
     weak3 =
         Dart_NewWeakPersistentHandle(AllocateOldString("weakly reachable 3"),
-                                     NULL, 0, ImplicitReferencesCallback);
+                                     &weak3, 0, ImplicitReferencesCallback);
     EXPECT(!Dart_IsNull(AsHandle(weak3)));
     EXPECT_VALID(AsHandle(weak3));
   }
@@ -3395,6 +4242,11 @@ TEST_CASE(DartAPI_ImplicitReferencesOldSpace) {
     EXPECT(!Dart_IsNull(AsHandle(weak3)));
     Dart_ExitScope();
   }
+
+  Dart_DeleteWeakPersistentHandle(strong_weak);
+  Dart_DeleteWeakPersistentHandle(weak1);
+  Dart_DeleteWeakPersistentHandle(weak2);
+  Dart_DeleteWeakPersistentHandle(weak3);
 }
 
 TEST_CASE(DartAPI_ImplicitReferencesNewSpace) {
@@ -3417,19 +4269,19 @@ TEST_CASE(DartAPI_ImplicitReferencesNewSpace) {
 
     weak1 =
         Dart_NewWeakPersistentHandle(AllocateNewString("weakly reachable 1"),
-                                     NULL, 0, ImplicitReferencesCallback);
+                                     &weak1, 0, ImplicitReferencesCallback);
     EXPECT(!Dart_IsNull(AsHandle(weak1)));
     EXPECT_VALID(AsHandle(weak1));
 
     weak2 =
         Dart_NewWeakPersistentHandle(AllocateNewString("weakly reachable 2"),
-                                     NULL, 0, ImplicitReferencesCallback);
+                                     &weak2, 0, ImplicitReferencesCallback);
     EXPECT(!Dart_IsNull(AsHandle(weak2)));
     EXPECT_VALID(AsHandle(weak2));
 
     weak3 =
         Dart_NewWeakPersistentHandle(AllocateNewString("weakly reachable 3"),
-                                     NULL, 0, ImplicitReferencesCallback);
+                                     &weak3, 0, ImplicitReferencesCallback);
     EXPECT(!Dart_IsNull(AsHandle(weak3)));
     EXPECT_VALID(AsHandle(weak3));
   }
@@ -3446,7 +4298,7 @@ TEST_CASE(DartAPI_ImplicitReferencesNewSpace) {
 
   {
     TransitionNativeToVM transition(thread);
-    Isolate::Current()->heap()->CollectGarbage(Heap::kOld);
+    GCTestHelper::CollectOldSpace();
   }
 
   {
@@ -3457,6 +4309,11 @@ TEST_CASE(DartAPI_ImplicitReferencesNewSpace) {
     EXPECT(!Dart_IsNull(AsHandle(weak3)));
     Dart_ExitScope();
   }
+
+  Dart_DeleteWeakPersistentHandle(strong_weak);
+  Dart_DeleteWeakPersistentHandle(weak1);
+  Dart_DeleteWeakPersistentHandle(weak2);
+  Dart_DeleteWeakPersistentHandle(weak3);
 }
 
 // Unit test for creating multiple scopes and local handles within them.
@@ -3470,8 +4327,8 @@ VM_UNIT_TEST_CASE(DartAPI_LocalHandles) {
   ApiLocalScope* scope = thread->api_top_scope();
   Dart_Handle handles[300];
   {
-    StackZone zone(thread);
     TransitionNativeToVM transition1(thread);
+    StackZone zone(thread);
     HANDLESCOPE(thread);
     Smi& val = Smi::Handle();
     TransitionVMToNative transition2(thread);
@@ -3519,7 +4376,6 @@ VM_UNIT_TEST_CASE(DartAPI_LocalHandles) {
           }
           EXPECT_EQ(300, thread->CountLocalHandles());
         }
-        VERIFY_ON_TRANSITION;
         Dart_ExitScope();
       }
       EXPECT_EQ(200, thread->CountLocalHandles());
@@ -3585,37 +4441,57 @@ VM_UNIT_TEST_CASE(DartAPI_Isolates) {
   Dart_Isolate isolate = Dart_CurrentIsolate();
   EXPECT_EQ(iso_1, isolate);
   Dart_ExitIsolate();
-  EXPECT(NULL == Dart_CurrentIsolate());
+  EXPECT_NULLPTR(Dart_CurrentIsolate());
   Dart_Isolate iso_2 = TestCase::CreateTestIsolate();
   EXPECT_EQ(iso_2, Dart_CurrentIsolate());
   Dart_ExitIsolate();
-  EXPECT(NULL == Dart_CurrentIsolate());
+  EXPECT_NULLPTR(Dart_CurrentIsolate());
   Dart_EnterIsolate(iso_2);
   EXPECT_EQ(iso_2, Dart_CurrentIsolate());
   Dart_ShutdownIsolate();
-  EXPECT(NULL == Dart_CurrentIsolate());
+  EXPECT_NULLPTR(Dart_CurrentIsolate());
   Dart_EnterIsolate(iso_1);
   EXPECT_EQ(iso_1, Dart_CurrentIsolate());
   Dart_ShutdownIsolate();
-  EXPECT(NULL == Dart_CurrentIsolate());
+  EXPECT_NULLPTR(Dart_CurrentIsolate());
+}
+
+VM_UNIT_TEST_CASE(DartAPI_IsolateGroups) {
+  Dart_Isolate iso_1 = TestCase::CreateTestIsolate();
+  EXPECT_NOTNULL(Dart_CurrentIsolateGroup());
+  Dart_ExitIsolate();
+  EXPECT_NULLPTR(Dart_CurrentIsolateGroup());
+  Dart_Isolate iso_2 = TestCase::CreateTestIsolate();
+  EXPECT_NOTNULL(Dart_CurrentIsolateGroup());
+  Dart_ExitIsolate();
+  EXPECT_NULLPTR(Dart_CurrentIsolateGroup());
+  Dart_EnterIsolate(iso_2);
+  EXPECT_NOTNULL(Dart_CurrentIsolateGroup());
+  Dart_ShutdownIsolate();
+  EXPECT_NULLPTR(Dart_CurrentIsolateGroup());
+  Dart_EnterIsolate(iso_1);
+  EXPECT_NOTNULL(Dart_CurrentIsolateGroup());
+  Dart_ShutdownIsolate();
+  EXPECT_NULLPTR(Dart_CurrentIsolateGroup());
 }
 
 VM_UNIT_TEST_CASE(DartAPI_CurrentIsolateData) {
   Dart_IsolateShutdownCallback saved_shutdown = Isolate::ShutdownCallback();
-  Dart_IsolateCleanupCallback saved_cleanup = Isolate::CleanupCallback();
+  Dart_IsolateGroupCleanupCallback saved_cleanup =
+      Isolate::GroupCleanupCallback();
   Isolate::SetShutdownCallback(NULL);
-  Isolate::SetCleanupCallback(NULL);
+  Isolate::SetGroupCleanupCallback(NULL);
 
   intptr_t mydata = 12345;
   Dart_Isolate isolate =
       TestCase::CreateTestIsolate(NULL, reinterpret_cast<void*>(mydata));
   EXPECT(isolate != NULL);
-  EXPECT_EQ(mydata, reinterpret_cast<intptr_t>(Dart_CurrentIsolateData()));
-  EXPECT_EQ(mydata, reinterpret_cast<intptr_t>(Dart_IsolateData(isolate)));
+  EXPECT_EQ(mydata, reinterpret_cast<intptr_t>(Dart_CurrentIsolateGroupData()));
+  EXPECT_EQ(mydata, reinterpret_cast<intptr_t>(Dart_IsolateGroupData(isolate)));
   Dart_ShutdownIsolate();
 
   Isolate::SetShutdownCallback(saved_shutdown);
-  Isolate::SetCleanupCallback(saved_cleanup);
+  Isolate::SetGroupCleanupCallback(saved_cleanup);
 }
 
 static Dart_Handle LoadScript(const char* url_str, const char* source) {
@@ -3630,60 +4506,19 @@ static Dart_Handle LoadScript(const char* url_str, const char* source) {
   return Dart_LoadScriptFromKernel(kernel_buffer, kernel_buffer_size);
 }
 
-VM_UNIT_TEST_CASE(DartAPI_IsolateSetCheckedMode) {
-  const char* kScriptChars =
-      "int bad1() {\n"
-      "  int foo = 'string';\n"
-      "  return foo;\n"
-      "}\n"
-      "\n"
-      "int good1() {\n"
-      "  int five = 5;\n"
-      "  return five;"
-      "}\n";
-
-  // Create an isolate with checked mode flags.
-  Dart_IsolateFlags api_flags;
-  Isolate::FlagsInitialize(&api_flags);
-  api_flags.enable_asserts = true;
-  char* err;
-  Dart_Isolate isolate =
-      Dart_CreateIsolate(NULL, NULL, bin::core_isolate_snapshot_data,
-                         bin::core_isolate_snapshot_instructions, NULL, NULL,
-                         &api_flags, NULL, &err);
-  if (isolate == NULL) {
-    OS::PrintErr("Creation of isolate failed '%s'\n", err);
-    free(err);
-  }
-  EXPECT(isolate != NULL);
-
-  {
-    Dart_Handle result;
-    Dart_EnterScope();
-    Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
-    EXPECT_VALID(lib);
-    result = Dart_FinalizeLoading(false);
-    EXPECT_VALID(result);
-    result = Dart_Invoke(lib, NewString("bad1"), 0, NULL);
-    EXPECT_ERROR(result,
-                 "Unhandled exception:\n"
-                 "type 'String' is not a subtype of type 'int' of 'foo'");
-
-    result = Dart_Invoke(lib, NewString("good1"), 0, NULL);
-    EXPECT_VALID(result);
-    Dart_ExitScope();
-  }
-
-  EXPECT(isolate != NULL);
-
-  // Shutdown the isolate.
-  Dart_ShutdownIsolate();
-}
-
 TEST_CASE(DartAPI_DebugName) {
   Dart_Handle debug_name = Dart_DebugName();
   EXPECT_VALID(debug_name);
   EXPECT(Dart_IsString(debug_name));
+}
+
+TEST_CASE(DartAPI_IsolateServiceID) {
+  Dart_Isolate isolate = Dart_CurrentIsolate();
+  const char* id = Dart_IsolateServiceId(isolate);
+  EXPECT(id != NULL);
+  int64_t main_port = Dart_GetMainPortId();
+  EXPECT_STREQ(ZONE_STR("isolates/%" Pd64, main_port), id);
+  free(const_cast<char*>(id));
 }
 
 static void MyMessageNotifyCallback(Dart_Isolate dest_isolate) {}
@@ -3738,15 +4573,20 @@ TEST_CASE(DartAPI_TypeGetNonParamtericTypes) {
   bool instanceOf = false;
 
   // First get the type objects of these non parameterized types.
-  Dart_Handle type0 = Dart_GetType(lib, NewString("MyClass0"), 0, NULL);
+  Dart_Handle type0 =
+      Dart_GetNonNullableType(lib, NewString("MyClass0"), 0, NULL);
   EXPECT_VALID(type0);
-  Dart_Handle type1 = Dart_GetType(lib, NewString("MyClass1"), 0, NULL);
+  Dart_Handle type1 =
+      Dart_GetNonNullableType(lib, NewString("MyClass1"), 0, NULL);
   EXPECT_VALID(type1);
-  Dart_Handle type2 = Dart_GetType(lib, NewString("MyClass2"), 0, NULL);
+  Dart_Handle type2 =
+      Dart_GetNonNullableType(lib, NewString("MyClass2"), 0, NULL);
   EXPECT_VALID(type2);
-  Dart_Handle type3 = Dart_GetType(lib, NewString("MyInterface0"), 0, NULL);
+  Dart_Handle type3 =
+      Dart_GetNonNullableType(lib, NewString("MyInterface0"), 0, NULL);
   EXPECT_VALID(type3);
-  Dart_Handle type4 = Dart_GetType(lib, NewString("MyInterface1"), 0, NULL);
+  Dart_Handle type4 =
+      Dart_GetNonNullableType(lib, NewString("MyInterface1"), 0, NULL);
   EXPECT_VALID(type4);
 
   // Now create objects of these non parameterized types and check
@@ -3810,77 +4650,89 @@ TEST_CASE(DartAPI_TypeGetParameterizedTypes) {
       "\n"
       "class MyClass1<A, C> {\n"
       "}\n"
+      "Type type<T>() => T;"
       "MyClass0 getMyClass0() {\n"
       "  return new MyClass0<int, double>();\n"
       "}\n"
       "Type getMyClass0Type() {\n"
-      "  return new MyClass0<int, double>().runtimeType;\n"
+      "  return type<MyClass0<int, double>>();\n"
       "}\n"
       "MyClass1 getMyClass1() {\n"
       "  return new MyClass1<List<int>, List>();\n"
       "}\n"
       "Type getMyClass1Type() {\n"
-      "  return new MyClass1<List<int>, List>().runtimeType;\n"
+      "  return type<MyClass1<List<int>, List>>();\n"
       "}\n"
       "MyClass0 getMyClass0_1() {\n"
       "  return new MyClass0<double, int>();\n"
       "}\n"
       "Type getMyClass0_1Type() {\n"
-      "  return new MyClass0<double, int>().runtimeType;\n"
+      "  return type<MyClass0<double, int>>();\n"
       "}\n"
       "MyClass1 getMyClass1_1() {\n"
       "  return new MyClass1<List<int>, List<double>>();\n"
       "}\n"
       "Type getMyClass1_1Type() {\n"
-      "  return new MyClass1<List<int>, List<double>>().runtimeType;\n"
-      "}\n";
+      "  return type<MyClass1<List<int>, List<double>>>();\n"
+      "}\n"
+      "Type getIntType() { return int; }\n"
+      "Type getDoubleType() { return double; }\n"
+      "Type getListIntType() { return type<List<int>>(); }\n"
+      "Type getListType() { return List; }\n";
 
   Dart_Handle corelib = Dart_LookupLibrary(NewString("dart:core"));
   EXPECT_VALID(corelib);
 
-  // First get type objects of some of the basic types used in the test.
-  Dart_Handle int_type = Dart_GetType(corelib, NewString("int"), 0, NULL);
-  EXPECT_VALID(int_type);
-  Dart_Handle double_type = Dart_GetType(corelib, NewString("double"), 0, NULL);
-  EXPECT_VALID(double_type);
-  Dart_Handle list_type = Dart_GetType(corelib, NewString("List"), 0, NULL);
-  EXPECT_VALID(list_type);
-  Dart_Handle type_args = Dart_NewList(1);
-  EXPECT_VALID(Dart_ListSetAt(type_args, 0, int_type));
-  Dart_Handle list_int_type =
-      Dart_GetType(corelib, NewString("List"), 1, &type_args);
-  EXPECT_VALID(list_int_type);
-
   Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
-  bool instanceOf = false;
 
   // Now instantiate MyClass0 and MyClass1 types with the same type arguments
   // used in the code above.
-  type_args = Dart_NewList(2);
+  Dart_Handle type_args = Dart_NewList(2);
+  Dart_Handle int_type = Dart_Invoke(lib, NewString("getIntType"), 0, NULL);
+  EXPECT_VALID(int_type);
   EXPECT_VALID(Dart_ListSetAt(type_args, 0, int_type));
+  Dart_Handle double_type =
+      Dart_Invoke(lib, NewString("getDoubleType"), 0, NULL);
+  EXPECT_VALID(double_type);
   EXPECT_VALID(Dart_ListSetAt(type_args, 1, double_type));
   Dart_Handle myclass0_type =
-      Dart_GetType(lib, NewString("MyClass0"), 2, &type_args);
+      TestCase::IsNNBD()
+          ? Dart_GetNonNullableType(lib, NewString("MyClass0"), 2, &type_args)
+          : Dart_GetType(lib, NewString("MyClass0"), 2, &type_args);
   EXPECT_VALID(myclass0_type);
 
   type_args = Dart_NewList(2);
+  Dart_Handle list_int_type =
+      Dart_Invoke(lib, NewString("getListIntType"), 0, NULL);
+  EXPECT_VALID(list_int_type);
   EXPECT_VALID(Dart_ListSetAt(type_args, 0, list_int_type));
+  Dart_Handle list_type = Dart_Invoke(lib, NewString("getListType"), 0, NULL);
+  EXPECT_VALID(list_type);
   EXPECT_VALID(Dart_ListSetAt(type_args, 1, list_type));
   Dart_Handle myclass1_type =
-      Dart_GetType(lib, NewString("MyClass1"), 2, &type_args);
+      TestCase::IsNNBD()
+          ? Dart_GetNonNullableType(lib, NewString("MyClass1"), 2, &type_args)
+          : Dart_GetType(lib, NewString("MyClass1"), 2, &type_args);
   EXPECT_VALID(myclass1_type);
 
   // Now create objects of the type and validate the object type matches
   // the one returned above. Also get the runtime type of the object and
-  // verify that it matches the type returned above.
+  // verify that it matches the type returned above. Note: we use
+  // Dart_ObjectEquals instead of Dart_IdentityEquals since we are comparing
+  // type literals with non-literals which would fail in unsound null safety
+  // mode.
   // MyClass0<int, double> type.
   Dart_Handle type0_obj = Dart_Invoke(lib, NewString("getMyClass0"), 0, NULL);
   EXPECT_VALID(type0_obj);
+  bool instanceOf = false;
   EXPECT_VALID(Dart_ObjectIsType(type0_obj, myclass0_type, &instanceOf));
   EXPECT(instanceOf);
   type0_obj = Dart_Invoke(lib, NewString("getMyClass0Type"), 0, NULL);
   EXPECT_VALID(type0_obj);
-  EXPECT(Dart_IdentityEquals(type0_obj, myclass0_type));
+
+  bool equal = false;
+  EXPECT_VALID(Dart_ObjectEquals(type0_obj, myclass0_type, &equal));
+  EXPECT(equal);
 
   // MyClass1<List<int>, List> type.
   Dart_Handle type1_obj = Dart_Invoke(lib, NewString("getMyClass1"), 0, NULL);
@@ -3889,7 +4741,9 @@ TEST_CASE(DartAPI_TypeGetParameterizedTypes) {
   EXPECT(instanceOf);
   type1_obj = Dart_Invoke(lib, NewString("getMyClass1Type"), 0, NULL);
   EXPECT_VALID(type1_obj);
-  EXPECT(Dart_IdentityEquals(type1_obj, myclass1_type));
+
+  EXPECT_VALID(Dart_ObjectEquals(type1_obj, myclass1_type, &equal));
+  EXPECT(equal);
 
   // MyClass0<double, int> type.
   type0_obj = Dart_Invoke(lib, NewString("getMyClass0_1"), 0, NULL);
@@ -3898,7 +4752,8 @@ TEST_CASE(DartAPI_TypeGetParameterizedTypes) {
   EXPECT(!instanceOf);
   type0_obj = Dart_Invoke(lib, NewString("getMyClass0_1Type"), 0, NULL);
   EXPECT_VALID(type0_obj);
-  EXPECT(!Dart_IdentityEquals(type0_obj, myclass0_type));
+  EXPECT_VALID(Dart_ObjectEquals(type0_obj, myclass0_type, &equal));
+  EXPECT(!equal);
 
   // MyClass1<List<int>, List<double>> type.
   type1_obj = Dart_Invoke(lib, NewString("getMyClass1_1"), 0, NULL);
@@ -3907,7 +4762,8 @@ TEST_CASE(DartAPI_TypeGetParameterizedTypes) {
   EXPECT(instanceOf);
   type1_obj = Dart_Invoke(lib, NewString("getMyClass1_1Type"), 0, NULL);
   EXPECT_VALID(type1_obj);
-  EXPECT(!Dart_IdentityEquals(type1_obj, myclass1_type));
+  EXPECT_VALID(Dart_ObjectEquals(type1_obj, myclass1_type, &equal));
+  EXPECT(!equal);
 }
 
 static void TestFieldOk(Dart_Handle container,
@@ -4040,7 +4896,7 @@ TEST_CASE(DartAPI_FieldAccess) {
 
   // Shared setup.
   Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
-  Dart_Handle type = Dart_GetType(lib, NewString("Fields"), 0, NULL);
+  Dart_Handle type = Dart_GetNonNullableType(lib, NewString("Fields"), 0, NULL);
   EXPECT_VALID(type);
   Dart_Handle instance = Dart_Invoke(lib, NewString("test"), 0, NULL);
   EXPECT_VALID(instance);
@@ -4223,9 +5079,8 @@ TEST_CASE(DartAPI_SetField_FunnyValue) {
 
   // Pass a non-instance handle.
   result = Dart_SetField(lib, name, lib);
-  EXPECT(Dart_IsError(result));
-  EXPECT_STREQ("Dart_SetField expects argument 'value' to be of type Instance.",
-               Dart_GetError(result));
+  EXPECT_ERROR(
+      result, "Dart_SetField expects argument 'value' to be of type Instance.");
 
   // Pass an error handle.  The error is contagious.
   result = Dart_SetField(lib, name, Api::NewError("myerror"));
@@ -4234,7 +5089,8 @@ TEST_CASE(DartAPI_SetField_FunnyValue) {
 }
 
 TEST_CASE(DartAPI_SetField_BadType) {
-  const char* kScriptChars = "int foo;\n";
+  const char* kScriptChars =
+      TestCase::IsNNBD() ? "late int foo;\n" : "int foo;\n";
   Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
   Dart_Handle name = NewString("foo");
   Dart_Handle result = Dart_SetField(lib, name, Dart_True());
@@ -4252,26 +5108,31 @@ static Dart_NativeFunction native_field_lookup(Dart_Handle name,
                                                bool* auto_setup_scope) {
   ASSERT(auto_setup_scope != NULL);
   *auto_setup_scope = false;
-  return reinterpret_cast<Dart_NativeFunction>(&NativeFieldLookup);
+  return NativeFieldLookup;
 }
 
 TEST_CASE(DartAPI_InjectNativeFields2) {
-  const char* kScriptChars =
-      "class NativeFields extends NativeFieldsWrapper {\n"
-      "  NativeFields(int i, int j) : fld1 = i, fld2 = j {}\n"
-      "  int fld1;\n"
-      "  final int fld2;\n"
-      "  static int fld3;\n"
-      "  static const int fld4 = 10;\n"
-      "}\n"
-      "NativeFields testMain() {\n"
-      "  NativeFields obj = new NativeFields(10, 20);\n"
-      "  return obj;\n"
-      "}\n";
+  // clang-format off
+  auto kScriptChars = Utils::CStringUniquePtr(
+      OS::SCreate(nullptr,
+                  "class NativeFields extends NativeFieldsWrapper {\n"
+                  "  NativeFields(int i, int j) : fld1 = i, fld2 = j {}\n"
+                  "  int fld1;\n"
+                  "  final int fld;\n"
+                  "  static int%s fld3;\n"
+                  "  static const int fld4 = 10;\n"
+                  "}\n"
+                  "NativeFields testMain() {\n"
+                  "  NativeFields obj = new NativeFields(10, 20);\n"
+                  "  return obj;\n"
+                  "}\n",
+                  TestCase::NullableTag()), std::free);
+  // clang-format on
+
   Dart_Handle result;
   // Create a test library and Load up a test script in it.
   Dart_Handle lib =
-      TestCase::LoadTestScript(kScriptChars, NULL, USER_TEST_URI, false);
+      TestCase::LoadTestScript(kScriptChars.get(), NULL, USER_TEST_URI, false);
 
   // Invoke a function which returns an object of type NativeFields.
   result = Dart_Invoke(lib, NewString("testMain"), 0, NULL);
@@ -4283,24 +5144,29 @@ TEST_CASE(DartAPI_InjectNativeFields2) {
 }
 
 TEST_CASE(DartAPI_InjectNativeFields3) {
-  const char* kScriptChars =
-      "import 'dart:nativewrappers';"
-      "class NativeFields extends NativeFieldWrapperClass2 {\n"
-      "  NativeFields(int i, int j) : fld1 = i, fld2 = j {}\n"
-      "  int fld1;\n"
-      "  final int fld2;\n"
-      "  static int fld3;\n"
-      "  static const int fld4 = 10;\n"
-      "}\n"
-      "NativeFields testMain() {\n"
-      "  NativeFields obj = new NativeFields(10, 20);\n"
-      "  return obj;\n"
-      "}\n";
+  // clang-format off
+  auto kScriptChars = Utils::CStringUniquePtr(
+      OS::SCreate(nullptr,
+                  "import 'dart:nativewrappers';"
+                  "class NativeFields extends NativeFieldWrapperClass2 {\n"
+                  "  NativeFields(int i, int j) : fld1 = i, fld2 = j {}\n"
+                  "  int fld1;\n"
+                  "  final int fld2;\n"
+                  "  static int%s fld3;\n"
+                  "  static const int fld4 = 10;\n"
+                  "}\n"
+                  "NativeFields testMain() {\n"
+                  "  NativeFields obj = new NativeFields(10, 20);\n"
+                  "  return obj;\n"
+                  "}\n",
+                  TestCase::NullableTag()), std::free);
+  // clang-format on
   Dart_Handle result;
   const int kNumNativeFields = 2;
 
   // Load up a test script in the test library.
-  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, native_field_lookup);
+  Dart_Handle lib =
+      TestCase::LoadTestScript(kScriptChars.get(), native_field_lookup);
 
   // Invoke a function which returns an object of type NativeFields.
   result = Dart_Invoke(lib, NewString("testMain"), 0, NULL);
@@ -4317,30 +5183,33 @@ TEST_CASE(DartAPI_InjectNativeFields3) {
   // (1 + 2) * kWordSize + size of object header.
   // We check to make sure the instance size computed by the VM matches
   // our expectations.
-  intptr_t header_size = sizeof(RawObject);
+  intptr_t header_size = sizeof(UntaggedObject);
   EXPECT_EQ(
       Utils::RoundUp(((1 + 2) * kWordSize) + header_size, kObjectAlignment),
-      cls.instance_size());
+      cls.host_instance_size());
   EXPECT_EQ(kNumNativeFields, cls.num_native_fields());
 }
 
 TEST_CASE(DartAPI_InjectNativeFields4) {
-  const char* kScriptChars =
-      "import 'dart:nativewrappers';"
-      "class NativeFields extends NativeFieldWrapperClass2 {\n"
-      "  NativeFields(int i, int j) : fld1 = i, fld2 = j {}\n"
-      "  int fld1;\n"
-      "  final int fld2;\n"
-      "  static int fld3;\n"
-      "  static const int fld4 = 10;\n"
-      "}\n"
-      "NativeFields testMain() {\n"
-      "  NativeFields obj = new NativeFields(10, 20);\n"
-      "  return obj;\n"
-      "}\n";
+  // clang-format off
+  auto kScriptChars = Utils::CStringUniquePtr(
+      OS::SCreate(nullptr,
+                  "class NativeFields extends NativeFieldsWrapperClass2 {\n"
+                  "  NativeFields(int i, int j) : fld1 = i, fld2 = j {}\n"
+                  "  int fld1;\n"
+                  "  final int fld;\n"
+                  "  static int%s fld3;\n"
+                  "  static const int fld4 = 10;\n"
+                  "}\n"
+                  "NativeFields testMain() {\n"
+                  "  NativeFields obj = new NativeFields(10, 20);\n"
+                  "  return obj;\n"
+                  "}\n",
+                  TestCase::NullableTag()), std::free);
+  // clang-format on
   Dart_Handle result;
   // Load up a test script in the test library.
-  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
+  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars.get(), NULL);
 
   // Invoke a function which returns an object of type NativeFields.
   result = Dart_Invoke(lib, NewString("testMain"), 0, NULL);
@@ -4383,6 +5252,15 @@ void TestNativeFieldsAccess_access(Dart_NativeArguments args) {
   EXPECT_EQ(0, field_values[1]);
 }
 
+void TestNativeFieldsAccess_invalidAccess(Dart_NativeArguments args) {
+  intptr_t field_values[kTestNumNativeFields];
+  Dart_Handle result = Dart_GetNativeFieldsOfArgument(
+      args, 0, kTestNumNativeFields, field_values);
+  EXPECT_ERROR(result,
+               "Dart_GetNativeFieldsOfArgument: "
+               "expected 0 'num_fields' but was passed in 2");
+}
+
 static Dart_NativeFunction TestNativeFieldsAccess_lookup(Dart_Handle name,
                                                          int argument_count,
                                                          bool* auto_scope) {
@@ -4395,38 +5273,53 @@ static Dart_NativeFunction TestNativeFieldsAccess_lookup(Dart_Handle name,
   }
   const char* function_name = obj.ToCString();
   ASSERT(function_name != NULL);
-  if (!strcmp(function_name, "TestNativeFieldsAccess_init")) {
-    return reinterpret_cast<Dart_NativeFunction>(&TestNativeFieldsAccess_init);
-  } else if (!strcmp(function_name, "TestNativeFieldsAccess_access")) {
-    return reinterpret_cast<Dart_NativeFunction>(
-        &TestNativeFieldsAccess_access);
+  if (strcmp(function_name, "TestNativeFieldsAccess_init") == 0) {
+    return TestNativeFieldsAccess_init;
+  } else if (strcmp(function_name, "TestNativeFieldsAccess_access") == 0) {
+    return TestNativeFieldsAccess_access;
+  } else if (strcmp(function_name, "TestNativeFieldsAccess_invalidAccess") ==
+             0) {
+    return TestNativeFieldsAccess_invalidAccess;
   } else {
     return NULL;
   }
 }
 
 TEST_CASE(DartAPI_TestNativeFieldsAccess) {
-  const char* kScriptChars =
-      "import 'dart:nativewrappers';"
-      "class NativeFields extends NativeFieldWrapperClass2 {\n"
-      "  NativeFields(int i, int j) : fld1 = i, fld2 = j {}\n"
-      "  int fld1;\n"
-      "  final int fld2;\n"
-      "  static int fld3;\n"
-      "  static const int fld4 = 10;\n"
-      "  int initNativeFlds() native 'TestNativeFieldsAccess_init';\n"
-      "  int accessNativeFlds(int i) native 'TestNativeFieldsAccess_access';\n"
-      "}\n"
-      "NativeFields testMain() {\n"
-      "  NativeFields obj = new NativeFields(10, 20);\n"
-      "  obj.initNativeFlds();\n"
-      "  obj.accessNativeFlds(null);\n"
-      "  return obj;\n"
-      "}\n";
+  const char* nullable_tag = TestCase::NullableTag();
+  // clang-format off
+  auto kScriptChars = Utils::CStringUniquePtr(
+      OS::SCreate(
+          nullptr,
+          "import 'dart:nativewrappers';"
+          "class NativeFields extends NativeFieldWrapperClass2 {\n"
+          "  NativeFields(int i, int j) : fld1 = i, fld2 = j {}\n"
+          "  int fld1;\n"
+          "  final int fld2;\n"
+          "  static int%s fld3;\n"
+          "  static const int fld4 = 10;\n"
+          "  int%s initNativeFlds() native 'TestNativeFieldsAccess_init';\n"
+          "  int%s accessNativeFlds(int%s i) native "
+          "'TestNativeFieldsAccess_access';\n"
+          "}\n"
+          "class NoNativeFields {\n"
+          "  int neitherATypedDataNorNull = 0;\n"
+          "  invalidAccess() native 'TestNativeFieldsAccess_invalidAccess';\n"
+          "}\n"
+          "NativeFields testMain() {\n"
+          "  NativeFields obj = new NativeFields(10, 20);\n"
+          "  obj.initNativeFlds();\n"
+          "  obj.accessNativeFlds(null);\n"
+          "  new NoNativeFields().invalidAccess();\n"
+          "  return obj;\n"
+          "}\n",
+          nullable_tag, nullable_tag, nullable_tag, nullable_tag),
+      std::free);
+  // clang-format on
 
   // Load up a test script in the test library.
-  Dart_Handle lib =
-      TestCase::LoadTestScript(kScriptChars, TestNativeFieldsAccess_lookup);
+  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars.get(),
+                                             TestNativeFieldsAccess_lookup);
 
   // Invoke a function which returns an object of type NativeFields.
   Dart_Handle result = Dart_Invoke(lib, NewString("testMain"), 0, NULL);
@@ -4538,22 +5431,29 @@ static void TestNativeFields(Dart_Handle retobj) {
 }
 
 TEST_CASE(DartAPI_ImplicitNativeFieldAccess) {
-  const char* kScriptChars =
-      "import 'dart:nativewrappers';"
-      "class NativeFields extends NativeFieldWrapperClass4 {\n"
-      "  NativeFields(int i, int j) : fld1 = i, fld2 = j {}\n"
-      "  int fld0;\n"
-      "  int fld1;\n"
-      "  final int fld2;\n"
-      "  static int fld3;\n"
-      "  static const int fld4 = 10;\n"
-      "}\n"
-      "NativeFields testMain() {\n"
-      "  NativeFields obj = new NativeFields(10, 20);\n"
-      "  return obj;\n"
-      "}\n";
+  const char* nullable_tag = TestCase::NullableTag();
+  // clang-format off
+  auto kScriptChars = Utils::CStringUniquePtr(
+      OS::SCreate(nullptr,
+                  "import 'dart:nativewrappers';"
+                  "class NativeFields extends NativeFieldWrapperClass4 {\n"
+                  "  NativeFields(int i, int j) : fld1 = i, fld2 = j {}\n"
+                  "  int%s fld0;\n"
+                  "  int fld1;\n"
+                  "  final int fld2;\n"
+                  "  static int%s fld3;\n"
+                  "  static const int fld4 = 10;\n"
+                  "}\n"
+                  "NativeFields testMain() {\n"
+                  "  NativeFields obj = new NativeFields(10, 20);\n"
+                  "  return obj;\n"
+                  "}\n",
+                  nullable_tag, nullable_tag),
+      std::free);
+  // clang-format on
   // Load up a test script in the test library.
-  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, native_field_lookup);
+  Dart_Handle lib =
+      TestCase::LoadTestScript(kScriptChars.get(), native_field_lookup);
 
   // Invoke a function which returns an object of type NativeFields.
   Dart_Handle retobj = Dart_Invoke(lib, NewString("testMain"), 0, NULL);
@@ -4564,26 +5464,33 @@ TEST_CASE(DartAPI_ImplicitNativeFieldAccess) {
 }
 
 TEST_CASE(DartAPI_NegativeNativeFieldAccess) {
-  const char* kScriptChars =
-      "class NativeFields {\n"
-      "  NativeFields(int i, int j) : fld1 = i, fld2 = j {}\n"
-      "  int fld1;\n"
-      "  final int fld2;\n"
-      "  static int fld3;\n"
-      "  static const int fld4 = 10;\n"
-      "}\n"
-      "NativeFields testMain1() {\n"
-      "  NativeFields obj = new NativeFields(10, 20);\n"
-      "  return obj;\n"
-      "}\n"
-      "Function testMain2() {\n"
-      "  return () {};\n"
-      "}\n";
+  // clang-format off
+  auto kScriptChars = Utils::CStringUniquePtr(
+      OS::SCreate(nullptr,
+                  "import 'dart:nativewrappers';\n"
+                  "class NativeFields {\n"
+                  "  NativeFields(int i, int j) : fld1 = i, fld2 = j {}\n"
+                  "  int fld1;\n"
+                  "  final int fld2;\n"
+                  "  static int%s fld3;\n"
+                  "  static const int fld4 = 10;\n"
+                  "}\n"
+                  "NativeFields testMain1() {\n"
+                  "  NativeFields obj = new NativeFields(10, 20);\n"
+                  "  return obj;\n"
+                  "}\n"
+                  "Function testMain2() {\n"
+                  "  return () {};\n"
+                  "}\n",
+                  TestCase::NullableTag()),
+      std::free);
+  // clang-format on
+
   Dart_Handle result;
   CHECK_API_SCOPE(thread);
 
   // Create a test library and Load up a test script in it.
-  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
+  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars.get(), NULL);
 
   // Invoke a function which returns an object of type NativeFields.
   Dart_Handle retobj = Dart_Invoke(lib, NewString("testMain1"), 0, NULL);
@@ -4644,7 +5551,8 @@ TEST_CASE(DartAPI_GetStaticField_RunsInitializer) {
   Dart_Handle result;
   // Create a test library and Load up a test script in it.
   Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
-  Dart_Handle type = Dart_GetType(lib, NewString("TestClass"), 0, NULL);
+  Dart_Handle type =
+      Dart_GetNonNullableType(lib, NewString("TestClass"), 0, NULL);
   EXPECT_VALID(type);
 
   // Invoke a function which returns an object.
@@ -4686,7 +5594,8 @@ TEST_CASE(DartAPI_GetField_CheckIsolate) {
 
   // Create a test library and Load up a test script in it.
   Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
-  Dart_Handle type = Dart_GetType(lib, NewString("TestClass"), 0, NULL);
+  Dart_Handle type =
+      Dart_GetNonNullableType(lib, NewString("TestClass"), 0, NULL);
   EXPECT_VALID(type);
 
   result = Dart_GetField(type, NewString("fld2"));
@@ -4707,7 +5616,8 @@ TEST_CASE(DartAPI_SetField_CheckIsolate) {
 
   // Create a test library and Load up a test script in it.
   Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
-  Dart_Handle type = Dart_GetType(lib, NewString("TestClass"), 0, NULL);
+  Dart_Handle type =
+      Dart_GetNonNullableType(lib, NewString("TestClass"), 0, NULL);
   EXPECT_VALID(type);
 
   result = Dart_SetField(type, NewString("fld2"), Dart_NewInteger(13));
@@ -4721,7 +5631,7 @@ TEST_CASE(DartAPI_SetField_CheckIsolate) {
 
 TEST_CASE(DartAPI_New) {
   const char* kScriptChars =
-      "class MyClass {\n"
+      "class MyClass implements MyExtraHop {\n"
       "  MyClass() : foo = 7 {}\n"
       "  MyClass.named(value) : foo = value {}\n"
       "  MyClass._hidden(value) : foo = -value {}\n"
@@ -4731,13 +5641,10 @@ TEST_CASE(DartAPI_New) {
       "  factory MyClass.multiply(value) {\n"
       "    return new MyClass.named(value * 100);\n"
       "  }\n"
-      "  factory MyClass.nullo() {\n"
-      "    return null;\n"
-      "  }\n"
       "  var foo;\n"
       "}\n"
       "\n"
-      "abstract class MyExtraHop {\n"
+      "abstract class MyExtraHop implements MyInterface {\n"
       "  factory MyExtraHop.hop(value) = MyClass.named;\n"
       "}\n"
       "\n"
@@ -4745,13 +5652,25 @@ TEST_CASE(DartAPI_New) {
       "  factory MyInterface.named(value) = MyExtraHop.hop;\n"
       "  factory MyInterface.multiply(value) = MyClass.multiply;\n"
       "  MyInterface.notfound(value);\n"
-      "}\n";
+      "}\n"
+      "\n"
+      "class _MyClass {\n"
+      "  _MyClass._() : foo = 7 {}\n"
+      "  var foo;\n"
+      "}\n"
+      "\n";
 
   Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
-  Dart_Handle type = Dart_GetType(lib, NewString("MyClass"), 0, NULL);
+  Dart_Handle type =
+      Dart_GetNonNullableType(lib, NewString("MyClass"), 0, NULL);
   EXPECT_VALID(type);
-  Dart_Handle intf = Dart_GetType(lib, NewString("MyInterface"), 0, NULL);
+  Dart_Handle intf =
+      Dart_GetNonNullableType(lib, NewString("MyInterface"), 0, NULL);
   EXPECT_VALID(intf);
+  Dart_Handle private_type =
+      Dart_GetNonNullableType(lib, NewString("_MyClass"), 0, NULL);
+  EXPECT_VALID(private_type);
+
   Dart_Handle args[1];
   args[0] = Dart_NewInteger(11);
   Dart_Handle bad_args[1];
@@ -4842,6 +5761,14 @@ TEST_CASE(DartAPI_New) {
   EXPECT_VALID(Dart_IntegerToInt64(foo, &int_value));
   EXPECT_EQ(-11, int_value);
 
+  // Invoke a hidden named constructor on a hidden type.
+  result = Dart_New(private_type, NewString("_"), 0, NULL);
+  EXPECT_VALID(result);
+  int_value = 0;
+  foo = Dart_GetField(result, NewString("foo"));
+  EXPECT_VALID(Dart_IntegerToInt64(foo, &int_value));
+  EXPECT_EQ(7, int_value);
+
   // Allocate object and invoke a hidden named constructor.
   obj = Dart_Allocate(type);
   EXPECT_VALID(obj);
@@ -4873,11 +5800,6 @@ TEST_CASE(DartAPI_New) {
   foo = Dart_GetField(result, NewString("foo"));
   EXPECT_VALID(Dart_IntegerToInt64(foo, &int_value));
   EXPECT_EQ(1100, int_value);
-
-  // Invoke a factory constructor which returns null.
-  result = Dart_New(type, NewString("nullo"), 0, NULL);
-  EXPECT_VALID(result);
-  EXPECT(Dart_IsNull(result));
 
   // Pass an error class object.  Error is passed through.
   result = Dart_New(Dart_NewApiError("myerror"), NewString("named"), 1, args);
@@ -4919,26 +5841,6 @@ TEST_CASE(DartAPI_New) {
   result = Dart_New(type, NewString("exception"), 1, args);
   EXPECT_ERROR(result, "ConstructorDeath");
 
-  // Invoke two-hop redirecting factory constructor.
-  result = Dart_New(intf, NewString("named"), 1, args);
-  EXPECT_VALID(result);
-  EXPECT_VALID(Dart_ObjectIsType(result, type, &instanceOf));
-  EXPECT(instanceOf);
-  int_value = 0;
-  foo = Dart_GetField(result, NewString("foo"));
-  EXPECT_VALID(Dart_IntegerToInt64(foo, &int_value));
-  EXPECT_EQ(11, int_value);
-
-  // Invoke one-hop redirecting factory constructor.
-  result = Dart_New(intf, NewString("multiply"), 1, args);
-  EXPECT_VALID(result);
-  EXPECT_VALID(Dart_ObjectIsType(result, type, &instanceOf));
-  EXPECT(instanceOf);
-  int_value = 0;
-  foo = Dart_GetField(result, NewString("foo"));
-  EXPECT_VALID(Dart_IntegerToInt64(foo, &int_value));
-  EXPECT_EQ(1100, int_value);
-
   // Invoke a constructor that is missing in the interface.
   result = Dart_New(intf, Dart_Null(), 0, NULL);
   EXPECT_ERROR(result, "Dart_New: could not find constructor 'MyInterface.'.");
@@ -4950,13 +5852,204 @@ TEST_CASE(DartAPI_New) {
   EXPECT(!instanceOf);
 }
 
+// These two cases below currently fail because of issue
+// https://github.com/dart-lang/sdk/issues/42939
+TEST_CASE(DartAPI_New_Issue42939) {
+  const char* kScriptChars =
+      "class MyClass implements MyExtraHop {\n"
+      "  MyClass() : foo = 7 {}\n"
+      "  MyClass.named(value) : foo = value {}\n"
+      "  MyClass._hidden(value) : foo = -value {}\n"
+      "  MyClass.exception(value) : foo = value {\n"
+      "    throw 'ConstructorDeath';\n"
+      "  }\n"
+      "  factory MyClass.multiply(value) {\n"
+      "    return new MyClass.named(value * 100);\n"
+      "  }\n"
+      "  var foo;\n"
+      "}\n"
+      "\n"
+      "abstract class MyExtraHop implements MyInterface {\n"
+      "  factory MyExtraHop.hop(value) = MyClass.named;\n"
+      "}\n"
+      "\n"
+      "abstract class MyInterface {\n"
+      "  factory MyInterface.named(value) = MyExtraHop.hop;\n"
+      "  factory MyInterface.multiply(value) = MyClass.multiply;\n"
+      "  MyInterface.notfound(value);\n"
+      "}\n"
+      "\n";
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
+  Dart_Handle type =
+      Dart_GetNonNullableType(lib, NewString("MyClass"), 0, NULL);
+  EXPECT_VALID(type);
+  Dart_Handle intf =
+      Dart_GetNonNullableType(lib, NewString("MyInterface"), 0, NULL);
+  EXPECT_VALID(intf);
+
+  Dart_Handle args[1];
+  args[0] = Dart_NewInteger(11);
+
+  // Invoke two-hop redirecting factory constructor.
+  bool instanceOf = false;
+  Dart_Handle result = Dart_New(intf, NewString("named"), 1, args);
+  EXPECT_VALID(result);
+  if (!Dart_IsError(result)) {
+    EXPECT_VALID(Dart_ObjectIsType(result, type, &instanceOf));
+    EXPECT(instanceOf);
+    int64_t int_value = 0;
+    Dart_Handle foo = Dart_GetField(result, NewString("foo"));
+    EXPECT_VALID(Dart_IntegerToInt64(foo, &int_value));
+    EXPECT_EQ(11, int_value);
+  }
+
+  // Invoke one-hop redirecting factory constructor.
+  result = Dart_New(intf, NewString("multiply"), 1, args);
+  EXPECT_VALID(result);
+  if (!Dart_IsError(result)) {
+    EXPECT_VALID(Dart_ObjectIsType(result, type, &instanceOf));
+    EXPECT(instanceOf);
+    int64_t int_value = 0;
+    Dart_Handle foo = Dart_GetField(result, NewString("foo"));
+    EXPECT_VALID(Dart_IntegerToInt64(foo, &int_value));
+    EXPECT_EQ(1100, int_value);
+  }
+}
+
+TEST_CASE(DartAPI_New_Issue44205) {
+  const char* kScriptChars =
+      "class MyIntClass {\n"
+      "  MyIntClass(this.value);\n"
+      "  int value;\n"
+      "}\n"
+      "\n"
+      "class MyClass<T> {\n"
+      "  T value;\n"
+      "  MyClass(this.value);\n"
+      "  factory MyClass.foo(T x) => MyClass<T>(x);\n"
+      "}\n"
+      "\n"
+      "Type getIntType() { return int; }\n"
+      "\n";
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
+  EXPECT_VALID(lib);
+  Dart_Handle int_wrapper_type =
+      Dart_GetNonNullableType(lib, NewString("MyIntClass"), 0, NULL);
+  EXPECT_VALID(int_wrapper_type);
+
+  Dart_Handle args[1];
+  args[0] = Dart_EmptyString();
+
+  Dart_Handle result = Dart_New(int_wrapper_type, Dart_EmptyString(), 1, args);
+  EXPECT_ERROR(result, "String' is not a subtype of type 'int' of 'value'");
+
+  Dart_Handle int_type = Dart_Invoke(lib, NewString("getIntType"), 0, args);
+  EXPECT_VALID(int_type);
+  Dart_Handle type_args = Dart_NewList(1);
+  EXPECT_VALID(type_args);
+  EXPECT_VALID(Dart_ListSetAt(type_args, 0, int_type));
+  Dart_Handle my_class_type =
+      Dart_GetNonNullableType(lib, NewString("MyClass"), 1, &type_args);
+  EXPECT_VALID(my_class_type);
+
+  // Generic generative constructor
+  args[0] = Dart_EmptyString();
+  result = Dart_New(my_class_type, Dart_EmptyString(), 1, args);
+  EXPECT_ERROR(result, "String' is not a subtype of type 'int' of 'value'");
+
+  // Generic factory constructor
+  result = Dart_New(my_class_type, NewString("foo"), 1, args);
+  EXPECT_ERROR(result, "String' is not a subtype of type 'int' of 'x'");
+}
+
+TEST_CASE(DartAPI_InvokeConstructor_Issue44205) {
+  const char* kScriptChars =
+      "class MyIntClass {\n"
+      "  MyIntClass(this.value);\n"
+      "  int value;\n"
+      "}\n"
+      "\n"
+      "class MyClass<T> {\n"
+      "  T value;\n"
+      "  MyClass(this.value);\n"
+      "}\n"
+      "\n"
+      "Type getIntType() { return int; }\n"
+      "\n";
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
+  EXPECT_VALID(lib);
+  Dart_Handle int_wrapper_type =
+      Dart_GetNonNullableType(lib, NewString("MyIntClass"), 0, NULL);
+  EXPECT_VALID(int_wrapper_type);
+
+  Dart_Handle args[1];
+  args[0] = Dart_EmptyString();
+  Dart_Handle result = Dart_Allocate(int_wrapper_type);
+  EXPECT_VALID(result);
+
+  result = Dart_InvokeConstructor(result, Dart_EmptyString(), 1, args);
+  EXPECT_ERROR(result, "String' is not a subtype of type 'int' of 'value'");
+
+  Dart_Handle int_type = Dart_Invoke(lib, NewString("getIntType"), 0, args);
+  EXPECT_VALID(int_type);
+  Dart_Handle type_args = Dart_NewList(1);
+  EXPECT_VALID(type_args);
+  EXPECT_VALID(Dart_ListSetAt(type_args, 0, int_type));
+  Dart_Handle my_class_type =
+      Dart_GetNonNullableType(lib, NewString("MyClass"), 1, &type_args);
+  EXPECT_VALID(my_class_type);
+
+  result = Dart_Allocate(my_class_type);
+  EXPECT_VALID(result);
+  result = Dart_InvokeConstructor(result, Dart_EmptyString(), 1, args);
+  EXPECT_ERROR(result, "String' is not a subtype of type 'int' of 'value'");
+}
+
+TEST_CASE(DartAPI_InvokeClosure_Issue44205) {
+  const char* kScriptChars =
+      "class InvokeClosure {\n"
+      "  InvokeClosure(int i, int j) : fld1 = i, fld2 = j {}\n"
+      "  Function method1(int i) {\n"
+      "    f(int j) => j + i + fld1 + fld2 + fld4; \n"
+      "    return f;\n"
+      "  }\n"
+      "  int fld1;\n"
+      "  final int fld2;\n"
+      "  static const int fld4 = 10;\n"
+      "}\n"
+      "Function testMain1() {\n"
+      "  InvokeClosure obj = new InvokeClosure(10, 20);\n"
+      "  return obj.method1(10);\n"
+      "}\n";
+  Dart_Handle result;
+  CHECK_API_SCOPE(thread);
+
+  // Create a test library and Load up a test script in it.
+  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
+  EXPECT_VALID(lib);
+
+  // Invoke a function which returns a closure.
+  Dart_Handle retobj = Dart_Invoke(lib, NewString("testMain1"), 0, NULL);
+  EXPECT_VALID(retobj);
+
+  // Now invoke the closure and check the result.
+  Dart_Handle dart_arguments[1];
+  dart_arguments[0] = Dart_EmptyString();
+  result = Dart_InvokeClosure(retobj, 1, dart_arguments);
+  EXPECT_ERROR(result, "String' is not a subtype of type 'int' of 'j'");
+}
+
 TEST_CASE(DartAPI_New_Issue2971) {
   // Issue 2971: We were unable to use Dart_New to construct an
   // instance of List, due to problems implementing interface
   // factories.
   Dart_Handle core_lib = Dart_LookupLibrary(NewString("dart:core"));
   EXPECT_VALID(core_lib);
-  Dart_Handle list_type = Dart_GetType(core_lib, NewString("List"), 0, NULL);
+  Dart_Handle list_type =
+      Dart_GetNonNullableType(core_lib, NewString("List"), 0, NULL);
   EXPECT_VALID(list_type);
 
   const int kNumArgs = 1;
@@ -4967,6 +6060,54 @@ TEST_CASE(DartAPI_New_Issue2971) {
   EXPECT(Dart_IsList(list_obj));
 }
 
+TEST_CASE(DartAPI_NewListOf) {
+  const char* kScriptChars =
+      "String expectListOfString(List<String> o) => '${o.first}';\n"
+      "String expectListOfDynamic(List<dynamic> o) => '${o.first}';\n"
+      "String expectListOfInt(List<int> o) => '${o.first}';\n";
+  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
+
+  const int kNumArgs = 1;
+  Dart_Handle args[kNumArgs];
+  const char* str;
+  Dart_Handle result;
+  Dart_Handle string_list = Dart_NewListOf(Dart_CoreType_String, 1);
+  if (!Dart_IsError(string_list)) {
+    args[0] = string_list;
+    Dart_Handle result =
+        Dart_Invoke(lib, NewString("expectListOfString"), kNumArgs, args);
+    EXPECT_VALID(result);
+    result = Dart_StringToCString(result, &str);
+    EXPECT_VALID(result);
+    EXPECT_STREQ("null", str);
+  } else {
+    EXPECT_ERROR(string_list,
+                 "Cannot use legacy types with --sound-null-safety enabled. "
+                 "Use Dart_NewListOfType or Dart_NewListOfTypeFilled instead.");
+  }
+
+  Dart_Handle dynamic_list = Dart_NewListOf(Dart_CoreType_Dynamic, 1);
+  EXPECT_VALID(dynamic_list);
+  args[0] = dynamic_list;
+  result = Dart_Invoke(lib, NewString("expectListOfDynamic"), kNumArgs, args);
+  EXPECT_VALID(result);
+  result = Dart_StringToCString(result, &str);
+  EXPECT_STREQ("null", str);
+
+  Dart_Handle int_list = Dart_NewListOf(Dart_CoreType_Int, 1);
+  if (!Dart_IsError(int_list)) {
+    args[0] = int_list;
+    result = Dart_Invoke(lib, NewString("expectListOfInt"), kNumArgs, args);
+    EXPECT_VALID(result);
+    result = Dart_StringToCString(result, &str);
+    EXPECT_STREQ("null", str);
+  } else {
+    EXPECT_ERROR(int_list,
+                 "Cannot use legacy types with --sound-null-safety enabled. "
+                 "Use Dart_NewListOfType or Dart_NewListOfTypeFilled instead.");
+  }
+}
+
 TEST_CASE(DartAPI_NewListOfType) {
   const char* kScriptChars =
       "class ZXHandle {}\n"
@@ -4975,10 +6116,13 @@ TEST_CASE(DartAPI_NewListOfType) {
       "  ChannelReadResult(this.handles);\n"
       "}\n"
       "void expectListOfString(List<String> _) {}\n"
-      "void expectListOfDynamic(List<dynamic> _) {}\n";
+      "void expectListOfDynamic(List<dynamic> _) {}\n"
+      "void expectListOfVoid(List<void> _) {}\n"
+      "void expectListOfNever(List<Never> _) {}\n";
   Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
 
-  Dart_Handle zxhandle_type = Dart_GetType(lib, NewString("ZXHandle"), 0, NULL);
+  Dart_Handle zxhandle_type =
+      Dart_GetNullableType(lib, NewString("ZXHandle"), 0, NULL);
   EXPECT_VALID(zxhandle_type);
 
   Dart_Handle zxhandle = Dart_New(zxhandle_type, Dart_Null(), 0, NULL);
@@ -4990,7 +6134,7 @@ TEST_CASE(DartAPI_NewListOfType) {
   EXPECT_VALID(Dart_ListSetAt(zxhandle_list, 0, zxhandle));
 
   Dart_Handle readresult_type =
-      Dart_GetType(lib, NewString("ChannelReadResult"), 0, NULL);
+      Dart_GetNonNullableType(lib, NewString("ChannelReadResult"), 0, NULL);
   EXPECT_VALID(zxhandle_type);
 
   const int kNumArgs = 1;
@@ -5009,7 +6153,7 @@ TEST_CASE(DartAPI_NewListOfType) {
   EXPECT_VALID(dart_core);
 
   Dart_Handle string_type =
-      Dart_GetType(dart_core, NewString("String"), 0, NULL);
+      Dart_GetNonNullableType(dart_core, NewString("String"), 0, NULL);
   EXPECT_VALID(string_type);
   Dart_Handle string_list = Dart_NewListOfType(string_type, 0);
   EXPECT_VALID(string_list);
@@ -5017,14 +6161,98 @@ TEST_CASE(DartAPI_NewListOfType) {
   EXPECT_VALID(
       Dart_Invoke(lib, NewString("expectListOfString"), kNumArgs, args));
 
-  Dart_Handle dynamic_type =
-      Dart_GetType(dart_core, NewString("dynamic"), 0, NULL);
+  Dart_Handle dynamic_type = Dart_TypeDynamic();
   EXPECT_VALID(dynamic_type);
-  Dart_Handle dynamic_list = Dart_NewListOfType(string_type, 0);
+  Dart_Handle dynamic_list = Dart_NewListOfType(dynamic_type, 0);
   EXPECT_VALID(dynamic_list);
   args[0] = dynamic_list;
   EXPECT_VALID(
       Dart_Invoke(lib, NewString("expectListOfDynamic"), kNumArgs, args));
+
+  Dart_Handle void_type = Dart_TypeVoid();
+  EXPECT_VALID(void_type);
+  Dart_Handle void_list = Dart_NewListOfType(void_type, 0);
+  EXPECT_VALID(void_list);
+  args[0] = void_list;
+  EXPECT_VALID(Dart_Invoke(lib, NewString("expectListOfVoid"), kNumArgs, args));
+
+  Dart_Handle never_type = Dart_TypeNever();
+  EXPECT_VALID(never_type);
+  Dart_Handle never_list = Dart_NewListOfType(never_type, 0);
+  EXPECT_VALID(never_list);
+  args[0] = never_list;
+  EXPECT_VALID(
+      Dart_Invoke(lib, NewString("expectListOfNever"), kNumArgs, args));
+}
+
+TEST_CASE(DartAPI_NewListOfTypeFilled) {
+  const char* kScriptChars =
+      "class ZXHandle {}\n"
+      "class ChannelReadResult {\n"
+      "  final List<ZXHandle> handles;\n"
+      "  ChannelReadResult(this.handles);\n"
+      "}\n";
+  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
+
+  Dart_Handle zxhandle_type =
+      Dart_GetNonNullableType(lib, NewString("ZXHandle"), 0, NULL);
+  EXPECT_VALID(zxhandle_type);
+
+  Dart_Handle nullable_zxhandle_type =
+      Dart_GetNullableType(lib, NewString("ZXHandle"), 0, NULL);
+  EXPECT_VALID(nullable_zxhandle_type);
+
+  Dart_Handle integer = Dart_NewInteger(42);
+  EXPECT_VALID(integer);
+
+  Dart_Handle zxhandle = Dart_New(zxhandle_type, Dart_Null(), 0, NULL);
+  EXPECT_VALID(zxhandle);
+
+  Dart_Handle zxhandle_list =
+      Dart_NewListOfTypeFilled(zxhandle_type, zxhandle, 1);
+  EXPECT_VALID(zxhandle_list);
+
+  Dart_Handle result = Dart_ListGetAt(zxhandle_list, 0);
+  EXPECT_VALID(result);
+
+  EXPECT(Dart_IdentityEquals(result, zxhandle));
+
+  Dart_Handle readresult_type =
+      Dart_GetNonNullableType(lib, NewString("ChannelReadResult"), 0, NULL);
+  EXPECT_VALID(zxhandle_type);
+
+  const int kNumArgs = 1;
+  Dart_Handle args[kNumArgs];
+  args[0] = zxhandle_list;
+  EXPECT_VALID(Dart_New(readresult_type, Dart_Null(), kNumArgs, args));
+
+  EXPECT_ERROR(Dart_NewListOfTypeFilled(Dart_Null(), Dart_Null(), 1),
+               "Dart_NewListOfTypeFilled expects argument 'element_type' to be "
+               "non-null.");
+  EXPECT_ERROR(Dart_NewListOfTypeFilled(Dart_True(), Dart_Null(), 1),
+               "Dart_NewListOfTypeFilled expects argument 'element_type' to be "
+               "of type Type.");
+  EXPECT_ERROR(
+      Dart_NewListOfTypeFilled(zxhandle_type, Dart_Null(), 1),
+      "Dart_NewListOfTypeFilled expects argument 'fill_object' to be non-null"
+      " for a non-nullable 'element_type'");
+  EXPECT_ERROR(
+      Dart_NewListOfTypeFilled(zxhandle_type, integer, 1),
+      "Dart_NewListOfTypeFilled expects argument 'fill_object' to have the same"
+      " type as 'element_type'.");
+
+  EXPECT_VALID(
+      Dart_NewListOfTypeFilled(nullable_zxhandle_type, Dart_Null(), 1));
+
+  // Null is always valid as the fill argument if we're creating an empty list.
+  EXPECT_VALID(Dart_NewListOfTypeFilled(zxhandle_type, Dart_Null(), 0));
+
+  // Test creation of a non nullable list of strings.
+  Dart_Handle corelib = Dart_LookupLibrary(NewString("dart:core"));
+  EXPECT_VALID(corelib);
+  Dart_Handle string_type =
+      Dart_GetNonNullableType(corelib, NewString("String"), 0, NULL);
+  EXPECT_VALID(Dart_NewListOfTypeFilled(string_type, Dart_EmptyString(), 2));
 }
 
 static Dart_Handle PrivateLibName(Dart_Handle lib, const char* str) {
@@ -5059,7 +6287,8 @@ TEST_CASE(DartAPI_Invoke) {
 
   // Shared setup.
   Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
-  Dart_Handle type = Dart_GetType(lib, NewString("Methods"), 0, NULL);
+  Dart_Handle type =
+      Dart_GetNonNullableType(lib, NewString("Methods"), 0, NULL);
   EXPECT_VALID(type);
   Dart_Handle instance = Dart_Invoke(lib, NewString("test"), 0, NULL);
   EXPECT_VALID(instance);
@@ -5165,7 +6394,8 @@ TEST_CASE(DartAPI_Invoke_PrivateStatic) {
 
   // Shared setup.
   Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
-  Dart_Handle type = Dart_GetType(lib, NewString("Methods"), 0, NULL);
+  Dart_Handle type =
+      Dart_GetNonNullableType(lib, NewString("Methods"), 0, NULL);
   Dart_Handle result;
   EXPECT_VALID(type);
   Dart_Handle name = NewString("_staticMethod");
@@ -5258,7 +6488,8 @@ TEST_CASE(DartAPI_Invoke_BadArgs) {
 
   // Shared setup.
   Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
-  Dart_Handle type = Dart_GetType(lib, NewString("Methods"), 0, NULL);
+  Dart_Handle type =
+      Dart_GetNonNullableType(lib, NewString("Methods"), 0, NULL);
   EXPECT_VALID(type);
   Dart_Handle instance = Dart_Invoke(lib, NewString("test"), 0, NULL);
   EXPECT_VALID(instance);
@@ -5375,8 +6606,9 @@ TEST_CASE(DartAPI_InvokeNoSuchMethod) {
   Dart_Handle instance;
   // Create a test library and Load up a test script in it.
   // The test library must have a dart: url so it can import dart:_internal.
-  Dart_Handle lib = TestCase::LoadCoreTestScript(kScriptChars, NULL);
-  Dart_Handle type = Dart_GetType(lib, NewString("TestClass"), 0, NULL);
+  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
+  Dart_Handle type =
+      Dart_GetNonNullableType(lib, NewString("TestClass"), 0, NULL);
   EXPECT_VALID(type);
 
   // Invoke a function which returns an object.
@@ -5478,7 +6710,7 @@ static Dart_NativeFunction native_lookup(Dart_Handle name,
                                          bool* auto_setup_scope) {
   ASSERT(auto_setup_scope != NULL);
   *auto_setup_scope = true;
-  return reinterpret_cast<Dart_NativeFunction>(&ExceptionNative);
+  return ExceptionNative;
 }
 
 TEST_CASE(DartAPI_ThrowException) {
@@ -5488,8 +6720,7 @@ TEST_CASE(DartAPI_ThrowException) {
   Dart_EnterScope();  // Start a Dart API scope for invoking API functions.
 
   // Load up a test script which extends the native wrapper class.
-  Dart_Handle lib = TestCase::LoadTestScript(
-      kScriptChars, reinterpret_cast<Dart_NativeEntryResolver>(native_lookup));
+  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, native_lookup);
 
   // Throwing an exception here should result in an error.
   result = Dart_ThrowException(NewString("This doesn't work"));
@@ -5510,7 +6741,8 @@ static intptr_t kNativeArgumentNativeField2Value = 40;
 static intptr_t native_arg_str_peer = 100;
 static void NativeArgumentCreate(Dart_NativeArguments args) {
   Dart_Handle lib = Dart_LookupLibrary(NewString(TestCase::url()));
-  Dart_Handle type = Dart_GetType(lib, NewString("MyObject"), 0, NULL);
+  Dart_Handle type =
+      Dart_GetNonNullableType(lib, NewString("MyObject"), 0, NULL);
   EXPECT_VALID(type);
 
   // Allocate without a constructor.
@@ -5640,10 +6872,10 @@ static Dart_NativeFunction native_args_lookup(Dart_Handle name,
   *auto_scope_setup = true;
   const char* function_name = obj.ToCString();
   ASSERT(function_name != NULL);
-  if (!strcmp(function_name, "NativeArgument_Create")) {
-    return reinterpret_cast<Dart_NativeFunction>(&NativeArgumentCreate);
-  } else if (!strcmp(function_name, "NativeArgument_Access")) {
-    return reinterpret_cast<Dart_NativeFunction>(&NativeArgumentAccess);
+  if (strcmp(function_name, "NativeArgument_Create") == 0) {
+    return NativeArgumentCreate;
+  } else if (strcmp(function_name, "NativeArgument_Access") == 0) {
+    return NativeArgumentAccess;
   }
   return NULL;
 }
@@ -5674,9 +6906,7 @@ TEST_CASE(DartAPI_GetNativeArguments) {
       "                           obj2);"
       "}";
 
-  Dart_Handle lib = TestCase::LoadTestScript(
-      kScriptChars,
-      reinterpret_cast<Dart_NativeEntryResolver>(native_args_lookup));
+  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, native_args_lookup);
 
   const char* ascii_str = "string";
   intptr_t ascii_str_length = strlen(ascii_str);
@@ -5704,7 +6934,7 @@ static Dart_NativeFunction gnac_lookup(Dart_Handle name,
                                        bool* auto_setup_scope) {
   ASSERT(auto_setup_scope != NULL);
   *auto_setup_scope = true;
-  return reinterpret_cast<Dart_NativeFunction>(&NativeArgumentCounter);
+  return NativeArgumentCounter;
 }
 
 TEST_CASE(DartAPI_GetNativeArgumentCount) {
@@ -5717,8 +6947,7 @@ TEST_CASE(DartAPI_GetNativeArgumentCount) {
       "  return obj.method1(77, 125);"
       "}";
 
-  Dart_Handle lib = TestCase::LoadTestScript(
-      kScriptChars, reinterpret_cast<Dart_NativeEntryResolver>(gnac_lookup));
+  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, gnac_lookup);
 
   Dart_Handle result = Dart_Invoke(lib, NewString("testMain"), 0, NULL);
   EXPECT_VALID(result);
@@ -5730,7 +6959,66 @@ TEST_CASE(DartAPI_GetNativeArgumentCount) {
   EXPECT_EQ(3, value);
 }
 
-TEST_CASE(DartAPI_GetType) {
+TEST_CASE(DartAPI_TypeToNullability) {
+  const char* kScriptChars =
+      "library testlib;\n"
+      "class Class {\n"
+      "  static var name = 'Class';\n"
+      "}\n";
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
+
+  const Dart_Handle name = NewString("Class");
+  // Lookup the legacy type for Class.
+  Dart_Handle type = Dart_GetType(lib, name, 0, NULL);
+  Dart_Handle nonNullableType;
+  Dart_Handle nullableType;
+  if (Dart_IsError(type)) {
+    EXPECT_ERROR(
+        type,
+        "Cannot use legacy types with --sound-null-safety enabled. "
+        "Use Dart_GetNullableType or Dart_GetNonNullableType instead.");
+
+    nonNullableType = Dart_GetNonNullableType(lib, name, 0, nullptr);
+    EXPECT_VALID(nonNullableType);
+    nullableType = Dart_GetNullableType(lib, name, 0, nullptr);
+  } else {
+    EXPECT_VALID(type);
+    bool result = false;
+    EXPECT_VALID(Dart_IsLegacyType(type, &result));
+    EXPECT(result);
+
+    // Legacy -> Nullable
+    nullableType = Dart_TypeToNullableType(type);
+    EXPECT_VALID(nullableType);
+    result = false;
+    EXPECT_VALID(Dart_IsNullableType(nullableType, &result));
+    EXPECT(result);
+    EXPECT(Dart_IdentityEquals(nullableType,
+                               Dart_GetNullableType(lib, name, 0, nullptr)));
+
+    // Legacy -> Non-Nullable
+    nonNullableType = Dart_TypeToNonNullableType(type);
+    EXPECT_VALID(nonNullableType);
+    result = false;
+    EXPECT_VALID(Dart_IsNonNullableType(nonNullableType, &result));
+    EXPECT(result);
+    EXPECT(Dart_IdentityEquals(nonNullableType,
+                               Dart_GetNonNullableType(lib, name, 0, nullptr)));
+  }
+
+  // Nullable -> Non-Nullable
+  EXPECT(Dart_IdentityEquals(
+      nonNullableType,
+      Dart_TypeToNonNullableType(Dart_GetNullableType(lib, name, 0, nullptr))));
+
+  // Non-Nullable -> Nullable
+  EXPECT(Dart_IdentityEquals(
+      nullableType,
+      Dart_TypeToNullableType(Dart_GetNonNullableType(lib, name, 0, nullptr))));
+}
+
+TEST_CASE(DartAPI_GetNullableType) {
   const char* kScriptChars =
       "library testlib;\n"
       "class Class {\n"
@@ -5744,17 +7032,28 @@ TEST_CASE(DartAPI_GetType) {
   Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
 
   // Lookup a class.
-  Dart_Handle type = Dart_GetType(lib, NewString("Class"), 0, NULL);
+  Dart_Handle type = Dart_GetNullableType(lib, NewString("Class"), 0, NULL);
   EXPECT_VALID(type);
-  Dart_Handle name = Dart_GetField(type, NewString("name"));
+  bool result = false;
+  EXPECT_VALID(Dart_IsNullableType(type, &result));
+  EXPECT(result);
+  Dart_Handle name = Dart_ToString(type);
   EXPECT_VALID(name);
   const char* name_cstr = "";
+  EXPECT_VALID(Dart_StringToCString(name, &name_cstr));
+  EXPECT_STREQ("Class?", name_cstr);
+
+  name = Dart_GetField(type, NewString("name"));
+  EXPECT_VALID(name);
   EXPECT_VALID(Dart_StringToCString(name, &name_cstr));
   EXPECT_STREQ("Class", name_cstr);
 
   // Lookup a private class.
-  type = Dart_GetType(lib, NewString("_Class"), 0, NULL);
+  type = Dart_GetNullableType(lib, NewString("_Class"), 0, NULL);
   EXPECT_VALID(type);
+  result = false;
+  EXPECT_VALID(Dart_IsNullableType(type, &result));
+
   name = Dart_GetField(type, NewString("name"));
   EXPECT_VALID(name);
   name_cstr = "";
@@ -5762,18 +7061,80 @@ TEST_CASE(DartAPI_GetType) {
   EXPECT_STREQ("_Class", name_cstr);
 
   // Lookup a class that does not exist.
-  type = Dart_GetType(lib, NewString("DoesNotExist"), 0, NULL);
+  type = Dart_GetNullableType(lib, NewString("DoesNotExist"), 0, NULL);
   EXPECT(Dart_IsError(type));
   EXPECT_STREQ("Type 'DoesNotExist' not found in library 'testlib'.",
                Dart_GetError(type));
 
   // Lookup a class from an error library.  The error propagates.
-  type = Dart_GetType(Api::NewError("myerror"), NewString("Class"), 0, NULL);
+  type = Dart_GetNullableType(Api::NewError("myerror"), NewString("Class"), 0,
+                              NULL);
   EXPECT(Dart_IsError(type));
   EXPECT_STREQ("myerror", Dart_GetError(type));
 
   // Lookup a type using an error class name.  The error propagates.
-  type = Dart_GetType(lib, Api::NewError("myerror"), 0, NULL);
+  type = Dart_GetNullableType(lib, Api::NewError("myerror"), 0, NULL);
+  EXPECT(Dart_IsError(type));
+  EXPECT_STREQ("myerror", Dart_GetError(type));
+}
+
+TEST_CASE(DartAPI_GetNonNullableType) {
+  const char* kScriptChars =
+      "library testlib;\n"
+      "class Class {\n"
+      "  static var name = 'Class';\n"
+      "}\n"
+      "\n"
+      "class _Class {\n"
+      "  static var name = '_Class';\n"
+      "}\n";
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
+
+  // Lookup a class.
+  Dart_Handle type = Dart_GetNonNullableType(lib, NewString("Class"), 0, NULL);
+  EXPECT_VALID(type);
+  bool result = false;
+  EXPECT_VALID(Dart_IsNonNullableType(type, &result));
+  EXPECT(result);
+  Dart_Handle name = Dart_ToString(type);
+  EXPECT_VALID(name);
+  const char* name_cstr = "";
+  EXPECT_VALID(Dart_StringToCString(name, &name_cstr));
+  EXPECT_STREQ("Class", name_cstr);
+
+  name = Dart_GetField(type, NewString("name"));
+  EXPECT_VALID(name);
+  EXPECT_VALID(Dart_StringToCString(name, &name_cstr));
+  EXPECT_STREQ("Class", name_cstr);
+
+  // Lookup a private class.
+  type = Dart_GetNonNullableType(lib, NewString("_Class"), 0, NULL);
+  EXPECT_VALID(type);
+  result = false;
+  EXPECT_VALID(Dart_IsNonNullableType(type, &result));
+  EXPECT(result);
+
+  name = Dart_GetField(type, NewString("name"));
+  EXPECT_VALID(name);
+  name_cstr = "";
+  EXPECT_VALID(Dart_StringToCString(name, &name_cstr));
+  EXPECT_STREQ("_Class", name_cstr);
+
+  // Lookup a class that does not exist.
+  type = Dart_GetNonNullableType(lib, NewString("DoesNotExist"), 0, NULL);
+  EXPECT(Dart_IsError(type));
+  EXPECT_STREQ("Type 'DoesNotExist' not found in library 'testlib'.",
+               Dart_GetError(type));
+
+  // Lookup a class from an error library.  The error propagates.
+  type = Dart_GetNonNullableType(Api::NewError("myerror"), NewString("Class"),
+                                 0, NULL);
+  EXPECT(Dart_IsError(type));
+  EXPECT_STREQ("myerror", Dart_GetError(type));
+
+  // Lookup a type using an error class name.  The error propagates.
+  type = Dart_GetNonNullableType(lib, Api::NewError("myerror"), 0, NULL);
   EXPECT(Dart_IsError(type));
   EXPECT_STREQ("myerror", Dart_GetError(type));
 }
@@ -5794,7 +7155,8 @@ TEST_CASE(DartAPI_InstanceOf) {
   Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
 
   // Fetch InstanceOfTest class.
-  Dart_Handle type = Dart_GetType(lib, NewString("InstanceOfTest"), 0, NULL);
+  Dart_Handle type =
+      Dart_GetNonNullableType(lib, NewString("InstanceOfTest"), 0, NULL);
   EXPECT_VALID(type);
 
   // Invoke a function which returns an object of type InstanceOf..
@@ -5810,7 +7172,8 @@ TEST_CASE(DartAPI_InstanceOf) {
   EXPECT(is_instance);
 
   // Fetch OtherClass and check if instanceOfTestObj is instance of it.
-  Dart_Handle otherType = Dart_GetType(lib, NewString("OtherClass"), 0, NULL);
+  Dart_Handle otherType =
+      Dart_GetNonNullableType(lib, NewString("OtherClass"), 0, NULL);
   EXPECT_VALID(otherType);
 
   result = Dart_ObjectIsType(instanceOfTestObj, otherType, &is_instance);
@@ -5915,15 +7278,13 @@ TEST_CASE(DartAPI_LookupLibrary) {
   EXPECT_VALID(result);
 
   result = Dart_LookupLibrary(Dart_Null());
-  EXPECT(Dart_IsError(result));
-  EXPECT_STREQ("Dart_LookupLibrary expects argument 'url' to be non-null.",
-               Dart_GetError(result));
+  EXPECT_ERROR(result,
+               "Dart_LookupLibrary expects argument 'url' to be non-null.");
 
   result = Dart_LookupLibrary(Dart_True());
-  EXPECT(Dart_IsError(result));
-  EXPECT_STREQ(
-      "Dart_LookupLibrary expects argument 'url' to be of type String.",
-      Dart_GetError(result));
+  EXPECT_ERROR(
+      result,
+      "Dart_LookupLibrary expects argument 'url' to be of type String.");
 
   result = Dart_LookupLibrary(Dart_NewApiError("incoming error"));
   EXPECT(Dart_IsError(result));
@@ -5931,9 +7292,7 @@ TEST_CASE(DartAPI_LookupLibrary) {
 
   url = NewString("noodles.dart");
   result = Dart_LookupLibrary(url);
-  EXPECT(Dart_IsError(result));
-  EXPECT_STREQ("Dart_LookupLibrary: library 'noodles.dart' not found.",
-               Dart_GetError(result));
+  EXPECT_ERROR(result, "Dart_LookupLibrary: library 'noodles.dart' not found.");
 }
 
 TEST_CASE(DartAPI_LibraryUrl) {
@@ -5943,15 +7302,13 @@ TEST_CASE(DartAPI_LibraryUrl) {
   EXPECT_VALID(lib);
 
   Dart_Handle result = Dart_LibraryUrl(Dart_Null());
-  EXPECT(Dart_IsError(result));
-  EXPECT_STREQ("Dart_LibraryUrl expects argument 'library' to be non-null.",
-               Dart_GetError(result));
+  EXPECT_ERROR(result,
+               "Dart_LibraryUrl expects argument 'library' to be non-null.");
 
   result = Dart_LibraryUrl(Dart_True());
-  EXPECT(Dart_IsError(result));
-  EXPECT_STREQ(
-      "Dart_LibraryUrl expects argument 'library' to be of type Library.",
-      Dart_GetError(result));
+  EXPECT_ERROR(
+      result,
+      "Dart_LibraryUrl expects argument 'library' to be of type Library.");
 
   result = Dart_LibraryUrl(error);
   EXPECT(Dart_IsError(result));
@@ -6009,21 +7366,18 @@ TEST_CASE(DartAPI_SetNativeResolver) {
   result = Dart_FinalizeLoading(false);
   EXPECT_VALID(result);
   EXPECT(Dart_IsLibrary(lib));
-  Dart_Handle type = Dart_GetType(lib, NewString("Test"), 0, NULL);
+  Dart_Handle type = Dart_GetNonNullableType(lib, NewString("Test"), 0, NULL);
   EXPECT_VALID(type);
 
   result = Dart_SetNativeResolver(Dart_Null(), &MyNativeResolver1, NULL);
-  EXPECT(Dart_IsError(result));
-  EXPECT_STREQ(
-      "Dart_SetNativeResolver expects argument 'library' to be non-null.",
-      Dart_GetError(result));
+  EXPECT_ERROR(
+      result,
+      "Dart_SetNativeResolver expects argument 'library' to be non-null.");
 
   result = Dart_SetNativeResolver(Dart_True(), &MyNativeResolver1, NULL);
-  EXPECT(Dart_IsError(result));
-  EXPECT_STREQ(
-      "Dart_SetNativeResolver expects argument 'library' to be of "
-      "type Library.",
-      Dart_GetError(result));
+  EXPECT_ERROR(result,
+               "Dart_SetNativeResolver expects argument 'library' to be of "
+               "type Library.");
 
   result = Dart_SetNativeResolver(error, &MyNativeResolver1, NULL);
   EXPECT(Dart_IsError(result));
@@ -6131,7 +7485,7 @@ TEST_CASE(DartAPI_ImportLibrary3) {
   lib = TestCase::LoadTestScriptWithDFE(sourcefiles_count, sourcefiles, NULL,
                                         true);
   EXPECT_ERROR(lib,
-               "Compilation failed file:///test-lib:4:10:"
+               "Compilation failed /test-lib:4:10:"
                " Error: Setter not found: 'foo'");
   return;
 
@@ -6267,7 +7621,9 @@ TEST_CASE(DartAPI_Multiroot_FailWhenUriIsWrong) {
       "foo1:///main.dart",
       /* multiroot_filepaths= */ "/bar,/baz",
       /* multiroot_scheme= */ "foo");
-  EXPECT_ERROR(lib, "Compilation failed FileSystemException(uri=foo1:");
+  EXPECT_ERROR(lib,
+               "Compilation failed Invalid argument(s): Exception when reading "
+               "'foo1:///.dart_tool");
 }
 
 void NewNativePort_send123(Dart_Port dest_port_id, Dart_CObject* message) {
@@ -6310,6 +7666,29 @@ TEST_CASE(DartAPI_IllegalPost) {
   Dart_Handle message = Dart_True();
   bool success = Dart_Post(ILLEGAL_PORT, message);
   EXPECT(!success);
+}
+
+static void UnreachableFinalizer(void* isolate_callback_data, void* peer) {
+  UNREACHABLE();
+}
+
+TEST_CASE(DartAPI_PostCObject_DoesNotRunFinalizerOnFailure) {
+  char* my_str =
+      Utils::StrDup("Ownership of this memory remains with the caller");
+
+  Dart_CObject message;
+  message.type = Dart_CObject_kExternalTypedData;
+  message.value.as_external_typed_data.type = Dart_TypedData_kUint8;
+  message.value.as_external_typed_data.length = strlen(my_str);
+  message.value.as_external_typed_data.data =
+      reinterpret_cast<uint8_t*>(my_str);
+  message.value.as_external_typed_data.peer = my_str;
+  message.value.as_external_typed_data.callback = UnreachableFinalizer;
+
+  bool success = Dart_PostCObject(ILLEGAL_PORT, &message);
+  EXPECT(!success);
+
+  free(my_str);  // Never a double-free.
 }
 
 VM_UNIT_TEST_CASE(DartAPI_NewNativePort) {
@@ -6591,8 +7970,8 @@ static Dart_Isolate RunLoopTestCallback(const char* script_name,
 
 // Common code for RunLoop_Success/RunLoop_Failure.
 static void RunLoopTest(bool throw_exception) {
-  Dart_IsolateCreateCallback saved = Isolate::CreateCallback();
-  Isolate::SetCreateCallback(RunLoopTestCallback);
+  Dart_IsolateGroupCreateCallback saved = Isolate::CreateGroupCallback();
+  Isolate::SetCreateGroupCallback(RunLoopTestCallback);
   Dart_Isolate isolate =
       RunLoopTestCallback(NULL, NULL, NULL, NULL, NULL, NULL, NULL);
 
@@ -6616,7 +7995,7 @@ static void RunLoopTest(bool throw_exception) {
   Dart_ExitScope();
   Dart_ShutdownIsolate();
 
-  Isolate::SetCreateCallback(saved);
+  Isolate::SetCreateGroupCallback(saved);
 }
 
 VM_UNIT_TEST_CASE(DartAPI_RunLoop_Success) {
@@ -6627,45 +8006,93 @@ VM_UNIT_TEST_CASE(DartAPI_RunLoop_Exception) {
   RunLoopTest(true);
 }
 
-static void* shutdown_callback_data;
-static void IsolateShutdownTestCallback(void* callback_data) {
-  shutdown_callback_data = callback_data;
+static void* shutdown_isolate_group_data;
+static void* shutdown_isolate_data;
+static void* cleanup_isolate_group_data;
+static void* cleanup_isolate_data;
+
+// Called on isolate shutdown time (which is still allowed to run Dart code)
+static void IsolateShutdownTestCallback(void* group_data, void* isolate_data) {
+  // Shutdown runs before cleanup.
+  EXPECT(cleanup_isolate_group_data == nullptr);
+  EXPECT(cleanup_isolate_data == nullptr);
+
+  // Shutdown must have a current isolate (since it is allowed to execute Dart
+  // code)
+  EXPECT(Dart_CurrentIsolate() != nullptr);
+  EXPECT(Dart_CurrentIsolateGroupData() == group_data);
+  EXPECT(Dart_CurrentIsolateData() == isolate_data);
+
+  shutdown_isolate_group_data = group_data;
+  shutdown_isolate_data = isolate_data;
 }
-static void* cleanup_callback_data;
-static void IsolateCleanupTestCallback(void* callback_data) {
-  cleanup_callback_data = callback_data;
+
+// Called on isolate cleanup time (which is after the isolate has been
+// destroyed)
+static void IsolateCleanupTestCallback(void* group_data, void* isolate_data) {
+  // Cleanup runs after shutdown.
+  EXPECT(shutdown_isolate_group_data != nullptr);
+  EXPECT(shutdown_isolate_data != nullptr);
+
+  // The isolate was destroyed and there should not be a current isolate.
+  EXPECT(Dart_CurrentIsolate() == nullptr);
+
+  cleanup_isolate_group_data = group_data;
+  cleanup_isolate_data = isolate_data;
+}
+
+// Called on isolate group cleanup time (once all isolates have been destroyed)
+static void* cleanup_group_callback_data;
+static void IsolateGroupCleanupTestCallback(void* callback_data) {
+  cleanup_group_callback_data = callback_data;
 }
 
 VM_UNIT_TEST_CASE(DartAPI_IsolateShutdownAndCleanup) {
   Dart_IsolateShutdownCallback saved_shutdown = Isolate::ShutdownCallback();
-  Dart_IsolateCleanupCallback saved_cleanup = Isolate::CleanupCallback();
+  Dart_IsolateGroupCleanupCallback saved_cleanup =
+      Isolate::GroupCleanupCallback();
   Isolate::SetShutdownCallback(IsolateShutdownTestCallback);
   Isolate::SetCleanupCallback(IsolateCleanupTestCallback);
+  Isolate::SetGroupCleanupCallback(IsolateGroupCleanupTestCallback);
 
-  shutdown_callback_data = NULL;
-  cleanup_callback_data = NULL;
-  void* my_data = reinterpret_cast<void*>(12345);
+  shutdown_isolate_group_data = nullptr;
+  shutdown_isolate_data = nullptr;
+  cleanup_group_callback_data = nullptr;
+  void* my_group_data = reinterpret_cast<void*>(123);
+  void* my_data = reinterpret_cast<void*>(456);
+
   // Create an isolate.
-  Dart_Isolate isolate = TestCase::CreateTestIsolate(NULL, my_data);
+  Dart_Isolate isolate =
+      TestCase::CreateTestIsolate(nullptr, my_group_data, my_data);
   EXPECT(isolate != NULL);
 
   // The shutdown callback has not been called.
-  EXPECT_EQ(0, reinterpret_cast<intptr_t>(shutdown_callback_data));
-  EXPECT_EQ(0, reinterpret_cast<intptr_t>(cleanup_callback_data));
+  EXPECT(nullptr == shutdown_isolate_data);
+  EXPECT(nullptr == shutdown_isolate_group_data);
+  EXPECT(nullptr == cleanup_group_callback_data);
+
+  // The isolate is the active isolate which allows us to access the isolate
+  // specific and isolate-group specific data.
+  EXPECT(Dart_CurrentIsolateData() == my_data);
+  EXPECT(Dart_CurrentIsolateGroupData() == my_group_data);
 
   // Shutdown the isolate.
   Dart_ShutdownIsolate();
 
-  // The shutdown callback has been called.
-  EXPECT_EQ(12345, reinterpret_cast<intptr_t>(shutdown_callback_data));
-  EXPECT_EQ(12345, reinterpret_cast<intptr_t>(cleanup_callback_data));
+  // The shutdown & cleanup callbacks have been called.
+  EXPECT(my_data == shutdown_isolate_data);
+  EXPECT(my_group_data == shutdown_isolate_group_data);
+  EXPECT(my_data == cleanup_isolate_data);
+  EXPECT(my_group_data == cleanup_isolate_group_data);
+  EXPECT(my_group_data == cleanup_group_callback_data);
 
   Isolate::SetShutdownCallback(saved_shutdown);
-  Isolate::SetCleanupCallback(saved_cleanup);
+  Isolate::SetGroupCleanupCallback(saved_cleanup);
 }
 
 static int64_t add_result = 0;
-static void IsolateShutdownRunDartCodeTestCallback(void* callback_data) {
+static void IsolateShutdownRunDartCodeTestCallback(void* isolate_group_data,
+                                                   void* isolate_data) {
   Dart_Isolate isolate = Dart_CurrentIsolate();
   if (Dart_IsKernelIsolate(isolate) || Dart_IsServiceIsolate(isolate)) {
     return;
@@ -6698,10 +8125,10 @@ VM_UNIT_TEST_CASE(DartAPI_IsolateShutdownRunDartCode) {
       "}\n";
 
   // Create an isolate.
-  Dart_Isolate isolate = TestCase::CreateTestIsolate();
+  auto isolate = reinterpret_cast<Isolate*>(TestCase::CreateTestIsolate());
   EXPECT(isolate != NULL);
 
-  Isolate::SetShutdownCallback(IsolateShutdownRunDartCodeTestCallback);
+  isolate->set_on_shutdown_callback(IsolateShutdownRunDartCodeTestCallback);
 
   {
     Dart_EnterScope();
@@ -6718,8 +8145,6 @@ VM_UNIT_TEST_CASE(DartAPI_IsolateShutdownRunDartCode) {
 
   // The shutdown callback has not been called.
   EXPECT_EQ(0, add_result);
-
-  EXPECT(isolate != NULL);
 
   // Shutdown the isolate.
   Dart_ShutdownIsolate();
@@ -6805,13 +8230,13 @@ static Dart_NativeFunction MyNativeClosureResolver(Dart_Handle name,
   const char* kNativeFoo2 = "NativeFoo2";
   const char* kNativeFoo3 = "NativeFoo3";
   const char* kNativeFoo4 = "NativeFoo4";
-  if (!strncmp(function_name, kNativeFoo1, strlen(kNativeFoo1))) {
+  if (strncmp(function_name, kNativeFoo1, strlen(kNativeFoo1)) == 0) {
     return &NativeFoo1;
-  } else if (!strncmp(function_name, kNativeFoo2, strlen(kNativeFoo2))) {
+  } else if (strncmp(function_name, kNativeFoo2, strlen(kNativeFoo2)) == 0) {
     return &NativeFoo2;
-  } else if (!strncmp(function_name, kNativeFoo3, strlen(kNativeFoo3))) {
+  } else if (strncmp(function_name, kNativeFoo3, strlen(kNativeFoo3)) == 0) {
     return &NativeFoo3;
-  } else if (!strncmp(function_name, kNativeFoo4, strlen(kNativeFoo4))) {
+  } else if (strncmp(function_name, kNativeFoo4, strlen(kNativeFoo4)) == 0) {
     return &NativeFoo4;
   } else {
     UNREACHABLE();
@@ -6945,13 +8370,13 @@ static Dart_NativeFunction MyStaticNativeClosureResolver(
   const char* kNativeFoo2 = "StaticNativeFoo2";
   const char* kNativeFoo3 = "StaticNativeFoo3";
   const char* kNativeFoo4 = "StaticNativeFoo4";
-  if (!strncmp(function_name, kNativeFoo1, strlen(kNativeFoo1))) {
+  if (strncmp(function_name, kNativeFoo1, strlen(kNativeFoo1)) == 0) {
     return &StaticNativeFoo1;
-  } else if (!strncmp(function_name, kNativeFoo2, strlen(kNativeFoo2))) {
+  } else if (strncmp(function_name, kNativeFoo2, strlen(kNativeFoo2)) == 0) {
     return &StaticNativeFoo2;
-  } else if (!strncmp(function_name, kNativeFoo3, strlen(kNativeFoo3))) {
+  } else if (strncmp(function_name, kNativeFoo3, strlen(kNativeFoo3)) == 0) {
     return &StaticNativeFoo3;
-  } else if (!strncmp(function_name, kNativeFoo4, strlen(kNativeFoo4))) {
+  } else if (strncmp(function_name, kNativeFoo4, strlen(kNativeFoo4)) == 0) {
     return &StaticNativeFoo4;
   } else {
     UNREACHABLE();
@@ -7113,17 +8538,17 @@ TEST_CASE(DartAPI_InvalidGetSetPeer) {
 // the peer and checks that the count of peer objects is decremented
 // by one.
 TEST_CASE(DartAPI_OneNewSpacePeer) {
-  Isolate* isolate = Isolate::Current();
+  Heap* heap = IsolateGroup::Current()->heap();
   Dart_Handle str = NewString("a string");
   EXPECT_VALID(str);
   EXPECT(Dart_IsString(str));
-  EXPECT_EQ(0, isolate->heap()->PeerCount());
+  EXPECT_EQ(0, heap->PeerCount());
   void* out = &out;
   EXPECT_VALID(Dart_GetPeer(str, &out));
   EXPECT(out == NULL);
   int peer = 1234;
   EXPECT_VALID(Dart_SetPeer(str, &peer));
-  EXPECT_EQ(1, isolate->heap()->PeerCount());
+  EXPECT_EQ(1, heap->PeerCount());
   out = &out;
   EXPECT_VALID(Dart_GetPeer(str, &out));
   EXPECT(out == reinterpret_cast<void*>(&peer));
@@ -7131,34 +8556,34 @@ TEST_CASE(DartAPI_OneNewSpacePeer) {
   out = &out;
   EXPECT_VALID(Dart_GetPeer(str, &out));
   EXPECT(out == NULL);
-  EXPECT_EQ(0, isolate->heap()->PeerCount());
+  EXPECT_EQ(0, heap->PeerCount());
 }
 
 // Allocates an object in new space and assigns it a peer.  Allows the
 // peer referent to be garbage collected and checks that the count of
 // peer objects is decremented by one.
 TEST_CASE(DartAPI_CollectOneNewSpacePeer) {
-  Isolate* isolate = Isolate::Current();
+  Heap* heap = IsolateGroup::Current()->heap();
   Dart_EnterScope();
   {
     CHECK_API_SCOPE(thread);
     Dart_Handle str = NewString("a string");
     EXPECT_VALID(str);
     EXPECT(Dart_IsString(str));
-    EXPECT_EQ(0, isolate->heap()->PeerCount());
+    EXPECT_EQ(0, heap->PeerCount());
     void* out = &out;
     EXPECT_VALID(Dart_GetPeer(str, &out));
     EXPECT(out == NULL);
     int peer = 1234;
     EXPECT_VALID(Dart_SetPeer(str, &peer));
-    EXPECT_EQ(1, isolate->heap()->PeerCount());
+    EXPECT_EQ(1, heap->PeerCount());
     out = &out;
     EXPECT_VALID(Dart_GetPeer(str, &out));
     EXPECT(out == reinterpret_cast<void*>(&peer));
     {
       TransitionNativeToVM transition(thread);
-      isolate->heap()->CollectGarbage(Heap::kNew);
-      EXPECT_EQ(1, isolate->heap()->PeerCount());
+      GCTestHelper::CollectNewSpace();
+      EXPECT_EQ(1, heap->PeerCount());
     }
     out = &out;
     EXPECT_VALID(Dart_GetPeer(str, &out));
@@ -7167,8 +8592,8 @@ TEST_CASE(DartAPI_CollectOneNewSpacePeer) {
   Dart_ExitScope();
   {
     TransitionNativeToVM transition(thread);
-    isolate->heap()->CollectGarbage(Heap::kNew);
-    EXPECT_EQ(0, isolate->heap()->PeerCount());
+    GCTestHelper::CollectNewSpace();
+    EXPECT_EQ(0, heap->PeerCount());
   }
 }
 
@@ -7176,37 +8601,37 @@ TEST_CASE(DartAPI_CollectOneNewSpacePeer) {
 // the peers and checks that the count of peer objects is decremented
 // by two.
 TEST_CASE(DartAPI_TwoNewSpacePeers) {
-  Isolate* isolate = Isolate::Current();
+  Heap* heap = IsolateGroup::Current()->heap();
   Dart_Handle s1 = NewString("s1");
   EXPECT_VALID(s1);
   EXPECT(Dart_IsString(s1));
   void* o1 = &o1;
   EXPECT_VALID(Dart_GetPeer(s1, &o1));
   EXPECT(o1 == NULL);
-  EXPECT_EQ(0, isolate->heap()->PeerCount());
+  EXPECT_EQ(0, heap->PeerCount());
   int p1 = 1234;
   EXPECT_VALID(Dart_SetPeer(s1, &p1));
-  EXPECT_EQ(1, isolate->heap()->PeerCount());
+  EXPECT_EQ(1, heap->PeerCount());
   EXPECT_VALID(Dart_GetPeer(s1, &o1));
   EXPECT(o1 == reinterpret_cast<void*>(&p1));
   Dart_Handle s2 = NewString("a string");
   EXPECT_VALID(s2);
   EXPECT(Dart_IsString(s2));
-  EXPECT_EQ(1, isolate->heap()->PeerCount());
+  EXPECT_EQ(1, heap->PeerCount());
   void* o2 = &o2;
   EXPECT(Dart_GetPeer(s2, &o2));
   EXPECT(o2 == NULL);
   int p2 = 5678;
   EXPECT_VALID(Dart_SetPeer(s2, &p2));
-  EXPECT_EQ(2, isolate->heap()->PeerCount());
+  EXPECT_EQ(2, heap->PeerCount());
   EXPECT_VALID(Dart_GetPeer(s2, &o2));
   EXPECT(o2 == reinterpret_cast<void*>(&p2));
   EXPECT_VALID(Dart_SetPeer(s1, NULL));
-  EXPECT_EQ(1, isolate->heap()->PeerCount());
+  EXPECT_EQ(1, heap->PeerCount());
   EXPECT(Dart_GetPeer(s1, &o1));
   EXPECT(o1 == NULL);
   EXPECT_VALID(Dart_SetPeer(s2, NULL));
-  EXPECT_EQ(0, isolate->heap()->PeerCount());
+  EXPECT_EQ(0, heap->PeerCount());
   EXPECT(Dart_GetPeer(s2, &o2));
   EXPECT(o2 == NULL);
 }
@@ -7215,40 +8640,40 @@ TEST_CASE(DartAPI_TwoNewSpacePeers) {
 // the peer referents to be garbage collected and check that the count
 // of peer objects is decremented by two.
 TEST_CASE(DartAPI_CollectTwoNewSpacePeers) {
-  Isolate* isolate = Isolate::Current();
+  Heap* heap = IsolateGroup::Current()->heap();
   Dart_EnterScope();
   {
     CHECK_API_SCOPE(thread);
     Dart_Handle s1 = NewString("s1");
     EXPECT_VALID(s1);
     EXPECT(Dart_IsString(s1));
-    EXPECT_EQ(0, isolate->heap()->PeerCount());
+    EXPECT_EQ(0, heap->PeerCount());
     void* o1 = &o1;
     EXPECT(Dart_GetPeer(s1, &o1));
     EXPECT(o1 == NULL);
     int p1 = 1234;
     EXPECT_VALID(Dart_SetPeer(s1, &p1));
-    EXPECT_EQ(1, isolate->heap()->PeerCount());
+    EXPECT_EQ(1, heap->PeerCount());
     EXPECT_VALID(Dart_GetPeer(s1, &o1));
     EXPECT(o1 == reinterpret_cast<void*>(&p1));
     Dart_Handle s2 = NewString("s2");
     EXPECT_VALID(s2);
     EXPECT(Dart_IsString(s2));
-    EXPECT_EQ(1, isolate->heap()->PeerCount());
+    EXPECT_EQ(1, heap->PeerCount());
     void* o2 = &o2;
     EXPECT(Dart_GetPeer(s2, &o2));
     EXPECT(o2 == NULL);
     int p2 = 5678;
     EXPECT_VALID(Dart_SetPeer(s2, &p2));
-    EXPECT_EQ(2, isolate->heap()->PeerCount());
+    EXPECT_EQ(2, heap->PeerCount());
     EXPECT_VALID(Dart_GetPeer(s2, &o2));
     EXPECT(o2 == reinterpret_cast<void*>(&p2));
   }
   Dart_ExitScope();
   {
     TransitionNativeToVM transition(thread);
-    isolate->heap()->CollectGarbage(Heap::kNew);
-    EXPECT_EQ(0, isolate->heap()->PeerCount());
+    GCTestHelper::CollectNewSpace();
+    EXPECT_EQ(0, heap->PeerCount());
   }
 }
 
@@ -7256,7 +8681,7 @@ TEST_CASE(DartAPI_CollectTwoNewSpacePeers) {
 // garbage collections and checks that the peer count is stable.
 TEST_CASE(DartAPI_CopyNewSpacePeers) {
   const int kPeerCount = 10;
-  Isolate* isolate = Isolate::Current();
+  Heap* heap = IsolateGroup::Current()->heap();
   Dart_Handle s[kPeerCount];
   for (int i = 0; i < kPeerCount; ++i) {
     s[i] = NewString("a string");
@@ -7266,22 +8691,22 @@ TEST_CASE(DartAPI_CopyNewSpacePeers) {
     EXPECT_VALID(Dart_GetPeer(s[i], &o));
     EXPECT(o == NULL);
   }
-  EXPECT_EQ(0, isolate->heap()->PeerCount());
+  EXPECT_EQ(0, heap->PeerCount());
   int p[kPeerCount];
   for (int i = 0; i < kPeerCount; ++i) {
     EXPECT_VALID(Dart_SetPeer(s[i], &p[i]));
-    EXPECT_EQ(i + 1, isolate->heap()->PeerCount());
+    EXPECT_EQ(i + 1, heap->PeerCount());
     void* o = &o;
     EXPECT_VALID(Dart_GetPeer(s[i], &o));
     EXPECT(o == reinterpret_cast<void*>(&p[i]));
   }
-  EXPECT_EQ(kPeerCount, isolate->heap()->PeerCount());
+  EXPECT_EQ(kPeerCount, heap->PeerCount());
   {
     TransitionNativeToVM transition(thread);
-    isolate->heap()->CollectGarbage(Heap::kNew);
-    EXPECT_EQ(kPeerCount, isolate->heap()->PeerCount());
-    isolate->heap()->CollectGarbage(Heap::kNew);
-    EXPECT_EQ(kPeerCount, isolate->heap()->PeerCount());
+    GCTestHelper::CollectNewSpace();
+    EXPECT_EQ(kPeerCount, heap->PeerCount());
+    GCTestHelper::CollectNewSpace();
+    EXPECT_EQ(kPeerCount, heap->PeerCount());
   }
 }
 
@@ -7289,11 +8714,11 @@ TEST_CASE(DartAPI_CopyNewSpacePeers) {
 // the peer to old space.  Removes the peer and check that the count
 // of peer objects is decremented by one.
 TEST_CASE(DartAPI_OnePromotedPeer) {
-  Isolate* isolate = Isolate::Current();
+  Heap* heap = IsolateGroup::Current()->heap();
   Dart_Handle str = NewString("a string");
   EXPECT_VALID(str);
   EXPECT(Dart_IsString(str));
-  EXPECT_EQ(0, isolate->heap()->PeerCount());
+  EXPECT_EQ(0, heap->PeerCount());
   void* out = &out;
   EXPECT(Dart_GetPeer(str, &out));
   EXPECT(out == NULL);
@@ -7302,11 +8727,11 @@ TEST_CASE(DartAPI_OnePromotedPeer) {
   out = &out;
   EXPECT(Dart_GetPeer(str, &out));
   EXPECT(out == reinterpret_cast<void*>(&peer));
-  EXPECT_EQ(1, isolate->heap()->PeerCount());
+  EXPECT_EQ(1, heap->PeerCount());
   {
     TransitionNativeToVM transition(thread);
-    isolate->heap()->CollectGarbage(Heap::kNew);
-    isolate->heap()->CollectGarbage(Heap::kNew);
+    GCTestHelper::CollectNewSpace();
+    GCTestHelper::CollectNewSpace();
   }
   {
     CHECK_API_SCOPE(thread);
@@ -7318,36 +8743,36 @@ TEST_CASE(DartAPI_OnePromotedPeer) {
   }
   EXPECT_VALID(Dart_GetPeer(str, &out));
   EXPECT(out == reinterpret_cast<void*>(&peer));
-  EXPECT_EQ(1, isolate->heap()->PeerCount());
+  EXPECT_EQ(1, heap->PeerCount());
   EXPECT_VALID(Dart_SetPeer(str, NULL));
   out = &out;
   EXPECT_VALID(Dart_GetPeer(str, &out));
   EXPECT(out == NULL);
-  EXPECT_EQ(0, isolate->heap()->PeerCount());
+  EXPECT_EQ(0, heap->PeerCount());
 }
 
 // Allocates an object in old space and assigns it a peer.  Removes
 // the peer and checks that the count of peer objects is decremented
 // by one.
 TEST_CASE(DartAPI_OneOldSpacePeer) {
-  Isolate* isolate = Isolate::Current();
+  Heap* heap = IsolateGroup::Current()->heap();
   Dart_Handle str = AllocateOldString("str");
   EXPECT_VALID(str);
   EXPECT(Dart_IsString(str));
-  EXPECT_EQ(0, isolate->heap()->PeerCount());
+  EXPECT_EQ(0, heap->PeerCount());
   void* out = &out;
   EXPECT(Dart_GetPeer(str, &out));
   EXPECT(out == NULL);
   int peer = 1234;
   EXPECT_VALID(Dart_SetPeer(str, &peer));
-  EXPECT_EQ(1, isolate->heap()->PeerCount());
+  EXPECT_EQ(1, heap->PeerCount());
   out = &out;
   EXPECT_VALID(Dart_GetPeer(str, &out));
   EXPECT(out == reinterpret_cast<void*>(&peer));
   {
     TransitionNativeToVM transition(thread);
-    isolate->heap()->CollectGarbage(Heap::kOld);
-    EXPECT_EQ(1, isolate->heap()->PeerCount());
+    GCTestHelper::CollectOldSpace();
+    EXPECT_EQ(1, heap->PeerCount());
   }
   EXPECT_VALID(Dart_GetPeer(str, &out));
   EXPECT(out == reinterpret_cast<void*>(&peer));
@@ -7355,14 +8780,14 @@ TEST_CASE(DartAPI_OneOldSpacePeer) {
   out = &out;
   EXPECT_VALID(Dart_GetPeer(str, &out));
   EXPECT(out == NULL);
-  EXPECT_EQ(0, isolate->heap()->PeerCount());
+  EXPECT_EQ(0, heap->PeerCount());
 }
 
 // Allocates an object in old space and assigns it a peer.  Allow the
 // peer referent to be garbage collected and check that the count of
 // peer objects is decremented by one.
 TEST_CASE(DartAPI_CollectOneOldSpacePeer) {
-  Isolate* isolate = Isolate::Current();
+  Heap* heap = IsolateGroup::Current()->heap();
   Dart_EnterScope();
   {
     Thread* T = Thread::Current();
@@ -7370,20 +8795,20 @@ TEST_CASE(DartAPI_CollectOneOldSpacePeer) {
     Dart_Handle str = AllocateOldString("str");
     EXPECT_VALID(str);
     EXPECT(Dart_IsString(str));
-    EXPECT_EQ(0, isolate->heap()->PeerCount());
+    EXPECT_EQ(0, heap->PeerCount());
     void* out = &out;
     EXPECT(Dart_GetPeer(str, &out));
     EXPECT(out == NULL);
     int peer = 1234;
     EXPECT_VALID(Dart_SetPeer(str, &peer));
-    EXPECT_EQ(1, isolate->heap()->PeerCount());
+    EXPECT_EQ(1, heap->PeerCount());
     out = &out;
     EXPECT_VALID(Dart_GetPeer(str, &out));
     EXPECT(out == reinterpret_cast<void*>(&peer));
     {
       TransitionNativeToVM transition(thread);
-      isolate->heap()->CollectGarbage(Heap::kOld);
-      EXPECT_EQ(1, isolate->heap()->PeerCount());
+      GCTestHelper::CollectOldSpace();
+      EXPECT_EQ(1, heap->PeerCount());
     }
     EXPECT_VALID(Dart_GetPeer(str, &out));
     EXPECT(out == reinterpret_cast<void*>(&peer));
@@ -7391,8 +8816,8 @@ TEST_CASE(DartAPI_CollectOneOldSpacePeer) {
   Dart_ExitScope();
   {
     TransitionNativeToVM transition(thread);
-    isolate->heap()->CollectGarbage(Heap::kOld);
-    EXPECT_EQ(0, isolate->heap()->PeerCount());
+    GCTestHelper::CollectOldSpace();
+    EXPECT_EQ(0, heap->PeerCount());
   }
 }
 
@@ -7400,40 +8825,40 @@ TEST_CASE(DartAPI_CollectOneOldSpacePeer) {
 // the peers and checks that the count of peer objects is decremented
 // by two.
 TEST_CASE(DartAPI_TwoOldSpacePeers) {
-  Isolate* isolate = Isolate::Current();
+  Heap* heap = IsolateGroup::Current()->heap();
   Dart_Handle s1 = AllocateOldString("s1");
   EXPECT_VALID(s1);
   EXPECT(Dart_IsString(s1));
-  EXPECT_EQ(0, isolate->heap()->PeerCount());
+  EXPECT_EQ(0, heap->PeerCount());
   void* o1 = &o1;
   EXPECT(Dart_GetPeer(s1, &o1));
   EXPECT(o1 == NULL);
   int p1 = 1234;
   EXPECT_VALID(Dart_SetPeer(s1, &p1));
-  EXPECT_EQ(1, isolate->heap()->PeerCount());
+  EXPECT_EQ(1, heap->PeerCount());
   o1 = &o1;
   EXPECT_VALID(Dart_GetPeer(s1, &o1));
   EXPECT(o1 == reinterpret_cast<void*>(&p1));
   Dart_Handle s2 = AllocateOldString("s2");
   EXPECT_VALID(s2);
   EXPECT(Dart_IsString(s2));
-  EXPECT_EQ(1, isolate->heap()->PeerCount());
+  EXPECT_EQ(1, heap->PeerCount());
   void* o2 = &o2;
   EXPECT(Dart_GetPeer(s2, &o2));
   EXPECT(o2 == NULL);
   int p2 = 5678;
   EXPECT_VALID(Dart_SetPeer(s2, &p2));
-  EXPECT_EQ(2, isolate->heap()->PeerCount());
+  EXPECT_EQ(2, heap->PeerCount());
   o2 = &o2;
   EXPECT_VALID(Dart_GetPeer(s2, &o2));
   EXPECT(o2 == reinterpret_cast<void*>(&p2));
   EXPECT_VALID(Dart_SetPeer(s1, NULL));
-  EXPECT_EQ(1, isolate->heap()->PeerCount());
+  EXPECT_EQ(1, heap->PeerCount());
   o1 = &o1;
   EXPECT(Dart_GetPeer(s1, &o1));
   EXPECT(o1 == NULL);
   EXPECT_VALID(Dart_SetPeer(s2, NULL));
-  EXPECT_EQ(0, isolate->heap()->PeerCount());
+  EXPECT_EQ(0, heap->PeerCount());
   o2 = &o2;
   EXPECT_VALID(Dart_GetPeer(s2, &o2));
   EXPECT(o2 == NULL);
@@ -7443,7 +8868,7 @@ TEST_CASE(DartAPI_TwoOldSpacePeers) {
 // the peer referents to be garbage collected and checks that the
 // count of peer objects is decremented by two.
 TEST_CASE(DartAPI_CollectTwoOldSpacePeers) {
-  Isolate* isolate = Isolate::Current();
+  Heap* heap = IsolateGroup::Current()->heap();
   Dart_EnterScope();
   {
     Thread* T = Thread::Current();
@@ -7451,26 +8876,26 @@ TEST_CASE(DartAPI_CollectTwoOldSpacePeers) {
     Dart_Handle s1 = AllocateOldString("s1");
     EXPECT_VALID(s1);
     EXPECT(Dart_IsString(s1));
-    EXPECT_EQ(0, isolate->heap()->PeerCount());
+    EXPECT_EQ(0, heap->PeerCount());
     void* o1 = &o1;
     EXPECT(Dart_GetPeer(s1, &o1));
     EXPECT(o1 == NULL);
     int p1 = 1234;
     EXPECT_VALID(Dart_SetPeer(s1, &p1));
-    EXPECT_EQ(1, isolate->heap()->PeerCount());
+    EXPECT_EQ(1, heap->PeerCount());
     o1 = &o1;
     EXPECT_VALID(Dart_GetPeer(s1, &o1));
     EXPECT(o1 == reinterpret_cast<void*>(&p1));
     Dart_Handle s2 = AllocateOldString("s2");
     EXPECT_VALID(s2);
     EXPECT(Dart_IsString(s2));
-    EXPECT_EQ(1, isolate->heap()->PeerCount());
+    EXPECT_EQ(1, heap->PeerCount());
     void* o2 = &o2;
     EXPECT(Dart_GetPeer(s2, &o2));
     EXPECT(o2 == NULL);
     int p2 = 5678;
     EXPECT_VALID(Dart_SetPeer(s2, &p2));
-    EXPECT_EQ(2, isolate->heap()->PeerCount());
+    EXPECT_EQ(2, heap->PeerCount());
     o2 = &o2;
     EXPECT_VALID(Dart_GetPeer(s2, &o2));
     EXPECT(o2 == reinterpret_cast<void*>(&p2));
@@ -7478,14 +8903,14 @@ TEST_CASE(DartAPI_CollectTwoOldSpacePeers) {
   Dart_ExitScope();
   {
     TransitionNativeToVM transition(thread);
-    isolate->heap()->CollectGarbage(Heap::kOld);
-    EXPECT_EQ(0, isolate->heap()->PeerCount());
+    GCTestHelper::CollectOldSpace();
+    EXPECT_EQ(0, heap->PeerCount());
   }
 }
 
 TEST_CASE(DartAPI_ExternalStringIndexOf) {
   const char* kScriptChars =
-      "main(String pattern) {\n"
+      "testMain(String pattern) {\n"
       "  var str = 'Hello World';\n"
       "  return str.indexOf(pattern);\n"
       "}\n";
@@ -7500,7 +8925,7 @@ TEST_CASE(DartAPI_ExternalStringIndexOf) {
 
   Dart_Handle dart_args[1];
   dart_args[0] = ext8;
-  Dart_Handle result = Dart_Invoke(lib, NewString("main"), 1, dart_args);
+  Dart_Handle result = Dart_Invoke(lib, NewString("testMain"), 1, dart_args);
   int64_t value = 0;
   result = Dart_IntegerToInt64(result, &value);
   EXPECT_VALID(result);
@@ -7657,516 +9082,39 @@ TEST_CASE(DartAPI_TimelineAsync) {
   EXPECT_SUBSTRING("testAsyncEvent", js.ToCString());
 }
 
-struct AppendData {
-  uint8_t* buffer;
-  intptr_t buffer_length;
-};
-
-static void AppendStreamConsumer(Dart_StreamConsumer_State state,
-                                 const char* stream_name,
-                                 const uint8_t* buffer,
-                                 intptr_t buffer_length,
-                                 void* user_data) {
-  if (state == Dart_StreamConsumer_kFinish) {
-    return;
-  }
-  AppendData* data = reinterpret_cast<AppendData*>(user_data);
-  if (state == Dart_StreamConsumer_kStart) {
-    // Initialize append data.
-    data->buffer = NULL;
-    data->buffer_length = 0;
-    return;
-  }
-  ASSERT(state == Dart_StreamConsumer_kData);
-
-  // Grow buffer.
-  data->buffer = reinterpret_cast<uint8_t*>(
-      realloc(data->buffer, data->buffer_length + buffer_length));
-  // Copy new data.
-  memmove(&data->buffer[data->buffer_length], buffer, buffer_length);
-  // Update length.
-  data->buffer_length += buffer_length;
+static void HintFreedNative(Dart_NativeArguments args) {
+  int64_t size = 0;
+  EXPECT_VALID(Dart_GetNativeIntegerArgument(args, 0, &size));
+  Dart_HintFreed(size);
 }
 
-TEST_CASE(DartAPI_TimelineGetTrace) {
-  const char* kScriptChars =
-      "foo() => 'a';\n"
-      "main() => foo();\n";
-
-  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
-
-  const char* buffer = NULL;
-  intptr_t buffer_length = 0;
-  bool success = false;
-
-  // Enable recording of all streams.
-  Dart_GlobalTimelineSetRecordedStreams(DART_TIMELINE_STREAM_ALL);
-
-  // Invoke main, which will be compiled resulting in a compiler event in
-  // the timeline.
-  Dart_Handle result = Dart_Invoke(lib, NewString("main"), 0, NULL);
-  EXPECT_VALID(result);
-
-  // Grab the trace.
-  AppendData data;
-  success = Dart_GlobalTimelineGetTrace(AppendStreamConsumer, &data);
-  EXPECT(success);
-  buffer = reinterpret_cast<char*>(data.buffer);
-  buffer_length = data.buffer_length;
-  EXPECT(buffer_length > 0);
-  EXPECT(buffer != NULL);
-
-  // Response starts with a '{' character and not a '['.
-  EXPECT(buffer[0] == '{');
-  // Response ends with a '}' character and not a ']'.
-  EXPECT(buffer[buffer_length - 1] == '\0');
-  EXPECT(buffer[buffer_length - 2] == '}');
-
-  // Heartbeat test.
-  EXPECT_SUBSTRING("\"cat\":\"Compiler\"", buffer);
-  EXPECT_SUBSTRING("\"name\":\"CompileFunction\"", buffer);
-  EXPECT_SUBSTRING("\"function\":\"::_main\"", buffer);
-
-  // Free buffer allocated by AppendStreamConsumer
-  free(data.buffer);
+static Dart_NativeFunction HintFreed_native_lookup(Dart_Handle name,
+                                                   int argument_count,
+                                                   bool* auto_setup_scope) {
+  return HintFreedNative;
 }
 
-TEST_CASE(DartAPI_TimelineGetTraceOnlyDartEvents) {
+TEST_CASE(DartAPI_HintFreed) {
   const char* kScriptChars =
-      "import 'dart:developer';\n"
-      ""
-      "main() {\n"
-      "  Timeline.startSync('DART_NAME');\n"
-      "  Timeline.finishSync();\n"
+      "void hintFreed(int size) native 'Test_nativeFunc';\n"
+      "void main() {\n"
+      "  var v;\n"
+      "  for (var i = 0; i < 100; i++) {\n"
+      "    var t = [];\n"
+      "    for (var j = 0; j < 10000; j++) {\n"
+      "      t.add(List.filled(100, null));\n"
+      "    }\n"
+      "    v = t;\n"
+      "    hintFreed(100 * 10000 * 4);\n"
+      "  }\n"
       "}\n";
-
-  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
-
-  const char* buffer = NULL;
-  intptr_t buffer_length = 0;
-  bool success = false;
-
-  // Enable recording of the Dart stream.
-  Dart_GlobalTimelineSetRecordedStreams(DART_TIMELINE_STREAM_DART);
-
-  // Invoke main, which will add a new timeline event from Dart.
+  Dart_Handle lib =
+      TestCase::LoadTestScript(kScriptChars, &HintFreed_native_lookup);
   Dart_Handle result = Dart_Invoke(lib, NewString("main"), 0, NULL);
   EXPECT_VALID(result);
-
-  // Grab the trace.
-  AppendData data;
-  data.buffer = NULL;
-  data.buffer_length = 0;
-  success = Dart_GlobalTimelineGetTrace(AppendStreamConsumer, &data);
-  EXPECT(success);
-  buffer = reinterpret_cast<char*>(data.buffer);
-  buffer_length = data.buffer_length;
-  EXPECT(buffer_length > 0);
-  EXPECT(buffer != NULL);
-
-  // Response starts with a '{' character and not a '['.
-  EXPECT(buffer[0] == '{');
-  // Response ends with a '}' character and not a ']'.
-  EXPECT(buffer[buffer_length - 1] == '\0');
-  EXPECT(buffer[buffer_length - 2] == '}');
-
-  // Heartbeat test.
-  EXPECT_SUBSTRING("\"cat\":\"Dart\"", buffer);
-  EXPECT_SUBSTRING("\"name\":\"DART_NAME\"", buffer);
-
-  // Free buffer allocated by AppendStreamConsumer
-  free(data.buffer);
 }
 
-TEST_CASE(DartAPI_TimelineGetTraceWithDartEvents) {
-  const char* kScriptChars =
-      "import 'dart:developer';\n"
-      "\n"
-      "main() {\n"
-      "  Timeline.startSync('DART_NAME');\n"
-      "  Timeline.finishSync();\n"
-      "}\n";
-
-  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
-
-  const char* buffer = NULL;
-  intptr_t buffer_length = 0;
-  bool success = false;
-
-  // Enable recording of all streams.
-  Dart_GlobalTimelineSetRecordedStreams(DART_TIMELINE_STREAM_ALL);
-
-  // Invoke main, which will be compiled resulting in a compiler event in
-  // the timeline.
-  Dart_Handle result = Dart_Invoke(lib, NewString("main"), 0, NULL);
-  EXPECT_VALID(result);
-
-  // Grab the trace.
-  AppendData data;
-  success = Dart_GlobalTimelineGetTrace(AppendStreamConsumer, &data);
-  EXPECT(success);
-  buffer = reinterpret_cast<char*>(data.buffer);
-  buffer_length = data.buffer_length;
-  EXPECT(buffer_length > 0);
-  EXPECT(buffer != NULL);
-
-  // Response starts with a '{' character and not a '['.
-  EXPECT(buffer[0] == '{');
-  // Response ends with a '}' character and not a ']'.
-  EXPECT(buffer[buffer_length - 1] == '\0');
-  EXPECT(buffer[buffer_length - 2] == '}');
-
-  // Heartbeat test.
-  EXPECT_SUBSTRING("\"cat\":\"Compiler\"", buffer);
-  EXPECT_SUBSTRING("\"name\":\"CompileFunction\"", buffer);
-  EXPECT_SUBSTRING("\"function\":\"::_main\"", buffer);
-  EXPECT_SUBSTRING("\"cat\":\"Dart\"", buffer);
-  EXPECT_SUBSTRING("\"name\":\"DART_NAME\"", buffer);
-
-  // Free buffer allocated by AppendStreamConsumer
-  free(data.buffer);
-}
-
-TEST_CASE(DartAPI_TimelineGetTraceGlobalOverride) {
-  const char* kScriptChars =
-      "foo() => 'a';\n"
-      "main() => foo();\n";
-
-  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
-
-  const char* buffer = NULL;
-  intptr_t buffer_length = 0;
-  bool success = false;
-
-  // Enable recording of all streams across the entire vm.
-  Dart_GlobalTimelineSetRecordedStreams(DART_TIMELINE_STREAM_ALL);
-
-  // Invoke main, which will be compiled resulting in a compiler event in
-  // the timeline.
-  Dart_Handle result = Dart_Invoke(lib, NewString("main"), 0, NULL);
-  EXPECT_VALID(result);
-
-  // Grab the trace.
-  AppendData data;
-  success = Dart_GlobalTimelineGetTrace(AppendStreamConsumer, &data);
-  EXPECT(success);
-  buffer = reinterpret_cast<char*>(data.buffer);
-  buffer_length = data.buffer_length;
-  EXPECT(buffer_length > 0);
-  EXPECT(buffer != NULL);
-
-  // Response starts with a '{' character and not a '['.
-  EXPECT(buffer[0] == '{');
-  // Response ends with a '}' character and not a ']'.
-  EXPECT(buffer[buffer_length - 1] == '\0');
-  EXPECT(buffer[buffer_length - 2] == '}');
-
-  // Heartbeat test.
-  EXPECT_SUBSTRING("\"cat\":\"Compiler\"", buffer);
-  EXPECT_SUBSTRING("\"name\":\"CompileFunction\"", buffer);
-  EXPECT_SUBSTRING("\"function\":\"::_main\"", buffer);
-
-  // Free buffer allocated by AppendStreamConsumer
-  free(data.buffer);
-}
-
-static const char* arg_names[] = {"arg0"};
-
-static const char* arg_values[] = {"value0"};
-
-TEST_CASE(DartAPI_GlobalTimelineGetTrace) {
-  const char* kScriptChars =
-      "bar() => 'z';\n"
-      "foo() => 'a';\n"
-      "main() => foo();\n";
-
-  // Enable all streams.
-  Dart_GlobalTimelineSetRecordedStreams(DART_TIMELINE_STREAM_ALL |
-                                        DART_TIMELINE_STREAM_VM);
-  Dart_Handle lib;
-  {
-    // Add something to the VM stream.
-    TimelineDurationScope tds(Timeline::GetVMStream(), "TestVMDuration");
-    lib = TestCase::LoadTestScript(kScriptChars, NULL);
-  }
-
-  {
-    // Add something to the embedder stream.
-    Dart_TimelineEvent("TRACE_EVENT", Dart_TimelineGetMicros(), 0,
-                       Dart_Timeline_Event_Begin, 1, &arg_names[0],
-                       &arg_values[0]);
-    // Add counter to the embedder stream.
-    Dart_TimelineEvent("COUNTER_EVENT", Dart_TimelineGetMicros(), 0,
-                       Dart_Timeline_Event_Counter, 0, NULL, NULL);
-    Dart_SetThreadName("CUSTOM THREAD NAME");
-  }
-
-  // Invoke main, which will be compiled resulting in a compiler event in
-  // the timeline.
-  Dart_Handle result = Dart_Invoke(lib, NewString("main"), 0, NULL);
-  EXPECT_VALID(result);
-
-  const char* buffer = NULL;
-  intptr_t buffer_length = 0;
-  bool success = false;
-
-  // Grab the global trace.
-  AppendData data;
-  {
-    Thread* T = Thread::Current();
-    StackZone zone(T);
-    success = Dart_GlobalTimelineGetTrace(AppendStreamConsumer, &data);
-    EXPECT(success);
-    // The call should do no zone allocation.
-    EXPECT(zone.SizeInBytes() == 0);
-  }
-  buffer = reinterpret_cast<char*>(data.buffer);
-  buffer_length = data.buffer_length;
-  EXPECT(buffer_length > 0);
-  EXPECT(buffer != NULL);
-
-  // Response starts with a '{' character and not a '['.
-  EXPECT(buffer[0] == '{');
-  // Response ends with a '}' character and not a ']'.
-  EXPECT(buffer[buffer_length - 1] == '\0');
-  EXPECT(buffer[buffer_length - 2] == '}');
-
-  // Heartbeat test.
-  EXPECT_SUBSTRING("\"name\":\"TestVMDuration\"", buffer);
-  EXPECT_SUBSTRING("\"cat\":\"Compiler\"", buffer);
-  EXPECT_SUBSTRING("\"name\":\"CompileFunction\"", buffer);
-  EXPECT_SUBSTRING("\"function\":\"::_main\"", buffer);
-  EXPECT_NOTSUBSTRING("\"function\":\"::_bar\"", buffer);
-  EXPECT_SUBSTRING("TRACE_EVENT", buffer);
-  EXPECT_SUBSTRING("arg0", buffer);
-  EXPECT_SUBSTRING("value0", buffer);
-  EXPECT_SUBSTRING("COUNTER_EVENT", buffer);
-  EXPECT_SUBSTRING("CUSTOM THREAD NAME", buffer);
-
-  // Free buffer allocated by AppendStreamConsumer
-  free(data.buffer);
-  data.buffer = NULL;
-  data.buffer_length = 0;
-
-  // Retrieving the global trace resulted in all open blocks being reclaimed.
-  // Add some new events and verify that both sets of events are present
-  // in the resulting trace.
-  {
-    // Add something to the VM stream.
-    TimelineDurationScope tds(Timeline::GetVMStream(), "TestVMDuration2");
-    // Invoke bar, which will be compiled resulting in a compiler event in
-    // the timeline.
-    result = Dart_Invoke(lib, NewString("bar"), 0, NULL);
-  }
-
-  // Grab the global trace.
-  {
-    Thread* T = Thread::Current();
-    StackZone zone(T);
-    success = Dart_GlobalTimelineGetTrace(AppendStreamConsumer, &data);
-    EXPECT(success);
-    EXPECT(zone.SizeInBytes() == 0);
-  }
-  buffer = reinterpret_cast<char*>(data.buffer);
-  buffer_length = data.buffer_length;
-  EXPECT(buffer_length > 0);
-  EXPECT(buffer != NULL);
-  // Response starts with a '{' character and not a '['.
-  EXPECT(buffer[0] == '{');
-  // Response ends with a '}' character and not a ']'.
-  EXPECT(buffer[buffer_length - 1] == '\0');
-  EXPECT(buffer[buffer_length - 2] == '}');
-
-  // Heartbeat test for old events.
-  EXPECT_SUBSTRING("\"name\":\"TestVMDuration\"", buffer);
-  EXPECT_SUBSTRING("\"cat\":\"Compiler\"", buffer);
-  EXPECT_SUBSTRING("\"name\":\"CompileFunction\"", buffer);
-  EXPECT_SUBSTRING("\"function\":\"::_main\"", buffer);
-
-  // Heartbeat test for new events.
-  EXPECT_SUBSTRING("\"name\":\"TestVMDuration2\"", buffer);
-  EXPECT_SUBSTRING("\"function\":\"::_bar\"", buffer);
-
-  // Free buffer allocated by AppendStreamConsumer
-  free(data.buffer);
-}
-
-class GlobalTimelineThreadData {
- public:
-  GlobalTimelineThreadData()
-      : monitor_(new Monitor()), data_(new AppendData()), running_(true) {}
-
-  ~GlobalTimelineThreadData() {
-    delete monitor_;
-    monitor_ = NULL;
-    free(data_->buffer);
-    data_->buffer = NULL;
-    data_->buffer_length = 0;
-    delete data_;
-    data_ = NULL;
-  }
-
-  Monitor* monitor() const { return monitor_; }
-  bool running() const { return running_; }
-  AppendData* data() const { return data_; }
-  uint8_t* buffer() const { return data_->buffer; }
-  intptr_t buffer_length() const { return data_->buffer_length; }
-
-  void set_running(bool running) { running_ = running; }
-
- private:
-  Monitor* monitor_;
-  AppendData* data_;
-  bool running_;
-};
-
-static void GlobalTimelineThread(uword parameter) {
-  GlobalTimelineThreadData* data =
-      reinterpret_cast<GlobalTimelineThreadData*>(parameter);
-  Thread* T = Thread::Current();
-  // When there is no current Thread, then Zone allocation will fail.
-  EXPECT(T == NULL);
-  {
-    MonitorLocker ml(data->monitor());
-    bool success =
-        Dart_GlobalTimelineGetTrace(AppendStreamConsumer, data->data());
-    EXPECT(success);
-    data->set_running(false);
-    ml.Notify();
-  }
-}
-
-// This test is the same as the one above except that the calls to
-// Dart_GlobalTimelineGetTrace are made from a fresh thread. This ensures that
-// we can call the function from a thread for which we have not set up a
-// Thread object.
-TEST_CASE(DartAPI_GlobalTimelineGetTrace_Threaded) {
-  const char* kScriptChars =
-      "bar() => 'z';\n"
-      "foo() => 'a';\n"
-      "main() => foo();\n";
-
-  // Enable all streams.
-  Dart_GlobalTimelineSetRecordedStreams(DART_TIMELINE_STREAM_ALL |
-                                        DART_TIMELINE_STREAM_VM);
-  Dart_Handle lib;
-  {
-    // Add something to the VM stream.
-    TimelineDurationScope tds(Timeline::GetVMStream(), "TestVMDuration");
-    lib = TestCase::LoadTestScript(kScriptChars, NULL);
-  }
-
-  // Invoke main, which will be compiled resulting in a compiler event in
-  // the timeline.
-  Dart_Handle result = Dart_Invoke(lib, NewString("main"), 0, NULL);
-  EXPECT_VALID(result);
-
-  const char* buffer = NULL;
-  intptr_t buffer_length = 0;
-
-  // Run Dart_GlobalTimelineGetTrace on a fresh thread.
-  GlobalTimelineThreadData data;
-  int err = OSThread::Start("Timeline test thread", GlobalTimelineThread,
-                            reinterpret_cast<uword>(&data));
-  EXPECT(err == 0);
-  {
-    MonitorLocker ml(data.monitor());
-    while (data.running()) {
-      ml.Wait();
-    }
-    buffer = reinterpret_cast<char*>(data.buffer());
-    buffer_length = data.buffer_length();
-  }
-  EXPECT(buffer_length > 0);
-  EXPECT(buffer != NULL);
-
-  // Response starts with a '{' character and not a '['.
-  EXPECT(buffer[0] == '{');
-  // Response ends with a '}' character and not a ']'.
-  EXPECT(buffer[buffer_length - 1] == '\0');
-  EXPECT(buffer[buffer_length - 2] == '}');
-
-  // Heartbeat test.
-  EXPECT_SUBSTRING("\"name\":\"TestVMDuration\"", buffer);
-  EXPECT_SUBSTRING("\"cat\":\"Compiler\"", buffer);
-  EXPECT_SUBSTRING("\"name\":\"CompileFunction\"", buffer);
-  EXPECT_SUBSTRING("\"function\":\"::_main\"", buffer);
-  EXPECT_NOTSUBSTRING("\"function\":\"::_bar\"", buffer);
-
-  // Retrieving the global trace resulted in all open blocks being reclaimed.
-  // Add some new events and verify that both sets of events are present
-  // in the resulting trace.
-  {
-    // Add something to the VM stream.
-    TimelineDurationScope tds(Timeline::GetVMStream(), "TestVMDuration2");
-    // Invoke bar, which will be compiled resulting in a compiler event in
-    // the timeline.
-    result = Dart_Invoke(lib, NewString("bar"), 0, NULL);
-  }
-
-  // Grab the global trace.
-  GlobalTimelineThreadData data2;
-  err = OSThread::Start("Timeline test thread", GlobalTimelineThread,
-                        reinterpret_cast<uword>(&data2));
-  EXPECT(err == 0);
-  {
-    MonitorLocker ml(data2.monitor());
-    while (data2.running()) {
-      ml.Wait();
-    }
-    buffer = reinterpret_cast<char*>(data2.buffer());
-    buffer_length = data2.buffer_length();
-  }
-
-  EXPECT(buffer_length > 0);
-  EXPECT(buffer != NULL);
-  // Response starts with a '{' character and not a '['.
-  EXPECT(buffer[0] == '{');
-  // Response ends with a '}' character and not a ']'.
-  EXPECT(buffer[buffer_length - 1] == '\0');
-  EXPECT(buffer[buffer_length - 2] == '}');
-
-  // Heartbeat test for old events.
-  EXPECT_SUBSTRING("\"name\":\"TestVMDuration\"", buffer);
-  EXPECT_SUBSTRING("\"cat\":\"Compiler\"", buffer);
-  EXPECT_SUBSTRING("\"name\":\"CompileFunction\"", buffer);
-  EXPECT_SUBSTRING("\"function\":\"::_main\"", buffer);
-
-  // Heartbeat test for new events.
-  EXPECT_SUBSTRING("\"name\":\"TestVMDuration2\"", buffer);
-  EXPECT_SUBSTRING("\"function\":\"::_bar\"", buffer);
-}
-
-static bool start_called = false;
-static bool stop_called = false;
-
-static void StartRecording() {
-  start_called = true;
-}
-
-static void StopRecording() {
-  stop_called = true;
-}
-
-TEST_CASE(DartAPI_EmbedderTimelineStartStopRecording) {
-  Dart_SetEmbedderTimelineCallbacks(StartRecording, StopRecording);
-
-  EXPECT(!start_called);
-  EXPECT(!stop_called);
-  Timeline::SetStreamEmbedderEnabled(true);
-  EXPECT(start_called);
-  EXPECT(!stop_called);
-
-  start_called = false;
-  stop_called = false;
-  EXPECT(!start_called);
-  EXPECT(!stop_called);
-  Timeline::SetStreamEmbedderEnabled(false);
-  EXPECT(!start_called);
-  EXPECT(stop_called);
-}
-
-void NotifyIdleShortNative(Dart_NativeArguments args) {
+static void NotifyIdleShortNative(Dart_NativeArguments args) {
   Dart_NotifyIdle(Dart_TimelineGetMicros() + 10 * kMicrosecondsPerMillisecond);
 }
 
@@ -8174,7 +9122,7 @@ static Dart_NativeFunction NotifyIdleShort_native_lookup(
     Dart_Handle name,
     int argument_count,
     bool* auto_setup_scope) {
-  return reinterpret_cast<Dart_NativeFunction>(&NotifyIdleShortNative);
+  return NotifyIdleShortNative;
 }
 
 TEST_CASE(DartAPI_NotifyIdleShort) {
@@ -8183,9 +9131,9 @@ TEST_CASE(DartAPI_NotifyIdleShort) {
       "void main() {\n"
       "  var v;\n"
       "  for (var i = 0; i < 100; i++) {\n"
-      "    var t = new List();\n"
+      "    var t = [];\n"
       "    for (var j = 0; j < 10000; j++) {\n"
-      "      t.add(new List(100));\n"
+      "      t.add(List.filled(100, null));\n"
       "    }\n"
       "    v = t;\n"
       "    notifyIdle();\n"
@@ -8197,7 +9145,7 @@ TEST_CASE(DartAPI_NotifyIdleShort) {
   EXPECT_VALID(result);
 }
 
-void NotifyIdleLongNative(Dart_NativeArguments args) {
+static void NotifyIdleLongNative(Dart_NativeArguments args) {
   Dart_NotifyIdle(Dart_TimelineGetMicros() + 100 * kMicrosecondsPerMillisecond);
 }
 
@@ -8205,7 +9153,7 @@ static Dart_NativeFunction NotifyIdleLong_native_lookup(
     Dart_Handle name,
     int argument_count,
     bool* auto_setup_scope) {
-  return reinterpret_cast<Dart_NativeFunction>(&NotifyIdleLongNative);
+  return NotifyIdleLongNative;
 }
 
 TEST_CASE(DartAPI_NotifyIdleLong) {
@@ -8214,9 +9162,9 @@ TEST_CASE(DartAPI_NotifyIdleLong) {
       "void main() {\n"
       "  var v;\n"
       "  for (var i = 0; i < 100; i++) {\n"
-      "    var t = new List();\n"
+      "    var t = [];\n"
       "    for (var j = 0; j < 10000; j++) {\n"
-      "      t.add(new List(100));\n"
+      "      t.add(List.filled(100, null));\n"
       "    }\n"
       "    v = t;\n"
       "    notifyIdle();\n"
@@ -8228,7 +9176,7 @@ TEST_CASE(DartAPI_NotifyIdleLong) {
   EXPECT_VALID(result);
 }
 
-void NotifyLowMemoryNative(Dart_NativeArguments args) {
+static void NotifyLowMemoryNative(Dart_NativeArguments args) {
   Dart_NotifyLowMemory();
 }
 
@@ -8236,7 +9184,7 @@ static Dart_NativeFunction NotifyLowMemory_native_lookup(
     Dart_Handle name,
     int argument_count,
     bool* auto_setup_scope) {
-  return reinterpret_cast<Dart_NativeFunction>(&NotifyLowMemoryNative);
+  return NotifyLowMemoryNative;
 }
 
 TEST_CASE(DartAPI_NotifyLowMemory) {
@@ -8246,9 +9194,9 @@ TEST_CASE(DartAPI_NotifyLowMemory) {
       "void main() {\n"
       "  var v;\n"
       "  for (var i = 0; i < 100; i++) {\n"
-      "    var t = new List();\n"
+      "    var t = [];\n"
       "    for (var j = 0; j < 10000; j++) {\n"
-      "      t.add(new List(100));\n"
+      "      t.add(List.filled(100, null));\n"
       "    }\n"
       "    v = t;\n"
       "    notifyLowMemory();\n"
@@ -8268,7 +9216,7 @@ TEST_CASE(DartAPI_NotifyLowMemory) {
 TEST_CASE(DartAPI_InvokeImportedFunction) {
   const char* kScriptChars =
       "import 'dart:math';\n"
-      "import 'dart:profiler';\n"
+      "import 'dart:developer';\n"
       "main() {}";
   Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
   EXPECT_VALID(lib);
@@ -8280,16 +9228,185 @@ TEST_CASE(DartAPI_InvokeImportedFunction) {
   EXPECT_ERROR(result,
                "NoSuchMethodError: No top-level method 'max' declared.");
 
-  // The function 'getCurrentTag' is actually defined in the library
-  // dart:developer. However, the library dart:profiler exports dart:developer
-  // and exposes the function 'getCurrentTag'.
-  // NOTE: dart:profiler is deprecated. So, its use in this test is only
-  // an interim solution until we fix DartAPI_Invoke_CrossLibrary.
   Dart_Handle getCurrentTag = Dart_NewStringFromCString("getCurrentTag");
   result = Dart_Invoke(lib, getCurrentTag, 0, NULL);
   EXPECT_ERROR(
       result,
       "NoSuchMethodError: No top-level method 'getCurrentTag' declared.");
+}
+
+TEST_CASE(DartAPI_InvokeVMServiceMethod) {
+  char buffer[1024];
+  snprintf(buffer, sizeof(buffer),
+           R"({
+               "jsonrpc": 2.0,
+               "id": "foo",
+               "method": "getVM",
+               "params": { }
+              })");
+  uint8_t* response_json = nullptr;
+  intptr_t response_json_length = 0;
+  char* error = nullptr;
+  const bool success = Dart_InvokeVMServiceMethod(
+      reinterpret_cast<uint8_t*>(buffer), strlen(buffer), &response_json,
+      &response_json_length, &error);
+  EXPECT(success);
+  EXPECT(error == nullptr);
+
+  Dart_Handle bytes = Dart_NewExternalTypedDataWithFinalizer(
+      Dart_TypedData_kUint8, response_json, response_json_length, response_json,
+      response_json_length, [](void* ignored, void* peer) { free(peer); });
+  EXPECT_VALID(bytes);
+
+  // We don't have a C++ JSON decoder so we'll invoke dart to validate the
+  // result.
+  const char* kScript =
+      R"(
+        import 'dart:convert';
+        import 'dart:typed_data';
+        bool validate(bool condition) {
+          if (!condition) {
+            throw 'Failed to validate InvokeVMServiceMethod() response.';
+          }
+          return false;
+        }
+        bool validateResult(Uint8List bytes) {
+          final map = json.decode(utf8.decode(bytes));
+          validate(map['jsonrpc'] == '2.0');
+          validate(map['id'] == 'foo');
+          validate(map['result']['name'] == 'vm');
+          validate(map['result']['type'] == 'VM');
+          validate(map['result'].containsKey('architectureBits'));
+          validate(map['result'].containsKey('pid'));
+          validate(map['result'].containsKey('startTime'));
+          validate(map['result'].containsKey('hostCPU'));
+          validate(map['result'].containsKey('targetCPU'));
+          validate(map['result'].containsKey('version'));
+          return true;
+        }
+      )";
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+  EXPECT_VALID(lib);
+  Dart_Handle result = Dart_Invoke(lib, NewString("validateResult"), 1, &bytes);
+  EXPECT(Dart_IsBoolean(result));
+  EXPECT(result == Dart_True());
+}
+
+static intptr_t EchoInt(double x) {
+  return x;
+}
+
+static void* FfiNativeResolver(const char* name) {
+  ASSERT(strcmp(name, "EchoInt") == 0);
+  return reinterpret_cast<void*>(EchoInt);
+}
+
+TEST_CASE(Dart_SetFfiNativeResolver) {
+  const char* kScriptChars = R"(
+    import 'dart:ffi';
+    @FfiNative<IntPtr Function(Double)>('EchoInt')
+    external int echoInt(double x);
+    main() => echoInt(7.0);
+    )";
+  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, nullptr);
+  EXPECT_VALID(lib);
+
+  Dart_Handle result = Dart_SetFfiNativeResolver(lib, &FfiNativeResolver);
+  EXPECT_VALID(result);
+
+  result = Dart_Invoke(lib, NewString("main"), 0, nullptr);
+  EXPECT_VALID(result);
+
+  int64_t value = 0;
+  result = Dart_IntegerToInt64(result, &value);
+  EXPECT_VALID(result);
+  EXPECT_EQ(7, value);
+}
+
+TEST_CASE(Dart_SetFfiNativeResolver_MissingResolver) {
+  const char* kScriptChars = R"(
+    import 'dart:ffi';
+    @FfiNative<IntPtr Function(Double)>('EchoInt')
+    external int echoInt(double x);
+    main() => echoInt(7.0);
+    )";
+  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, nullptr);
+  EXPECT_VALID(lib);
+
+  Dart_Handle result = Dart_Invoke(lib, NewString("main"), 0, nullptr);
+  EXPECT_ERROR(
+      result,
+      "Invalid argument(s): Library has no handler: 'file:///test-lib'.");
+}
+
+static void* NopResolver(const char* name) {
+  return nullptr;
+}
+
+TEST_CASE(Dart_SetFfiNativeResolver_DoesNotResolve) {
+  const char* kScriptChars = R"(
+    import 'dart:ffi';
+    @FfiNative<Void Function()>('DoesNotResolve')
+    external void doesNotResolve();
+    main() => doesNotResolve();
+    )";
+  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, nullptr);
+  EXPECT_VALID(lib);
+
+  Dart_Handle result = Dart_SetFfiNativeResolver(lib, &NopResolver);
+  EXPECT_VALID(result);
+
+  result = Dart_Invoke(lib, NewString("main"), 0, nullptr);
+  EXPECT_ERROR(
+      result,
+      "Invalid argument(s): Couldn't resolve function: 'DoesNotResolve'");
+}
+
+TEST_CASE(DartAPI_UserTags) {
+  Dart_Handle default_tag = Dart_GetDefaultUserTag();
+  EXPECT_VALID(default_tag);
+
+  auto default_label =
+      Utils::CStringUniquePtr(Dart_GetUserTagLabel(default_tag), std::free);
+  EXPECT_STREQ(default_label.get(), "Default");
+
+  Dart_Handle current_tag = Dart_GetCurrentUserTag();
+  EXPECT(Dart_IdentityEquals(default_tag, current_tag));
+
+  auto current_label =
+      Utils::CStringUniquePtr(Dart_GetUserTagLabel(current_tag), std::free);
+  EXPECT_STREQ(default_label.get(), current_label.get());
+
+  Dart_Handle new_tag = Dart_NewUserTag("Foo");
+  EXPECT_VALID(new_tag);
+
+  auto new_tag_label =
+      Utils::CStringUniquePtr(Dart_GetUserTagLabel(new_tag), std::free);
+  EXPECT_STREQ(new_tag_label.get(), "Foo");
+
+  Dart_Handle old_tag = Dart_SetCurrentUserTag(new_tag);
+  EXPECT_VALID(old_tag);
+
+  auto old_label =
+      Utils::CStringUniquePtr(Dart_GetUserTagLabel(old_tag), std::free);
+  EXPECT_STREQ(old_label.get(), default_label.get());
+
+  current_tag = Dart_GetCurrentUserTag();
+  EXPECT(Dart_IdentityEquals(new_tag, current_tag));
+
+  current_label =
+      Utils::CStringUniquePtr(Dart_GetUserTagLabel(current_tag), std::free);
+  EXPECT_STREQ(current_label.get(), new_tag_label.get());
+
+  EXPECT(Dart_GetUserTagLabel(Dart_Null()) == nullptr);
+
+  EXPECT_ERROR(Dart_NewUserTag(nullptr),
+               "Dart_NewUserTag expects argument 'label' to be non-null");
+
+  EXPECT_ERROR(
+      Dart_SetCurrentUserTag(Dart_Null()),
+      "Dart_SetCurrentUserTag expects argument 'user_tag' to be non-null");
 }
 
 #endif  // !PRODUCT

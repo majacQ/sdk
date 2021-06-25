@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import "package:crypto/crypto.dart";
 import "package:expect/expect.dart";
 import 'dart:async';
@@ -162,7 +164,7 @@ void testBasicAuthenticateCallback() {
       String username = url.path.substring(1, 6);
       String password = url.path.substring(1, 6);
       if (passwordChanged) password = "${password}1";
-      Completer completer = new Completer();
+      Completer completer = new Completer<bool>();
       new Timer(const Duration(milliseconds: 10), () {
         client.addCredentials(
             url, realm, new HttpClientBasicCredentials(username, password));

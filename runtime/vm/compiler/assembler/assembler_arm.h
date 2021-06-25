@@ -5,23 +5,47 @@
 #ifndef RUNTIME_VM_COMPILER_ASSEMBLER_ASSEMBLER_ARM_H_
 #define RUNTIME_VM_COMPILER_ASSEMBLER_ASSEMBLER_ARM_H_
 
+#if defined(DART_PRECOMPILED_RUNTIME)
+#error "AOT runtime should not use compiler sources (including header files)"
+#endif  // defined(DART_PRECOMPILED_RUNTIME)
+
 #ifndef RUNTIME_VM_COMPILER_ASSEMBLER_ASSEMBLER_H_
 #error Do not include assembler_arm.h directly; use assembler.h instead.
 #endif
 
+#include <functional>
+
 #include "platform/assert.h"
 #include "platform/utils.h"
-#include "vm/constants_arm.h"
+#include "vm/code_entry_kind.h"
+#include "vm/compiler/assembler/assembler_base.h"
+#include "vm/compiler/runtime_api.h"
+#include "vm/constants.h"
 #include "vm/cpu.h"
 #include "vm/hash_map.h"
-#include "vm/object.h"
 #include "vm/simulator.h"
 
 namespace dart {
 
 // Forward declarations.
-class RuntimeEntry;
+class FlowGraphCompiler;
 class RegisterSet;
+class RuntimeEntry;
+
+// Load/store multiple addressing mode.
+enum BlockAddressMode {
+  // bit encoding P U W
+  DA = (0 | 0 | 0) << 21,    // decrement after
+  IA = (0 | 4 | 0) << 21,    // increment after
+  DB = (8 | 0 | 0) << 21,    // decrement before
+  IB = (8 | 4 | 0) << 21,    // increment before
+  DA_W = (0 | 0 | 1) << 21,  // decrement after with writeback to base
+  IA_W = (0 | 4 | 1) << 21,  // increment after with writeback to base
+  DB_W = (8 | 0 | 1) << 21,  // decrement before with writeback to base
+  IB_W = (8 | 4 | 1) << 21   // increment before with writeback to base
+};
+
+namespace compiler {
 
 // Instruction encoding bits.
 enum {
@@ -150,7 +174,7 @@ class Operand : public ValueObject {
     }
     // Note that immediate must be unsigned for the test to work correctly.
     for (int rot = 0; rot < 16; rot++) {
-      uint32_t imm8 = (immediate << 2 * rot) | (immediate >> (32 - 2 * rot));
+      uint32_t imm8 = Utils::RotateLeft(immediate, 2 * rot);
       if (imm8 < (1 << kImmed8Bits)) {
         o->type_ = 1;
         o->encoding_ = (rot << kRotateShift) | (imm8 << kImmed8Shift);
@@ -178,32 +202,6 @@ class Operand : public ValueObject {
 
   friend class Assembler;
   friend class Address;
-};
-
-enum OperandSize {
-  kByte,
-  kUnsignedByte,
-  kHalfword,
-  kUnsignedHalfword,
-  kWord,
-  kUnsignedWord,
-  kWordPair,
-  kSWord,
-  kDWord,
-  kRegList,
-};
-
-// Load/store multiple addressing mode.
-enum BlockAddressMode {
-  // bit encoding P U W
-  DA = (0 | 0 | 0) << 21,    // decrement after
-  IA = (0 | 4 | 0) << 21,    // increment after
-  DB = (8 | 0 | 0) << 21,    // decrement before
-  IB = (8 | 4 | 0) << 21,    // increment before
-  DA_W = (0 | 0 | 1) << 21,  // decrement after with writeback to base
-  IA_W = (0 | 4 | 1) << 21,  // increment after with writeback to base
-  DB_W = (8 | 0 | 1) << 21,  // decrement before with writeback to base
-  IB_W = (8 | 4 | 1) << 21   // increment before with writeback to base
 };
 
 class Address : public ValueObject {
@@ -302,6 +300,24 @@ class Address : public ValueObject {
            (mode() == NegPreIndex) || (mode() == NegPostIndex);
   }
 
+  static bool has_writeback(BlockAddressMode am) {
+    switch (am) {
+      case DA:
+      case IA:
+      case DB:
+      case IB:
+        return false;
+      case DA_W:
+      case IA_W:
+      case DB_W:
+      case IB_W:
+        return true;
+      default:
+        UNREACHABLE();
+        return false;
+    }
+  }
+
   uint32_t encoding() const { return encoding_; }
 
   // Encoding for addressing mode 3.
@@ -337,25 +353,78 @@ class FieldAddress : public Address {
 
 class Assembler : public AssemblerBase {
  public:
-  explicit Assembler(ObjectPoolWrapper* object_pool_wrapper,
-                     bool use_far_branches = false)
-      : AssemblerBase(object_pool_wrapper),
-        use_far_branches_(use_far_branches),
-        constant_pool_allowed_(false) {}
-
+  explicit Assembler(ObjectPoolBuilder* object_pool_builder,
+                     bool use_far_branches = false);
   ~Assembler() {}
 
   void PushRegister(Register r) { Push(r); }
   void PopRegister(Register r) { Pop(r); }
 
-  void Bind(Label* label);
-  void Jump(Label* label) { b(label); }
+  // Push two registers to the stack; r0 to lower address location.
+  void PushRegisterPair(Register r0, Register r1) {
+    if ((r0 < r1) && (r0 != SP) && (r1 != SP)) {
+      RegList reg_list = (1 << r0) | (1 << r1);
+      PushList(reg_list);
+    } else {
+      PushRegister(r1);
+      PushRegister(r0);
+    }
+  }
 
-  void LoadField(Register dst, FieldAddress address) { ldr(dst, address); }
+  // Pop two registers from the stack; r0 from lower address location.
+  void PopRegisterPair(Register r0, Register r1) {
+    if ((r0 < r1) && (r0 != SP) && (r1 != SP)) {
+      RegList reg_list = (1 << r0) | (1 << r1);
+      PopList(reg_list);
+    } else {
+      PopRegister(r0);
+      PopRegister(r1);
+    }
+  }
+
+  void Bind(Label* label);
+  // Unconditional jump to a given label. [distance] is ignored on ARM.
+  void Jump(Label* label, JumpDistance distance = kFarJump) { b(label); }
+  // Unconditional jump to a given address in memory.
+  void Jump(const Address& address) { Branch(address); }
+
+  void LoadField(Register dst, const FieldAddress& address) override {
+    ldr(dst, address);
+  }
+  void LoadMemoryValue(Register dst, Register base, int32_t offset) {
+    LoadFromOffset(dst, base, offset);
+  }
+  void LoadCompressed(Register dest, const Address& slot) { ldr(dest, slot); }
+  void StoreMemoryValue(Register src, Register base, int32_t offset) {
+    StoreToOffset(src, base, offset);
+  }
+  void LoadAcquire(Register dst, Register address, int32_t offset = 0) {
+    ldr(dst, Address(address, offset));
+    dmb();
+  }
+  void StoreRelease(Register src, Register address, int32_t offset = 0) {
+    dmb();
+    str(src, Address(address, offset));
+  }
 
   void CompareWithFieldValue(Register value, FieldAddress address) {
+    CompareWithMemoryValue(value, address);
+  }
+  void CompareWithCompressedFieldFromOffset(Register value,
+                                            Register base,
+                                            int32_t offset) {
+    LoadCompressedFieldFromOffset(TMP, base, offset);
+    cmp(value, Operand(TMP));
+  }
+
+  void CompareWithMemoryValue(Register value, Address address) {
     ldr(TMP, address);
     cmp(value, Operand(TMP));
+  }
+
+  void CompareTypeNullabilityWith(Register type, int8_t value) {
+    ldrb(TMP, FieldAddress(type, compiler::target::Type::nullability_offset()));
+    cmp(TMP, Operand(value));
   }
 
   // Misc. functionality
@@ -370,17 +439,11 @@ class Assembler : public AssemblerBase {
 #endif  // TESTING || DEBUG
 
   // Debugging and bringup support.
-  void Breakpoint() { bkpt(0); }
-  void Stop(const char* message) override;
-
-  static void InitializeMemoryWithBreakpoints(uword data, intptr_t length);
-
-  static const char* RegisterName(Register reg);
-
-  static const char* FpuRegisterName(FpuRegister reg);
+  void Breakpoint() override { bkpt(0); }
 
   // Data-processing instructions.
   void and_(Register rd, Register rn, Operand o, Condition cond = AL);
+  void ands(Register rd, Register rn, Operand o, Condition cond = AL);
 
   void eor(Register rd, Register rn, Operand o, Condition cond = AL);
 
@@ -426,6 +489,7 @@ class Assembler : public AssemblerBase {
 
   // Miscellaneous data-processing instructions.
   void clz(Register rd, Register rm, Condition cond = AL);
+  void rbit(Register rd, Register rm, Condition cond = AL);
 
   // Multiply instructions.
   void mul(Register rd, Register rn, Register rm, Condition cond = AL);
@@ -484,8 +548,7 @@ class Assembler : public AssemblerBase {
   void ldrsh(Register rd, Address ad, Condition cond = AL);
 
   // ldrd and strd actually support the full range of addressing modes, but
-  // we don't use them, and we need to split them up into two instructions for
-  // ARMv5TE, so we only support the base + offset mode.
+  // we don't use them, so we only support the base + offset mode.
   // rd must be an even register and rd2 must be rd + 1.
   void ldrd(Register rd,
             Register rd2,
@@ -510,6 +573,35 @@ class Assembler : public AssemblerBase {
   void ldrex(Register rd, Register rn, Condition cond = AL);
   void strex(Register rd, Register rt, Register rn, Condition cond = AL);
 
+  void dmb();
+
+  // Media instructions.
+  void sbfx(Register rd,
+            Register rn,
+            int32_t lsb,
+            int32_t width,
+            Condition cond = AL);
+  void ubfx(Register rd,
+            Register rn,
+            int32_t lsb,
+            int32_t width,
+            Condition cond = AL);
+
+  // Emit code to transition between generated and native modes.
+  //
+  // These require that CSP and SP are equal and aligned and require two scratch
+  // registers (in addition to TMP).
+  void TransitionGeneratedToNative(Register destination_address,
+                                   Register exit_frame_fp,
+                                   Register exit_through_ffi,
+                                   Register scratch0,
+                                   bool enter_safepoint);
+  void TransitionNativeToGenerated(Register scratch0,
+                                   Register scratch1,
+                                   bool exit_safepoint);
+  void EnterFullSafepoint(Register scratch0, Register scratch1);
+  void ExitFullSafepoint(Register scratch0, Register scratch1);
+
   // Miscellaneous instructions.
   void clrex();
   void nop(Condition cond = AL);
@@ -522,8 +614,6 @@ class Assembler : public AssemblerBase {
     return (AL << kConditionShift) | B24 | B21 | ((imm16 >> 4) << 8) | B6 | B5 |
            B4 | (imm16 & 0xf);
   }
-
-  static uword GetBreakInstructionFiller() { return BkptEncoding(0); }
 
   // Floating point instructions (VFPv3-D16 and VFPv3-D32 profiles).
   void vmovsr(SRegister sn, Register rt, Condition cond = AL);
@@ -656,34 +746,45 @@ class Assembler : public AssemblerBase {
   void blx(Register rm, Condition cond = AL);
 
   void Branch(const Code& code,
-              ObjectPool::Patchability patchable = ObjectPool::kNotPatchable,
+              ObjectPoolBuilderEntry::Patchability patchable =
+                  ObjectPoolBuilderEntry::kNotPatchable,
               Register pp = PP,
               Condition cond = AL);
 
   void Branch(const Address& address, Condition cond = AL);
 
-  void BranchLink(
-      const Code& code,
-      ObjectPool::Patchability patchable = ObjectPool::kNotPatchable,
-      Code::EntryKind entry_kind = Code::EntryKind::kNormal);
+  void BranchLink(const Code& code,
+                  ObjectPoolBuilderEntry::Patchability patchable =
+                      ObjectPoolBuilderEntry::kNotPatchable,
+                  CodeEntryKind entry_kind = CodeEntryKind::kNormal);
   void BranchLinkToRuntime();
 
-  void CallNullErrorShared(bool save_fpu_registers);
-
   // Branch and link to an entry address. Call sequence can be patched.
-  void BranchLinkPatchable(
-      const Code& code,
-      Code::EntryKind entry_kind = Code::EntryKind::kNormal);
+  void BranchLinkPatchable(const Code& code,
+                           CodeEntryKind entry_kind = CodeEntryKind::kNormal);
 
   // Emit a call that shares its object pool entries with other calls
   // that have the same equivalence marker.
   void BranchLinkWithEquivalence(
       const Code& code,
       const Object& equivalence,
-      Code::EntryKind entry_kind = Code::EntryKind::kNormal);
+      CodeEntryKind entry_kind = CodeEntryKind::kNormal);
 
   // Branch and link to [base + offset]. Call sequence is never patched.
   void BranchLinkOffset(Register base, int32_t offset);
+
+  void Call(Address target, Condition cond = AL) {
+    // CLOBBERS_LR uses __ to access the assembler.
+#define __ this->
+    CLOBBERS_LR({
+      ldr(LR, target, cond);
+      blx(LR, cond);
+    });
+#undef __
+  }
+  void Call(const Code& code) { BranchLink(code); }
+
+  void CallCFunction(Address target) { Call(target); }
 
   // Add signed immediate value to rd. May clobber IP.
   void AddImmediate(Register rd, int32_t value, Condition cond = AL) {
@@ -699,6 +800,10 @@ class Assembler : public AssemblerBase {
                             Register rn,
                             int32_t value,
                             Condition cond = AL);
+  void SubImmediate(Register rd,
+                    Register rn,
+                    int32_t value,
+                    Condition cond = AL);
   void SubImmediateSetFlags(Register rd,
                             Register rn,
                             int32_t value,
@@ -739,32 +844,30 @@ class Assembler : public AssemblerBase {
 
   void RestoreCodePointer();
   void LoadPoolPointer(Register reg = PP);
+  void SetupGlobalPoolAndDispatchTable();
 
   void LoadIsolate(Register rd);
+  void LoadIsolateGroup(Register dst);
 
-  // Load word from pool from the given offset using encoding that
+  // Load word from pool from the given index using encoding that
   // InstructionPattern::DecodeLoadWordFromPool can decode.
-  void LoadWordFromPoolOffset(Register rd,
-                              int32_t offset,
-                              Register pp,
-                              Condition cond);
+  void LoadWordFromPoolIndex(Register rd,
+                             intptr_t index,
+                             Register pp = PP,
+                             Condition cond = AL);
 
   void LoadObject(Register rd, const Object& object, Condition cond = AL);
   void LoadUniqueObject(Register rd, const Object& object, Condition cond = AL);
-  void LoadFunctionFromCalleePool(Register dst,
-                                  const Function& function,
-                                  Register new_pp);
   void LoadNativeEntry(Register dst,
                        const ExternalLabel* label,
-                       ObjectPool::Patchability patchable,
+                       ObjectPoolBuilderEntry::Patchability patchable,
                        Condition cond = AL);
   void PushObject(const Object& object);
+  void PushImmediate(int32_t immediate) {
+    LoadImmediate(TMP, immediate);
+    Push(TMP);
+  }
   void CompareObject(Register rn, const Object& object);
-
-  enum CanBeSmi {
-    kValueIsNotSmi,
-    kValueCanBeSmi,
-  };
 
   // Store into a heap object and apply the generational and incremental write
   // barriers. All stores into heap objects must pass through this function or,
@@ -774,22 +877,19 @@ class Assembler : public AssemblerBase {
   void StoreIntoObject(Register object,      // Object we are storing into.
                        const Address& dest,  // Where we are storing into.
                        Register value,       // Value we are storing.
-                       CanBeSmi can_value_be_smi = kValueCanBeSmi,
-                       bool lr_reserved = false);
+                       CanBeSmi can_value_be_smi = kValueCanBeSmi) override;
   void StoreIntoArray(Register object,
                       Register slot,
                       Register value,
-                      CanBeSmi can_value_be_smi = kValueCanBeSmi,
-                      bool lr_reserved = false);
+                      CanBeSmi can_value_be_smi = kValueCanBeSmi);
   void StoreIntoObjectOffset(Register object,
                              int32_t offset,
                              Register value,
-                             CanBeSmi can_value_be_smi = kValueCanBeSmi,
-                             bool lr_reserved = false);
+                             CanBeSmi can_value_be_smi = kValueCanBeSmi);
 
   void StoreIntoObjectNoBarrier(Register object,
                                 const Address& dest,
-                                Register value);
+                                Register value) override;
   void StoreIntoObjectNoBarrier(Register object,
                                 const Address& dest,
                                 const Object& value);
@@ -799,6 +899,11 @@ class Assembler : public AssemblerBase {
   void StoreIntoObjectNoBarrierOffset(Register object,
                                       int32_t offset,
                                       const Object& value);
+
+  // Stores a non-tagged value into a heap object.
+  void StoreInternalPointer(Register object,
+                            const Address& dest,
+                            Register value);
 
   // Store value_even, value_odd, value_even, ... into the words in the address
   // range [begin, end), assumed to be uninitialized fields in object (tagged).
@@ -821,31 +926,104 @@ class Assembler : public AssemblerBase {
   // Stores a Smi value into a heap object field that always contains a Smi.
   void StoreIntoSmiField(const Address& dest, Register value);
 
+  void ExtractClassIdFromTags(Register result, Register tags);
+  void ExtractInstanceSizeFromTags(Register result, Register tags);
+
   void LoadClassId(Register result, Register object, Condition cond = AL);
   void LoadClassById(Register result, Register class_id);
   void CompareClassId(Register object, intptr_t class_id, Register scratch);
   void LoadClassIdMayBeSmi(Register result, Register object);
   void LoadTaggedClassIdMayBeSmi(Register result, Register object);
+  void EnsureHasClassIdInDEBUG(intptr_t cid,
+                               Register src,
+                               Register scratch,
+                               bool can_be_null = false) override;
 
   intptr_t FindImmediate(int32_t imm);
   bool CanLoadFromObjectPool(const Object& object) const;
-  void LoadFromOffset(OperandSize type,
-                      Register reg,
+  void LoadFromOffset(Register reg,
+                      const Address& address,
+                      OperandSize type,
+                      Condition cond);
+  void LoadFromOffset(Register reg,
+                      const Address& address,
+                      OperandSize type = kFourBytes) override {
+    LoadFromOffset(reg, address, type, AL);
+  }
+  void LoadFromOffset(Register reg,
                       Register base,
                       int32_t offset,
+                      OperandSize type = kFourBytes,
                       Condition cond = AL);
-  void LoadFieldFromOffset(OperandSize type,
-                           Register reg,
+  void LoadFieldFromOffset(Register reg,
                            Register base,
                            int32_t offset,
-                           Condition cond = AL) {
-    LoadFromOffset(type, reg, base, offset - kHeapObjectTag, cond);
+                           OperandSize sz = kFourBytes) override {
+    LoadFieldFromOffset(reg, base, offset, sz, AL);
   }
-  void StoreToOffset(OperandSize type,
-                     Register reg,
+  void LoadFieldFromOffset(Register reg,
+                           Register base,
+                           int32_t offset,
+                           OperandSize type,
+                           Condition cond) {
+    LoadFromOffset(reg, base, offset - kHeapObjectTag, type, cond);
+  }
+  void LoadCompressedFieldFromOffset(Register reg,
+                                     Register base,
+                                     int32_t offset) override {
+    LoadCompressedFieldFromOffset(reg, base, offset, kFourBytes, AL);
+  }
+  void LoadCompressedFieldFromOffset(Register reg,
+                                     Register base,
+                                     int32_t offset,
+                                     OperandSize type,
+                                     Condition cond = AL) {
+    LoadFieldFromOffset(reg, base, offset, type, cond);
+  }
+  // For loading indexed payloads out of tagged objects like Arrays. If the
+  // payload objects are word-sized, use TIMES_HALF_WORD_SIZE if the contents of
+  // [index] is a Smi, otherwise TIMES_WORD_SIZE if unboxed.
+  void LoadIndexedPayload(Register dst,
+                          Register base,
+                          int32_t payload_start,
+                          Register index,
+                          ScaleFactor scale,
+                          OperandSize type = kFourBytes) {
+    add(dst, base, Operand(index, LSL, scale));
+    LoadFromOffset(dst, dst, payload_start - kHeapObjectTag, type);
+  }
+  void LoadIndexedCompressed(Register dst,
+                             Register base,
+                             int32_t offset,
+                             Register index) {
+    add(dst, base, Operand(index, LSL, TIMES_COMPRESSED_WORD_SIZE));
+    LoadCompressedFieldFromOffset(dst, dst, offset);
+  }
+  void LoadFromStack(Register dst, intptr_t depth);
+  void StoreToStack(Register src, intptr_t depth);
+  void CompareToStack(Register src, intptr_t depth);
+
+  void StoreToOffset(Register reg,
+                     const Address& address,
+                     OperandSize type,
+                     Condition cond);
+  void StoreToOffset(Register reg,
+                     const Address& address,
+                     OperandSize type = kFourBytes) override {
+    StoreToOffset(reg, address, type, AL);
+  }
+  void StoreToOffset(Register reg,
                      Register base,
                      int32_t offset,
+                     OperandSize type = kFourBytes,
                      Condition cond = AL);
+  void StoreFieldToOffset(Register reg,
+                          Register base,
+                          int32_t offset,
+                          OperandSize type = kFourBytes,
+                          Condition cond = AL) {
+    StoreToOffset(reg, base, offset - kHeapObjectTag, type, cond);
+  }
   void LoadSFromOffset(SRegister reg,
                        Register base,
                        int32_t offset,
@@ -897,10 +1075,58 @@ class Assembler : public AssemblerBase {
   void PushRegisters(const RegisterSet& regs);
   void PopRegisters(const RegisterSet& regs);
 
-  void CompareRegisters(Register rn, Register rm) { cmp(rn, Operand(rm)); }
-  void BranchIf(Condition condition, Label* label) { b(label, condition); }
+  // Push all registers which are callee-saved according to the ARM ABI.
+  void PushNativeCalleeSavedRegisters();
 
-  void MoveRegister(Register rd, Register rm, Condition cond = AL);
+  // Pop all registers which are callee-saved according to the ARM ABI.
+  void PopNativeCalleeSavedRegisters();
+
+  void CompareRegisters(Register rn, Register rm) { cmp(rn, Operand(rm)); }
+  void CompareObjectRegisters(Register rn, Register rm) {
+    CompareRegisters(rn, rm);
+  }
+  // Branches to the given label if the condition holds.
+  // [distance] is ignored on ARM.
+  void BranchIf(Condition condition,
+                Label* label,
+                JumpDistance distance = kFarJump) {
+    b(label, condition);
+  }
+  void BranchIfZero(Register rn,
+                    Label* label,
+                    JumpDistance distance = kFarJump) {
+    cmp(rn, Operand(0));
+    b(label, ZERO);
+  }
+
+  void MoveRegister(Register rd, Register rm, Condition cond) {
+    ExtendValue(rd, rm, kFourBytes, cond);
+  }
+  void MoveRegister(Register rd, Register rm) override {
+    MoveRegister(rd, rm, AL);
+  }
+  void MoveAndSmiTagRegister(Register rd, Register rm, Condition cond) {
+    ExtendAndSmiTagValue(rd, rm, kFourBytes, cond);
+  }
+  void MoveAndSmiTagRegister(Register rd, Register rm) override {
+    MoveAndSmiTagRegister(rd, rm, AL);
+  }
+  void ExtendValue(Register rd, Register rm, OperandSize sz, Condition cond);
+  void ExtendValue(Register rd, Register rm, OperandSize sz) override {
+    ExtendValue(rd, rm, sz, AL);
+  }
+  void ExtendAndSmiTagValue(Register rd,
+                            Register rm,
+                            OperandSize sz,
+                            Condition cond) {
+    ExtendValue(rd, rm, sz, cond);
+    SmiTag(rd, cond);
+  }
+  void ExtendAndSmiTagValue(Register rd,
+                            Register rm,
+                            OperandSize sz = kFourBytes) override {
+    ExtendAndSmiTagValue(rd, rm, sz, AL);
+  }
 
   // Convenience shift instructions. Use mov instruction with shifter operand
   // for variants setting the status flags.
@@ -939,17 +1165,14 @@ class Assembler : public AssemblerBase {
   void Vsqrtqs(QRegister qd, QRegister qm, QRegister temp);
   void Vdivqs(QRegister qd, QRegister qn, QRegister qm);
 
-  void SmiTag(Register reg, Condition cond = AL) {
-    Lsl(reg, reg, Operand(kSmiTagSize), cond);
-  }
+  void SmiTag(Register reg, Condition cond) { SmiTag(reg, reg, cond); }
+  void SmiTag(Register reg) override { SmiTag(reg, AL); }
 
   void SmiTag(Register dst, Register src, Condition cond = AL) {
     Lsl(dst, src, Operand(kSmiTagSize), cond);
   }
 
-  void SmiUntag(Register reg, Condition cond = AL) {
-    Asr(reg, reg, Operand(kSmiTagSize), cond);
-  }
+  void SmiUntag(Register reg, Condition cond = AL) { SmiUntag(reg, reg, cond); }
 
   void SmiUntag(Register dst, Register src, Condition cond = AL) {
     Asr(dst, src, Operand(kSmiTagSize), cond);
@@ -965,12 +1188,18 @@ class Assembler : public AssemblerBase {
     b(is_smi, CC);
   }
 
-  void BranchIfNotSmi(Register reg, Label* label) {
+  // For ARM, the near argument is ignored.
+  void BranchIfNotSmi(Register reg,
+                      Label* label,
+                      JumpDistance distance = kFarJump) {
     tst(reg, Operand(kSmiTagMask));
     b(label, NE);
   }
 
-  void BranchIfSmi(Register reg, Label* label) {
+  // For ARM, the near argument is ignored.
+  void BranchIfSmi(Register reg,
+                   Label* label,
+                   JumpDistance distance = kFarJump) {
     tst(reg, Operand(kSmiTagMask));
     b(label, EQ);
   }
@@ -980,8 +1209,15 @@ class Assembler : public AssemblerBase {
   // Function frame setup and tear down.
   void EnterFrame(RegList regs, intptr_t frame_space);
   void LeaveFrame(RegList regs, bool allow_pop_pc = false);
-  void Ret();
+  void Ret(Condition cond = AL);
   void ReserveAlignedFrameSpace(intptr_t frame_space);
+
+  // In debug mode, this generates code to check that:
+  //   FP + kExitLinkSlotFromEntryFp == SP
+  // or triggers breakpoint otherwise.
+  //
+  // Requires a scratch register in addition to the assembler temporary.
+  void EmitEntryFrameVerification(Register scratch);
 
   // Create a frame for calling into runtime that preserves all volatile
   // registers.  Frame's SP is guaranteed to be correctly aligned and
@@ -994,7 +1230,7 @@ class Assembler : public AssemblerBase {
   // Set up a Dart frame on entry with a frame pointer and PC information to
   // enable easy access to the RawInstruction object of code corresponding
   // to this frame.
-  void EnterDartFrame(intptr_t frame_size);
+  void EnterDartFrame(intptr_t frame_size, bool load_pool_pointer = true);
 
   void LeaveDartFrame();
 
@@ -1022,7 +1258,16 @@ class Assembler : public AssemblerBase {
   void EnterStubFrame();
   void LeaveStubFrame();
 
-  void MonomorphicCheckedEntry();
+  // Set up a frame for calling a C function.
+  // Automatically save the pinned registers in Dart which are not callee-
+  // saved in the native calling convention.
+  // Use together with CallCFunction.
+  void EnterCFrame(intptr_t frame_space);
+  void LeaveCFrame();
+
+  void MonomorphicCheckedEntryJIT();
+  void MonomorphicCheckedEntryAOT();
+  void BranchOnMonomorphicCheckedEntryJIT(Label* label);
 
   // The register into which the allocation stats table is loaded with
   // LoadAllocationStatsAddress should be passed to MaybeTraceAllocation and
@@ -1030,12 +1275,6 @@ class Assembler : public AssemblerBase {
   // allocation stats. These are separate assembler macros so we can
   // avoid a dependent load too nearby the load of the table address.
   void LoadAllocationStatsAddress(Register dest, intptr_t cid);
-  void IncrementAllocationStats(Register stats_addr,
-                                intptr_t cid,
-                                Heap::Space space);
-  void IncrementAllocationStatsWithSize(Register stats_addr_reg,
-                                        Register size_reg,
-                                        Heap::Space space);
 
   Address ElementAddressForIntIndex(bool is_load,
                                     bool is_external,
@@ -1057,6 +1296,7 @@ class Assembler : public AssemblerBase {
                                     bool is_external,
                                     intptr_t cid,
                                     intptr_t index_scale,
+                                    bool index_unboxed,
                                     Register array,
                                     Register index);
 
@@ -1065,8 +1305,20 @@ class Assembler : public AssemblerBase {
                                      bool is_external,
                                      intptr_t cid,
                                      intptr_t index_scale,
+                                     bool index_unboxed,
                                      Register array,
                                      Register index);
+
+  void LoadCompressedFieldAddressForRegOffset(Register address,
+                                              Register instance,
+                                              Register offset_in_words_as_smi) {
+    return LoadFieldAddressForRegOffset(address, instance,
+                                        offset_in_words_as_smi);
+  }
+
+  void LoadFieldAddressForRegOffset(Register address,
+                                    Register instance,
+                                    Register offset_in_words_as_smi);
 
   void LoadHalfWordUnaligned(Register dst, Register addr, Register tmp);
   void LoadHalfWordUnsignedUnaligned(Register dst, Register addr, Register tmp);
@@ -1078,14 +1330,12 @@ class Assembler : public AssemblerBase {
   // which will allocate in the runtime where tracing occurs.
   void MaybeTraceAllocation(Register stats_addr_reg, Label* trace);
 
-  // Inlined allocation of an instance of class 'cls', code has no runtime
-  // calls. Jump to 'failure' if the instance cannot be allocated here.
-  // Allocated instance is returned in 'instance_reg'.
-  // Only the tags field of the object is initialized.
-  void TryAllocate(const Class& cls,
-                   Label* failure,
-                   Register instance_reg,
-                   Register temp_reg);
+  void TryAllocateObject(intptr_t cid,
+                         intptr_t instance_size,
+                         Label* failure,
+                         JumpDistance distance,
+                         Register instance_reg,
+                         Register temp_reg) override;
 
   void TryAllocateArray(intptr_t cid,
                         intptr_t instance_size,
@@ -1095,18 +1345,29 @@ class Assembler : public AssemblerBase {
                         Register temp1,
                         Register temp2);
 
-  // This emits an PC-relative call of the form "blr <offset>".  The offset
-  // is not yet known and needs therefore relocation to the right place before
-  // the code can be used.
+  // This emits an PC-relative call of the form "blr.<cond> <offset>".  The
+  // offset is not yet known and needs therefore relocation to the right place
+  // before the code can be used.
   //
   // The neccessary information for the "linker" (i.e. the relocation
-  // information) is stored in [RawCode::static_calls_target_table_]: an entry
-  // of the form
+  // information) is stored in [UntaggedCode::static_calls_target_table_]: an
+  // entry of the form
   //
   //   (Code::kPcRelativeCall & pc_offset, <target-code>, <target-function>)
   //
   // will be used during relocation to fix the offset.
-  void GenerateUnRelocatedPcRelativeCall();
+  //
+  // The provided [offset_into_target] will be added to calculate the final
+  // destination.  It can be used e.g. for calling into the middle of a
+  // function.
+  void GenerateUnRelocatedPcRelativeCall(Condition cond = AL,
+                                         intptr_t offset_into_target = 0);
+
+  // This emits an PC-relative tail call of the form "b.<cond> <offset>".
+  //
+  // See also above for the pc-relative call.
+  void GenerateUnRelocatedPcRelativeTailCall(Condition cond = AL,
+                                             intptr_t offset_into_target = 0);
 
   // Emit data (e.g encoded instruction or immediate) in instruction stream.
   void Emit(int32_t value);
@@ -1114,10 +1375,13 @@ class Assembler : public AssemblerBase {
   // On some other platforms, we draw a distinction between safe and unsafe
   // smis.
   static bool IsSafe(const Object& object) { return true; }
-  static bool IsSafeSmi(const Object& object) { return object.IsSmi(); }
+  static bool IsSafeSmi(const Object& object) { return target::IsSmi(object); }
 
   bool constant_pool_allowed() const { return constant_pool_allowed_; }
   void set_constant_pool_allowed(bool b) { constant_pool_allowed_ = b; }
+
+  compiler::LRState lr_state() const { return lr_state_; }
+  void set_lr_state(compiler::LRState b) { lr_state_ = b; }
 
   // Whether we can branch to a target which is [distance] bytes away from the
   // beginning of the branch instruction.
@@ -1138,17 +1402,18 @@ class Assembler : public AssemblerBase {
  private:
   bool use_far_branches_;
 
+  bool constant_pool_allowed_;
+
+  compiler::LRState lr_state_ = compiler::LRState::OnEntry();
+
   // If you are thinking of using one or both of these instructions directly,
   // instead LoadImmediate should probably be used.
   void movw(Register rd, uint16_t imm16, Condition cond = AL);
   void movt(Register rd, uint16_t imm16, Condition cond = AL);
 
-  void BindARMv6(Label* label);
   void BindARMv7(Label* label);
 
   void BranchLink(const ExternalLabel* label);
-
-  bool constant_pool_allowed_;
 
   void LoadObjectHelper(Register rd,
                         const Object& object,
@@ -1273,10 +1538,16 @@ class Assembler : public AssemblerBase {
                              CanBeSmi can_be_smi,
                              BarrierFilterMode barrier_filter_mode);
 
+  friend class dart::FlowGraphCompiler;
+  std::function<void(Condition, Register)>
+      generate_invoke_write_barrier_wrapper_;
+  std::function<void(Condition)> generate_invoke_array_write_barrier_;
+
   DISALLOW_ALLOCATION();
   DISALLOW_COPY_AND_ASSIGN(Assembler);
 };
 
+}  // namespace compiler
 }  // namespace dart
 
 #endif  // RUNTIME_VM_COMPILER_ASSEMBLER_ASSEMBLER_ARM_H_

@@ -1,4 +1,4 @@
-// Copyright (c) 2018, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2018, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -9,7 +9,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import '../../abstract_single_unit.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(FindElementByNameOffsetTest);
   });
@@ -17,8 +17,8 @@ main() {
 
 @reflectiveTest
 class FindElementByNameOffsetTest extends AbstractSingleUnitTest {
-  test_class() async {
-    await resolveTestUnit(r'''
+  Future<void> test_class() async {
+    await resolveTestCode(r'''
 class AAA {}
 class BBB {}
 ''');
@@ -26,8 +26,8 @@ class BBB {}
     _assertElement(19, ElementKind.CLASS, 'BBB');
   }
 
-  test_function() async {
-    await resolveTestUnit(r'''
+  Future<void> test_function() async {
+    await resolveTestCode(r'''
 void aaa() {}
 void bbb() {}
 ''');
@@ -35,8 +35,8 @@ void bbb() {}
     _assertElement(19, ElementKind.FUNCTION, 'bbb');
   }
 
-  test_null() async {
-    await resolveTestUnit(r'''
+  Future<void> test_null() async {
+    await resolveTestCode(r'''
 class AAA {}
 class BBB {}
 ''');
@@ -49,19 +49,18 @@ class BBB {}
     expect(findElementByNameOffset(testUnitElement, 7), isNull);
   }
 
-  test_topLevelVariable() async {
-    await resolveTestUnit(r'''
-int aaa, bbb;
-int ccc;
+  Future<void> test_topLevelVariable() async {
+    await resolveTestCode(r'''
+int? aaa, bbb;
+int? ccc;
 ''');
-    _assertElement(4, ElementKind.TOP_LEVEL_VARIABLE, 'aaa');
-    _assertElement(9, ElementKind.TOP_LEVEL_VARIABLE, 'bbb');
-    _assertElement(18, ElementKind.TOP_LEVEL_VARIABLE, 'ccc');
+    _assertElement(5, ElementKind.TOP_LEVEL_VARIABLE, 'aaa');
+    _assertElement(10, ElementKind.TOP_LEVEL_VARIABLE, 'bbb');
+    _assertElement(20, ElementKind.TOP_LEVEL_VARIABLE, 'ccc');
   }
 
   void _assertElement(int nameOffset, ElementKind kind, String name) {
-    var element = findElementByNameOffset(testUnitElement, nameOffset);
-    expect(element, isNotNull);
+    var element = findElementByNameOffset(testUnitElement, nameOffset)!;
     expect(element.kind, kind);
     expect(element.name, name);
   }

@@ -7,10 +7,10 @@
 !pkg_tested
 !/tcmalloc
 !d8
-!7zip.tar.gz.sha1
 !firefox_jsshell
-!gsutil.tar.gz.sha1
 !clang.tar.gz.sha1
 !unittest.tar.gz.sha1
 !update.sh
-!/googletest
+!/wasmer
+# but ignore a subfolder of tcmalloc (some client ignores /tcmalloc/.gitignore)
+/tcmalloc/gperftools

@@ -1,7 +1,8 @@
+
+// @dart = 2.9
 library async_test;
 
-import 'package:unittest/unittest.dart';
-import 'package:unittest/html_config.dart';
+import 'package:async_helper/async_minitest.dart';
 
 import 'dart:async';
 import 'dart:isolate';
@@ -17,8 +18,6 @@ periodicTimerIsolate(message) =>
 cancellingIsolate(message) => cancelling_test.main(message.first, message.last);
 
 main() {
-  useHtmlConfiguration();
-
   test('one shot timer in pure isolate', () {
     var response = new ReceivePort();
     var remote = Isolate.spawn(oneshot, [

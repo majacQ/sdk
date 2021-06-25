@@ -2,68 +2,147 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'package:kernel/ast.dart';
-import 'package:kernel/class_hierarchy.dart';
-import 'package:kernel/core_types.dart';
-import 'package:kernel/testing/mock_sdk_component.dart';
-import 'package:kernel/text/ast_to_text.dart';
-import 'package:kernel/type_algebra.dart';
-import 'package:test/test.dart';
-import 'package:test_reflective_loader/test_reflective_loader.dart';
+// @dart = 2.9
+
+import "package:expect/minitest.dart";
+
+import "package:kernel/ast.dart";
+import "package:kernel/class_hierarchy.dart";
+import "package:kernel/core_types.dart";
+import "package:kernel/testing/mock_sdk_component.dart";
+import "package:kernel/text/ast_to_text.dart";
+import "package:kernel/src/text_util.dart";
 
 main() {
-  defineReflectiveSuite(() {
-    defineReflectiveTests(ClosedWorldClassHierarchyTest);
-  });
+  new ClosedWorldClassHierarchyTest().test_applyTreeChanges();
+
+  new ClosedWorldClassHierarchyTest().test_applyMemberChanges();
+
+  new ClosedWorldClassHierarchyTest()
+      .test_getSingleTargetForInterfaceInvocation();
+
+  new ClosedWorldClassHierarchyTest().test_getSubtypesOf();
+
+  new ClosedWorldClassHierarchyTest()
+      .test_forEachOverridePair_supertypeOverridesInterface();
+
+  new ClosedWorldClassHierarchyTest()
+      .test_forEachOverridePair_supertypeOverridesThis();
+
+  new ClosedWorldClassHierarchyTest()
+      .test_forEachOverridePair_supertypeOverridesThisAbstract();
+
+  new ClosedWorldClassHierarchyTest()
+      .test_forEachOverridePair_thisOverridesSupertype();
+
+  new ClosedWorldClassHierarchyTest()
+      .test_forEachOverridePair_thisOverridesSupertype_setter();
+
+  new ClosedWorldClassHierarchyTest()
+      .test_getClassAsInstanceOf_generic_extends();
+
+  new ClosedWorldClassHierarchyTest()
+      .test_getClassAsInstanceOf_generic_implements();
+
+  new ClosedWorldClassHierarchyTest().test_getClassAsInstanceOf_generic_with();
+
+  new ClosedWorldClassHierarchyTest()
+      .test_getClassAsInstanceOf_notGeneric_extends();
+
+  new ClosedWorldClassHierarchyTest()
+      .test_getClassAsInstanceOf_notGeneric_implements();
+
+  new ClosedWorldClassHierarchyTest()
+      .test_getClassAsInstanceOf_notGeneric_with();
+
+  new ClosedWorldClassHierarchyTest().test_getDeclaredMembers();
+
+  new ClosedWorldClassHierarchyTest().test_getDispatchTarget();
+
+  new ClosedWorldClassHierarchyTest().test_getDispatchTarget_abstract();
+
+  new ClosedWorldClassHierarchyTest().test_getInterfaceMember_extends();
+
+  new ClosedWorldClassHierarchyTest().test_getInterfaceMember_implements();
+
+  new ClosedWorldClassHierarchyTest().test_getInterfaceMembers_in_class();
+
+  new ClosedWorldClassHierarchyTest()
+      .test_getInterfaceMembers_inherited_or_mixed_in();
+
+  new ClosedWorldClassHierarchyTest().test_getInterfaceMembers_multiple();
+
+  new ClosedWorldClassHierarchyTest().test_getInterfaceMembers_shadowed();
+
+  new ClosedWorldClassHierarchyTest().test_getOrderedClasses();
+
+  new ClosedWorldClassHierarchyTest()
+      .test_getTypeAsInstanceOf_generic_extends();
 }
 
-@reflectiveTest
-class ClosedWorldClassHierarchyTest extends _ClassHierarchyTest {
+class ClosedWorldClassHierarchyTest {
+  final Component component = createMockSdkComponent();
+  CoreTypes coreTypes;
+
+  Library library;
+
+  ClassHierarchy _hierarchy;
+
+  ClosedWorldClassHierarchyTest() {
+    coreTypes = new CoreTypes(component);
+    Uri uri = Uri.parse('org-dartlang:///test.dart');
+    library = new Library(uri, fileUri: uri, name: 'test');
+    library.parent = component;
+    component.libraries.add(library);
+  }
+
   ClassHierarchy createClassHierarchy(Component component) {
-    return new ClassHierarchy(component);
+    return new ClassHierarchy(component, coreTypes);
   }
 
   void test_applyTreeChanges() {
-    Class a = addClass(new Class(name: 'A', supertype: objectSuper));
+    Class a = addClass(
+        new Class(name: 'A', supertype: objectSuper, fileUri: library.fileUri));
     _assertLibraryText(library, '''
 class A {}
 ''');
 
-    Class b = new Class(name: 'B', supertype: a.asThisSupertype);
-    Library libWithB =
-        new Library(Uri.parse('org-dartlang:///test_b.dart'), name: 'test_b');
+    Uri uriB = Uri.parse('org-dartlang:///test_b.dart');
+    Class b = new Class(
+        name: 'B', supertype: a.asThisSupertype, fileUri: library.fileUri);
+    Library libWithB = new Library(uriB, fileUri: uriB, name: 'test_b');
     libWithB.parent = component;
     component.libraries.add(libWithB);
     libWithB.addClass(b);
     _assertLibraryText(libWithB, '''
 library test_b;
 import self as self;
-import "./test.dart" as test;
+import "test.dart" as test;
 
-class B extends test::A {}
+class B extends test::A { // from org-dartlang:///test.dart
+}
 ''');
 
     // No updated classes, the same hierarchy.
-    expect(hierarchy.applyTreeChanges([], []), same(hierarchy));
-    expect(hierarchy.hasProperSubtypes(a), true);
+    expect(hierarchy.applyTreeChanges([], [], []), same(hierarchy));
 
     // Has updated classes, still the same hierarchy (instance). Can answer
     // queries about the new classes.
-    var c = new Class(name: 'C', supertype: a.asThisSupertype);
-    Library libWithC =
-        new Library(Uri.parse('org-dartlang:///test2.dart'), name: 'test2');
+    var c = new Class(
+        name: 'C', supertype: a.asThisSupertype, fileUri: library.fileUri);
+    Uri uriC = Uri.parse('org-dartlang:///test2.dart');
+    Library libWithC = new Library(uriC, fileUri: uriC, name: 'test2');
     libWithC.parent = component;
     component.libraries.add(libWithC);
     libWithC.addClass(c);
 
-    expect(hierarchy.applyTreeChanges([libWithB], [libWithC]), same(hierarchy));
+    expect(hierarchy.applyTreeChanges([libWithB], [libWithC], []),
+        same(hierarchy));
     expect(hierarchy.isSubclassOf(a, c), false);
     expect(hierarchy.isSubclassOf(c, a), true);
-    expect(hierarchy.hasProperSubtypes(a), true);
 
     // Remove so A should no longer be a super of anything.
-    expect(hierarchy.applyTreeChanges([libWithC], []), same(hierarchy));
-    expect(hierarchy.hasProperSubtypes(a), false);
+    expect(hierarchy.applyTreeChanges([libWithC], [], []), same(hierarchy));
   }
 
   void test_applyMemberChanges() {
@@ -73,9 +152,15 @@ class B extends test::A {}
     var methodB1 = newEmptyMethod('memberB1');
 
     var a = addClass(new Class(
-        name: 'A', supertype: objectSuper, procedures: [methodA1, methodA2]));
+        name: 'A',
+        supertype: objectSuper,
+        procedures: [methodA1, methodA2],
+        fileUri: library.fileUri));
     var b = addClass(new Class(
-        name: 'B', supertype: a.asThisSupertype, procedures: [methodB1]));
+        name: 'B',
+        supertype: a.asThisSupertype,
+        procedures: [methodB1],
+        fileUri: library.fileUri));
 
     _assertTestLibraryText('''
 class A {
@@ -95,7 +180,7 @@ class B extends self::A {
         hierarchy.getDispatchTargets(a), unorderedEquals([methodA1, methodA2]));
 
     // Add a member to A, but only update A.
-    a.addMember(methodA3);
+    a.addProcedure(methodA3);
     hierarchy.applyMemberChanges([a]);
     expect(hierarchy.getDispatchTargets(b),
         unorderedEquals([methodA1, methodA2, methodB1]));
@@ -117,25 +202,34 @@ class B extends self::A {
     var methodInD = newEmptyMethod('foo');
     var methodInE = newEmptyMethod('foo');
 
-    var a = addClass(
-        new Class(name: 'A', supertype: objectSuper, procedures: [methodInA]));
+    var a = addClass(new Class(
+        name: 'A',
+        supertype: objectSuper,
+        procedures: [methodInA],
+        fileUri: library.fileUri));
     var b = addClass(new Class(
         name: 'B',
         isAbstract: true,
         supertype: objectSuper,
-        procedures: [methodInB]));
+        procedures: [methodInB],
+        fileUri: library.fileUri));
     var c = addClass(new Class(
         name: 'C',
         supertype: b.asThisSupertype,
-        implementedTypes: [a.asThisSupertype]));
+        implementedTypes: [a.asThisSupertype],
+        fileUri: library.fileUri));
     addClass(new Class(
-        name: 'D', supertype: b.asThisSupertype, procedures: [methodInD]));
+        name: 'D',
+        supertype: b.asThisSupertype,
+        procedures: [methodInD],
+        fileUri: library.fileUri));
     addClass(new Class(
         name: 'E',
         isAbstract: true,
         supertype: objectSuper,
         implementedTypes: [c.asThisSupertype],
-        procedures: [methodInE]));
+        procedures: [methodInE],
+        fileUri: library.fileUri));
 
     _assertTestLibraryText('''
 class A {
@@ -165,28 +259,36 @@ abstract class E implements self::C {
   }
 
   void test_getSubtypesOf() {
-    var a = addClass(new Class(name: 'A', supertype: objectSuper));
-    var b = addClass(new Class(name: 'B', supertype: objectSuper));
-    var c = addClass(new Class(name: 'C', supertype: objectSuper));
+    var a = addClass(
+        new Class(name: 'A', supertype: objectSuper, fileUri: library.fileUri));
+    var b = addClass(
+        new Class(name: 'B', supertype: objectSuper, fileUri: library.fileUri));
+    var c = addClass(
+        new Class(name: 'C', supertype: objectSuper, fileUri: library.fileUri));
 
-    var d = addClass(new Class(name: 'D', supertype: a.asThisSupertype));
+    var d = addClass(new Class(
+        name: 'D', supertype: a.asThisSupertype, fileUri: library.fileUri));
 
     var e = addClass(new Class(
         name: 'E',
         supertype: b.asThisSupertype,
-        implementedTypes: [c.asThisSupertype]));
+        implementedTypes: [c.asThisSupertype],
+        fileUri: library.fileUri));
 
     var f = addClass(new Class(
         name: 'F',
         supertype: e.asThisSupertype,
-        implementedTypes: [a.asThisSupertype]));
+        implementedTypes: [a.asThisSupertype],
+        fileUri: library.fileUri));
 
-    var g = addClass(new Class(name: 'G', supertype: objectSuper));
+    var g = addClass(
+        new Class(name: 'G', supertype: objectSuper, fileUri: library.fileUri));
 
     var h = addClass(new Class(
         name: 'H',
         supertype: g.asThisSupertype,
-        implementedTypes: [c.asThisSupertype, a.asThisSupertype]));
+        implementedTypes: [c.asThisSupertype, a.asThisSupertype],
+        fileUri: library.fileUri));
 
     _assertTestLibraryText('''
 class A {}
@@ -211,16 +313,6 @@ class H extends self::G implements self::C, self::A {}
     expect(cwchst.getSubtypesOf(g), unorderedEquals([g, h]));
     expect(cwchst.getSubtypesOf(h), unorderedEquals([h]));
   }
-}
-
-abstract class _ClassHierarchyTest {
-  Component component;
-  CoreTypes coreTypes;
-
-  /// The test library.
-  Library library;
-
-  ClassHierarchy _hierarchy;
 
   /// Return the new or existing instance of [ClassHierarchy].
   ClassHierarchy get hierarchy {
@@ -233,7 +325,7 @@ abstract class _ClassHierarchyTest {
 
   Class addClass(Class c) {
     if (_hierarchy != null) {
-      fail('The classs hierarchy has already been created.');
+      fail('The class hierarchy has already been created.');
     }
     library.addClass(c);
     return c;
@@ -246,10 +338,12 @@ abstract class _ClassHierarchyTest {
       {Supertype extends_(List<DartType> typeParameterTypes),
       List<Supertype> implements_(List<DartType> typeParameterTypes)}) {
     var typeParameters = typeParameterNames
-        .map((name) => new TypeParameter(name, objectClass.rawType))
+        .map((name) => new TypeParameter(
+            name, coreTypes.objectLegacyRawType, coreTypes.objectLegacyRawType))
         .toList();
     var typeParameterTypes = typeParameters
-        .map((parameter) => new TypeParameterType(parameter))
+        .map(
+            (parameter) => new TypeParameterType(parameter, Nullability.legacy))
         .toList();
     var supertype =
         extends_ != null ? extends_(typeParameterTypes) : objectSuper;
@@ -259,33 +353,24 @@ abstract class _ClassHierarchyTest {
         name: name,
         typeParameters: typeParameters,
         supertype: supertype,
-        implementedTypes: implementedTypes));
+        implementedTypes: implementedTypes,
+        fileUri: library.fileUri));
   }
-
-  /// Add a new class with the given [name] that extends `Object` and
-  /// [implements_] the given classes.
-  Class addImplementsClass(String name, List<Class> implements_) {
-    return addClass(new Class(
-        name: name,
-        supertype: objectSuper,
-        implementedTypes: implements_.map((c) => c.asThisSupertype).toList()));
-  }
-
-  ClassHierarchy createClassHierarchy(Component component);
 
   Procedure newEmptyGetter(String name,
       {DartType returnType: const DynamicType(), bool isAbstract: false}) {
     var body =
         isAbstract ? null : new Block([new ReturnStatement(new NullLiteral())]);
     return new Procedure(new Name(name), ProcedureKind.Getter,
-        new FunctionNode(body, returnType: returnType));
+        new FunctionNode(body, returnType: returnType),
+        fileUri: library.fileUri);
   }
 
   Procedure newEmptyMethod(String name, {bool isAbstract: false}) {
     var body = isAbstract ? null : new Block([]);
     return new Procedure(new Name(name), ProcedureKind.Method,
         new FunctionNode(body, returnType: const VoidType()),
-        isAbstract: isAbstract);
+        isAbstract: isAbstract, fileUri: library.fileUri);
   }
 
   Procedure newEmptySetter(String name,
@@ -296,18 +381,8 @@ abstract class _ClassHierarchyTest {
         ProcedureKind.Setter,
         new FunctionNode(body,
             returnType: const VoidType(),
-            positionalParameters: [new VariableDeclaration('_', type: type)]));
-  }
-
-  void setUp() {
-    // Start with mock SDK libraries.
-    component = createMockSdkComponent();
-    coreTypes = new CoreTypes(component);
-
-    // Add the test library.
-    library = new Library(Uri.parse('org-dartlang:///test.dart'), name: 'test');
-    library.parent = component;
-    component.libraries.add(library);
+            positionalParameters: [new VariableDeclaration('_', type: type)]),
+        fileUri: library.fileUri);
   }
 
   /// 2. A non-abstract member is inherited from a superclass, and in the
@@ -317,21 +392,26 @@ abstract class _ClassHierarchyTest {
     var a = addClass(new Class(
         name: 'A',
         supertype: objectSuper,
-        procedures: [newEmptyMethod('foo'), newEmptyMethod('bar')]));
+        procedures: [newEmptyMethod('foo'), newEmptyMethod('bar')],
+        fileUri: library.fileUri));
     var b = addClass(new Class(
         name: 'B',
         supertype: a.asThisSupertype,
-        procedures: [newEmptyMethod('foo', isAbstract: true)]));
+        procedures: [newEmptyMethod('foo', isAbstract: true)],
+        fileUri: library.fileUri));
     var c = addClass(new Class(
         name: 'C',
         supertype: a.asThisSupertype,
-        implementedTypes: [b.asThisSupertype]));
-    var d = addClass(new Class(name: 'D', supertype: objectSuper));
+        implementedTypes: [b.asThisSupertype],
+        fileUri: library.fileUri));
+    var d = addClass(
+        new Class(name: 'D', supertype: objectSuper, fileUri: library.fileUri));
     var e = addClass(new Class(
         name: 'E',
         supertype: d.asThisSupertype,
         mixedInType: a.asThisSupertype,
-        implementedTypes: [b.asThisSupertype]));
+        implementedTypes: [b.asThisSupertype],
+        fileUri: library.fileUri));
 
     _assertTestLibraryText('''
 class A {
@@ -347,7 +427,7 @@ class E = self::D with self::A implements self::B {}
 ''');
 
     _assertOverridePairs(c, []);
-    _assertOverridePairs(e, ['test::A::foo overrides test::B::foo']);
+    _assertOverridePairs(e, ['test::A.foo overrides test::B.foo']);
   }
 
   /// An abstract member declared in the class is overridden by a member in
@@ -356,18 +436,23 @@ class E = self::D with self::A implements self::B {}
     var a = addClass(new Class(
         name: 'A',
         supertype: objectSuper,
-        procedures: [newEmptyMethod('foo')]));
+        procedures: [newEmptyMethod('foo')],
+        fileUri: library.fileUri));
     var b = addClass(new Class(
         name: 'B',
         supertype: a.asThisSupertype,
-        procedures: [newEmptyMethod('foo', isAbstract: true)]));
+        procedures: [newEmptyMethod('foo', isAbstract: true)],
+        fileUri: library.fileUri));
     var c = addClass(new Class(
         name: 'C',
         supertype: a.asThisSupertype,
         procedures: [newEmptyMethod('foo', isAbstract: true)],
-        isAbstract: true));
-    var d = addClass(new Class(name: 'D', supertype: b.asThisSupertype));
-    var e = addClass(new Class(name: 'E', supertype: c.asThisSupertype));
+        isAbstract: true,
+        fileUri: library.fileUri));
+    var d = addClass(new Class(
+        name: 'D', supertype: b.asThisSupertype, fileUri: library.fileUri));
+    var e = addClass(new Class(
+        name: 'E', supertype: c.asThisSupertype, fileUri: library.fileUri));
 
     _assertTestLibraryText('''
 class A {
@@ -383,8 +468,8 @@ class D extends self::B {}
 class E extends self::C {}
 ''');
 
-    _assertOverridePairs(b, ['test::B::foo overrides test::A::foo']);
-    _assertOverridePairs(c, ['test::C::foo overrides test::A::foo']);
+    _assertOverridePairs(b, ['test::B.foo overrides test::A.foo']);
+    _assertOverridePairs(c, ['test::C.foo overrides test::A.foo']);
     _assertOverridePairs(d, []);
     _assertOverridePairs(e, []);
   }
@@ -395,11 +480,13 @@ class E extends self::C {}
     var a = addClass(new Class(
         name: 'A',
         supertype: objectSuper,
-        procedures: [newEmptyMethod('foo'), newEmptyMethod('bar')]));
+        procedures: [newEmptyMethod('foo'), newEmptyMethod('bar')],
+        fileUri: library.fileUri));
     var b = addClass(new Class(
         name: 'B',
         supertype: a.asThisSupertype,
-        procedures: [newEmptyMethod('foo', isAbstract: true)]));
+        procedures: [newEmptyMethod('foo', isAbstract: true)],
+        fileUri: library.fileUri));
 
     _assertTestLibraryText('''
 class A {
@@ -412,8 +499,9 @@ class B extends self::A {
 ''');
 
     // The documentation says:
-    // It is possible for two methods to override one another in both directions.
-    _assertOverridePairs(b, ['test::B::foo overrides test::A::foo']);
+    // It is possible for two methods to override one another in both
+    // directions.
+    _assertOverridePairs(b, ['test::B.foo overrides test::A.foo']);
   }
 
   /// 1. A member declared in the class overrides a member inheritable through
@@ -422,15 +510,18 @@ class B extends self::A {
     var a = addClass(new Class(
         name: 'A',
         supertype: objectSuper,
-        procedures: [newEmptyMethod('foo'), newEmptyMethod('bar')]));
+        procedures: [newEmptyMethod('foo'), newEmptyMethod('bar')],
+        fileUri: library.fileUri));
     var b = addClass(new Class(
         name: 'B',
         supertype: a.asThisSupertype,
-        procedures: [newEmptyMethod('foo')]));
+        procedures: [newEmptyMethod('foo')],
+        fileUri: library.fileUri));
     var c = addClass(new Class(
         name: 'C',
         supertype: b.asThisSupertype,
-        procedures: [newEmptyMethod('bar')]));
+        procedures: [newEmptyMethod('bar')],
+        fileUri: library.fileUri));
 
     _assertTestLibraryText('''
 class A {
@@ -445,8 +536,8 @@ class C extends self::B {
 }
 ''');
 
-    _assertOverridePairs(b, ['test::B::foo overrides test::A::foo']);
-    _assertOverridePairs(c, ['test::C::bar overrides test::A::bar']);
+    _assertOverridePairs(b, ['test::B.foo overrides test::A.foo']);
+    _assertOverridePairs(c, ['test::C.bar overrides test::A.bar']);
   }
 
   /// 1. A member declared in the class overrides a member inheritable through
@@ -455,15 +546,18 @@ class C extends self::B {
     var a = addClass(new Class(
         name: 'A',
         supertype: objectSuper,
-        procedures: [newEmptySetter('foo'), newEmptySetter('bar')]));
+        procedures: [newEmptySetter('foo'), newEmptySetter('bar')],
+        fileUri: library.fileUri));
     var b = addClass(new Class(
         name: 'B',
         supertype: a.asThisSupertype,
-        procedures: [newEmptySetter('foo')]));
+        procedures: [newEmptySetter('foo')],
+        fileUri: library.fileUri));
     var c = addClass(new Class(
         name: 'C',
         supertype: b.asThisSupertype,
-        procedures: [newEmptySetter('bar')]));
+        procedures: [newEmptySetter('bar')],
+        fileUri: library.fileUri));
 
     _assertTestLibraryText('''
 class A {
@@ -478,29 +572,34 @@ class C extends self::B {
 }
 ''');
 
-    _assertOverridePairs(b, ['test::B::foo= overrides test::A::foo=']);
-    _assertOverridePairs(c, ['test::C::bar= overrides test::A::bar=']);
+    _assertOverridePairs(b, ['test::B.foo= overrides test::A.foo=']);
+    _assertOverridePairs(c, ['test::C.bar= overrides test::A.bar=']);
   }
 
   void test_getClassAsInstanceOf_generic_extends() {
-    var int = coreTypes.intClass.rawType;
-    var bool = coreTypes.boolClass.rawType;
+    var int = coreTypes.intLegacyRawType;
+    var bool = coreTypes.boolLegacyRawType;
 
     var a = addGenericClass('A', ['T', 'U']);
 
-    var bT = new TypeParameter('T', objectClass.rawType);
-    var bTT = new TypeParameterType(bT);
+    var bT = new TypeParameter(
+        'T', coreTypes.objectLegacyRawType, coreTypes.objectLegacyRawType);
+    var bTT = new TypeParameterType(bT, Nullability.legacy);
     var b = addClass(new Class(
         name: 'B',
         typeParameters: [bT],
-        supertype: new Supertype(a, [bTT, bool])));
+        supertype: new Supertype(a, [bTT, bool]),
+        fileUri: library.fileUri));
 
-    var c = addClass(new Class(name: 'C', supertype: new Supertype(b, [int])));
+    var c = addClass(new Class(
+        name: 'C',
+        supertype: new Supertype(b, [int]),
+        fileUri: library.fileUri));
 
     _assertTestLibraryText('''
-class A<T, U> {}
-class B<T> extends self::A<self::B::T, core::bool> {}
-class C extends self::B<core::int> {}
+class A<T*, U*> {}
+class B<T*> extends self::A<self::B::T*, core::bool*> {}
+class C extends self::B<core::int*> {}
 ''');
 
     expect(hierarchy.getClassAsInstanceOf(a, objectClass), objectSuper);
@@ -511,30 +610,35 @@ class C extends self::B<core::int> {}
   }
 
   void test_getClassAsInstanceOf_generic_implements() {
-    var int = coreTypes.intClass.rawType;
-    var bool = coreTypes.boolClass.rawType;
+    var int = coreTypes.intLegacyRawType;
+    var bool = coreTypes.boolLegacyRawType;
 
     var a = addGenericClass('A', ['T', 'U']);
 
-    var bT = new TypeParameter('T', objectClass.rawType);
-    var bTT = new TypeParameterType(bT);
+    var bT = new TypeParameter(
+        'T', coreTypes.objectLegacyRawType, coreTypes.objectLegacyRawType);
+    var bTT = new TypeParameterType(bT, Nullability.legacy);
     var b = addClass(new Class(
         name: 'B',
         typeParameters: [bT],
         supertype: objectSuper,
         implementedTypes: [
           new Supertype(a, [bTT, bool])
-        ]));
+        ],
+        fileUri: library.fileUri));
 
-    var c = addClass(
-        new Class(name: 'C', supertype: objectSuper, implementedTypes: [
-      new Supertype(b, [int])
-    ]));
+    var c = addClass(new Class(
+        name: 'C',
+        supertype: objectSuper,
+        implementedTypes: [
+          new Supertype(b, [int])
+        ],
+        fileUri: library.fileUri));
 
     _assertTestLibraryText('''
-class A<T, U> {}
-class B<T> implements self::A<self::B::T, core::bool> {}
-class C implements self::B<core::int> {}
+class A<T*, U*> {}
+class B<T*> implements self::A<self::B::T*, core::bool*> {}
+class C implements self::B<core::int*> {}
 ''');
 
     expect(hierarchy.getClassAsInstanceOf(a, objectClass), objectSuper);
@@ -545,28 +649,31 @@ class C implements self::B<core::int> {}
   }
 
   void test_getClassAsInstanceOf_generic_with() {
-    var int = coreTypes.intClass.rawType;
-    var bool = coreTypes.boolClass.rawType;
+    var int = coreTypes.intLegacyRawType;
+    var bool = coreTypes.boolLegacyRawType;
 
     var a = addGenericClass('A', ['T', 'U']);
 
-    var bT = new TypeParameter('T', objectClass.rawType);
-    var bTT = new TypeParameterType(bT);
+    var bT = new TypeParameter(
+        'T', coreTypes.objectLegacyRawType, coreTypes.objectLegacyRawType);
+    var bTT = new TypeParameterType(bT, Nullability.legacy);
     var b = addClass(new Class(
         name: 'B',
         typeParameters: [bT],
         supertype: objectSuper,
-        mixedInType: new Supertype(a, [bTT, bool])));
+        mixedInType: new Supertype(a, [bTT, bool]),
+        fileUri: library.fileUri));
 
     var c = addClass(new Class(
         name: 'C',
         supertype: objectSuper,
-        mixedInType: new Supertype(b, [int])));
+        mixedInType: new Supertype(b, [int]),
+        fileUri: library.fileUri));
 
     _assertTestLibraryText('''
-class A<T, U> {}
-class B<T> = core::Object with self::A<self::B::T, core::bool> {}
-class C = core::Object with self::B<core::int> {}
+class A<T*, U*> {}
+class B<T*> = core::Object with self::A<self::B::T*, core::bool*> {}
+class C = core::Object with self::B<core::int*> {}
 ''');
 
     expect(hierarchy.getClassAsInstanceOf(a, objectClass), objectSuper);
@@ -577,10 +684,14 @@ class C = core::Object with self::B<core::int> {}
   }
 
   void test_getClassAsInstanceOf_notGeneric_extends() {
-    var a = addClass(new Class(name: 'A', supertype: objectSuper));
-    var b = addClass(new Class(name: 'B', supertype: a.asThisSupertype));
-    var c = addClass(new Class(name: 'C', supertype: b.asThisSupertype));
-    var z = addClass(new Class(name: 'Z', supertype: objectSuper));
+    var a = addClass(
+        new Class(name: 'A', supertype: objectSuper, fileUri: library.fileUri));
+    var b = addClass(new Class(
+        name: 'B', supertype: a.asThisSupertype, fileUri: library.fileUri));
+    var c = addClass(new Class(
+        name: 'C', supertype: b.asThisSupertype, fileUri: library.fileUri));
+    var z = addClass(
+        new Class(name: 'Z', supertype: objectSuper, fileUri: library.fileUri));
 
     _assertTestLibraryText('''
 class A {}
@@ -599,21 +710,27 @@ class Z {}
   }
 
   void test_getClassAsInstanceOf_notGeneric_implements() {
-    var a = addClass(new Class(name: 'A', supertype: objectSuper));
-    var b = addClass(new Class(name: 'B', supertype: objectSuper));
+    var a = addClass(
+        new Class(name: 'A', supertype: objectSuper, fileUri: library.fileUri));
+    var b = addClass(
+        new Class(name: 'B', supertype: objectSuper, fileUri: library.fileUri));
     var c = addClass(new Class(
         name: 'C',
         supertype: objectSuper,
-        implementedTypes: [a.asThisSupertype]));
+        implementedTypes: [a.asThisSupertype],
+        fileUri: library.fileUri));
     var d = addClass(new Class(
         name: 'D',
         supertype: objectSuper,
-        implementedTypes: [c.asThisSupertype]));
+        implementedTypes: [c.asThisSupertype],
+        fileUri: library.fileUri));
     var e = addClass(new Class(
         name: 'D',
         supertype: a.asThisSupertype,
-        implementedTypes: [b.asThisSupertype]));
-    var z = addClass(new Class(name: 'Z', supertype: objectSuper));
+        implementedTypes: [b.asThisSupertype],
+        fileUri: library.fileUri));
+    var z = addClass(
+        new Class(name: 'Z', supertype: objectSuper, fileUri: library.fileUri));
 
     _assertTestLibraryText('''
 class A {}
@@ -633,10 +750,15 @@ class Z {}
   }
 
   void test_getClassAsInstanceOf_notGeneric_with() {
-    var a = addClass(new Class(name: 'A', supertype: objectSuper));
+    var a = addClass(
+        new Class(name: 'A', supertype: objectSuper, fileUri: library.fileUri));
     var b = addClass(new Class(
-        name: 'B', supertype: objectSuper, mixedInType: a.asThisSupertype));
-    var z = addClass(new Class(name: 'Z', supertype: objectSuper));
+        name: 'B',
+        supertype: objectSuper,
+        mixedInType: a.asThisSupertype,
+        fileUri: library.fileUri));
+    var z = addClass(
+        new Class(name: 'Z', supertype: objectSuper, fileUri: library.fileUri));
 
     _assertTestLibraryText('''
 class A {}
@@ -649,180 +771,6 @@ class Z {}
     expect(hierarchy.getClassAsInstanceOf(z, a), null);
   }
 
-  /// Copy of the tests/language/least_upper_bound_expansive_test.dart test.
-  void test_getClassicLeastUpperBound_expansive() {
-    var int = coreTypes.intClass.rawType;
-    var string = coreTypes.stringClass.rawType;
-
-    // class N<T> {}
-    var NT = new TypeParameter('T', objectClass.rawType);
-    var N = addClass(
-        new Class(name: 'N', typeParameters: [NT], supertype: objectSuper));
-
-    // class C1<T> extends N<N<C1<T>>> {}
-    Class C1;
-    {
-      var T = new TypeParameter('T', objectClass.rawType);
-      C1 = addClass(
-          new Class(name: 'C1', typeParameters: [T], supertype: objectSuper));
-      DartType C1_T = Substitution.fromMap({T: new TypeParameterType(T)})
-          .substituteType(C1.thisType);
-      DartType N_C1_T =
-          Substitution.fromMap({NT: C1_T}).substituteType(N.thisType);
-      Supertype N_N_C1_T = Substitution.fromMap({NT: N_C1_T})
-          .substituteSupertype(N.asThisSupertype);
-      C1.supertype = N_N_C1_T;
-    }
-
-    // class C2<T> extends N<N<C2<N<C2<T>>>>> {}
-    Class C2;
-    {
-      var T = new TypeParameter('T', objectClass.rawType);
-      C2 = addClass(
-          new Class(name: 'C2', typeParameters: [T], supertype: objectSuper));
-      DartType C2_T = Substitution.fromMap({T: new TypeParameterType(T)})
-          .substituteType(C2.thisType);
-      DartType N_C2_T =
-          Substitution.fromMap({NT: C2_T}).substituteType(N.thisType);
-      DartType C2_N_C2_T =
-          Substitution.fromMap({T: N_C2_T}).substituteType(C2.thisType);
-      DartType N_C2_N_C2_T =
-          Substitution.fromMap({NT: C2_N_C2_T}).substituteType(N.thisType);
-      Supertype N_N_C2_N_C2_T = Substitution.fromMap({NT: N_C2_N_C2_T})
-          .substituteSupertype(N.asThisSupertype);
-      C2.supertype = N_N_C2_N_C2_T;
-    }
-
-    _assertTestLibraryText('''
-class N<T> {}
-class C1<T> extends self::N<self::N<self::C1<self::C1::T>>> {}
-class C2<T> extends self::N<self::N<self::C2<self::N<self::C2<self::C2::T>>>>> {}
-''');
-
-    // The least upper bound of C1<int> and N<C1<String>> is Object since the
-    // supertypes are
-    //     {C1<int>, N<N<C1<int>>>, Object} for C1<int> and
-    //     {N<C1<String>>, Object} for N<C1<String>> and
-    // Object is the most specific type in the intersection of the supertypes.
-    expect(
-        hierarchy.getClassicLeastUpperBound(
-            new InterfaceType(C1, [int]),
-            new InterfaceType(N, [
-              new InterfaceType(C1, [string])
-            ])),
-        objectClass.thisType);
-
-    // The least upper bound of C2<int> and N<C2<String>> is Object since the
-    // supertypes are
-    //     {C2<int>, N<N<C2<N<C2<int>>>>>, Object} for C2<int> and
-    //     {N<C2<String>>, Object} for N<C2<String>> and
-    // Object is the most specific type in the intersection of the supertypes.
-    expect(
-        hierarchy.getClassicLeastUpperBound(
-            new InterfaceType(C2, [int]),
-            new InterfaceType(N, [
-              new InterfaceType(C2, [string])
-            ])),
-        objectClass.thisType);
-  }
-
-  void test_getClassicLeastUpperBound_generic() {
-    var int = coreTypes.intClass.rawType;
-    var double = coreTypes.doubleClass.rawType;
-    var bool = coreTypes.boolClass.rawType;
-
-    var a = addGenericClass('A', []);
-    var b =
-        addGenericClass('B', ['T'], implements_: (_) => [a.asThisSupertype]);
-    var c =
-        addGenericClass('C', ['U'], implements_: (_) => [a.asThisSupertype]);
-    var d = addGenericClass('D', ['T', 'U'], implements_: (typeParameterTypes) {
-      var t = typeParameterTypes[0];
-      var u = typeParameterTypes[1];
-      return [
-        new Supertype(b, [t]),
-        new Supertype(c, [u])
-      ];
-    });
-    var e = addGenericClass('E', [],
-        implements_: (_) => [
-              new Supertype(d, [int, double])
-            ]);
-    var f = addGenericClass('F', [],
-        implements_: (_) => [
-              new Supertype(d, [int, bool])
-            ]);
-
-    _assertTestLibraryText('''
-class A {}
-class B<T> implements self::A {}
-class C<U> implements self::A {}
-class D<T, U> implements self::B<self::D::T>, self::C<self::D::U> {}
-class E implements self::D<core::int, core::double> {}
-class F implements self::D<core::int, core::bool> {}
-''');
-
-    expect(
-        hierarchy.getClassicLeastUpperBound(new InterfaceType(d, [int, double]),
-            new InterfaceType(d, [int, double])),
-        new InterfaceType(d, [int, double]));
-    expect(
-        hierarchy.getClassicLeastUpperBound(new InterfaceType(d, [int, double]),
-            new InterfaceType(d, [int, bool])),
-        new InterfaceType(b, [int]));
-    expect(
-        hierarchy.getClassicLeastUpperBound(new InterfaceType(d, [int, double]),
-            new InterfaceType(d, [bool, double])),
-        new InterfaceType(c, [double]));
-    expect(
-        hierarchy.getClassicLeastUpperBound(new InterfaceType(d, [int, double]),
-            new InterfaceType(d, [bool, int])),
-        a.rawType);
-    expect(hierarchy.getClassicLeastUpperBound(e.rawType, f.rawType),
-        new InterfaceType(b, [int]));
-  }
-
-  void test_getClassicLeastUpperBound_nonGeneric() {
-    var a = addImplementsClass('A', []);
-    var b = addImplementsClass('B', []);
-    var c = addImplementsClass('C', [a]);
-    var d = addImplementsClass('D', [a]);
-    var e = addImplementsClass('E', [a]);
-    var f = addImplementsClass('F', [c, d]);
-    var g = addImplementsClass('G', [c, d]);
-    var h = addImplementsClass('H', [c, d, e]);
-    var i = addImplementsClass('I', [c, d, e]);
-
-    _assertTestLibraryText('''
-class A {}
-class B {}
-class C implements self::A {}
-class D implements self::A {}
-class E implements self::A {}
-class F implements self::C, self::D {}
-class G implements self::C, self::D {}
-class H implements self::C, self::D, self::E {}
-class I implements self::C, self::D, self::E {}
-''');
-
-    expect(hierarchy.getClassicLeastUpperBound(a.rawType, b.rawType),
-        objectClass.rawType);
-    expect(hierarchy.getClassicLeastUpperBound(a.rawType, objectClass.rawType),
-        objectClass.rawType);
-    expect(hierarchy.getClassicLeastUpperBound(objectClass.rawType, b.rawType),
-        objectClass.rawType);
-    expect(
-        hierarchy.getClassicLeastUpperBound(c.rawType, d.rawType), a.rawType);
-    expect(
-        hierarchy.getClassicLeastUpperBound(c.rawType, a.rawType), a.rawType);
-    expect(
-        hierarchy.getClassicLeastUpperBound(a.rawType, d.rawType), a.rawType);
-    expect(
-        hierarchy.getClassicLeastUpperBound(f.rawType, g.rawType), a.rawType);
-    expect(
-        hierarchy.getClassicLeastUpperBound(h.rawType, i.rawType), a.rawType);
-  }
-
   void test_getDeclaredMembers() {
     var method = newEmptyMethod('method');
     var getter = newEmptyGetter('getter');
@@ -830,16 +778,15 @@ class I implements self::C, self::D, self::E {}
     var abstractMethod = newEmptyMethod('abstractMethod', isAbstract: true);
     var abstractGetter = newEmptyGetter('abstractGetter', isAbstract: true);
     var abstractSetter = newEmptySetter('abstractSetter', isAbstract: true);
-    var nonFinalField = new Field(new Name('nonFinalField'));
-    var finalField = new Field(new Name('finalField'), isFinal: true);
+    var nonFinalField =
+        new Field.mutable(new Name('nonFinalField'), fileUri: library.fileUri);
+    var finalField = new Field.immutable(new Name('finalField'),
+        isFinal: true, fileUri: library.fileUri);
     var a = addClass(new Class(
         isAbstract: true,
         name: 'A',
         supertype: objectSuper,
-        fields: [
-          nonFinalField,
-          finalField
-        ],
+        fields: [nonFinalField, finalField],
         procedures: [
           method,
           getter,
@@ -847,9 +794,13 @@ class I implements self::C, self::D, self::E {}
           abstractMethod,
           abstractGetter,
           abstractSetter
-        ]));
-    var b = addClass(
-        new Class(isAbstract: true, name: 'B', supertype: a.asThisSupertype));
+        ],
+        fileUri: library.fileUri));
+    var b = addClass(new Class(
+        isAbstract: true,
+        name: 'B',
+        supertype: a.asThisSupertype,
+        fileUri: library.fileUri));
 
     _assertTestLibraryText('''
 abstract class A {
@@ -879,8 +830,8 @@ abstract class B extends self::A {}
         ]));
     expect(hierarchy.getDeclaredMembers(a, setters: true),
         unorderedEquals([setter, abstractSetter, nonFinalField]));
-    expect(hierarchy.getDeclaredMembers(b), isEmpty);
-    expect(hierarchy.getDeclaredMembers(b, setters: true), isEmpty);
+    expect(hierarchy.getDeclaredMembers(b).isEmpty, isTrue);
+    expect(hierarchy.getDeclaredMembers(b, setters: true).isEmpty, isTrue);
   }
 
   void test_getDispatchTarget() {
@@ -889,12 +840,17 @@ abstract class B extends self::A {}
     var bMethod = newEmptyMethod('bMethod');
     var bSetter = newEmptySetter('bSetter');
     var a = addClass(new Class(
-        name: 'A', supertype: objectSuper, procedures: [aMethod, aSetter]));
+        name: 'A',
+        supertype: objectSuper,
+        procedures: [aMethod, aSetter],
+        fileUri: library.fileUri));
     var b = addClass(new Class(
         name: 'B',
         supertype: a.asThisSupertype,
-        procedures: [bMethod, bSetter]));
-    var c = addClass(new Class(name: 'C', supertype: b.asThisSupertype));
+        procedures: [bMethod, bSetter],
+        fileUri: library.fileUri));
+    var c = addClass(new Class(
+        name: 'C', supertype: b.asThisSupertype, fileUri: library.fileUri));
 
     _assertTestLibraryText('''
 class A {
@@ -935,13 +891,16 @@ class C extends self::B {}
         isAbstract: true,
         name: 'A',
         supertype: objectSuper,
-        procedures: [aFoo, aBar]));
+        procedures: [aFoo, aBar],
+        fileUri: library.fileUri));
     var b = addClass(new Class(
         isAbstract: true,
         name: 'B',
         supertype: a.asThisSupertype,
-        procedures: [bFoo, bBar]));
-    var c = addClass(new Class(name: 'C', supertype: b.asThisSupertype));
+        procedures: [bFoo, bBar],
+        fileUri: library.fileUri));
+    var c = addClass(new Class(
+        name: 'C', supertype: b.asThisSupertype, fileUri: library.fileUri));
 
     _assertTestLibraryText('''
 abstract class A {
@@ -970,12 +929,17 @@ class C extends self::B {}
     var bMethod = newEmptyMethod('bMethod');
     var bSetter = newEmptySetter('bSetter');
     var a = addClass(new Class(
-        name: 'A', supertype: objectSuper, procedures: [aMethod, aSetter]));
+        name: 'A',
+        supertype: objectSuper,
+        procedures: [aMethod, aSetter],
+        fileUri: library.fileUri));
     var b = addClass(new Class(
         name: 'B',
         supertype: a.asThisSupertype,
-        procedures: [bMethod, bSetter]));
-    var c = addClass(new Class(name: 'C', supertype: b.asThisSupertype));
+        procedures: [bMethod, bSetter],
+        fileUri: library.fileUri));
+    var c = addClass(new Class(
+        name: 'C', supertype: b.asThisSupertype, fileUri: library.fileUri));
 
     _assertTestLibraryText('''
 class A {
@@ -1013,16 +977,21 @@ class C extends self::B {}
     var bMethod = newEmptyMethod('bMethod');
     var bSetter = newEmptySetter('bSetter');
     var a = addClass(new Class(
-        name: 'A', supertype: objectSuper, procedures: [aMethod, aSetter]));
+        name: 'A',
+        supertype: objectSuper,
+        procedures: [aMethod, aSetter],
+        fileUri: library.fileUri));
     var b = addClass(new Class(
         name: 'B',
         supertype: objectSuper,
         implementedTypes: [a.asThisSupertype],
-        procedures: [bMethod, bSetter]));
+        procedures: [bMethod, bSetter],
+        fileUri: library.fileUri));
     var c = addClass(new Class(
         name: 'C',
         supertype: objectSuper,
-        implementedTypes: [b.asThisSupertype]));
+        implementedTypes: [b.asThisSupertype],
+        fileUri: library.fileUri));
 
     _assertTestLibraryText('''
 class A {
@@ -1061,16 +1030,15 @@ class C implements self::B {}
     var abstractMethod = newEmptyMethod('abstractMethod', isAbstract: true);
     var abstractGetter = newEmptyGetter('abstractGetter', isAbstract: true);
     var abstractSetter = newEmptySetter('abstractSetter', isAbstract: true);
-    var nonFinalField = new Field(new Name('nonFinalField'));
-    var finalField = new Field(new Name('finalField'), isFinal: true);
+    var nonFinalField =
+        new Field.mutable(new Name('nonFinalField'), fileUri: library.fileUri);
+    var finalField = new Field.immutable(new Name('finalField'),
+        isFinal: true, fileUri: library.fileUri);
     var a = addClass(new Class(
         isAbstract: true,
         name: 'A',
         supertype: objectSuper,
-        fields: [
-          nonFinalField,
-          finalField
-        ],
+        fields: [nonFinalField, finalField],
         procedures: [
           method,
           getter,
@@ -1078,7 +1046,8 @@ class C implements self::B {}
           abstractMethod,
           abstractGetter,
           abstractSetter
-        ]));
+        ],
+        fileUri: library.fileUri));
 
     _assertTestLibraryText('''
 abstract class A {
@@ -1116,28 +1085,37 @@ abstract class A {
     var abstractMethod = newEmptyMethod('abstractMethod', isAbstract: true);
     var abstractGetter = newEmptyGetter('abstractGetter', isAbstract: true);
     var abstractSetter = newEmptySetter('abstractSetter', isAbstract: true);
-    var nonFinalField = new Field(new Name('nonFinalField'));
-    var finalField = new Field(new Name('finalField'), isFinal: true);
+    var nonFinalField =
+        new Field.mutable(new Name('nonFinalField'), fileUri: library.fileUri);
+    var finalField = new Field.immutable(new Name('finalField'),
+        isFinal: true, fileUri: library.fileUri);
 
-    var a = addClass(new Class(name: 'A', supertype: objectSuper, fields: [
-      nonFinalField,
-      finalField
-    ], procedures: [
-      method,
-      getter,
-      setter,
-      abstractMethod,
-      abstractGetter,
-      abstractSetter
-    ]));
-    var b = addClass(new Class(name: 'B', supertype: a.asThisSupertype));
+    var a = addClass(new Class(
+        name: 'A',
+        supertype: objectSuper,
+        fields: [nonFinalField, finalField],
+        procedures: [
+          method,
+          getter,
+          setter,
+          abstractMethod,
+          abstractGetter,
+          abstractSetter
+        ],
+        fileUri: library.fileUri));
+    var b = addClass(new Class(
+        name: 'B', supertype: a.asThisSupertype, fileUri: library.fileUri));
     var c = addClass(new Class(
         isAbstract: true,
         name: 'C',
         supertype: objectSuper,
-        implementedTypes: [a.asThisSupertype]));
+        implementedTypes: [a.asThisSupertype],
+        fileUri: library.fileUri));
     var d = addClass(new Class(
-        name: 'D', supertype: objectSuper, mixedInType: a.asThisSupertype));
+        name: 'D',
+        supertype: objectSuper,
+        mixedInType: a.asThisSupertype,
+        fileUri: library.fileUri));
 
     _assertTestLibraryText('''
 class A {
@@ -1181,29 +1159,36 @@ class D = core::Object with self::A {}
     var method_a = newEmptyMethod('method');
     var getter_a = newEmptyGetter('getter');
     var setter_a = newEmptySetter('setter');
-    var nonFinalField_a = new Field(new Name('nonFinalField'));
-    var finalField_a = new Field(new Name('finalField'), isFinal: true);
+    var nonFinalField_a =
+        new Field.mutable(new Name('nonFinalField'), fileUri: library.fileUri);
+    var finalField_a = new Field.immutable(new Name('finalField'),
+        isFinal: true, fileUri: library.fileUri);
     var method_b = newEmptyMethod('method');
     var getter_b = newEmptyGetter('getter');
     var setter_b = newEmptySetter('setter');
-    var nonFinalField_b = new Field(new Name('nonFinalField'));
-    var finalField_b = new Field(new Name('finalField'), isFinal: true);
+    var nonFinalField_b =
+        new Field.mutable(new Name('nonFinalField'), fileUri: library.fileUri);
+    var finalField_b = new Field.immutable(new Name('finalField'),
+        isFinal: true, fileUri: library.fileUri);
 
     var a = addClass(new Class(
         name: 'A',
         supertype: objectSuper,
         fields: [nonFinalField_a, finalField_a],
-        procedures: [method_a, getter_a, setter_a]));
+        procedures: [method_a, getter_a, setter_a],
+        fileUri: library.fileUri));
     var b = addClass(new Class(
         name: 'B',
         supertype: objectSuper,
         fields: [nonFinalField_b, finalField_b],
-        procedures: [method_b, getter_b, setter_b]));
+        procedures: [method_b, getter_b, setter_b],
+        fileUri: library.fileUri));
     var c = addClass(new Class(
         isAbstract: true,
         name: 'C',
         supertype: objectSuper,
-        implementedTypes: [a.asThisSupertype, b.asThisSupertype]));
+        implementedTypes: [a.asThisSupertype, b.asThisSupertype],
+        fileUri: library.fileUri));
 
     _assertTestLibraryText('''
 class A {
@@ -1251,29 +1236,36 @@ abstract class C implements self::A, self::B {}
     var getter_a = newEmptyGetter('getter');
     var setter_a = newEmptySetter('setter');
     var nonShadowedSetter_a = newEmptySetter('nonShadowedSetter');
-    var nonFinalField_a = new Field(new Name('nonFinalField'));
-    var finalField_a = new Field(new Name('finalField'), isFinal: true);
+    var nonFinalField_a =
+        new Field.mutable(new Name('nonFinalField'), fileUri: library.fileUri);
+    var finalField_a = new Field.immutable(new Name('finalField'),
+        isFinal: true, fileUri: library.fileUri);
     var method_b = newEmptyMethod('method');
     var getter_b = newEmptyGetter('getter');
     var setter_b = newEmptySetter('setter');
-    var nonFinalField_b = new Field(new Name('nonFinalField'));
-    var finalField_b = new Field(new Name('finalField'), isFinal: true);
+    var nonFinalField_b =
+        new Field.mutable(new Name('nonFinalField'), fileUri: library.fileUri);
+    var finalField_b = new Field.immutable(new Name('finalField'),
+        isFinal: true, fileUri: library.fileUri);
 
-    var a = addClass(new Class(name: 'A', supertype: objectSuper, fields: [
-      nonFinalField_a,
-      finalField_a
-    ], procedures: [
-      method_a,
-      nonShadowedMethod_a,
-      getter_a,
-      setter_a,
-      nonShadowedSetter_a
-    ]));
+    var a = addClass(new Class(
+        name: 'A',
+        supertype: objectSuper,
+        fields: [nonFinalField_a, finalField_a],
+        procedures: [
+          method_a,
+          nonShadowedMethod_a,
+          getter_a,
+          setter_a,
+          nonShadowedSetter_a
+        ],
+        fileUri: library.fileUri));
     var b = addClass(new Class(
         name: 'B',
         supertype: a.asThisSupertype,
         fields: [nonFinalField_b, finalField_b],
-        procedures: [method_b, getter_b, setter_b]));
+        procedures: [method_b, getter_b, setter_b],
+        fileUri: library.fileUri));
 
     _assertTestLibraryText('''
 class A {
@@ -1312,9 +1304,12 @@ class B extends self::A {
   }
 
   void test_getOrderedClasses() {
-    var a = addClass(new Class(name: 'A', supertype: objectSuper));
-    var b = addClass(new Class(name: 'B', supertype: a.asThisSupertype));
-    var c = addClass(new Class(name: 'C', supertype: b.asThisSupertype));
+    var a = addClass(
+        new Class(name: 'A', supertype: objectSuper, fileUri: library.fileUri));
+    var b = addClass(new Class(
+        name: 'B', supertype: a.asThisSupertype, fileUri: library.fileUri));
+    var c = addClass(new Class(
+        name: 'C', supertype: b.asThisSupertype, fileUri: library.fileUri));
 
     void assertOrderOfClasses(List<Class> unordered, List<Class> expected) {
       var ordered = hierarchy.getOrderedClasses(unordered);
@@ -1331,28 +1326,30 @@ class B extends self::A {
   }
 
   void test_getTypeAsInstanceOf_generic_extends() {
-    var int = coreTypes.intClass.rawType;
-    var bool = coreTypes.boolClass.rawType;
+    var int = coreTypes.intLegacyRawType;
+    var bool = coreTypes.boolLegacyRawType;
 
     var a = addGenericClass('A', ['T', 'U']);
 
-    var bT = new TypeParameter('T', objectClass.rawType);
-    var bTT = new TypeParameterType(bT);
+    var bT = new TypeParameter(
+        'T', coreTypes.objectLegacyRawType, coreTypes.objectLegacyRawType);
+    var bTT = new TypeParameterType(bT, Nullability.legacy);
     var b = addClass(new Class(
         name: 'B',
         typeParameters: [bT],
-        supertype: new Supertype(a, [bTT, bool])));
+        supertype: new Supertype(a, [bTT, bool]),
+        fileUri: library.fileUri));
 
     _assertTestLibraryText('''
-class A<T, U> {}
-class B<T> extends self::A<self::B::T, core::bool> {}
+class A<T*, U*> {}
+class B<T*> extends self::A<self::B::T*, core::bool*> {}
 ''');
 
-    var b_int = new InterfaceType(b, [int]);
-    expect(hierarchy.getTypeAsInstanceOf(b_int, a),
-        new InterfaceType(a, [int, bool]));
-    expect(hierarchy.getTypeAsInstanceOf(b_int, objectClass),
-        new InterfaceType(objectClass));
+    var b_int = new InterfaceType(b, Nullability.legacy, [int]);
+    expect(hierarchy.getTypeAsInstanceOf(b_int, a, library),
+        new InterfaceType(a, Nullability.legacy, [int, bool]));
+    expect(hierarchy.getTypeAsInstanceOf(b_int, objectClass, library),
+        new InterfaceType(objectClass, Nullability.legacy));
   }
 
   void _assertOverridePairs(Class class_, List<String> expected) {
@@ -1360,8 +1357,12 @@ class B<T> extends self::A<self::B::T, core::bool> {}
     void callback(
         Member declaredMember, Member interfaceMember, bool isSetter) {
       var suffix = isSetter ? '=' : '';
-      String declaredName = '$declaredMember$suffix';
-      String interfaceName = '$interfaceMember$suffix';
+      String declaredMemberName =
+          qualifiedMemberNameToString(declaredMember, includeLibraryName: true);
+      String declaredName = '${declaredMemberName}$suffix';
+      String interfaceMemberName = qualifiedMemberNameToString(interfaceMember,
+          includeLibraryName: true);
+      String interfaceName = '${interfaceMemberName}$suffix';
       var desc = '$declaredName overrides $interfaceName';
       overrideDescriptions.add(desc);
     }

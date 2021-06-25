@@ -2,28 +2,36 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library fasta.redirecting_factory_body;
 
-import 'package:kernel/ast.dart'
-    show
-        DartType,
-        DynamicType,
-        Expression,
-        ExpressionStatement,
-        FunctionNode,
-        InvalidExpression,
-        Let,
-        Member,
-        NullLiteral,
-        Procedure,
-        StaticGet,
-        StringLiteral,
-        TypeParameterType,
-        VariableDeclaration;
+import 'package:kernel/ast.dart';
 
 import 'package:kernel/type_algebra.dart' show Substitution;
 
+import 'body_builder.dart' show EnsureLoaded;
+
+/// Name used for a static field holding redirecting factory information.
+const String redirectingName = "_redirecting#";
+
+/// Returns `true` if [member] is synthesized field holding the names of
+/// redirecting factories declared in the same class.
+///
+/// This field should be special-cased by backends.
+bool isRedirectingFactoryField(Member member) {
+  return member is Field &&
+      member.isStatic &&
+      member.name.text == redirectingName;
+}
+
+/// Name used for a synthesized let variable used to encode redirecting factory
+/// information in a factory method body.
 const String letName = "#redirecting_factory";
+
+/// Name used for a synthesized let variable used to encode type arguments to
+/// the redirection target in a factory method body.
+const String varNamePrefix = "#typeArg";
 
 class RedirectingFactoryBody extends ExpressionStatement {
   RedirectingFactoryBody.internal(Expression value,
@@ -38,12 +46,12 @@ class RedirectingFactoryBody extends ExpressionStatement {
       : this.internal(new StringLiteral(name));
 
   Member get target {
-    var value = getValue(expression);
+    dynamic value = getValue(expression);
     return value is StaticGet ? value.target : null;
   }
 
   String get unresolvedName {
-    var value = getValue(expression);
+    dynamic value = getValue(expression);
     return value is StringLiteral ? value.value : null;
   }
 
@@ -71,7 +79,7 @@ class RedirectingFactoryBody extends ExpressionStatement {
 
   static void restoreFromDill(Procedure factory) {
     // This is a hack / work around for storing redirecting constructors in
-    // dill files. See `KernelClassBuilder.addRedirectingConstructor` in
+    // dill files. See `ClassBuilder.addRedirectingConstructor` in
     // [kernel_class_builder.dart](kernel_class_builder.dart).
     FunctionNode function = factory.function;
     ExpressionStatement statement = function.body;
@@ -85,8 +93,38 @@ class RedirectingFactoryBody extends ExpressionStatement {
       ..parent = function;
   }
 
+  static bool hasRedirectingFactoryBodyShape(Procedure factory) {
+    if (factory.function.body is! ExpressionStatement) return false;
+    Expression body = (factory.function.body as ExpressionStatement).expression;
+    if (body is Let &&
+        body.variable.name == letName &&
+        body.variable.type is DynamicType &&
+        body.variable.initializer is StaticGet) {
+      Expression currentArgument = body.body;
+      int argumentCount = 0;
+      while (currentArgument is! InvalidExpression) {
+        Expression argument = currentArgument;
+        if (argument is Let) {
+          String argumentName = "${varNamePrefix}${argumentCount}";
+          if (argument.variable.name != argumentName) {
+            return false;
+          }
+          if (argument.variable.initializer is! NullLiteral) {
+            return false;
+          }
+          currentArgument = argument.body;
+          ++argumentCount;
+        } else {
+          return false;
+        }
+      }
+      return true;
+    } else {
+      return false;
+    }
+  }
+
   static Expression encodeTypeArguments(List<DartType> typeArguments) {
-    String varNamePrefix = "#typeArg";
     Expression result = new InvalidExpression(null);
     if (typeArguments == null) {
       return result;
@@ -112,9 +150,20 @@ class RedirectingFactoryBody extends ExpressionStatement {
     }
     return result;
   }
+
+  @override
+  String toString() {
+    return "RedirectingFactoryBody(${toStringInternal()})";
+  }
+
+  @override
+  String toStringInternal() {
+    return "";
+  }
 }
 
-bool isRedirectingFactory(Member member) {
+bool isRedirectingFactory(Member member, {EnsureLoaded helper}) {
+  assert(helper == null || helper.isLoaded(member));
   return member is Procedure && member.function.body is RedirectingFactoryBody;
 }
 
@@ -129,11 +178,12 @@ class RedirectionTarget {
   RedirectionTarget(this.target, this.typeArguments);
 }
 
-RedirectionTarget getRedirectionTarget(Procedure member, {bool legacyMode}) {
+RedirectionTarget getRedirectionTarget(Procedure member, EnsureLoaded helper) {
   List<DartType> typeArguments = <DartType>[]..length =
       member.function.typeParameters.length;
   for (int i = 0; i < typeArguments.length; i++) {
-    typeArguments[i] = new TypeParameterType(member.function.typeParameters[i]);
+    typeArguments[i] = new TypeParameterType.withDefaultNullabilityForLibrary(
+        member.function.typeParameters[i], member.enclosingLibrary);
   }
 
   // We use the [tortoise and hare algorithm]
@@ -142,38 +192,31 @@ RedirectionTarget getRedirectionTarget(Procedure member, {bool legacyMode}) {
   Member tortoise = member;
   RedirectingFactoryBody tortoiseBody = getRedirectingFactoryBody(tortoise);
   Member hare = tortoiseBody?.target;
+  helper.ensureLoaded(hare);
   RedirectingFactoryBody hareBody = getRedirectingFactoryBody(hare);
   while (tortoise != hare) {
-    if (tortoiseBody?.isUnresolved ?? true)
+    if (tortoiseBody?.isUnresolved ?? true) {
       return new RedirectionTarget(tortoise, typeArguments);
+    }
     Member nextTortoise = tortoiseBody.target;
+    helper.ensureLoaded(nextTortoise);
     List<DartType> nextTypeArguments = tortoiseBody.typeArguments;
-    if (!legacyMode && nextTypeArguments == null) {
+    if (nextTypeArguments == null) {
       nextTypeArguments = <DartType>[];
     }
 
-    if (!legacyMode || nextTypeArguments != null) {
-      Substitution sub = Substitution.fromPairs(
-          tortoise.function.typeParameters, typeArguments);
-      typeArguments = <DartType>[]..length = nextTypeArguments.length;
-      for (int i = 0; i < typeArguments.length; i++) {
-        typeArguments[i] = sub.substituteType(nextTypeArguments[i]);
-      }
-    } else {
-      // In Dart 1, we need to throw away the extra type arguments and use
-      // `dynamic` in place of the missing ones.
-      int typeArgumentCount = typeArguments.length;
-      int nextTypeArgumentCount =
-          nextTortoise.enclosingClass.typeParameters.length;
-      typeArguments.length = nextTypeArgumentCount;
-      for (int i = typeArgumentCount; i < nextTypeArgumentCount; i++) {
-        typeArguments[i] = const DynamicType();
-      }
+    Substitution sub =
+        Substitution.fromPairs(tortoise.function.typeParameters, typeArguments);
+    typeArguments = <DartType>[]..length = nextTypeArguments.length;
+    for (int i = 0; i < typeArguments.length; i++) {
+      typeArguments[i] = sub.substituteType(nextTypeArguments[i]);
     }
 
     tortoise = nextTortoise;
     tortoiseBody = getRedirectingFactoryBody(tortoise);
+    helper.ensureLoaded(hareBody?.target);
     hare = getRedirectingFactoryBody(hareBody?.target)?.target;
+    helper.ensureLoaded(hare);
     hareBody = getRedirectingFactoryBody(hare);
   }
   return null;

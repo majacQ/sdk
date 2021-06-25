@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library test.constructor_kinds_test;
 
 import 'dart:mirrors';
@@ -44,7 +46,7 @@ main() {
   cm = reflectClass(ClassWithDefaultConstructor);
   mm = cm.declarations.values
       .where((d) => d is MethodMirror && d.isConstructor)
-      .single;
+      .single as MethodMirror;
   Expect.isTrue(mm.isConstructor);
   Expect.isTrue(mm.isGenerativeConstructor);
   Expect.isFalse(mm.isFactoryConstructor);
@@ -53,42 +55,42 @@ main() {
 
   cm = reflectClass(Class);
 
-  mm = cm.declarations[#Class.generativeConstructor];
+  mm = cm.declarations[#Class.generativeConstructor] as MethodMirror;
   Expect.isTrue(mm.isConstructor);
   Expect.isTrue(mm.isGenerativeConstructor);
   Expect.isFalse(mm.isFactoryConstructor);
   Expect.isFalse(mm.isRedirectingConstructor);
   Expect.isFalse(mm.isConstConstructor);
 
-  mm = cm.declarations[#Class.redirectingGenerativeConstructor];
+  mm = cm.declarations[#Class.redirectingGenerativeConstructor] as MethodMirror;
   Expect.isTrue(mm.isConstructor);
   Expect.isTrue(mm.isGenerativeConstructor);
   Expect.isFalse(mm.isFactoryConstructor);
   Expect.isTrue(mm.isRedirectingConstructor);
   Expect.isFalse(mm.isConstConstructor);
 
-  mm = cm.declarations[#Class.factoryConstructor];
+  mm = cm.declarations[#Class.factoryConstructor] as MethodMirror;
   Expect.isTrue(mm.isConstructor);
   Expect.isFalse(mm.isGenerativeConstructor);
   Expect.isTrue(mm.isFactoryConstructor);
   Expect.isFalse(mm.isRedirectingConstructor);
   Expect.isFalse(mm.isConstConstructor);
 
-  mm = cm.declarations[#Class.redirectingFactoryConstructor];
+  mm = cm.declarations[#Class.redirectingFactoryConstructor] as MethodMirror;
   Expect.isTrue(mm.isConstructor);
   Expect.isFalse(mm.isGenerativeConstructor);
   Expect.isTrue(mm.isFactoryConstructor);
   Expect.isTrue(mm.isRedirectingConstructor);
   Expect.isFalse(mm.isConstConstructor);
 
-  mm = cm.declarations[#Class.constGenerativeConstructor];
+  mm = cm.declarations[#Class.constGenerativeConstructor] as MethodMirror;
   Expect.isTrue(mm.isConstructor);
   Expect.isTrue(mm.isGenerativeConstructor);
   Expect.isFalse(mm.isFactoryConstructor);
   Expect.isFalse(mm.isRedirectingConstructor);
   Expect.isTrue(mm.isConstConstructor);
 
-  mm = cm.declarations[#Class.constRedirectingGenerativeConstructor];
+  mm = cm.declarations[#Class.constRedirectingGenerativeConstructor] as MethodMirror;
   Expect.isTrue(mm.isConstructor);
   Expect.isTrue(mm.isGenerativeConstructor);
   Expect.isFalse(mm.isFactoryConstructor);
@@ -96,14 +98,14 @@ main() {
   Expect.isTrue(mm.isConstConstructor);
 
   // Not legal.
-  // mm = cm.declarations[#Class.constFactoryConstructor];
+  // mm = cm.declarations[#Class.constFactoryConstructor] as MethodMirror;
   // Expect.isTrue(mm.isConstructor);
   // Expect.isFalse(mm.isGenerativeConstructor);
   // Expect.isTrue(mm.isFactoryConstructor);
   // Expect.isFalse(mm.isRedirectingConstructor);
   // Expect.isTrue(mm.isConstConstructor);
 
-  mm = cm.declarations[#Class.constRedirectingFactoryConstructor];
+  mm = cm.declarations[#Class.constRedirectingFactoryConstructor] as MethodMirror;
   Expect.isTrue(mm.isConstructor);
   Expect.isFalse(mm.isGenerativeConstructor);
   Expect.isTrue(mm.isFactoryConstructor);

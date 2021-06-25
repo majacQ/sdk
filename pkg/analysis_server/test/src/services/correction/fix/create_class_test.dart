@@ -10,7 +10,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'fix_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(CreateClassTest);
   });
@@ -21,8 +21,37 @@ class CreateClassTest extends FixProcessorTest {
   @override
   FixKind get kind => DartFixKind.CREATE_CLASS;
 
-  test_hasUnresolvedPrefix() async {
-    await resolveTestUnit('''
+  Future<void> test_annotation() async {
+    await resolveTestCode('''
+@Test('a')
+void f() {}
+''');
+    await assertHasFix('''
+@Test('a')
+void f() {}
+
+class Test {
+  const Test(String s);
+}
+''');
+    assertLinkedGroup(
+        change.linkedEditGroups[0], ["Test('", 'Test {', 'Test(S']);
+  }
+
+  Future<void> test_extends() async {
+    await resolveTestCode('''
+class MyClass extends BaseClass {}
+''');
+    await assertHasFix('''
+class MyClass extends BaseClass {}
+
+class BaseClass {
+}
+''');
+  }
+
+  Future<void> test_hasUnresolvedPrefix() async {
+    await resolveTestCode('''
 main() {
   prefix.Test v = null;
   print(v);
@@ -31,17 +60,29 @@ main() {
     await assertNoFix();
   }
 
-  test_inLibraryOfPrefix() async {
+  Future<void> test_implements() async {
+    await resolveTestCode('''
+class MyClass implements BaseClass {}
+''');
+    await assertHasFix('''
+class MyClass implements BaseClass {}
+
+class BaseClass {
+}
+''');
+  }
+
+  Future<void> test_inLibraryOfPrefix() async {
     addSource('/home/test/lib/lib.dart', r'''
 class A {}
 ''');
 
-    await resolveTestUnit('''
+    await resolveTestCode('''
 import 'lib.dart' as lib;
 
 main() {
-  lib.A a = null;
-  lib.Test t = null;
+  lib.A? a = null;
+  lib.Test? t = null;
   print('\$a \$t');
 }
 ''');
@@ -55,8 +96,8 @@ class Test {
     expect(change.linkedEditGroups, hasLength(1));
   }
 
-  test_innerLocalFunction() async {
-    await resolveTestUnit('''
+  Future<void> test_innerLocalFunction() async {
+    await resolveTestCode('''
 f() {
   g() {
     Test v = null;
@@ -80,8 +121,8 @@ class Test {
     assertLinkedGroup(change.linkedEditGroups[0], ['Test v =', 'Test {']);
   }
 
-  test_instanceCreation_withoutNew_fromFunction() async {
-    await resolveTestUnit('''
+  Future<void> test_instanceCreation_withoutNew_fromFunction() async {
+    await resolveTestCode('''
 main() {
   Test ();
 }
@@ -97,8 +138,8 @@ class Test {
     assertLinkedGroup(change.linkedEditGroups[0], ['Test ()', 'Test {']);
   }
 
-  test_instanceCreation_withoutNew_fromMethod() async {
-    await resolveTestUnit('''
+  Future<void> test_instanceCreation_withoutNew_fromMethod() async {
+    await resolveTestCode('''
 class A {
   main() {
     Test ();
@@ -118,8 +159,8 @@ class Test {
     assertLinkedGroup(change.linkedEditGroups[0], ['Test ()', 'Test {']);
   }
 
-  test_itemOfList() async {
-    await resolveTestUnit('''
+  Future<void> test_itemOfList() async {
+    await resolveTestCode('''
 main() {
   var a = [Test];
   print(a);
@@ -137,8 +178,8 @@ class Test {
     assertLinkedGroup(change.linkedEditGroups[0], ['Test];', 'Test {']);
   }
 
-  test_itemOfList_inAnnotation() async {
-    await resolveTestUnit('''
+  Future<void> test_itemOfList_inAnnotation() async {
+    await resolveTestCode('''
 class MyAnnotation {
   const MyAnnotation(a, b);
 }
@@ -155,13 +196,13 @@ main() {}
 class Test {
 }
 ''', errorFilter: (error) {
-      return error.errorCode == StaticWarningCode.UNDEFINED_IDENTIFIER;
+      return error.errorCode == CompileTimeErrorCode.UNDEFINED_IDENTIFIER;
     });
     assertLinkedGroup(change.linkedEditGroups[0], ['Test])', 'Test {']);
   }
 
-  test_simple() async {
-    await resolveTestUnit('''
+  Future<void> test_simple() async {
+    await resolveTestCode('''
 main() {
   Test v = null;
   print(v);
@@ -177,5 +218,17 @@ class Test {
 }
 ''');
     assertLinkedGroup(change.linkedEditGroups[0], ['Test v =', 'Test {']);
+  }
+
+  Future<void> test_with() async {
+    await resolveTestCode('''
+class MyClass with BaseClass {}
+''');
+    await assertHasFix('''
+class MyClass with BaseClass {}
+
+class BaseClass {
+}
+''');
   }
 }

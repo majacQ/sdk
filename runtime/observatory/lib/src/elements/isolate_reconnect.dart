@@ -9,45 +9,38 @@ import 'dart:async';
 import 'package:observatory/models.dart' as M;
 import 'package:observatory/src/elements/helpers/nav_bar.dart';
 import 'package:observatory/src/elements/helpers/rendering_scheduler.dart';
-import 'package:observatory/src/elements/helpers/tag.dart';
+import 'package:observatory/src/elements/helpers/custom_element.dart';
 import 'package:observatory/src/elements/helpers/uris.dart';
 import 'package:observatory/src/elements/nav/notify.dart';
 import 'package:observatory/src/elements/nav/top_menu.dart';
 import 'package:observatory/src/elements/view_footer.dart';
 
-class IsolateReconnectElement extends HtmlElement implements Renderable {
-  static const tag = const Tag<IsolateReconnectElement>('isolate-reconnect',
-      dependencies: const [
-        NavTopMenuElement.tag,
-        NavNotifyElement.tag,
-        ViewFooterElement.tag
-      ]);
-
-  RenderingScheduler _r;
+class IsolateReconnectElement extends CustomElement implements Renderable {
+  late RenderingScheduler<IsolateReconnectElement> _r;
 
   Stream<RenderedEvent<IsolateReconnectElement>> get onRendered =>
       _r.onRendered;
 
-  M.VM _vm;
-  String _missing;
-  Uri _uri;
-  M.EventRepository _events;
-  StreamSubscription _subscription;
+  late M.VM _vm;
+  late String _missing;
+  late Uri _uri;
+  late M.EventRepository _events;
+  late StreamSubscription _subscription;
 
   M.VM get vm => _vm;
   String get missing => _missing;
   Uri get uri => _uri;
 
-  M.NotificationRepository _notifications;
+  late M.NotificationRepository _notifications;
   factory IsolateReconnectElement(M.VM vm, M.EventRepository events,
       M.NotificationRepository notifications, String missing, Uri uri,
-      {RenderingQueue queue}) {
+      {RenderingQueue? queue}) {
     assert(vm != null);
     assert(events != null);
     assert(missing != null);
     assert(uri != null);
     assert(notifications != null);
-    IsolateReconnectElement e = document.createElement(tag.name);
+    IsolateReconnectElement e = new IsolateReconnectElement.created();
     e._r = new RenderingScheduler<IsolateReconnectElement>(e, queue: queue);
     e._vm = vm;
     e._events = events;
@@ -57,13 +50,13 @@ class IsolateReconnectElement extends HtmlElement implements Renderable {
     return e;
   }
 
-  IsolateReconnectElement.created() : super.created();
+  IsolateReconnectElement.created() : super.created('isolate-reconnect');
 
   @override
   void attached() {
     super.attached();
     _subscription = _events.onVMUpdate.listen((e) {
-      _vm = e.vm;
+      _vm = e.vm as M.VM;
       _r.dirty();
     });
     _r.enable();
@@ -80,8 +73,8 @@ class IsolateReconnectElement extends HtmlElement implements Renderable {
   void render() {
     children = <Element>[
       navBar(<Element>[
-        new NavTopMenuElement(queue: _r.queue),
-        new NavNotifyElement(_notifications, queue: _r.queue)
+        new NavTopMenuElement(queue: _r.queue).element,
+        new NavNotifyElement(_notifications, queue: _r.queue).element
       ]),
       new DivElement()
         ..classes = ['content-centered']
@@ -111,7 +104,7 @@ class IsolateReconnectElement extends HtmlElement implements Renderable {
                   new AnchorElement(href: Uris.vm())..text = 'isolates summary',
                 ]))
         ],
-      new ViewFooterElement(queue: _r.queue)
+      new ViewFooterElement(queue: _r.queue).element
     ];
   }
 }

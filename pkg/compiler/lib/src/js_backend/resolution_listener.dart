@@ -17,7 +17,7 @@ import '../universe/call_structure.dart' show CallStructure;
 import '../universe/use.dart' show StaticUse, TypeUse;
 import '../universe/world_impact.dart'
     show WorldImpact, WorldImpactBuilder, WorldImpactBuilderImpl;
-import 'allocator_analysis.dart';
+import 'field_analysis.dart';
 import 'backend_impact.dart';
 import 'backend_usage.dart';
 import 'checked_mode_helpers.dart';
@@ -43,7 +43,7 @@ class ResolutionEnqueuerListener extends EnqueuerListener {
   final CustomElementsResolutionAnalysis _customElementsAnalysis;
 
   final NativeResolutionEnqueuer _nativeEnqueuer;
-  final KAllocatorAnalysis _allocatorAnalysis;
+  final KFieldAnalysis _fieldAnalysis;
 
   /// True when we enqueue the loadLibrary code.
   bool _isLoadLibraryFunctionResolved = false;
@@ -59,7 +59,7 @@ class ResolutionEnqueuerListener extends EnqueuerListener {
       this._noSuchMethodRegistry,
       this._customElementsAnalysis,
       this._nativeEnqueuer,
-      this._allocatorAnalysis,
+      this._fieldAnalysis,
       this._deferredLoadTask);
 
   void _registerBackendImpact(
@@ -121,8 +121,12 @@ class ResolutionEnqueuerListener extends EnqueuerListener {
       mainImpact.registerStaticUse(
           new StaticUse.staticInvoke(mainMethod, callStructure));
     }
-    mainImpact.registerStaticUse(
-        new StaticUse.staticInvoke(mainMethod, CallStructure.NO_ARGS));
+    if (mainMethod.isGetter) {
+      mainImpact.registerStaticUse(new StaticUse.staticGet(mainMethod));
+    } else {
+      mainImpact.registerStaticUse(
+          new StaticUse.staticInvoke(mainMethod, CallStructure.NO_ARGS));
+    }
     return mainImpact;
   }
 
@@ -180,6 +184,12 @@ class ResolutionEnqueuerListener extends EnqueuerListener {
       _backendUsage.isNoSuchMethodUsed = true;
     }
 
+    if (_nativeData.isAllowInteropUsed) {
+      _backendUsage.processBackendImpact(_impacts.allowInterop);
+      enqueuer
+          .applyImpact(_impacts.allowInterop.createImpact(_elementEnvironment));
+    }
+
     if (!enqueuer.queueIsEmpty) return false;
 
     return true;
@@ -215,9 +225,7 @@ class ResolutionEnqueuerListener extends EnqueuerListener {
     } else if (constant.isType) {
       FunctionEntity helper = _commonElements.createRuntimeType;
       impactBuilder.registerStaticUse(new StaticUse.staticInvoke(
-          // TODO(johnniwinther): Find the right [CallStructure].
-          helper,
-          null));
+          helper, helper.parameterStructure.callStructure));
       _backendUsage.registerBackendFunctionUse(helper);
       impactBuilder
           .registerTypeUse(new TypeUse.instantiation(_commonElements.typeType));
@@ -232,10 +240,9 @@ class ResolutionEnqueuerListener extends EnqueuerListener {
         // If we use a type literal in a constant, the compile time
         // constant emitter will generate a call to the createRuntimeType
         // helper so we register a use of that.
+        FunctionEntity helper = _commonElements.createRuntimeType;
         impactBuilder.registerStaticUse(new StaticUse.staticInvoke(
-            // TODO(johnniwinther): Find the right [CallStructure].
-            _commonElements.createRuntimeType,
-            null));
+            helper, helper.parameterStructure.callStructure));
       }
     }
   }
@@ -263,7 +270,7 @@ class ResolutionEnqueuerListener extends EnqueuerListener {
           ..addAll(functionType.optionalParameterTypes)
           ..addAll(functionType.namedParameterTypes);
         for (var type in allParameterTypes) {
-          if (type.isFunctionType || type.isTypedef) {
+          if (type.withoutNullability is FunctionType) {
             var closureConverter = _commonElements.closureConverter;
             worldImpact.registerStaticUse(
                 new StaticUse.implicitInvoke(closureConverter));
@@ -331,12 +338,16 @@ class ResolutionEnqueuerListener extends EnqueuerListener {
       _registerBackendImpact(impactBuilder, _impacts.functionClass);
     } else if (cls == _commonElements.mapClass) {
       _registerBackendImpact(impactBuilder, _impacts.mapClass);
+    } else if (cls == _commonElements.setClass) {
+      _registerBackendImpact(impactBuilder, _impacts.setClass);
     } else if (cls == _commonElements.boundClosureClass) {
       _registerBackendImpact(impactBuilder, _impacts.boundClosureClass);
     } else if (_nativeData.isNativeOrExtendsNative(cls)) {
       _registerBackendImpact(impactBuilder, _impacts.nativeOrExtendsClass);
     } else if (cls == _commonElements.mapLiteralClass) {
       _registerBackendImpact(impactBuilder, _impacts.mapLiteralClass);
+    } else if (cls == _commonElements.setLiteralClass) {
+      _registerBackendImpact(impactBuilder, _impacts.setLiteralClass);
     }
     if (cls == _commonElements.closureClass) {
       _registerBackendImpact(impactBuilder, _impacts.closureClass);
@@ -362,9 +373,8 @@ class ResolutionEnqueuerListener extends EnqueuerListener {
       _addInterceptors(_commonElements.jsUInt32Class, impactBuilder);
       _addInterceptors(_commonElements.jsUInt31Class, impactBuilder);
       _addInterceptors(_commonElements.jsNumberClass, impactBuilder);
-    } else if (cls == _commonElements.doubleClass ||
-        cls == _commonElements.jsDoubleClass) {
-      _addInterceptors(_commonElements.jsDoubleClass, impactBuilder);
+    } else if (cls == _commonElements.jsNumNotIntClass) {
+      _addInterceptors(_commonElements.jsNumNotIntClass, impactBuilder);
       _addInterceptors(_commonElements.jsNumberClass, impactBuilder);
     } else if (cls == _commonElements.boolClass ||
         cls == _commonElements.jsBoolClass) {
@@ -372,13 +382,14 @@ class ResolutionEnqueuerListener extends EnqueuerListener {
     } else if (cls == _commonElements.nullClass ||
         cls == _commonElements.jsNullClass) {
       _addInterceptors(_commonElements.jsNullClass, impactBuilder);
-    } else if (cls == _commonElements.numClass ||
+    } else if (cls == _commonElements.doubleClass ||
+        cls == _commonElements.numClass ||
         cls == _commonElements.jsNumberClass) {
       _addInterceptors(_commonElements.jsIntClass, impactBuilder);
       _addInterceptors(_commonElements.jsPositiveIntClass, impactBuilder);
       _addInterceptors(_commonElements.jsUInt32Class, impactBuilder);
       _addInterceptors(_commonElements.jsUInt31Class, impactBuilder);
-      _addInterceptors(_commonElements.jsDoubleClass, impactBuilder);
+      _addInterceptors(_commonElements.jsNumNotIntClass, impactBuilder);
       _addInterceptors(_commonElements.jsNumberClass, impactBuilder);
     } else if (cls == _commonElements.jsJavaScriptObjectClass) {
       _addInterceptors(_commonElements.jsJavaScriptObjectClass, impactBuilder);
@@ -408,7 +419,7 @@ class ResolutionEnqueuerListener extends EnqueuerListener {
 
   @override
   WorldImpact registerInstantiatedClass(ClassEntity cls) {
-    _allocatorAnalysis.registerInstantiatedClass(cls);
+    _fieldAnalysis.registerInstantiatedClass(cls);
     return _processClass(cls);
   }
 
@@ -431,11 +442,15 @@ class ResolutionEnqueuerListener extends EnqueuerListener {
     if (_options.experimentCallInstrumentation) {
       _registerBackendImpact(impactBuilder, _impacts.traceHelper);
     }
+
+    _registerBackendImpact(impactBuilder, _impacts.rtiAddRules);
+
     _registerBackendImpact(impactBuilder, _impacts.assertUnreachable);
     _registerCheckedModeHelpers(impactBuilder);
     return impactBuilder;
   }
 
+  // TODO(39733): Move registration of boolConversionCheck.
   void _registerCheckedModeHelpers(WorldImpactBuilder impactBuilder) {
     // We register all the _commonElements in the resolution queue.
     // TODO(13155): Find a way to register fewer _commonElements.

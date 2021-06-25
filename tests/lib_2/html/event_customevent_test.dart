@@ -2,10 +2,11 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library EventCustomEventTest;
 
-import 'package:unittest/unittest.dart';
-import 'package:unittest/html_config.dart';
+import 'package:async_helper/async_minitest.dart';
 import 'dart:html';
 import 'dart:js' as js;
 
@@ -16,8 +17,6 @@ class DartPayloadData {
 }
 
 main() {
-  useHtmlConfiguration();
-
   test('custom events', () {
     var provider = new EventStreamProvider<CustomEvent>('foo');
     var el = new DivElement();

@@ -4,16 +4,90 @@
 
 import 'package:analysis_server/src/protocol_server.dart';
 import 'package:analysis_server/src/services/correction/fix.dart';
+import 'package:analysis_server/src/services/linter/lint_names.dart';
 import 'package:analyzer_plugin/utilities/fixes/fixes.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'fix_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
-    defineReflectiveTests(CreateMethodTest);
+    defineReflectiveTests(AddMissingHashOrEqualsTest);
     defineReflectiveTests(CreateMethodMixinTest);
+    defineReflectiveTests(CreateMethodTest);
   });
+}
+
+@reflectiveTest
+class AddMissingHashOrEqualsTest extends FixProcessorLintTest {
+  @override
+  FixKind get kind => DartFixKind.CREATE_METHOD;
+
+  @override
+  String get lintCode => LintNames.hash_and_equals;
+
+  Future<void> test_equals() async {
+    await resolveTestCode('''
+class C {
+  @override
+  int get hashCode => 13;
+}
+''');
+    await assertHasFix('''
+class C {
+  @override
+  int get hashCode => 13;
+
+  @override
+  bool operator ==(Object other) {
+    // TODO: implement ==
+    return super == other;
+  }
+}
+''');
+  }
+
+  /// See: https://github.com/dart-lang/sdk/issues/43867
+  Future<void> test_equals_fieldHashCode() async {
+    await resolveTestCode('''
+class C {
+  @override
+  int hashCode = 13;
+}
+''');
+    await assertHasFix('''
+class C {
+  @override
+  int hashCode = 13;
+
+  @override
+  bool operator ==(Object other) {
+    // TODO: implement ==
+    return super == other;
+  }
+}
+''');
+  }
+
+  Future<void> test_hashCode() async {
+    await resolveTestCode('''
+class C {
+  @override
+  bool operator ==(Object other) => false;
+}
+''');
+    await assertHasFix('''
+class C {
+  @override
+  bool operator ==(Object other) => false;
+
+  @override
+  // TODO: implement hashCode
+  int get hashCode => super.hashCode;
+
+}
+''');
+  }
 }
 
 @reflectiveTest
@@ -21,11 +95,11 @@ class CreateMethodMixinTest extends FixProcessorTest {
   @override
   FixKind get kind => DartFixKind.CREATE_METHOD;
 
-  test_createQualified_instance() async {
-    await resolveTestUnit('''
+  Future<void> test_createQualified_instance() async {
+    await resolveTestCode('''
 mixin M {}
 
-main(M m) {
+void f(M m) {
   m.myUndefinedMethod();
 }
 ''');
@@ -34,14 +108,14 @@ mixin M {
   void myUndefinedMethod() {}
 }
 
-main(M m) {
+void f(M m) {
   m.myUndefinedMethod();
 }
 ''');
   }
 
-  test_createQualified_static() async {
-    await resolveTestUnit('''
+  Future<void> test_createQualified_static() async {
+    await resolveTestCode('''
 mixin M {}
 
 main() {
@@ -59,8 +133,8 @@ main() {
 ''');
   }
 
-  test_createUnqualified() async {
-    await resolveTestUnit('''
+  Future<void> test_createUnqualified() async {
+    await resolveTestCode('''
 mixin M {
   main() {
     myUndefinedMethod();
@@ -78,8 +152,8 @@ mixin M {
 ''');
   }
 
-  test_functionType_method_enclosingMixin_static() async {
-    await resolveTestUnit('''
+  Future<void> test_functionType_method_enclosingMixin_static() async {
+    await resolveTestCode('''
 mixin M {
   static foo() {
     useFunction(test);
@@ -102,9 +176,9 @@ useFunction(int g(double a, String b)) {}
 ''');
   }
 
-  test_functionType_method_targetMixin() async {
-    await resolveTestUnit('''
-main(M m) {
+  Future<void> test_functionType_method_targetMixin() async {
+    await resolveTestCode('''
+void f(M m) {
   useFunction(m.test);
 }
 
@@ -114,7 +188,7 @@ mixin M {
 useFunction(int g(double a, String b)) {}
 ''');
     await assertHasFix('''
-main(M m) {
+void f(M m) {
   useFunction(m.test);
 }
 
@@ -133,8 +207,8 @@ class CreateMethodTest extends FixProcessorTest {
   @override
   FixKind get kind => DartFixKind.CREATE_METHOD;
 
-  test_createQualified_emptyClassBody() async {
-    await resolveTestUnit('''
+  Future<void> test_createQualified_emptyClassBody() async {
+    await resolveTestCode('''
 class A {}
 main() {
   A.myUndefinedMethod();
@@ -150,8 +224,8 @@ main() {
 ''');
   }
 
-  test_createQualified_fromClass() async {
-    await resolveTestUnit('''
+  Future<void> test_createQualified_fromClass() async {
+    await resolveTestCode('''
 class A {
 }
 main() {
@@ -168,8 +242,8 @@ main() {
 ''');
   }
 
-  test_createQualified_fromClass_hasOtherMember() async {
-    await resolveTestUnit('''
+  Future<void> test_createQualified_fromClass_hasOtherMember() async {
+    await resolveTestCode('''
 class A {
   foo() {}
 }
@@ -189,11 +263,11 @@ main() {
 ''');
   }
 
-  test_createQualified_fromInstance() async {
-    await resolveTestUnit('''
+  Future<void> test_createQualified_fromInstance() async {
+    await resolveTestCode('''
 class A {
 }
-main(A a) {
+void f(A a) {
   a.myUndefinedMethod();
 }
 ''');
@@ -201,14 +275,14 @@ main(A a) {
 class A {
   void myUndefinedMethod() {}
 }
-main(A a) {
+void f(A a) {
   a.myUndefinedMethod();
 }
 ''');
   }
 
-  test_createQualified_targetIsFunctionType() async {
-    await resolveTestUnit('''
+  Future<void> test_createQualified_targetIsFunctionType() async {
+    await resolveTestCode('''
 typedef A();
 main() {
   A.myUndefinedMethod();
@@ -217,8 +291,8 @@ main() {
     await assertNoFix();
   }
 
-  test_createQualified_targetIsUnresolved() async {
-    await resolveTestUnit('''
+  Future<void> test_createQualified_targetIsUnresolved() async {
+    await resolveTestCode('''
 main() {
   NoSuchClass.myUndefinedMethod();
 }
@@ -226,10 +300,10 @@ main() {
     await assertNoFix();
   }
 
-  test_createUnqualified_duplicateArgumentNames() async {
-    await resolveTestUnit('''
+  Future<void> test_createUnqualified_duplicateArgumentNames() async {
+    await resolveTestCode('''
 class C {
-  int x;
+  int x = 0;
 }
 
 class D {
@@ -239,7 +313,7 @@ class D {
 }''');
     await assertHasFix('''
 class C {
-  int x;
+  int x = 0;
 }
 
 class D {
@@ -251,8 +325,8 @@ class D {
 }''');
   }
 
-  test_createUnqualified_parameters() async {
-    await resolveTestUnit('''
+  Future<void> test_createUnqualified_parameters() async {
+    await resolveTestCode('''
 class A {
   main() {
     myUndefinedMethod(0, 1.0, '3');
@@ -269,7 +343,7 @@ class A {
 }
 ''');
     // linked positions
-    int index = 0;
+    var index = 0;
     assertLinkedGroup(
         change.linkedEditGroups[index++], ['void myUndefinedMethod(']);
     assertLinkedGroup(change.linkedEditGroups[index++],
@@ -294,8 +368,8 @@ class A {
     assertLinkedGroup(change.linkedEditGroups[index++], ['s)']);
   }
 
-  test_createUnqualified_parameters_named() async {
-    await resolveTestUnit('''
+  Future<void> test_createUnqualified_parameters_named() async {
+    await resolveTestCode('''
 class A {
   main() {
     myUndefinedMethod(0, bbb: 1.0, ccc: '2');
@@ -312,7 +386,7 @@ class A {
 }
 ''');
     // linked positions
-    int index = 0;
+    var index = 0;
     assertLinkedGroup(
         change.linkedEditGroups[index++], ['void myUndefinedMethod(']);
     assertLinkedGroup(change.linkedEditGroups[index++],
@@ -335,8 +409,8 @@ class A {
             ['String', 'Object', 'Comparable<String>', 'Pattern']));
   }
 
-  test_createUnqualified_returnType() async {
-    await resolveTestUnit('''
+  Future<void> test_createUnqualified_returnType() async {
+    await resolveTestCode('''
 class A {
   main() {
     int v = myUndefinedMethod();
@@ -360,8 +434,8 @@ class A {
         ['myUndefinedMethod();', 'myUndefinedMethod() {']);
   }
 
-  test_createUnqualified_staticFromField() async {
-    await resolveTestUnit('''
+  Future<void> test_createUnqualified_staticFromField() async {
+    await resolveTestCode('''
 class A {
   static var f = myUndefinedMethod();
 }
@@ -375,8 +449,8 @@ class A {
 ''');
   }
 
-  test_createUnqualified_staticFromMethod() async {
-    await resolveTestUnit('''
+  Future<void> test_createUnqualified_staticFromMethod() async {
+    await resolveTestCode('''
 class A {
   static main() {
     myUndefinedMethod();
@@ -394,8 +468,32 @@ class A {
 ''');
   }
 
-  test_functionType_method_enclosingClass_static() async {
-    await resolveTestUnit('''
+  Future<void> test_functionType_method_enclosingClass_instance() async {
+    await resolveTestCode('''
+class C {
+  void m1() {
+    m2(m3);
+  }
+
+  void m2(int Function(int) f) {}
+}
+''');
+    await assertHasFix('''
+class C {
+  void m1() {
+    m2(m3);
+  }
+
+  void m2(int Function(int) f) {}
+
+  int m3(int p1) {
+  }
+}
+''');
+  }
+
+  Future<void> test_functionType_method_enclosingClass_static() async {
+    await resolveTestCode('''
 class A {
   static foo() {
     useFunction(test);
@@ -416,8 +514,8 @@ useFunction(int g(double a, String b)) {}
 ''');
   }
 
-  test_functionType_method_enclosingClass_static2() async {
-    await resolveTestUnit('''
+  Future<void> test_functionType_method_enclosingClass_static2() async {
+    await resolveTestCode('''
 class A {
   var f;
   A() : f = useFunction(test);
@@ -436,9 +534,9 @@ useFunction(int g(double a, String b)) {}
 ''');
   }
 
-  test_functionType_method_targetClass() async {
-    await resolveTestUnit('''
-main(A a) {
+  Future<void> test_functionType_method_targetClass() async {
+    await resolveTestCode('''
+void f(A a) {
   useFunction(a.test);
 }
 class A {
@@ -446,7 +544,7 @@ class A {
 useFunction(int g(double a, String b)) {}
 ''');
     await assertHasFix('''
-main(A a) {
+void f(A a) {
   useFunction(a.test);
 }
 class A {
@@ -457,9 +555,9 @@ useFunction(int g(double a, String b)) {}
 ''');
   }
 
-  test_functionType_method_targetClass_hasOtherMember() async {
-    await resolveTestUnit('''
-main(A a) {
+  Future<void> test_functionType_method_targetClass_hasOtherMember() async {
+    await resolveTestCode('''
+void f(A a) {
   useFunction(a.test);
 }
 class A {
@@ -468,7 +566,7 @@ class A {
 useFunction(int g(double a, String b)) {}
 ''');
     await assertHasFix('''
-main(A a) {
+void f(A a) {
   useFunction(a.test);
 }
 class A {
@@ -481,9 +579,9 @@ useFunction(int g(double a, String b)) {}
 ''');
   }
 
-  test_functionType_notFunctionType() async {
-    await resolveTestUnit('''
-main(A a) {
+  Future<void> test_functionType_notFunctionType() async {
+    await resolveTestCode('''
+void f(A a) {
   useFunction(a.test);
 }
 typedef A();
@@ -492,9 +590,9 @@ useFunction(g) {}
     await assertNoFix();
   }
 
-  test_functionType_unknownTarget() async {
-    await resolveTestUnit('''
-main(A a) {
+  Future<void> test_functionType_unknownTarget() async {
+    await resolveTestCode('''
+void f(A a) {
   useFunction(a.test);
 }
 class A {
@@ -504,11 +602,11 @@ useFunction(g) {}
     await assertNoFix();
   }
 
-  test_generic_argumentType() async {
-    await resolveTestUnit('''
+  Future<void> test_generic_argumentType() async {
+    await resolveTestCode('''
 class A<T> {
-  B b;
-  Map<int, T> items;
+  B b = B();
+  Map<int, T> items = {};
   main() {
     b.process(items);
   }
@@ -519,8 +617,8 @@ class B {
 ''');
     await assertHasFix('''
 class A<T> {
-  B b;
-  Map<int, T> items;
+  B b = B();
+  Map<int, T> items = {};
   main() {
     b.process(items);
   }
@@ -532,11 +630,11 @@ class B {
 ''');
   }
 
-  test_generic_literal() async {
-    await resolveTestUnit('''
+  Future<void> test_generic_literal() async {
+    await resolveTestCode('''
 class A {
-  B b;
-  List<int> items;
+  B b = B();
+  List<int> items = [];
   main() {
     b.process(items);
   }
@@ -546,8 +644,8 @@ class B {}
 ''');
     await assertHasFix('''
 class A {
-  B b;
-  List<int> items;
+  B b = B();
+  List<int> items = [];
   main() {
     b.process(items);
   }
@@ -559,10 +657,10 @@ class B {
 ''');
   }
 
-  test_generic_local() async {
-    await resolveTestUnit('''
+  Future<void> test_generic_local() async {
+    await resolveTestCode('''
 class A<T> {
-  List<T> items;
+  List<T> items = [];
   main() {
     process(items);
   }
@@ -570,7 +668,7 @@ class A<T> {
 ''');
     await assertHasFix('''
 class A<T> {
-  List<T> items;
+  List<T> items = [];
   main() {
     process(items);
   }
@@ -580,8 +678,8 @@ class A<T> {
 ''');
   }
 
-  test_generic_returnType() async {
-    await resolveTestUnit('''
+  Future<void> test_generic_returnType() async {
+    await resolveTestCode('''
 class A<T> {
   main() {
     T t = new B().compute();
@@ -606,8 +704,8 @@ class B {
 ''');
   }
 
-  test_hint_createQualified_fromInstance() async {
-    await resolveTestUnit('''
+  Future<void> test_hint_createQualified_fromInstance() async {
+    await resolveTestCode('''
 class A {
 }
 main() {
@@ -626,8 +724,8 @@ main() {
 ''');
   }
 
-  test_inSDK() async {
-    await resolveTestUnit('''
+  Future<void> test_inSDK() async {
+    await resolveTestCode('''
 main() {
   List.foo();
 }
@@ -635,8 +733,57 @@ main() {
     await assertNoFix();
   }
 
-  test_parameterType_differentPrefixInTargetUnit() async {
-    String code2 = r'''
+  Future<void> test_internal_instance() async {
+    await resolveTestCode('''
+extension E on String {
+  int m() => n();
+}
+''');
+    await assertHasFix('''
+extension E on String {
+  int m() => n();
+
+  n() {}
+}
+''');
+  }
+
+  Future<void> test_internal_static() async {
+    await resolveTestCode('''
+extension E on String {
+  static int m() => n();
+}
+''');
+    await assertHasFix('''
+extension E on String {
+  static int m() => n();
+
+  static n() {}
+}
+''');
+  }
+
+  Future<void> test_override() async {
+    await resolveTestCode('''
+extension E on String {}
+
+void f() {
+  E('a').m();
+}
+''');
+    await assertHasFix('''
+extension E on String {
+  void m() {}
+}
+
+void f() {
+  E('a').m();
+}
+''');
+  }
+
+  Future<void> test_parameterType_differentPrefixInTargetUnit() async {
+    var code2 = r'''
 import 'test3.dart' as bbb;
 export 'test3.dart';
 
@@ -650,10 +797,10 @@ library test3;
 class E {}
 ''');
 
-    await resolveTestUnit('''
+    await resolveTestCode('''
 import 'test2.dart' as aaa;
 
-main(aaa.D d, aaa.E e) {
+void f(aaa.D d, aaa.E e) {
   d.foo(e);
 }
 ''');
@@ -668,7 +815,7 @@ class D {
 ''', target: '/home/test/lib/test2.dart');
   }
 
-  test_parameterType_inTargetUnit() async {
+  Future<void> test_parameterType_inTargetUnit() async {
     addSource('/home/test/lib/test2.dart', r'''
 class D {
 }
@@ -676,10 +823,10 @@ class D {
 class E {}
 ''');
 
-    await resolveTestUnit('''
+    await resolveTestCode('''
 import 'test2.dart' as test2;
 
-main(test2.D d, test2.E e) {
+void f(test2.D d, test2.E e) {
   d.foo(e);
 }
 ''');
@@ -693,8 +840,27 @@ class E {}
 ''', target: '/home/test/lib/test2.dart');
   }
 
-  test_targetIsEnum() async {
-    await resolveTestUnit('''
+  Future<void> test_static() async {
+    await resolveTestCode('''
+extension E on String {}
+
+void f() {
+  E.m();
+}
+''');
+    await assertHasFix('''
+extension E on String {
+  static void m() {}
+}
+
+void f() {
+  E.m();
+}
+''');
+  }
+
+  Future<void> test_targetIsEnum() async {
+    await resolveTestCode('''
 enum MyEnum {A, B}
 main() {
   MyEnum.foo();

@@ -11,9 +11,9 @@
 #include <openssl/x509.h>
 
 #include "bin/lockers.h"
-#include "bin/log.h"
 #include "bin/secure_socket_utils.h"
 #include "bin/security_context.h"
+#include "platform/syslog.h"
 #include "platform/text_buffer.h"
 
 // Return the error from the containing function if handle is an error handle.
@@ -30,26 +30,40 @@ namespace bin {
 
 bool SSLFilter::library_initialized_ = false;
 // To protect library initialization.
-Mutex* SSLFilter::mutex_ = new Mutex();
+Mutex* SSLFilter::mutex_ = nullptr;
 int SSLFilter::filter_ssl_index;
+int SSLFilter::ssl_cert_context_index;
+
+void SSLFilter::Init() {
+  ASSERT(SSLFilter::mutex_ == nullptr);
+  SSLFilter::mutex_ = new Mutex();
+}
+
+void SSLFilter::Cleanup() {
+  ASSERT(SSLFilter::mutex_ != nullptr);
+  delete SSLFilter::mutex_;
+  SSLFilter::mutex_ = nullptr;
+}
 
 const intptr_t SSLFilter::kInternalBIOSize = 10 * KB;
 const intptr_t SSLFilter::kApproximateSize =
     sizeof(SSLFilter) + (2 * SSLFilter::kInternalBIOSize);
 
 static SSLFilter* GetFilter(Dart_NativeArguments args) {
-  SSLFilter* filter;
+  SSLFilter* filter = NULL;
   Dart_Handle dart_this = ThrowIfError(Dart_GetNativeArgument(args, 0));
   ASSERT(Dart_IsInstance(dart_this));
   ThrowIfError(Dart_GetNativeInstanceField(
       dart_this, SSLFilter::kSSLFilterNativeFieldIndex,
       reinterpret_cast<intptr_t*>(&filter)));
+  if (filter == NULL) {
+    Dart_PropagateError(Dart_NewUnhandledExceptionError(
+        DartUtils::NewInternalError("No native peer")));
+  }
   return filter;
 }
 
-static void DeleteFilter(void* isolate_data,
-                         Dart_WeakPersistentHandle handle,
-                         void* context_pointer) {
+static void DeleteFilter(void* isolate_data, void* context_pointer) {
   SSLFilter* filter = reinterpret_cast<SSLFilter*>(context_pointer);
   filter->Release();
 }
@@ -63,8 +77,8 @@ static Dart_Handle SetFilter(Dart_NativeArguments args, SSLFilter* filter) {
       dart_this, SSLFilter::kSSLFilterNativeFieldIndex,
       reinterpret_cast<intptr_t>(filter));
   RETURN_IF_ERROR(err);
-  Dart_NewWeakPersistentHandle(dart_this, reinterpret_cast<void*>(filter),
-                               SSLFilter::kApproximateSize, DeleteFilter);
+  Dart_NewFinalizableHandle(dart_this, reinterpret_cast<void*>(filter),
+                            SSLFilter::kApproximateSize, DeleteFilter);
   return Dart_Null();
 }
 
@@ -130,7 +144,30 @@ void FUNCTION_NAME(SecureSocket_Destroy)(Dart_NativeArguments args) {
 }
 
 void FUNCTION_NAME(SecureSocket_Handshake)(Dart_NativeArguments args) {
-  GetFilter(args)->Handshake();
+  Dart_Handle port = ThrowIfError(Dart_GetNativeArgument(args, 1));
+  ASSERT(!Dart_IsNull(port));
+
+  Dart_Port port_id;
+  ThrowIfError(Dart_SendPortGetId(port, &port_id));
+  int result = GetFilter(args)->Handshake(port_id);
+  Dart_SetReturnValue(args, Dart_NewInteger(result));
+}
+
+void FUNCTION_NAME(SecureSocket_MarkAsTrusted)(Dart_NativeArguments args) {
+  GetFilter(args)->MarkAsTrusted(args);
+}
+
+void FUNCTION_NAME(SecureSocket_NewX509CertificateWrapper)(
+    Dart_NativeArguments args) {
+// This is to be used only in conjunction with certificate trust evaluator
+// running asynchronously, which is only used on mac/ios at the moment.
+#if !defined(HOST_OS_MACOS)
+  FATAL("This is to be used only on mac/ios platforms");
+#endif
+  intptr_t x509_pointer = DartUtils::GetNativeIntptrArgument(args, 0);
+  ASSERT(x509_pointer != 0);
+  X509* x509 = reinterpret_cast<X509*>(x509_pointer);
+  Dart_SetReturnValue(args, X509Helper::WrappedX509Certificate(x509));
 }
 
 void FUNCTION_NAME(SecureSocket_GetSelectedProtocol)(
@@ -232,7 +269,8 @@ CObject* SSLFilter::ProcessFilterRequest(const CObjectArray& request) {
     SecureSocketUtils::FetchErrorString(filter->ssl_, &error_string);
     CObjectArray* result = new CObjectArray(CObject::NewArray(2));
     result->SetAt(0, new CObjectInt32(CObject::NewInt32(error_code)));
-    result->SetAt(1, new CObjectString(CObject::NewString(error_string.buf())));
+    result->SetAt(1,
+                  new CObjectString(CObject::NewString(error_string.buffer())));
     return result;
   }
 }
@@ -371,6 +409,7 @@ Dart_Handle SSLFilter::InitializeBuffers(Dart_Handle dart_this) {
     int size = IsBufferEncrypted(i) ? encrypted_buffer_size_ : buffer_size_;
     buffers_[i] = new uint8_t[size];
     ASSERT(buffers_[i] != NULL);
+    memset(buffers_[i], 0, size);
     dart_buffer_objects_[i] = NULL;
   }
 
@@ -432,6 +471,8 @@ void SSLFilter::InitializeLibrary() {
     SSL_library_init();
     filter_ssl_index = SSL_get_ex_new_index(0, NULL, NULL, NULL, NULL);
     ASSERT(filter_ssl_index >= 0);
+    ssl_cert_context_index = SSL_get_ex_new_index(0, NULL, NULL, NULL, NULL);
+    ASSERT(ssl_cert_context_index >= 0);
     library_initialized_ = true;
   }
 }
@@ -462,7 +503,15 @@ void SSLFilter::Connect(const char* hostname,
   SSL_set_mode(ssl_, SSL_MODE_AUTO_RETRY);  // TODO(whesse): Is this right?
   SSL_set_ex_data(ssl_, filter_ssl_index, this);
   context->RegisterCallbacks(ssl_);
+  SSL_set_ex_data(ssl_, ssl_cert_context_index, context);
 
+  TrustEvaluateHandlerFunc trust_evaluate_handler =
+      context->GetTrustEvaluateHandler();
+  if (trust_evaluate_handler != nullptr) {
+    trust_evaluate_reply_port_ = Dart_NewNativePort(
+        "SSLCertContextTrustEvaluate", trust_evaluate_handler,
+        /*handle_concurrently=*/false);
+  }
   if (is_server_) {
     int certificate_mode =
         request_client_certificate ? SSL_VERIFY_PEER : SSL_VERIFY_NONE;
@@ -478,7 +527,7 @@ void SSLFilter::Connect(const char* hostname,
     // Sets the hostname in the certificate-checking object, so it is checked
     // against the certificate presented by the server.
     X509_VERIFY_PARAM* certificate_checking_parameters = SSL_get0_param(ssl_);
-    hostname_ = strdup(hostname);
+    hostname_ = Utils::StrDup(hostname);
     X509_VERIFY_PARAM_set_flags(
         certificate_checking_parameters,
         X509_V_FLAG_PARTIAL_CHAIN | X509_V_FLAG_TRUSTED_FIRST);
@@ -492,35 +541,59 @@ void SSLFilter::Connect(const char* hostname,
   if (is_server_) {
     status = SSL_accept(ssl_);
     if (SSL_LOG_STATUS) {
-      Log::Print("SSL_accept status: %d\n", status);
+      Syslog::Print("SSL_accept status: %d\n", status);
     }
     if (status != 1) {
       // TODO(whesse): expect a needs-data error here.  Handle other errors.
       error = SSL_get_error(ssl_, status);
       if (SSL_LOG_STATUS) {
-        Log::Print("SSL_accept error: %d\n", error);
+        Syslog::Print("SSL_accept error: %d\n", error);
       }
     }
   } else {
     status = SSL_connect(ssl_);
     if (SSL_LOG_STATUS) {
-      Log::Print("SSL_connect status: %d\n", status);
+      Syslog::Print("SSL_connect status: %d\n", status);
     }
     if (status != 1) {
       // TODO(whesse): expect a needs-data error here.  Handle other errors.
       error = SSL_get_error(ssl_, status);
       if (SSL_LOG_STATUS) {
-        Log::Print("SSL_connect error: %d\n", error);
+        Syslog::Print("SSL_connect error: %d\n", error);
       }
     }
   }
-  Handshake();
+  // We don't expect certificate evaluation on first attempt,
+  // we expect requests for more bytes, therefore we could get away
+  // with passing illegal port.
+  Handshake(ILLEGAL_PORT);
 }
 
-void SSLFilter::Handshake() {
+void SSLFilter::MarkAsTrusted(Dart_NativeArguments args) {
+  intptr_t certificate_pointer = DartUtils::GetNativeIntptrArgument(args, 1);
+  ASSERT(certificate_pointer != 0);
+  certificate_trust_state_.reset(
+      new X509TrustState(reinterpret_cast<X509*>(certificate_pointer),
+                         DartUtils::GetNativeBooleanArgument(args, 2)));
+  if (SSL_LOG_STATUS) {
+    Syslog::Print("Mark %p as %strusted certificate\n",
+                  certificate_trust_state_.get()->x509(),
+                  certificate_trust_state_.get()->is_trusted() ? "" : "not ");
+  }
+}
+
+int SSLFilter::Handshake(Dart_Port reply_port) {
+  // Set reply port to be used by CertificateVerificationCallback
+  // invoked by SSL_do_handshake: this is where results of
+  // certificate evaluation will be communicated to.
+  reply_port_ = reply_port;
+
   // Try and push handshake along.
-  int status;
-  status = SSL_do_handshake(ssl_);
+  int status = SSL_do_handshake(ssl_);
+  int error = SSL_get_error(ssl_, status);
+  if (error == SSL_ERROR_WANT_CERTIFICATE_VERIFY) {
+    return SSL_ERROR_WANT_CERTIFICATE_VERIFY;
+  }
   if (callback_error != NULL) {
     // The SSL_do_handshake will try performing a handshake and might call
     // a CertificateCallback. If the certificate validation
@@ -530,7 +603,7 @@ void SSLFilter::Handshake() {
   }
   if (SSL_want_write(ssl_) || SSL_want_read(ssl_)) {
     in_handshake_ = true;
-    return;
+    return error;
   }
   SecureSocketUtils::CheckStatusSSL(
       status, "HandshakeException",
@@ -542,10 +615,10 @@ void SSLFilter::Handshake() {
     //    should give us the hostname check.
     int result = SSL_get_verify_result(ssl_);
     if (SSL_LOG_STATUS) {
-      Log::Print("Handshake verification status: %d\n", result);
+      Syslog::Print("Handshake verification status: %d\n", result);
       X509* peer_certificate = SSL_get_peer_certificate(ssl_);
       if (peer_certificate == NULL) {
-        Log::Print("No peer certificate received\n");
+        Syslog::Print("No peer certificate received\n");
       } else {
         X509_NAME* s_name = X509_get_subject_name(peer_certificate);
         printf("Peer certificate SN: ");
@@ -557,6 +630,8 @@ void SSLFilter::Handshake() {
         Dart_HandleFromPersistent(handshake_complete_), 0, NULL));
     in_handshake_ = false;
   }
+
+  return error;
 }
 
 void SSLFilter::GetSelectedProtocol(Dart_NativeArguments args) {
@@ -629,6 +704,10 @@ void SSLFilter::Destroy() {
     Dart_DeletePersistentHandle(bad_certificate_callback_);
     bad_certificate_callback_ = NULL;
   }
+  if (trust_evaluate_reply_port_ != ILLEGAL_PORT) {
+    Dart_CloseNativePort(trust_evaluate_reply_port_);
+    trust_evaluate_reply_port_ = ILLEGAL_PORT;
+  }
   FreeResources();
 }
 
@@ -636,28 +715,46 @@ void SSLFilter::Destroy() {
 int SSLFilter::ProcessReadPlaintextBuffer(int start, int end) {
   int length = end - start;
   int bytes_processed = 0;
+  if (SSL_LOG_DATA) {
+    Syslog::Print("Entering ProcessReadPlaintextBuffer with %d bytes\n",
+                  length);
+  }
   if (length > 0) {
     bytes_processed = SSL_read(
         ssl_, reinterpret_cast<char*>((buffers_[kReadPlaintext] + start)),
         length);
     if (bytes_processed < 0) {
       int error = SSL_get_error(ssl_, bytes_processed);
-      USE(error);
+      if (SSL_LOG_DATA) {
+        Syslog::Print("SSL_read returned error %d\n", error);
+      }
       bytes_processed = 0;
     }
+  }
+  if (SSL_LOG_DATA) {
+    Syslog::Print("Leaving ProcessReadPlaintextBuffer read %d bytes\n",
+                  bytes_processed);
   }
   return bytes_processed;
 }
 
 int SSLFilter::ProcessWritePlaintextBuffer(int start, int end) {
   int length = end - start;
+  if (SSL_LOG_DATA) {
+    Syslog::Print("Entering ProcessWritePlaintextBuffer with %d bytes\n",
+                  length);
+  }
   int bytes_processed =
       SSL_write(ssl_, buffers_[kWritePlaintext] + start, length);
   if (bytes_processed < 0) {
     if (SSL_LOG_DATA) {
-      Log::Print("SSL_write returned error %d\n", bytes_processed);
+      Syslog::Print("SSL_write returned error %d\n", bytes_processed);
     }
     return 0;
+  }
+  if (SSL_LOG_DATA) {
+    Syslog::Print("Leaving ProcessWritePlaintextBuffer wrote %d bytes\n",
+                  bytes_processed);
   }
   return bytes_processed;
 }
@@ -665,42 +762,52 @@ int SSLFilter::ProcessWritePlaintextBuffer(int start, int end) {
 /* Read encrypted data from the circular buffer to the filter */
 int SSLFilter::ProcessReadEncryptedBuffer(int start, int end) {
   int length = end - start;
-  if (SSL_LOG_DATA)
-    Log::Print("Entering ProcessReadEncryptedBuffer with %d bytes\n", length);
+  if (SSL_LOG_DATA) {
+    Syslog::Print("Entering ProcessReadEncryptedBuffer with %d bytes\n",
+                  length);
+  }
   int bytes_processed = 0;
   if (length > 0) {
     bytes_processed =
         BIO_write(socket_side_, buffers_[kReadEncrypted] + start, length);
     if (bytes_processed <= 0) {
-      bool retry = BIO_should_retry(socket_side_);
+      bool retry = BIO_should_retry(socket_side_) != 0;
       if (!retry) {
-        if (SSL_LOG_DATA)
-          Log::Print("BIO_write failed in ReadEncryptedBuffer\n");
+        if (SSL_LOG_DATA) {
+          Syslog::Print("BIO_write failed in ReadEncryptedBuffer\n");
+        }
       }
       bytes_processed = 0;
     }
   }
-  if (SSL_LOG_DATA)
-    Log::Print("Leaving ProcessReadEncryptedBuffer wrote %d bytes\n",
-               bytes_processed);
+  if (SSL_LOG_DATA) {
+    Syslog::Print("Leaving ProcessReadEncryptedBuffer read %d bytes\n",
+                  bytes_processed);
+  }
   return bytes_processed;
 }
 
 int SSLFilter::ProcessWriteEncryptedBuffer(int start, int end) {
   int length = end - start;
   int bytes_processed = 0;
+  if (SSL_LOG_DATA) {
+    Syslog::Print("Entering ProcessWriteEncryptedBuffer with %d bytes\n",
+                  length);
+  }
   if (length > 0) {
     bytes_processed =
         BIO_read(socket_side_, buffers_[kWriteEncrypted] + start, length);
     if (bytes_processed < 0) {
-      if (SSL_LOG_DATA)
-        Log::Print("WriteEncrypted BIO_read returned error %d\n",
-                   bytes_processed);
+      if (SSL_LOG_DATA) {
+        Syslog::Print("WriteEncrypted BIO_read returned error %d\n",
+                      bytes_processed);
+      }
       return 0;
     } else {
-      if (SSL_LOG_DATA)
-        Log::Print("WriteEncrypted  BIO_read wrote %d bytes\n",
-                   bytes_processed);
+      if (SSL_LOG_DATA) {
+        Syslog::Print("WriteEncrypted  BIO_read wrote %d bytes\n",
+                      bytes_processed);
+      }
     }
   }
   return bytes_processed;

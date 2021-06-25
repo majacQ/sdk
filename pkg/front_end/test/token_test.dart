@@ -2,8 +2,11 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'package:front_end/src/fasta/scanner/string_scanner.dart';
-import 'package:front_end/src/scanner/token.dart';
+// @dart = 2.9
+
+import 'package:_fe_analyzer_shared/src/scanner/scanner.dart'
+    show ScannerConfiguration, scanString;
+import 'package:_fe_analyzer_shared/src/scanner/token.dart';
 import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
@@ -31,8 +34,7 @@ class Foo {
   }
 }
 ''';
-    var scanner = new StringScanner(source, includeComments: true);
-    Token token = scanner.tokenize();
+    Token token = scanString(source, includeComments: true).tokens;
 
     Token nextComment() {
       while (!token.isEof) {
@@ -46,27 +48,26 @@ class Foo {
     Token comment = nextComment();
     expect(comment.lexeme, contains('Single line dartdoc comment'));
     expect(comment.type, TokenType.SINGLE_LINE_COMMENT);
-    expect(comment, new isInstanceOf<DocumentationCommentToken>());
+    expect(comment, const TypeMatcher<DocumentationCommentToken>());
 
     comment = nextComment();
     expect(comment.lexeme, contains('Multi-line dartdoc comment'));
     expect(comment.type, TokenType.MULTI_LINE_COMMENT);
-    expect(comment, new isInstanceOf<DocumentationCommentToken>());
+    expect(comment, const TypeMatcher<DocumentationCommentToken>());
 
     comment = nextComment();
     expect(comment.lexeme, contains('Single line comment'));
     expect(comment.type, TokenType.SINGLE_LINE_COMMENT);
-    expect(comment, new isInstanceOf<CommentToken>());
+    expect(comment, const TypeMatcher<CommentToken>());
 
     comment = nextComment();
     expect(comment.lexeme, contains('Multi-line comment'));
     expect(comment.type, TokenType.MULTI_LINE_COMMENT);
-    expect(comment, new isInstanceOf<CommentToken>());
+    expect(comment, const TypeMatcher<CommentToken>());
   }
 
   void test_isSynthetic() {
-    var scanner = new StringScanner('/* 1 */ foo', includeComments: true);
-    var token = scanner.tokenize();
+    var token = scanString('/* 1 */ foo', includeComments: true).tokens;
     expect(token.isSynthetic, false);
     expect(token.precedingComments.isSynthetic, false);
     expect(token.previous.isSynthetic, true);
@@ -75,8 +76,7 @@ class Foo {
   }
 
   void test_matchesAny() {
-    var scanner = new StringScanner('true', includeComments: true);
-    var token = scanner.tokenize();
+    var token = scanString('true', includeComments: true).tokens;
     expect(token.matchesAny([Keyword.TRUE]), true);
     expect(token.matchesAny([TokenType.AMPERSAND, Keyword.TRUE]), true);
     expect(token.matchesAny([TokenType.AMPERSAND]), false);
@@ -90,16 +90,19 @@ class Foo {
       Keyword.DEFERRED,
       Keyword.DYNAMIC,
       Keyword.EXPORT,
+      Keyword.EXTENSION,
       Keyword.EXTERNAL,
       Keyword.FACTORY,
       Keyword.GET,
       Keyword.IMPLEMENTS,
       Keyword.IMPORT,
       Keyword.INTERFACE,
+      Keyword.LATE,
       Keyword.LIBRARY,
       Keyword.MIXIN,
       Keyword.OPERATOR,
       Keyword.PART,
+      Keyword.REQUIRED,
       Keyword.SET,
       Keyword.STATIC,
       Keyword.TYPEDEF,
@@ -117,13 +120,17 @@ class Foo {
       Keyword.COVARIANT,
       Keyword.EXTERNAL,
       Keyword.FINAL,
+      Keyword.LATE,
+      Keyword.REQUIRED,
       Keyword.STATIC,
       Keyword.VAR,
     ]);
     for (Keyword keyword in Keyword.values) {
       var isModifier = modifierKeywords.contains(keyword);
-      var scanner = new StringScanner(keyword.lexeme, includeComments: true);
-      Token token = scanner.tokenize();
+      Token token = scanString(keyword.lexeme,
+              configuration: ScannerConfiguration.nonNullable,
+              includeComments: true)
+          .tokens;
       expect(token.isModifier, isModifier, reason: keyword.name);
       if (isModifier) {
         expect(token.isTopLevelKeyword, isFalse, reason: keyword.name);
@@ -136,6 +143,7 @@ class Foo {
       Keyword.CLASS,
       Keyword.ENUM,
       Keyword.EXPORT,
+      //Keyword.EXTENSION, <-- when "extension methods" is enabled by default
       Keyword.IMPORT,
       Keyword.LIBRARY,
       Keyword.MIXIN,
@@ -144,11 +152,18 @@ class Foo {
     ]);
     for (Keyword keyword in Keyword.values) {
       var isTopLevelKeyword = topLevelKeywords.contains(keyword);
-      var scanner = new StringScanner(keyword.lexeme, includeComments: true);
-      Token token = scanner.tokenize();
+      Token token = scanString(keyword.lexeme, includeComments: true).tokens;
       expect(token.isTopLevelKeyword, isTopLevelKeyword, reason: keyword.name);
       if (isTopLevelKeyword) {
         expect(token.isModifier, isFalse, reason: keyword.name);
+      }
+    }
+  }
+
+  void test_noPseudoModifiers() {
+    for (Keyword keyword in Keyword.values) {
+      if (keyword.isModifier) {
+        expect(keyword.isPseudo, isFalse, reason: keyword.lexeme);
       }
     }
   }
@@ -159,9 +174,11 @@ class Foo {
       Keyword.AWAIT,
       Keyword.FUNCTION,
       Keyword.HIDE,
+      Keyword.INOUT,
       Keyword.NATIVE,
       Keyword.OF,
       Keyword.ON,
+      Keyword.OUT,
       Keyword.PATCH,
       Keyword.SHOW,
       Keyword.SOURCE,
@@ -175,8 +192,7 @@ class Foo {
   }
 
   void test_value() {
-    var scanner = new StringScanner('true & "home"', includeComments: true);
-    var token = scanner.tokenize();
+    var token = scanString('true & "home"', includeComments: true).tokens;
     // Keywords
     expect(token.lexeme, 'true');
     expect(token.value(), Keyword.TRUE);

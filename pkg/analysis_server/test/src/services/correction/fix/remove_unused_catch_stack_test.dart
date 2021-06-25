@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'fix_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(RemoveUnusedCatchStackTest);
   });
@@ -19,8 +19,8 @@ class RemoveUnusedCatchStackTest extends FixProcessorTest {
   @override
   FixKind get kind => DartFixKind.REMOVE_UNUSED_CATCH_STACK;
 
-  test_removeUnusedCatchStack() async {
-    await resolveTestUnit('''
+  Future<void> test_removeUnusedCatchStack() async {
+    await resolveTestCode('''
 main() {
   try {
     throw 42;

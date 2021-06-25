@@ -2,9 +2,11 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import 'dart:async';
 
-import 'package:expect/async_minitest.dart';
+import 'package:async_helper/async_minitest.dart';
 
 main() {
   test("stream iterator basic", () async {
@@ -51,7 +53,7 @@ main() {
     Stream stream = createStream();
     StreamIterator iterator = new StreamIterator(stream);
     var hasNext = iterator.moveNext();
-    expect(iterator.moveNext, throwsA(isStateError));
+    expect(iterator.moveNext, throwsStateError);
     expect(await hasNext, isTrue);
     expect(iterator.current, 42);
     iterator.cancel();
@@ -69,6 +71,27 @@ main() {
     expect(cancel, throwsA("BAD"));
     expect(await hasNext, isFalse);
     expect(await iterator.moveNext(), isFalse);
+  });
+
+  test("regression 43799 (1)", () async {
+    // See: https://github.com/dart-lang/sdk/issues/43799
+    var badStream = StreamController<int>.broadcast(sync: true);
+    badStream.onListen = () {
+      badStream.add(1);
+      badStream.close();
+    };
+    var it = StreamIterator(badStream.stream);
+    expect(await it.moveNext(), false);
+  });
+
+  test("regression 43799 (2)", () async {
+    // See: https://github.com/dart-lang/sdk/issues/43799
+    var badStream = StreamController<int>.broadcast(sync: true);
+    badStream.onListen = () {
+      badStream.addError("bad");
+    };
+    var it = StreamIterator(badStream.stream);
+    expect(it.moveNext(), expectAsync(throwsA("bad")));
   });
 }
 

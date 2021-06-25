@@ -32,6 +32,7 @@ class CompilerFileSystem implements fe.FileSystem {
 }
 
 class _CompilerFileSystemEntity implements fe.FileSystemEntity {
+  @override
   final Uri uri;
   final CompilerFileSystem fs;
 
@@ -68,6 +69,9 @@ class _CompilerFileSystemEntity implements fe.FileSystemEntity {
   }
 
   @override
+  Future<List<int>> readAsBytesAsyncIfPossible() => readAsBytes();
+
+  @override
   Future<bool> exists() async {
     try {
       api.Input input = await fs.inputProvider
@@ -77,38 +81,49 @@ class _CompilerFileSystemEntity implements fe.FileSystemEntity {
       return false;
     }
   }
+
+  @override
+  Future<bool> existsAsyncIfPossible() => exists();
 }
 
 /// Report a [message] received from the front-end, using dart2js's
 /// [DiagnosticReporter].
 void reportFrontEndMessage(
     DiagnosticReporter reporter, fe.DiagnosticMessage message) {
-  MessageKind kind = MessageKind.GENERIC;
-  Spannable span;
-  String text;
-  if (message is fe.FormattedMessage) {
-    if (message.uri != null && message.charOffset != -1) {
-      int offset = message.charOffset;
-      span = new SourceSpan(message.uri, offset, offset + message.length);
+  Spannable _getSpannable(fe.DiagnosticMessage message) {
+    Uri uri = fe.getMessageUri(message);
+    int offset = fe.getMessageCharOffset(message);
+    int length = fe.getMessageLength(message);
+    if (uri != null && offset != -1) {
+      return new SourceSpan(uri, offset, offset + length);
     } else {
-      span = NO_LOCATION_SPANNABLE;
+      return NO_LOCATION_SPANNABLE;
     }
-    text = message.message;
-  } else {
-    throw new UnimplementedError(
-        "Unhandled diagnostic message: ${message.runtimeType}");
   }
+
+  DiagnosticMessage _convertMessage(fe.DiagnosticMessage message) {
+    Spannable span = _getSpannable(message);
+    String text = fe.getMessageHeaderText(message);
+    return reporter.createMessage(span, MessageKind.GENERIC, {'text': text});
+  }
+
+  List<fe.DiagnosticMessage> relatedInformation =
+      fe.getMessageRelatedInformation(message);
+  DiagnosticMessage mainMessage = _convertMessage(message);
+  List<DiagnosticMessage> infos = relatedInformation != null
+      ? relatedInformation.map(_convertMessage).toList()
+      : const [];
   switch (message.severity) {
     case fe.Severity.internalProblem:
-      throw text;
+      throw mainMessage.message.computeMessage();
     case fe.Severity.error:
-      reporter.reportErrorMessage(span, kind, {'text': text});
+      reporter.reportError(mainMessage, infos);
       break;
     case fe.Severity.warning:
-      reporter.reportWarningMessage(span, kind, {'text': text});
+      reporter.reportWarning(mainMessage, infos);
       break;
-    case fe.Severity.context:
-      reporter.reportInfo(span, kind, {'text': text});
+    case fe.Severity.info:
+      reporter.reportInfo(mainMessage, infos);
       break;
     default:
       throw new UnimplementedError('unhandled severity ${message.severity}');

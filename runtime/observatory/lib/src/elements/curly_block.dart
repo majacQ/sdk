@@ -6,7 +6,7 @@ library curly_block_element;
 
 import 'dart:async';
 import 'dart:html';
-import 'package:observatory/src/elements/helpers/tag.dart';
+import 'package:observatory/src/elements/helpers/custom_element.dart';
 import 'package:observatory/src/elements/helpers/rendering_scheduler.dart';
 
 class CurlyBlockToggleEvent {
@@ -15,18 +15,16 @@ class CurlyBlockToggleEvent {
   CurlyBlockToggleEvent(this.control);
 }
 
-class CurlyBlockElement extends HtmlElement implements Renderable {
-  static const tag = const Tag<CurlyBlockElement>('curly-block');
-
-  RenderingScheduler<CurlyBlockElement> _r;
+class CurlyBlockElement extends CustomElement implements Renderable {
+  late RenderingScheduler<CurlyBlockElement> _r;
 
   final StreamController<CurlyBlockToggleEvent> _onToggle =
       new StreamController<CurlyBlockToggleEvent>.broadcast();
   Stream<CurlyBlockToggleEvent> get onToggle => _onToggle.stream;
   Stream<RenderedEvent<CurlyBlockElement>> get onRendered => _r.onRendered;
 
-  bool _expanded;
-  bool _disabled;
+  late bool _expanded;
+  late bool _disabled;
   Iterable<Element> _content = const [];
 
   bool get expanded => _expanded;
@@ -45,17 +43,17 @@ class CurlyBlockElement extends HtmlElement implements Renderable {
   }
 
   factory CurlyBlockElement(
-      {bool expanded: false, bool disabled: false, RenderingQueue queue}) {
+      {bool expanded: false, bool disabled: false, RenderingQueue? queue}) {
     assert(expanded != null);
     assert(disabled != null);
-    CurlyBlockElement e = document.createElement(tag.name);
+    CurlyBlockElement e = new CurlyBlockElement.created();
     e._r = new RenderingScheduler<CurlyBlockElement>(e, queue: queue);
     e._expanded = expanded;
     e._disabled = disabled;
     return e;
   }
 
-  CurlyBlockElement.created() : super.created();
+  CurlyBlockElement.created() : super.created('curly-block');
 
   @override
   void attached() {

@@ -12,9 +12,10 @@
 
 #include "bin/builtin.h"
 #include "bin/dartutils.h"
-#include "bin/log.h"
 #include "bin/namespace.h"
 #include "bin/reference_counting.h"
+#include "platform/syslog.h"
+#include "platform/utils.h"
 
 namespace dart {
 namespace bin {
@@ -24,14 +25,22 @@ class FileHandle;
 
 class MappedMemory {
  public:
-  MappedMemory(void* address, intptr_t size) : address_(address), size_(size) {}
-  ~MappedMemory() { Unmap(); }
+  MappedMemory(void* address, intptr_t size, bool should_unmap = true)
+      : should_unmap_(should_unmap), address_(address), size_(size) {}
+  ~MappedMemory() {
+    if (should_unmap_) Unmap();
+  }
 
   void* address() const { return address_; }
   intptr_t size() const { return size_; }
+  uword start() const { return reinterpret_cast<uword>(address()); }
 
  private:
   void Unmap();
+
+  // False for mappings which reside inside another, and will be removed when
+  // the outer mapping is removed.
+  bool should_unmap_;
 
   void* address_;
   intptr_t size_;
@@ -66,11 +75,13 @@ class File : public ReferenceCounted<File> {
   enum Identical { kIdentical = 0, kDifferent = 1, kError = 2 };
 
   enum StdioHandleType {
+    // These match the constants in stdio.dart.
     kTerminal = 0,
     kPipe = 1,
     kFile = 2,
     kSocket = 3,
-    kOther = 4
+    kOther = 4,
+    kTypeError = 5
   };
 
   enum FileStat {
@@ -100,8 +111,30 @@ class File : public ReferenceCounted<File> {
   enum MapType {
     kReadOnly = 0,
     kReadExecute = 1,
+    kReadWrite = 2,
   };
-  MappedMemory* Map(MapType type, int64_t position, int64_t length);
+
+  /// Maps or copies the file into memory.
+  ///
+  /// 'position' and 'length' should be page-aligned.
+  ///
+  /// If 'start' is zero, allocates virtual memory for the mapping. When the
+  /// returned 'MappedMemory' is destroyed, the mapping is removed.
+  ///
+  /// If 'start' is non-zero, it must point within a suitably sized existing
+  /// mapping. The returned 'MappedMemory' will not remove the mapping when it
+  /// is destroyed; rather, the mapping will be removed when the enclosing
+  /// mapping is removed. This mode is not supported on Fuchsia.
+  ///
+  /// If 'type' is 'kReadWrite', writes to the mapping are *not* copied back to
+  /// the file.
+  ///
+  /// 'position' + 'length' may be larger than the file size. In this case, the
+  /// extra memory is zero-filled.
+  MappedMemory* Map(MapType type,
+                    int64_t position,
+                    int64_t length,
+                    void* start = nullptr);
 
   // Read/Write attempt to transfer num_bytes to/from buffer. It returns
   // the number of bytes read/written.
@@ -151,39 +184,49 @@ class File : public ReferenceCounted<File> {
   // Calls the platform-specific functions to close the file.
   void Close();
 
-  // Returns the weak persistent handle for the File's Dart wrapper.
-  Dart_WeakPersistentHandle WeakHandle() const { return weak_handle_; }
-
-  // Set the weak persistent handle for the File's Dart wrapper.
-  void SetWeakHandle(Dart_WeakPersistentHandle handle) {
-    ASSERT(weak_handle_ == NULL);
-    weak_handle_ = handle;
+  // Returns the finalizable handle for the File's Dart wrapper.
+  Dart_FinalizableHandle FinalizableHandle() const {
+    return finalizable_handle_;
   }
 
-  // Deletes the weak persistent handle for the File's Dart wrapper. Call
+  // Set the finalizable handle for the File's Dart wrapper.
+  void SetFinalizableHandle(Dart_FinalizableHandle handle) {
+    ASSERT(finalizable_handle_ == NULL);
+    finalizable_handle_ = handle;
+  }
+
+  // Deletes the finalizable handle for the File's Dart wrapper. Call
   // when the file is explicitly closed and the finalizer is no longer
   // needed.
-  void DeleteWeakHandle(Dart_Isolate isolate) {
-    Dart_DeleteWeakPersistentHandle(isolate, weak_handle_);
-    weak_handle_ = NULL;
+  void DeleteFinalizableHandle(Dart_Isolate isolate, Dart_Handle strong_ref) {
+    Dart_DeleteFinalizableHandle(finalizable_handle_, strong_ref);
+    finalizable_handle_ = NULL;
   }
 
   // Open the file with the given path. The file is always opened for
   // reading. If mode contains kWrite the file is opened for both
   // reading and writing. If mode contains kWrite and the file does
   // not exist the file is created. The file is truncated to length 0 if
-  // mode contains kTruncate. Assumes we are in an API scope.
+  // mode contains kTruncate.
   static File* Open(Namespace* namespc, const char* path, FileOpenMode mode);
 
   // Same as [File::Open], but attempts to convert uri to path before opening
   // the file. If conversion fails, uri is treated as a path.
   static File* OpenUri(Namespace* namespc, const char* uri, FileOpenMode mode);
 
+  // Attempts to convert the given [uri] to a file path.
+  static Utils::CStringUniquePtr UriToPath(const char* uri);
+
   // Create a file object for the specified stdio file descriptor
   // (stdin, stout or stderr).
   static File* OpenStdio(int fd);
 
+#if defined(HOST_OS_FUCHSIA) || defined(HOST_OS_LINUX)
+  static File* OpenFD(int fd);
+#endif
+
   static bool Exists(Namespace* namespc, const char* path);
+  static bool ExistsUri(Namespace* namespc, const char* uri);
   static bool Create(Namespace* namespc, const char* path);
   static bool CreateLink(Namespace* namespc,
                          const char* path,
@@ -213,16 +256,28 @@ class File : public ReferenceCounted<File> {
   static const char* PathSeparator();
   static const char* StringEscapedPathSeparator();
   static Type GetType(Namespace* namespc, const char* path, bool follow_links);
-  static Identical AreIdentical(Namespace* namespc,
+  static Identical AreIdentical(Namespace* namespc_1,
                                 const char* file_1,
+                                Namespace* namespc_2,
                                 const char* file_2);
   static StdioHandleType GetStdioHandleType(int fd);
 
   // LinkTarget, GetCanonicalPath, and ReadLink may call Dart_ScopeAllocate.
-  static const char* LinkTarget(Namespace* namespc, const char* pathname);
-  static const char* GetCanonicalPath(Namespace* namespc, const char* path);
+  // If dest and its size are provided, Dart String will not be created.
+  // The result will be populated into dest.
+  static const char* LinkTarget(Namespace* namespc,
+                                const char* pathname,
+                                char* dest = nullptr,
+                                int dest_size = 0);
+  static const char* GetCanonicalPath(Namespace* namespc,
+                                      const char* path,
+                                      char* dest = nullptr,
+                                      int dest_size = 0);
   // Link LinkTarget, but pathname must be absolute.
   static const char* ReadLink(const char* pathname);
+  static intptr_t ReadLinkInto(const char* pathname,
+                               char* result,
+                               size_t result_size);
 
   // Cleans an input path, transforming it to out, according to the rules
   // defined by "Lexical File Names in Plan 9 or Getting Dot-Dot Right",
@@ -266,7 +321,7 @@ class File : public ReferenceCounted<File> {
 
  private:
   explicit File(FileHandle* handle)
-      : ReferenceCounted(), handle_(handle), weak_handle_(NULL) {}
+      : ReferenceCounted(), handle_(handle), finalizable_handle_(NULL) {}
 
   ~File();
 
@@ -277,10 +332,10 @@ class File : public ReferenceCounted<File> {
   // FileHandle is an OS specific class which stores data about the file.
   FileHandle* handle_;  // OS specific handle for the file.
 
-  // We retain the weak handle because we can do cleanup eagerly when Dart code
-  // calls closeSync(). In that case, we delete the weak handle so that the
-  // finalizer doesn't run.
-  Dart_WeakPersistentHandle weak_handle_;
+  // We retain the finalizable handle because we can do cleanup eagerly when
+  // Dart code calls closeSync(). In that case, we delete the finalizable
+  // handle so that the finalizer doesn't run.
+  Dart_FinalizableHandle finalizable_handle_;
 
   friend class ReferenceCounted<File>;
   DISALLOW_COPY_AND_ASSIGN(File);

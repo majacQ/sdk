@@ -20,6 +20,7 @@ namespace dart {
 
 class CompileType;
 class LocalScope;
+class Slot;
 
 // Indices of [LocalVariable]s are abstract and have little todo with the
 // actual frame layout!
@@ -42,7 +43,7 @@ class LocalScope;
 //    c) [LocalVariable]s referring to values on the expression stack. Those are
 //       assigned by the flow graph builder. The indices of those variables are
 //       assigned by the flow graph builder (it simulates the expression stack
-//       height), they go from -NumVariabables - ExpressionHeight.
+//       height), they go from -NumVariables - ExpressionHeight.
 //
 //       -> These variables participate only partially in SSA renaming and can
 //          therefore only be used with [LoadLocalInstr]s and with
@@ -59,7 +60,7 @@ class VariableIndex {
 
   explicit VariableIndex(int value = kInvalidIndex) : value_(value) {}
 
-  int operator==(const VariableIndex& other) { return value_ == other.value_; }
+  bool operator==(const VariableIndex& other) { return value_ == other.value_; }
 
   bool IsValid() const { return value_ != kInvalidIndex; }
 
@@ -75,20 +76,26 @@ class LocalVariable : public ZoneAllocated {
                 TokenPosition token_pos,
                 const String& name,
                 const AbstractType& type,
-                CompileType* parameter_type = NULL)
+                CompileType* parameter_type = nullptr,
+                const Object* parameter_value = nullptr)
       : declaration_pos_(declaration_pos),
         token_pos_(token_pos),
         name_(name),
         owner_(NULL),
         type_(type),
         parameter_type_(parameter_type),
+        parameter_value_(parameter_value),
         const_value_(NULL),
         is_final_(false),
         is_captured_(false),
         is_invisible_(false),
         is_captured_parameter_(false),
         is_forced_stack_(false),
-        is_explicit_covariant_parameter_(false),
+        covariance_mode_(kNotCovariant),
+        is_late_(false),
+        is_chained_future_(false),
+        expected_context_index_(-1),
+        late_init_offset_(0),
         type_check_mode_(kDoTypeCheck),
         index_() {
     ASSERT(type.IsZoneHandle() || type.IsReadOnlyHandle());
@@ -108,6 +115,7 @@ class LocalVariable : public ZoneAllocated {
   const AbstractType& type() const { return type_; }
 
   CompileType* parameter_type() const { return parameter_type_; }
+  const Object* parameter_value() const { return parameter_value_; }
 
   bool is_final() const { return is_final_; }
   void set_is_final() { is_final_ = true; }
@@ -118,15 +126,38 @@ class LocalVariable : public ZoneAllocated {
   // Variables marked as forced to stack are skipped and not captured by
   // CaptureLocalVariables - which iterates scope chain between two scopes
   // and indiscriminately marks all variables as captured.
-  // TODO(27590) remove the hardcoded blacklist from CaptureLocalVariables
+  // TODO(27590) remove the hardcoded list of names from CaptureLocalVariables
   bool is_forced_stack() const { return is_forced_stack_; }
   void set_is_forced_stack() { is_forced_stack_ = true; }
 
-  bool is_explicit_covariant_parameter() const {
-    return is_explicit_covariant_parameter_;
+  bool is_late() const { return is_late_; }
+  void set_is_late() { is_late_ = true; }
+
+  bool is_chained_future() const { return is_chained_future_; }
+  void set_is_chained_future() { is_chained_future_ = true; }
+
+  intptr_t expected_context_index() const { return expected_context_index_; }
+  void set_expected_context_index(int index) {
+    expected_context_index_ = index;
   }
-  void set_is_explicit_covariant_parameter() {
-    is_explicit_covariant_parameter_ = true;
+
+  intptr_t late_init_offset() const { return late_init_offset_; }
+  void set_late_init_offset(intptr_t late_init_offset) {
+    late_init_offset_ = late_init_offset;
+  }
+
+  bool is_explicit_covariant_parameter() const {
+    return covariance_mode_ == kExplicit;
+  }
+  void set_is_explicit_covariant_parameter() { covariance_mode_ = kExplicit; }
+
+  bool needs_covariant_check_in_method() const {
+    return covariance_mode_ != kNotCovariant;
+  }
+  void set_needs_covariant_check_in_method() {
+    if (covariance_mode_ == kNotCovariant) {
+      covariance_mode_ = kImplicit;
+    }
   }
 
   enum TypeCheckMode {
@@ -137,10 +168,7 @@ class LocalVariable : public ZoneAllocated {
 
   // Returns true if this local variable represents a parameter that needs type
   // check when we enter the function.
-  bool needs_type_check() const {
-    return (type_check_mode_ == kDoTypeCheck) &&
-           Isolate::Current()->should_emit_strong_mode_checks();
-  }
+  bool needs_type_check() const { return (type_check_mode_ == kDoTypeCheck); }
 
   // Returns true if this local variable represents a parameter which type is
   // guaranteed by the caller.
@@ -148,6 +176,7 @@ class LocalVariable : public ZoneAllocated {
     return type_check_mode_ == kTypeCheckedByCaller;
   }
 
+  TypeCheckMode type_check_mode() const { return type_check_mode_; }
   void set_type_check_mode(TypeCheckMode mode) { type_check_mode_ = mode; }
 
   bool HasIndex() const { return index_.IsValid(); }
@@ -186,6 +215,12 @@ class LocalVariable : public ZoneAllocated {
   bool Equals(const LocalVariable& other) const;
 
  private:
+  enum CovarianceMode {
+    kNotCovariant,
+    kImplicit,
+    kExplicit,
+  };
+
   static const int kUninitializedIndex = INT_MIN;
 
   const TokenPosition declaration_pos_;
@@ -196,6 +231,7 @@ class LocalVariable : public ZoneAllocated {
   const AbstractType& type_;  // Declaration type of local variable.
 
   CompileType* const parameter_type_;  // NULL or incoming parameter type.
+  const Object* parameter_value_;      // NULL or incoming parameter value.
 
   const Instance* const_value_;  // NULL or compile-time const value.
 
@@ -205,12 +241,46 @@ class LocalVariable : public ZoneAllocated {
   bool is_invisible_;
   bool is_captured_parameter_;
   bool is_forced_stack_;
-  bool is_explicit_covariant_parameter_;
+  CovarianceMode covariance_mode_;
+  bool is_late_;
+  bool is_chained_future_;
+  intptr_t expected_context_index_;
+  intptr_t late_init_offset_;
   TypeCheckMode type_check_mode_;
   VariableIndex index_;
 
   friend class LocalScope;
   DISALLOW_COPY_AND_ASSIGN(LocalVariable);
+};
+
+// Accumulates local variable descriptors while building
+// LocalVarDescriptors object.
+class LocalVarDescriptorsBuilder : public ValueObject {
+ public:
+  struct VarDesc {
+    const String* name;
+    UntaggedLocalVarDescriptors::VarInfo info;
+  };
+
+  LocalVarDescriptorsBuilder() : vars_(8) {}
+
+  // Add variable descriptor.
+  void Add(const VarDesc& var_desc) { vars_.Add(var_desc); }
+
+  // Add all variable descriptors from given [LocalVarDescriptors] object.
+  void AddAll(Zone* zone, const LocalVarDescriptors& var_descs);
+
+  // Record deopt-id -> context-level mappings, using ranges of deopt-ids with
+  // the same context-level. [context_level_array] contains (deopt_id,
+  // context_level) tuples.
+  void AddDeoptIdToContextLevelMappings(
+      ZoneGrowableArray<intptr_t>* context_level_array);
+
+  // Finish building LocalVarDescriptor object.
+  LocalVarDescriptorsPtr Done();
+
+ private:
+  GrowableArray<VarDesc> vars_;
 };
 
 class NameReference : public ZoneAllocated {
@@ -294,7 +364,7 @@ class LocalScope : public ZoneAllocated {
   // The context level is only set in a scope that is either the owner scope of
   // a captured variable or that is the owner scope of a context.
   bool HasContextLevel() const {
-    return context_level_ != kUnitializedContextLevel;
+    return context_level_ != kUninitializedContextLevel;
   }
   int context_level() const {
     ASSERT(HasContextLevel());
@@ -302,7 +372,7 @@ class LocalScope : public ZoneAllocated {
   }
   void set_context_level(int context_level) {
     ASSERT(!HasContextLevel());
-    ASSERT(context_level != kUnitializedContextLevel);
+    ASSERT(context_level != kUninitializedContextLevel);
     context_level_ = context_level;
   }
 
@@ -316,6 +386,10 @@ class LocalScope : public ZoneAllocated {
   // scope and to its children at the same loop level.
   const GrowableArray<LocalVariable*>& context_variables() const {
     return context_variables_;
+  }
+
+  const ZoneGrowableArray<const Slot*>& context_slots() const {
+    return *context_slots_;
   }
 
   // The number of variables allocated in the context and belonging to this
@@ -410,13 +484,13 @@ class LocalScope : public ZoneAllocated {
 
   // Creates variable info for the scope and all its nested scopes.
   // Must be called after AllocateVariables() has been called.
-  RawLocalVarDescriptors* GetVarDescriptors(
+  LocalVarDescriptorsPtr GetVarDescriptors(
       const Function& func,
       ZoneGrowableArray<intptr_t>* context_level_array);
 
   // Create a ContextScope object describing all captured variables referenced
   // from this scope and belonging to outer scopes.
-  RawContextScope* PreserveOuterScope(int current_context_level) const;
+  ContextScopePtr PreserveOuterScope(int current_context_level) const;
 
   // Mark all local variables that are accessible from this scope up to
   // top_scope (included) as captured unless they are marked as forced to stack.
@@ -430,14 +504,9 @@ class LocalScope : public ZoneAllocated {
 
   // Create a ContextScope object which will capture "this" for an implicit
   // closure object.
-  static RawContextScope* CreateImplicitClosureScope(const Function& func);
+  static ContextScopePtr CreateImplicitClosureScope(const Function& func);
 
  private:
-  struct VarDesc {
-    const String* name;
-    RawLocalVarDescriptors::VarInfo info;
-  };
-
   // Allocate the variable in the current context, possibly updating the current
   // context owner scope, if the variable is the first one to be allocated at
   // this loop level.
@@ -446,24 +515,27 @@ class LocalScope : public ZoneAllocated {
   void AllocateContextVariable(LocalVariable* variable,
                                LocalScope** context_owner);
 
-  void CollectLocalVariables(GrowableArray<VarDesc>* vars, int16_t* scope_id);
+  void CollectLocalVariables(LocalVarDescriptorsBuilder* vars,
+                             int16_t* scope_id);
 
   NameReference* FindReference(const String& name) const;
 
-  static const int kUnitializedContextLevel = INT_MIN;
+  static const int kUninitializedContextLevel = INT_MIN;
   LocalScope* parent_;
   LocalScope* child_;
   LocalScope* sibling_;
-  int function_level_;         // Reflects the nesting level of local functions.
-  int loop_level_;             // Reflects the loop nesting level.
-  int context_level_;          // Reflects the level of the runtime context.
+  int function_level_;  // Reflects the nesting level of local functions.
+  int loop_level_;      // Reflects the loop nesting level.
+  int context_level_;   // Reflects the level of the runtime context.
   TokenPosition begin_token_pos_;  // Token index of beginning of scope.
   TokenPosition end_token_pos_;    // Token index of end of scope.
   GrowableArray<LocalVariable*> variables_;
   GrowableArray<SourceLabel*> labels_;
 
-  // List of variables allocated into the context which is owned by this scope.
+  // List of variables allocated into the context which is owned by this scope,
+  // and their corresponding Slots.
   GrowableArray<LocalVariable*> context_variables_;
+  ZoneGrowableArray<const Slot*>* context_slots_;
 
   // List of names referenced in this scope and its children that
   // are not resolved to local variables.

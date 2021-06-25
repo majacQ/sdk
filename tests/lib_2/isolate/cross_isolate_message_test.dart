@@ -2,14 +2,19 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
+// VMOptions=--enable-isolate-groups --experimental-enable-isolate-groups-jit
+// VMOptions=--no-enable-isolate-groups
+
 // Dart test program for testing that isolates can communicate to isolates
 // other than the main isolate.
 
 library CrossIsolateMessageTest;
 
 import 'dart:isolate';
-import 'package:unittest/unittest.dart';
-import "remote_unittest_helper.dart";
+import 'package:async_helper/async_helper.dart';
+import 'package:expect/expect.dart';
 
 /*
  * Everything starts in the main-isolate (in the main-method).
@@ -27,7 +32,7 @@ void crossIsolate1(SendPort mainIsolate) {
   mainIsolate.send(["ready1", local.sendPort]);
   local.first.then((msg) {
     // Message from crossIsolate2
-    expect(msg[0], "fromIsolate2");
+    Expect.equals(msg[0], "fromIsolate2");
     mainIsolate.send(["fromIsolate1", msg[1] + 58]); // 100.
   });
 }
@@ -37,24 +42,22 @@ void crossIsolate2(SendPort toIsolate1) {
 }
 
 void main([args, port]) {
-  if (testRemote(main, port)) return;
-  test("send message cross isolates ", () {
-    ReceivePort fromIsolate1 = new ReceivePort();
-    Isolate.spawn(crossIsolate1, fromIsolate1.sendPort);
-    var done = expectAsync(() {});
-    fromIsolate1.listen((msg) {
-      switch (msg[0]) {
-        case "ready1":
-          SendPort toIsolate1 = msg[1];
-          Isolate.spawn(crossIsolate2, toIsolate1);
-          break;
-        case "fromIsolate1":
-          expect(msg[1], 100);
-          fromIsolate1.close();
-          break;
-        default:
-          fail("unreachable! Tag: ${msg[0]}");
-      }
-    }, onDone: done);
-  });
+  ReceivePort fromIsolate1 = new ReceivePort();
+  Isolate.spawn(crossIsolate1, fromIsolate1.sendPort);
+
+  asyncStart();
+  fromIsolate1.listen((msg) {
+    switch (msg[0]) {
+      case "ready1":
+        SendPort toIsolate1 = msg[1];
+        Isolate.spawn(crossIsolate2, toIsolate1);
+        break;
+      case "fromIsolate1":
+        Expect.equals(msg[1], 100);
+        fromIsolate1.close();
+        break;
+      default:
+        Expect.fail("unreachable! Tag: ${msg[0]}");
+    }
+  }, onDone: asyncEnd);
 }

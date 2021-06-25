@@ -19,8 +19,8 @@ abstract class Encoding extends Codec<String, List<int>> {
   Converter<List<int>, String> get decoder;
 
   Future<String> decodeStream(Stream<List<int>> byteStream) {
-    return byteStream
-        .transform<String>(decoder)
+    return decoder
+        .bind(byteStream)
         .fold(StringBuffer(),
             (StringBuffer buffer, String string) => buffer..write(string))
         .then((StringBuffer buffer) => buffer.toString());
@@ -65,17 +65,16 @@ abstract class Encoding extends Codec<String, List<int>> {
     "utf-8": utf8
   };
 
-  /// Gets an [Encoding] object from the name of the character set
-  /// name. The names used are the IANA official names for the
-  /// character set (see
-  /// http://www.iana.org/assignments/character-sets/character-sets.xml).
+  /// Returns an [Encoding] for a named character set.
   ///
-  /// The [name] passed is case insensitive.
+  /// The names used are the IANA official names for the character set (see
+  /// [IANA character sets][]). The names are case insensitive.
   ///
-  /// If character set is not supported [:null:] is returned.
-  static Encoding getByName(String name) {
+  /// [IANA character sets]: http://www.iana.org/assignments/character-sets/character-sets.xml
+  ///
+  /// If character set is not supported `null` is returned.
+  static Encoding? getByName(String? name) {
     if (name == null) return null;
-    name = name.toLowerCase();
-    return _nameToEncoding[name];
+    return _nameToEncoding[name.toLowerCase()];
   }
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -9,7 +9,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import '../support/integration_tests.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(AnalysisHighlightsTest);
   });
@@ -17,14 +17,14 @@ main() {
 
 @reflectiveTest
 class AnalysisHighlightsTest extends AbstractAnalysisServerIntegrationTest {
-  Map<HighlightRegionType, Set<String>> highlights;
+  late Map<HighlightRegionType, Set<String>> highlights;
 
   void check(HighlightRegionType type, List<String> expected) {
     expect(highlights[type], equals(expected.toSet()));
     highlights.remove(type);
   }
 
-  computeHighlights(String pathname, String text) async {
+  Future<void> computeHighlights(String pathname, String text) async {
     writeFile(pathname, text);
     standardAnalysisSetup();
     sendAnalysisSetSubscriptions({
@@ -34,23 +34,31 @@ class AnalysisHighlightsTest extends AbstractAnalysisServerIntegrationTest {
     onAnalysisHighlights.listen((AnalysisHighlightsParams params) {
       expect(params.file, equals(pathname));
       highlights = <HighlightRegionType, Set<String>>{};
-      for (HighlightRegion region in params.regions) {
-        int startIndex = region.offset;
-        int endIndex = startIndex + region.length;
-        String highlightedText = text.substring(startIndex, endIndex);
-        HighlightRegionType type = region.type;
-        if (!highlights.containsKey(type)) {
-          highlights[type] = new Set<String>();
-        }
-        highlights[type].add(highlightedText);
+      for (var region in params.regions) {
+        var startIndex = region.offset;
+        var endIndex = startIndex + region.length;
+        var highlightedText = text.substring(startIndex, endIndex);
+        var type = region.type;
+        highlights.putIfAbsent(type, () => {}).add(highlightedText);
       }
     });
     await analysisFinished;
   }
 
-  test_highlights() async {
-    String pathname = sourcePath('test.dart');
-    String text = r'''
+  @override
+  Future startServer({
+    int? diagnosticPort,
+    int? servicesPort,
+  }) {
+    return server.start(
+        diagnosticPort: diagnosticPort,
+        servicesPort: servicesPort,
+        useAnalysisHighlight2: true);
+  }
+
+  Future<void> test_highlights() async {
+    var pathname = sourcePath('test.dart');
+    var text = r'''
 import 'dart:async' as async;
 
 /**
@@ -66,8 +74,8 @@ class Class<TypeParameter> {
     field = {2: local};
   }
 
-  Map field;
-  static int staticField;
+  Map field = {3: 4};
+  static int staticField = 0;
 
   method() {
     // End of line comment
@@ -81,6 +89,7 @@ class Class<TypeParameter> {
   }
 
   set setter(int parameter) {
+    print(parameter);
   }
 }
 
@@ -98,7 +107,7 @@ function(dynamicType) {
   return async.Future.wait([]);
 }
 
-int topLevelVariable;
+int topLevelVariable = 0;
 ''';
     await computeHighlights(pathname, text);
     // There should be 1 error due to the fact that unresolvedIdentifier is
@@ -116,47 +125,51 @@ int topLevelVariable;
     check(HighlightRegionType.COMMENT_END_OF_LINE, ['// End of line comment']);
     check(HighlightRegionType.CONSTRUCTOR, ['constructor']);
     check(HighlightRegionType.DIRECTIVE, ["import 'dart:async' as async;"]);
-    check(HighlightRegionType.DYNAMIC_TYPE, ['dynamicType', 'local']);
-    check(HighlightRegionType.FIELD, ['field']);
-    check(HighlightRegionType.FIELD_STATIC, ['staticField']);
-    check(HighlightRegionType.FUNCTION, ['print']);
-    check(HighlightRegionType.FUNCTION_DECLARATION, ['function']);
+    check(HighlightRegionType.DYNAMIC_PARAMETER_DECLARATION, ['dynamicType']);
+    check(HighlightRegionType.INSTANCE_FIELD_DECLARATION, ['field']);
+    check(HighlightRegionType.INSTANCE_SETTER_REFERENCE, ['field']);
+    check(HighlightRegionType.STATIC_FIELD_DECLARATION, ['staticField']);
+    check(HighlightRegionType.TOP_LEVEL_FUNCTION_REFERENCE, ['print']);
+    check(HighlightRegionType.TOP_LEVEL_FUNCTION_DECLARATION, ['function']);
     check(HighlightRegionType.FUNCTION_TYPE_ALIAS, ['functionType']);
-    check(HighlightRegionType.GETTER_DECLARATION, ['getter']);
+    check(HighlightRegionType.INSTANCE_GETTER_DECLARATION, ['getter']);
     check(HighlightRegionType.IDENTIFIER_DEFAULT, ['unresolvedIdentifier']);
     check(HighlightRegionType.IMPORT_PREFIX, ['async']);
     check(HighlightRegionType.KEYWORD, ['class', 'extends', 'true', 'return']);
     check(HighlightRegionType.LITERAL_BOOLEAN, ['true']);
     check(HighlightRegionType.LITERAL_DOUBLE, ['1.0']);
-    check(HighlightRegionType.LITERAL_INTEGER, ['2', '42']);
+    check(HighlightRegionType.LITERAL_INTEGER, ['2', '3', '4', '0', '42']);
     check(HighlightRegionType.LITERAL_LIST, ['[]']);
-    check(
-        HighlightRegionType.LITERAL_MAP, ['{1.0: [].toList()}', '{2: local}']);
+    check(HighlightRegionType.LITERAL_MAP,
+        ['{1.0: [].toList()}', '{2: local}', '{3: 4}']);
     check(HighlightRegionType.LITERAL_STRING, ["'dart:async'", "'string'"]);
-    //check(HighlightRegionType.LOCAL_VARIABLE, ['local']);
-    //check(HighlightRegionType.LOCAL_VARIABLE_DECLARATION, ['local']);
-    check(HighlightRegionType.METHOD, ['toList']);
-    check(HighlightRegionType.METHOD_DECLARATION, ['method']);
-    check(HighlightRegionType.METHOD_DECLARATION_STATIC, ['staticMethod']);
-    check(HighlightRegionType.METHOD_STATIC, ['wait']);
-    check(HighlightRegionType.PARAMETER, ['parameter']);
-    check(HighlightRegionType.SETTER_DECLARATION, ['setter']);
-    check(HighlightRegionType.TOP_LEVEL_VARIABLE,
-        ['override', 'topLevelVariable']);
+    check(HighlightRegionType.DYNAMIC_LOCAL_VARIABLE_DECLARATION, ['local']);
+    check(HighlightRegionType.DYNAMIC_LOCAL_VARIABLE_REFERENCE, ['local']);
+    check(HighlightRegionType.INSTANCE_METHOD_REFERENCE, ['toList']);
+    check(HighlightRegionType.INSTANCE_METHOD_DECLARATION, ['method']);
+    check(HighlightRegionType.STATIC_METHOD_DECLARATION, ['staticMethod']);
+    check(HighlightRegionType.STATIC_METHOD_REFERENCE, ['wait']);
+    check(HighlightRegionType.PARAMETER_DECLARATION, ['parameter']);
+    check(HighlightRegionType.PARAMETER_REFERENCE, ['parameter']);
+    check(HighlightRegionType.INSTANCE_SETTER_DECLARATION, ['setter']);
+    check(HighlightRegionType.TOP_LEVEL_GETTER_REFERENCE, ['override']);
+    check(HighlightRegionType.TOP_LEVEL_VARIABLE_DECLARATION,
+        ['topLevelVariable']);
     check(HighlightRegionType.TYPE_NAME_DYNAMIC, ['dynamic']);
     check(HighlightRegionType.TYPE_PARAMETER, ['TypeParameter']);
     expect(highlights, isEmpty);
   }
 
-  test_highlights_mixin() async {
-    String pathname = sourcePath('test.dart');
-    String text = r'''
+  Future<void> test_highlights_mixin() async {
+    var pathname = sourcePath('test.dart');
+    var text = r'''
 mixin M on A implements B {}
 class A {}
 class B {}
 ''';
     await computeHighlights(pathname, text);
     expect(currentAnalysisErrors[pathname], hasLength(0));
+
     check(HighlightRegionType.BUILT_IN, ['implements', 'mixin', 'on']);
     check(HighlightRegionType.KEYWORD, ['class']);
   }

@@ -10,13 +10,11 @@ class _Growable {
 
 const _ListConstructorSentinel = const _Growable();
 
-/**
- * The interceptor class for [List]. The compiler recognizes this
- * class as an interceptor, and changes references to [:this:] to
- * actually use the receiver of the method, which is generated as an extra
- * argument added to each member.
- */
-class JSArray<E> extends Interceptor implements List<E>, JSIndexable {
+/// The interceptor class for [List]. The compiler recognizes this
+/// class as an interceptor, and changes references to [:this:] to
+/// actually use the receiver of the method, which is generated as an extra
+/// argument added to each member.
+class JSArray<E> extends Interceptor implements List<E>, JSIndexable<E> {
   const JSArray();
 
   // This factory constructor is the redirection target of the List() factory
@@ -28,11 +26,11 @@ class JSArray<E> extends Interceptor implements List<E>, JSIndexable {
     return new JSArray<E>.fixed(length);
   }
 
-  /**
-   * Returns a fresh JavaScript Array, marked as fixed-length.
-   *
-   * [length] must be a non-negative integer.
-   */
+  /// Returns a fresh JavaScript Array, marked as fixed-length. The holes in the
+  /// array yield `undefined`, making the Dart List appear to be filled with
+  /// `null` values.
+  ///
+  /// [length] must be a non-negative integer.
   factory JSArray.fixed(int length) {
     // Explicit type test is necessary to guard against JavaScript conversions
     // in unchecked mode, and against `new Array(null)` which creates a single
@@ -40,8 +38,9 @@ class JSArray<E> extends Interceptor implements List<E>, JSIndexable {
     if (length is! int) {
       throw new ArgumentError.value(length, 'length', 'is not an integer');
     }
-    // The JavaScript Array constructor with one argument throws if
-    // the value is not a UInt32. Give a better error message.
+    // The JavaScript Array constructor with one argument throws if the value is
+    // not a UInt32 but the error message does not contain the bad value. Give a
+    // better error message.
     int maxJSArrayLength = 0xFFFFFFFF;
     if (length < 0 || length > maxJSArrayLength) {
       throw new RangeError.range(length, 0, maxJSArrayLength, 'length');
@@ -49,16 +48,39 @@ class JSArray<E> extends Interceptor implements List<E>, JSIndexable {
     return new JSArray<E>.markFixed(JS('', 'new Array(#)', length));
   }
 
-  /**
-   * Returns a fresh growable JavaScript Array of zero length length.
-   */
+  /// Returns a fresh JavaScript Array, marked as fixed-length.  The Array is
+  /// allocated but no elements are assigned.
+  ///
+  /// All elements of the array must be assigned before the array is valid. This
+  /// is essentially the same as `JSArray.fixed` except that global type
+  /// inference starts with bottom for the element type.
+  ///
+  /// [length] must be a non-negative integer.
+  factory JSArray.allocateFixed(int length) {
+    // Explicit type test is necessary to guard against JavaScript conversions
+    // in unchecked mode, and against `new Array(null)` which creates a single
+    // element Array containing `null`.
+    if (length is! int) {
+      throw new ArgumentError.value(length, 'length', 'is not an integer');
+    }
+    // The JavaScript Array constructor with one argument throws if the value is
+    // not a UInt32 but the error message does not contain the bad value. Give a
+    // better error message.
+    int maxJSArrayLength = 0xFFFFFFFF;
+    if (length < 0 || length > maxJSArrayLength) {
+      throw new RangeError.range(length, 0, maxJSArrayLength, 'length');
+    }
+    return new JSArray<E>.markFixed(JS('', 'new Array(#)', length));
+  }
+
+  /// Returns a fresh growable JavaScript Array of zero length length.
   factory JSArray.emptyGrowable() => new JSArray<E>.markGrowable(JS('', '[]'));
 
-  /**
-   * Returns a fresh growable JavaScript Array with initial length.
-   *
-   * [validatedLength] must be a non-negative integer.
-   */
+  /// Returns a fresh growable JavaScript Array with initial length. The holes
+  /// in the array yield `undefined`, making the Dart List appear to be filled
+  /// with `null` values.
+  ///
+  /// [length] must be a non-negative integer.
   factory JSArray.growable(int length) {
     // Explicit type test is necessary to guard against JavaScript conversions
     // in unchecked mode.
@@ -68,20 +90,35 @@ class JSArray<E> extends Interceptor implements List<E>, JSIndexable {
     return new JSArray<E>.markGrowable(JS('', 'new Array(#)', length));
   }
 
-  /**
-   * Constructor for adding type parameters to an existing JavaScript Array.
-   * The compiler specially recognizes this constructor.
-   *
-   *     var a = new JSArray<int>.typed(JS('JSExtendableArray', '[]'));
-   *     a is List<int>    --> true
-   *     a is List<String> --> false
-   *
-   * Usually either the [JSArray.markFixed] or [JSArray.markGrowable]
-   * constructors is used instead.
-   *
-   * The input must be a JavaScript Array.  The JS form is just a re-assertion
-   * to help type analysis when the input type is sloppy.
-   */
+  /// Returns a fresh growable JavaScript Array with initial length. The Array
+  /// is allocated but no elements are assigned.
+  ///
+  /// All elements of the array must be assigned before the array is valid. This
+  /// is essentially the same as `JSArray.growable` except that global type
+  /// inference starts with bottom for the element type.
+  ///
+  /// [length] must be a non-negative integer.
+  factory JSArray.allocateGrowable(int length) {
+    // Explicit type test is necessary to guard against JavaScript conversions
+    // in unchecked mode.
+    if ((length is! int) || (length < 0)) {
+      throw new ArgumentError('Length must be a non-negative integer: $length');
+    }
+    return new JSArray<E>.markGrowable(JS('', 'new Array(#)', length));
+  }
+
+  /// Constructor for adding type parameters to an existing JavaScript Array.
+  /// The compiler specially recognizes this constructor.
+  ///
+  ///     var a = new JSArray<int>.typed(JS('JSExtendableArray', '[]'));
+  ///     a is List<int>    --> true
+  ///     a is List<String> --> false
+  ///
+  /// Usually either the [JSArray.markFixed] or [JSArray.markGrowable]
+  /// constructors is used instead.
+  ///
+  /// The input must be a JavaScript Array.  The JS form is just a re-assertion
+  /// to help type analysis when the input type is sloppy.
   factory JSArray.typed(allocation) => JS('JSArray', '#', allocation);
 
   factory JSArray.markFixed(allocation) =>
@@ -90,7 +127,7 @@ class JSArray<E> extends Interceptor implements List<E>, JSIndexable {
   factory JSArray.markGrowable(allocation) =>
       JS('JSExtendableArray', '#', new JSArray<E>.typed(allocation));
 
-  static List markFixedList(List list) {
+  static List<T> markFixedList<T>(List<T> list) {
     // Functions are stored in the hidden class and not as properties in
     // the object. We never actually look at the value, but only want
     // to know if the property exists.
@@ -98,7 +135,7 @@ class JSArray<E> extends Interceptor implements List<E>, JSIndexable {
     return JS('JSFixedArray', '#', list);
   }
 
-  static List markUnmodifiableList(List list) {
+  static List<T> markUnmodifiableList<T>(List list) {
     // Functions are stored in the hidden class and not as properties in
     // the object. We never actually look at the value, but only want
     // to know if the property exists.
@@ -107,15 +144,31 @@ class JSArray<E> extends Interceptor implements List<E>, JSIndexable {
     return JS('JSUnmodifiableArray', '#', list);
   }
 
-  checkMutable(reason) {
-    if (this is! JSMutableArray) {
-      throw new UnsupportedError(reason);
+  static bool isFixedLength(JSArray a) {
+    return !JS('bool', r'!#.fixed$length', a);
+  }
+
+  static bool isUnmodifiable(JSArray a) {
+    return !JS('bool', r'!#.immutable$list', a);
+  }
+
+  static bool isGrowable(JSArray a) {
+    return !isFixedLength(a);
+  }
+
+  static bool isMutable(JSArray a) {
+    return !isUnmodifiable(a);
+  }
+
+  checkMutable(String reason) {
+    if (!isMutable(this)) {
+      throw UnsupportedError(reason);
     }
   }
 
-  checkGrowable(reason) {
-    if (this is! JSExtendableArray) {
-      throw new UnsupportedError(reason);
+  checkGrowable(String reason) {
+    if (!isGrowable(this)) {
+      throw UnsupportedError(reason);
     }
   }
 
@@ -150,7 +203,7 @@ class JSArray<E> extends Interceptor implements List<E>, JSIndexable {
       iterable = iterable.toList();
     }
     int insertionLength = iterable.length;
-    this.length += insertionLength;
+    this._setLengthUnsafe(this.length + insertionLength);
     int end = index + insertionLength;
     this.setRange(end, this.length, this, index);
     this.setRange(index, end, iterable);
@@ -170,7 +223,7 @@ class JSArray<E> extends Interceptor implements List<E>, JSIndexable {
     return JS('', r'#.pop()', this);
   }
 
-  bool remove(Object element) {
+  bool remove(Object? element) {
     checkGrowable('remove');
     for (int i = 0; i < this.length; i++) {
       if (this[i] == element) {
@@ -181,9 +234,7 @@ class JSArray<E> extends Interceptor implements List<E>, JSIndexable {
     return false;
   }
 
-  /**
-   * Removes elements matching [test] from [this] List.
-   */
+  /// Removes elements matching [test] from [this] List.
   void removeWhere(bool test(E element)) {
     checkGrowable('removeWhere');
     _removeWhere(test, true);
@@ -231,12 +282,24 @@ class JSArray<E> extends Interceptor implements List<E>, JSIndexable {
   }
 
   void addAll(Iterable<E> collection) {
-    int i = this.length;
     checkGrowable('addAll');
+    if (collection is JSArray) {
+      _addAllFromArray(JS('', '#', collection));
+      return;
+    }
+    int i = this.length;
     for (E e in collection) {
-      assert(
-          i++ == this.length || (throw new ConcurrentModificationError(this)));
+      assert(i++ == this.length || (throw ConcurrentModificationError(this)));
       JS('void', r'#.push(#)', this, e);
+    }
+  }
+
+  void _addAllFromArray(JSArray array) {
+    int len = array.length;
+    if (len == 0) return;
+    if (identical(this, array)) throw ConcurrentModificationError(this);
+    for (int i = 0; i < len; i++) {
+      JS('', '#.push(#[#])', this, array, i);
     }
   }
 
@@ -260,7 +323,7 @@ class JSArray<E> extends Interceptor implements List<E>, JSIndexable {
   }
 
   String join([String separator = '']) {
-    var list = new List(this.length);
+    var list = List.filled(this.length, "");
     for (int i = 0; i < this.length; i++) {
       list[i] = '${this[i]}';
     }
@@ -268,7 +331,7 @@ class JSArray<E> extends Interceptor implements List<E>, JSIndexable {
   }
 
   Iterable<E> take(int n) {
-    return new SubListIterable<E>(this, 0, n);
+    return new SubListIterable<E>(this, 0, checkNotNullable(n, "count"));
   }
 
   Iterable<E> takeWhile(bool test(E value)) {
@@ -310,7 +373,7 @@ class JSArray<E> extends Interceptor implements List<E>, JSIndexable {
     return value;
   }
 
-  E firstWhere(bool test(E value), {E orElse()}) {
+  E firstWhere(bool Function(E) test, {E Function()? orElse}) {
     var end = this.length;
     for (int i = 0; i < end; ++i) {
       // TODO(22407): Improve bounds check elimination to allow this JS code to
@@ -323,7 +386,7 @@ class JSArray<E> extends Interceptor implements List<E>, JSIndexable {
     throw IterableElementError.noElement();
   }
 
-  E lastWhere(bool test(E element), {E orElse()}) {
+  E lastWhere(bool Function(E) test, {E Function()? orElse}) {
     int length = this.length;
     for (int i = length - 1; i >= 0; i--) {
       // TODO(22407): Improve bounds check elimination to allow this JS code to
@@ -338,9 +401,9 @@ class JSArray<E> extends Interceptor implements List<E>, JSIndexable {
     throw IterableElementError.noElement();
   }
 
-  E singleWhere(bool test(E element), {E orElse()}) {
+  E singleWhere(bool Function(E) test, {E Function()? orElse}) {
     int length = this.length;
-    E match = null;
+    E? match = null;
     bool matchFound = false;
     for (int i = 0; i < length; i++) {
       // TODO(22407): Improve bounds check elimination to allow this JS code to
@@ -357,7 +420,7 @@ class JSArray<E> extends Interceptor implements List<E>, JSIndexable {
         throw new ConcurrentModificationError(this);
       }
     }
-    if (matchFound) return match;
+    if (matchFound) return match as E;
     if (orElse != null) return orElse();
     throw IterableElementError.noElement();
   }
@@ -366,7 +429,7 @@ class JSArray<E> extends Interceptor implements List<E>, JSIndexable {
     return this[index];
   }
 
-  List<E> sublist(int start, [int end]) {
+  List<E> sublist(int start, [int? end]) {
     checkNull(start); // TODO(ahe): This is not specified but co19 tests it.
     if (start is! int) throw argumentErrorValue(start);
     if (start < 0 || start > length) {
@@ -425,7 +488,7 @@ class JSArray<E> extends Interceptor implements List<E>, JSIndexable {
     int otherStart;
     // TODO(floitsch): Make this accept more.
     if (iterable is List) {
-      otherList = iterable;
+      otherList = JS<List<E>>('', '#', iterable);
       otherStart = skipCount;
     } else {
       otherList = iterable.skip(skipCount).toList(growable: false);
@@ -453,12 +516,14 @@ class JSArray<E> extends Interceptor implements List<E>, JSIndexable {
     }
   }
 
-  void fillRange(int start, int end, [E fillValue]) {
+  void fillRange(int start, int end, [E? fillValue]) {
     checkMutable('fill range');
     RangeError.checkValidRange(start, end, this.length);
+    E checkedFillValue = fillValue as E;
     for (int i = start; i < end; i++) {
-      // Store is safe since [fillValue] type has been checked as parameter.
-      JS('', '#[#] = #', this, i, fillValue);
+      // Store is safe since [checkedFillValue] type has been checked as
+      // parameter and for null.
+      JS('', '#[#] = #', this, i, checkedFillValue);
     }
   }
 
@@ -483,7 +548,7 @@ class JSArray<E> extends Interceptor implements List<E>, JSIndexable {
       int delta = insertLength - removeLength;
       int newLength = this.length + delta;
       int insertEnd = start + insertLength; // aka. end + delta.
-      this.length = newLength;
+      this._setLengthUnsafe(newLength);
       this.setRange(insertEnd, newLength, this, end);
       this.setRange(start, insertEnd, replacement);
     }
@@ -515,18 +580,16 @@ class JSArray<E> extends Interceptor implements List<E>, JSIndexable {
 
   Iterable<E> get reversed => new ReversedListIterable<E>(this);
 
-  void sort([int compare(E a, E b)]) {
+  void sort([int Function(E, E)? compare]) {
     checkMutable('sort');
     Sort.sort(this, compare ?? _compareAny);
   }
 
   static int _compareAny(a, b) {
-    // In strong mode Comparable.compare requires an implicit cast to ensure
-    // `a` and `b` are Comparable.
     return Comparable.compare(a, b);
   }
 
-  void shuffle([Random random]) {
+  void shuffle([Random? random]) {
     checkMutable('shuffle');
     if (random == null) random = new Random();
     int length = this.length;
@@ -539,14 +602,15 @@ class JSArray<E> extends Interceptor implements List<E>, JSIndexable {
     }
   }
 
-  int indexOf(Object element, [int start = 0]) {
-    if (start >= this.length) {
+  int indexOf(Object? element, [int start = 0]) {
+    int length = this.length;
+    if (start >= length) {
       return -1;
     }
     if (start < 0) {
       start = 0;
     }
-    for (int i = start; i < this.length; i++) {
+    for (int i = start; i < length; i++) {
       if (this[i] == element) {
         return i;
       }
@@ -554,18 +618,15 @@ class JSArray<E> extends Interceptor implements List<E>, JSIndexable {
     return -1;
   }
 
-  int lastIndexOf(Object element, [int startIndex]) {
-    if (startIndex == null) {
-      startIndex = this.length - 1;
-    } else {
-      if (startIndex < 0) {
-        return -1;
-      }
-      if (startIndex >= this.length) {
-        startIndex = this.length - 1;
-      }
+  int lastIndexOf(Object? element, [int? startIndex]) {
+    int start = startIndex ?? this.length - 1;
+    if (start < 0) {
+      return -1;
     }
-    for (int i = startIndex; i >= 0; i--) {
+    if (start >= this.length) {
+      start = this.length - 1;
+    }
+    for (int i = start; i >= 0; i--) {
       if (this[i] == element) {
         return i;
       }
@@ -573,9 +634,10 @@ class JSArray<E> extends Interceptor implements List<E>, JSIndexable {
     return -1;
   }
 
-  bool contains(Object other) {
+  bool contains(Object? other) {
     for (int i = 0; i < length; i++) {
-      if (this[i] == other) return true;
+      E element = JS('', '#[#]', this, i);
+      if (element == other) return true;
     }
     return false;
   }
@@ -613,6 +675,29 @@ class JSArray<E> extends Interceptor implements List<E>, JSIndexable {
     if (newLength < 0) {
       throw new RangeError.range(newLength, 0, null, 'newLength');
     }
+
+    // Verify that element type is nullable.
+    if (newLength > length) null as E;
+
+    // JavaScript with throw a RangeError for numbers that are too big. The
+    // message does not contain the value.
+    JS('void', r'#.length = #', this, newLength);
+  }
+
+  /// Unsafe alternative to the [length] setter that skips the check and will
+  /// not fail when increasing the size of a list of non-nullable elements.
+  ///
+  /// To ensure null safe soundness this should only be called when every new
+  /// index will be filled before returning.
+  ///
+  /// Should only be called when the list is already known to be growable.
+  void _setLengthUnsafe(int newLength) {
+    assert(newLength is int,
+        throw new ArgumentError.value(newLength, 'newLength'));
+
+    assert(newLength >= 0,
+        throw new RangeError.range(newLength, 0, null, 'newLength'));
+
     // JavaScript with throw a RangeError for numbers that are too big. The
     // message does not contain the value.
     JS('void', r'#.length = #', this, newLength);
@@ -640,13 +725,7 @@ class JSArray<E> extends Interceptor implements List<E>, JSIndexable {
 
   Iterable<T> whereType<T>() => new WhereTypeIterable<T>(this);
 
-  List<E> operator +(List<E> other) {
-    int totalLength = this.length + other.length;
-    return <E>[]
-      ..length = totalLength
-      ..setRange(0, this.length, this)
-      ..setRange(this.length, totalLength, other);
-  }
+  List<E> operator +(List<E> other) => [...this, ...other];
 
   int indexWhere(bool test(E element), [int start = 0]) {
     if (start >= this.length) return -1;
@@ -657,7 +736,7 @@ class JSArray<E> extends Interceptor implements List<E>, JSIndexable {
     return -1;
   }
 
-  int lastIndexWhere(bool test(E element), [int start]) {
+  int lastIndexWhere(bool test(E element), [int? start]) {
     if (start == null) start = this.length - 1;
     if (start < 0) return -1;
     for (int i = start; i >= 0; i--) {
@@ -677,18 +756,16 @@ class JSArray<E> extends Interceptor implements List<E>, JSIndexable {
   }
 }
 
-/**
- * Dummy subclasses that allow the backend to track more precise
- * information about arrays through their type. The CPA type inference
- * relies on the fact that these classes do not override [] nor []=.
- *
- * These classes are really a fiction, and can have no methods, since
- * getInterceptor always returns JSArray.  We should consider pushing the
- * 'isGrowable' and 'isMutable' checks into the getInterceptor implementation so
- * these classes can have specialized implementations. Doing so will challenge
- * many assumptions in the JS backend.
- */
-class JSMutableArray<E> extends JSArray<E> implements JSMutableIndexable {}
+/// Dummy subclasses that allow the backend to track more precise
+/// information about arrays through their type. The CPA type inference
+/// relies on the fact that these classes do not override [] nor []=.
+///
+/// These classes are really a fiction, and can have no methods, since
+/// getInterceptor always returns JSArray.  We should consider pushing the
+/// 'isGrowable' and 'isMutable' checks into the getInterceptor implementation
+/// so these classes can have specialized implementations. Doing so will
+/// challenge many assumptions in the JS backend.
+class JSMutableArray<E> extends JSArray<E> implements JSMutableIndexable<E> {}
 
 class JSFixedArray<E> extends JSMutableArray<E> {}
 
@@ -702,14 +779,14 @@ class ArrayIterator<E> implements Iterator<E> {
   final JSArray<E> _iterable;
   final int _length;
   int _index;
-  E _current;
+  E? _current;
 
   ArrayIterator(JSArray<E> iterable)
       : _iterable = iterable,
         _length = iterable.length,
         _index = 0;
 
-  E get current => _current;
+  E get current => _current as E;
 
   bool moveNext() {
     int length = _iterable.length;

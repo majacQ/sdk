@@ -2,47 +2,47 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-/**
- * Inserts the given arguments into [pattern].
- *
- *     format('Hello, {0}!', 'John') = 'Hello, John!'
- *     format('{0} are you {1}ing?', 'How', 'do') = 'How are you doing?'
- *     format('{0} are you {1}ing?', 'What', 'read') = 'What are you reading?'
- */
+/// Inserts the given arguments into [pattern].
+///
+///     format('Hello, {0}!', 'John') = 'Hello, John!'
+///     format('{0} are you {1}ing?', 'How', 'do') = 'How are you doing?'
+///     format('{0} are you {1}ing?', 'What', 'read') = 'What are you reading?'
 String format(String pattern,
-    [arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7]) {
+    [Object? arg0,
+    Object? arg1,
+    Object? arg2,
+    Object? arg3,
+    Object? arg4,
+    Object? arg5,
+    Object? arg6,
+    Object? arg7]) {
   // TODO(rnystrom): This is not used by analyzer, but is called by
   // analysis_server. Move this code there and remove it from here.
   return formatList(pattern, [arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7]);
 }
 
-/**
- * Inserts the given [arguments] into [pattern].
- *
- *     format('Hello, {0}!', ['John']) = 'Hello, John!'
- *     format('{0} are you {1}ing?', ['How', 'do']) = 'How are you doing?'
- *     format('{0} are you {1}ing?', ['What', 'read']) = 'What are you reading?'
- */
-String formatList(String pattern, List<Object> arguments) {
+/// Inserts the given [arguments] into [pattern].
+///
+///     format('Hello, {0}!', ['John']) = 'Hello, John!'
+///     format('{0} are you {1}ing?', ['How', 'do']) = 'How are you doing?'
+///     format('{0} are you {1}ing?', ['What', 'read']) =
+///         'What are you reading?'
+String formatList(String pattern, List<Object?>? arguments) {
   if (arguments == null || arguments.isEmpty) {
-    assert(!pattern.contains(new RegExp(r'\{(\d+)\}')),
+    assert(!pattern.contains(RegExp(r'\{(\d+)\}')),
         'Message requires arguments, but none were provided.');
     return pattern;
   }
-  return pattern.replaceAllMapped(new RegExp(r'\{(\d+)\}'), (match) {
-    String indexStr = match.group(1);
+  return pattern.replaceAllMapped(RegExp(r'\{(\d+)\}'), (match) {
+    String indexStr = match.group(1)!;
     int index = int.parse(indexStr);
-    Object arg = arguments[index];
-    assert(arg != null);
-    return arg?.toString();
+    return arguments[index].toString();
   });
 }
 
-/**
- * Very limited printf implementation, supports only %s and %d.
- */
+/// Very limited printf implementation, supports only %s and %d.
 String _printf(String fmt, List args) {
-  StringBuffer sb = new StringBuffer();
+  StringBuffer sb = StringBuffer();
   bool markFound = false;
   int argIndex = 0;
   for (int i = 0; i < fmt.length; i++) {
@@ -69,7 +69,7 @@ String _printf(String fmt, List args) {
         continue;
       }
       // unknown
-      throw new ArgumentError('[$fmt][$i] = 0x${c.toRadixString(16)}');
+      throw ArgumentError('[$fmt][$i] = 0x${c.toRadixString(16)}');
     } else {
       sb.writeCharCode(c);
     }
@@ -86,7 +86,7 @@ class Character {
 
   static int digit(int codePoint, int radix) {
     if (radix != 16) {
-      throw new ArgumentError("only radix == 16 is supported");
+      throw ArgumentError("only radix == 16 is supported");
     }
     if (0x30 <= codePoint && codePoint <= 0x39) {
       return codePoint - 0x30;
@@ -112,15 +112,15 @@ class Character {
 
   static String toChars(int codePoint) {
     if (codePoint < 0 || codePoint > MAX_CODE_POINT) {
-      throw new ArgumentError();
+      throw ArgumentError();
     }
     if (codePoint < MIN_SUPPLEMENTARY_CODE_POINT) {
-      return new String.fromCharCode(codePoint);
+      return String.fromCharCode(codePoint);
     }
     int offset = codePoint - MIN_SUPPLEMENTARY_CODE_POINT;
     int c0 = ((offset & 0x7FFFFFFF) >> 10) + MIN_HIGH_SURROGATE;
     int c1 = (offset & 0x3ff) + MIN_LOW_SURROGATE;
-    return new String.fromCharCodes([c0, c1]);
+    return String.fromCharCodes([c0, c1]);
   }
 }
 
@@ -131,36 +131,45 @@ abstract class Enum<E extends Enum<E>> implements Comparable<E> {
 
   /// The position in the enum declaration.
   final int ordinal;
+
   const Enum(this.name, this.ordinal);
+
+  @override
   int get hashCode => ordinal;
+
+  @override
   int compareTo(E other) => ordinal - other.ordinal;
+
+  @override
   String toString() => name;
 }
 
 @deprecated
 class PrintStringWriter extends PrintWriter {
-  final StringBuffer _sb = new StringBuffer();
+  final StringBuffer _sb = StringBuffer();
 
-  void print(x) {
+  @override
+  void print(Object x) {
     _sb.write(x);
   }
 
+  @override
   String toString() => _sb.toString();
 }
 
 abstract class PrintWriter {
   void newLine() {
-    this.print('\n');
+    print('\n');
   }
 
-  void print(x);
+  void print(Object x);
 
   void printf(String fmt, List args) {
-    this.print(_printf(fmt, args));
+    print(_printf(fmt, args));
   }
 
   void println(String s) {
-    this.print(s);
-    this.newLine();
+    print(s);
+    newLine();
   }
 }

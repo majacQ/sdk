@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'assist_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(ImportAddShowTest);
   });
@@ -19,81 +19,101 @@ class ImportAddShowTest extends AssistProcessorTest {
   @override
   AssistKind get kind => DartAssistKind.IMPORT_ADD_SHOW;
 
-  test_hasShow() async {
-    await resolveTestUnit('''
-import 'dart:math' show PI;
+  Future<void> test_hasShow() async {
+    await resolveTestCode('''
+import 'dart:math' show pi;
 main() {
-  PI;
+  pi;
 }
 ''');
     await assertNoAssistAt('import ');
   }
 
-  test_hasUnresolvedIdentifier() async {
-    await resolveTestUnit('''
+  Future<void> test_hasUnresolvedIdentifier() async {
+    await resolveTestCode('''
 import 'dart:math';
 main(x) {
-  PI;
+  pi;
   return x.foo();
 }
 ''');
     await assertHasAssistAt('import ', '''
-import 'dart:math' show PI;
+import 'dart:math' show pi;
 main(x) {
-  PI;
+  pi;
   return x.foo();
 }
 ''');
   }
 
-  test_onDirective() async {
-    await resolveTestUnit('''
+  Future<void> test_onDirective() async {
+    await resolveTestCode('''
 import 'dart:math';
 main() {
-  PI;
-  E;
+  pi;
+  e;
   max(1, 2);
 }
 ''');
     await assertHasAssistAt('import ', '''
-import 'dart:math' show E, PI, max;
+import 'dart:math' show e, max, pi;
 main() {
-  PI;
-  E;
+  pi;
+  e;
   max(1, 2);
 }
 ''');
   }
 
-  test_onUri() async {
-    await resolveTestUnit('''
+  Future<void> test_onUri() async {
+    await resolveTestCode('''
 import 'dart:math';
 main() {
-  PI;
-  E;
+  pi;
+  e;
   max(1, 2);
 }
 ''');
     await assertHasAssistAt('art:math', '''
-import 'dart:math' show E, PI, max;
+import 'dart:math' show e, max, pi;
 main() {
-  PI;
-  E;
+  pi;
+  e;
   max(1, 2);
 }
 ''');
   }
 
-  test_unresolvedUri() async {
+  Future<void> test_setterOnDirective() async {
+    addSource('/home/test/lib/a.dart', r'''
+void set setter(int i) {}
+''');
+    await resolveTestCode('''
+import 'a.dart';
+
+main() {
+  setter = 42;
+}
+''');
+    await assertHasAssistAt('import ', '''
+import 'a.dart' show setter;
+
+main() {
+  setter = 42;
+}
+''');
+  }
+
+  Future<void> test_unresolvedUri() async {
     verifyNoTestUnitErrors = false;
-    await resolveTestUnit('''
+    await resolveTestCode('''
 import '/no/such/lib.dart';
 ''');
     await assertNoAssistAt('import ');
   }
 
-  test_unused() async {
-    await resolveTestUnit('''
+  Future<void> test_unused() async {
+    await resolveTestCode('''
 import 'dart:math';
 ''');
     await assertNoAssistAt('import ');

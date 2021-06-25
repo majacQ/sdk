@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library test.invoke_private_test;
 
 import 'dart:mirrors';
@@ -67,7 +69,7 @@ main() {
   Expect.equals('my value', result.reflectee._field);
 
   // LibraryMirror.
-  LibraryMirror lm = cm.owner;
+  LibraryMirror lm = cm.owner as LibraryMirror;
   result = lm.invoke(#_libraryFunction, [':', ')']);
   Expect.equals(':)', result.reflectee);
 

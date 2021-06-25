@@ -7,20 +7,16 @@
 
 #include "bin/socket_base.h"
 
-// TODO(ZX-766): If/when Fuchsia adds getifaddrs(), use that instead of the
-// ioctl in netconfig.h.
-#include <errno.h>  // NOLINT
-#include <fcntl.h>  // NOLINT
-#include <lib/netstack/c/netconfig.h>
-#include <ifaddrs.h>      // NOLINT
-#include <net/if.h>       // NOLINT
-#include <netinet/tcp.h>  // NOLINT
-#include <stdio.h>        // NOLINT
-#include <stdlib.h>       // NOLINT
-#include <string.h>       // NOLINT
-#include <sys/ioctl.h>    // NOLINT
-#include <sys/stat.h>     // NOLINT
-#include <unistd.h>       // NOLINT
+#include <errno.h>
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <netinet/tcp.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <vector>
 
 #include "bin/eventhandler.h"
 #include "bin/fdutils.h"
@@ -37,13 +33,14 @@
 #define LOG_ERR(msg, ...)                                                      \
   {                                                                            \
     int err = errno;                                                           \
-    Log::PrintErr("Dart Socket ERROR: %s:%d: " msg, __FILE__, __LINE__,        \
-                  ##__VA_ARGS__);                                              \
+    Syslog::PrintErr("Dart Socket ERROR: %s:%d: " msg, __FILE__, __LINE__,     \
+                     ##__VA_ARGS__);                                           \
     errno = err;                                                               \
   }
 #if defined(SOCKET_LOG_INFO)
 #define LOG_INFO(msg, ...)                                                     \
-  Log::Print("Dart Socket INFO: %s:%d: " msg, __FILE__, __LINE__, ##__VA_ARGS__)
+  Syslog::Print("Dart Socket INFO: %s:%d: " msg, __FILE__, __LINE__,           \
+                ##__VA_ARGS__)
 #else
 #define LOG_INFO(msg, ...)
 #endif  // defined(SOCKET_LOG_INFO)
@@ -55,7 +52,11 @@
 namespace dart {
 namespace bin {
 
-SocketAddress::SocketAddress(struct sockaddr* sa) {
+SocketAddress::SocketAddress(struct sockaddr* sa, bool unnamed_unix_socket) {
+  // Fuchsia does not support unix domain sockets.
+  if (unnamed_unix_socket) {
+    FATAL("Fuchsia does not support unix domain sockets.");
+  }
   ASSERT(INET6_ADDRSTRLEN >= INET_ADDRSTRLEN);
   if (!SocketBase::FormatNumericAddress(*reinterpret_cast<RawAddr*>(sa),
                                         as_string_, INET6_ADDRSTRLEN)) {
@@ -64,6 +65,7 @@ SocketAddress::SocketAddress(struct sockaddr* sa) {
   socklen_t salen = GetAddrLength(*reinterpret_cast<RawAddr*>(sa));
   memmove(reinterpret_cast<void*>(&addr_), sa, salen);
 }
+
 
 bool SocketBase::Initialize() {
   // Nothing to do on Fuchsia.
@@ -120,6 +122,12 @@ intptr_t SocketBase::RecvFrom(intptr_t fd,
                               SocketOpKind sync) {
   errno = ENOSYS;
   return -1;
+}
+
+bool SocketBase::AvailableDatagram(intptr_t fd,
+                                   void* buffer,
+                                   intptr_t num_bytes) {
+  return false;
 }
 
 intptr_t SocketBase::Write(intptr_t fd,
@@ -180,7 +188,13 @@ SocketAddress* SocketBase::GetRemotePeer(intptr_t fd, intptr_t* port) {
 }
 
 void SocketBase::GetError(intptr_t fd, OSError* os_error) {
-  errno = ENOSYS;
+  IOHandle* handle = reinterpret_cast<IOHandle*>(fd);
+  ASSERT(handle->fd() >= 0);
+  int len = sizeof(errno);
+  int err = 0;
+  VOID_NO_RETRY_EXPECTED(getsockopt(handle->fd(), SOL_SOCKET, SO_ERROR, &err,
+                                    reinterpret_cast<socklen_t*>(&len)));
+  errno = err;
   os_error->SetCodeAndMessage(OSError::kSystem, errno);
 }
 
@@ -257,8 +271,22 @@ bool SocketBase::ParseAddress(int type, const char* address, RawAddr* addr) {
   return (result == 1);
 }
 
-static bool ShouldIncludeIfaAddrs(netc_if_info_t* if_info, int lookup_family) {
-  const int family = if_info->addr.ss_family;
+bool SocketBase::RawAddrToString(RawAddr* addr, char* str) {
+  if (addr->addr.sa_family == AF_INET) {
+    return inet_ntop(AF_INET, &addr->in.sin_addr, str, INET_ADDRSTRLEN) != NULL;
+  } else {
+    ASSERT(addr->addr.sa_family == AF_INET6);
+    return inet_ntop(AF_INET6, &addr->in6.sin6_addr, str, INET6_ADDRSTRLEN) !=
+           NULL;
+  }
+}
+
+static bool ShouldIncludeIfaAddrs(struct ifaddrs* ifa, int lookup_family) {
+  if (ifa->ifa_addr == NULL) {
+    // OpenVPN's virtual device tun0.
+    return false;
+  }
+  int family = ifa->ifa_addr->sa_family;
   return ((lookup_family == family) ||
           (((lookup_family == AF_UNSPEC) &&
             ((family == AF_INET) || (family == AF_INET6)))));
@@ -271,54 +299,38 @@ bool SocketBase::ListInterfacesSupported() {
 AddressList<InterfaceSocketAddress>* SocketBase::ListInterfaces(
     int type,
     OSError** os_error) {
-  // We need a dummy socket.
-  const int fd = socket(AF_INET6, SOCK_STREAM, 0);
-  if (fd < 0) {
-    LOG_ERR("ListInterfaces: socket(AF_INET, SOCK_DGRAM, 0) failed\n");
+  struct ifaddrs* ifaddr;
+
+  int status = NO_RETRY_EXPECTED(getifaddrs(&ifaddr));
+  if (status != 0) {
+    ASSERT(*os_error == NULL);
+    *os_error =
+        new OSError(status, gai_strerror(status), OSError::kGetAddressInfo);
     return NULL;
   }
 
-  // Call the ioctls.
-  netc_get_if_info_t get_if_info;
-  const ssize_t size = ioctl_netc_get_num_ifs(fd, &get_if_info.n_info);
-  if (size < 0) {
-    LOG_ERR("ListInterfaces: ioctl_netc_get_num_ifs() failed");
-    close(fd);
-    return NULL;
-  }
-  for (uint32_t i = 0; i < get_if_info.n_info; i++) {
-    const ssize_t size =
-        ioctl_netc_get_if_info_at(fd, &i, &get_if_info.info[i]);
-    if (size < 0) {
-      LOG_ERR("ListInterfaces: ioctl_netc_get_if_info_at() failed");
-      close(fd);
-      return NULL;
-    }
-  }
+  int lookup_family = SocketAddress::FromType(type);
 
-  // Process the results.
-  const int lookup_family = SocketAddress::FromType(type);
   intptr_t count = 0;
-  for (intptr_t i = 0; i < get_if_info.n_info; i++) {
-    if (ShouldIncludeIfaAddrs(&get_if_info.info[i], lookup_family)) {
+  for (struct ifaddrs* ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+    if (ShouldIncludeIfaAddrs(ifa, lookup_family)) {
       count++;
     }
   }
 
   AddressList<InterfaceSocketAddress>* addresses =
       new AddressList<InterfaceSocketAddress>(count);
-  int addresses_idx = 0;
-  for (intptr_t i = 0; i < get_if_info.n_info; i++) {
-    if (ShouldIncludeIfaAddrs(&get_if_info.info[i], lookup_family)) {
-      char* ifa_name = DartUtils::ScopedCopyCString(get_if_info.info[i].name);
-      InterfaceSocketAddress* isa = new InterfaceSocketAddress(
-          reinterpret_cast<struct sockaddr*>(&get_if_info.info[i].addr),
-          ifa_name, if_nametoindex(get_if_info.info[i].name));
-      addresses->SetAt(addresses_idx, isa);
-      addresses_idx++;
+  int i = 0;
+  for (struct ifaddrs* ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+    if (ShouldIncludeIfaAddrs(ifa, lookup_family)) {
+      char* ifa_name = DartUtils::ScopedCopyCString(ifa->ifa_name);
+      addresses->SetAt(
+          i, new InterfaceSocketAddress(ifa->ifa_addr, ifa_name,
+                                        if_nametoindex(ifa->ifa_name)));
+      i++;
     }
   }
-  close(fd);
+  freeifaddrs(ifaddr);
   return addresses;
 }
 
@@ -373,6 +385,29 @@ bool SocketBase::GetBroadcast(intptr_t fd, bool* enabled) {
 bool SocketBase::SetBroadcast(intptr_t fd, bool enabled) {
   errno = ENOSYS;
   return false;
+}
+
+bool SocketBase::SetOption(intptr_t fd,
+                           int level,
+                           int option,
+                           const char* data,
+                           int length) {
+  IOHandle* handle = reinterpret_cast<IOHandle*>(fd);
+  return NO_RETRY_EXPECTED(
+             setsockopt(handle->fd(), level, option, data, length)) == 0;
+}
+
+bool SocketBase::GetOption(intptr_t fd,
+                           int level,
+                           int option,
+                           char* data,
+                           unsigned int* length) {
+  IOHandle* handle = reinterpret_cast<IOHandle*>(fd);
+  socklen_t optlen = static_cast<socklen_t>(*length);
+  auto result =
+      NO_RETRY_EXPECTED(getsockopt(handle->fd(), level, option, data, &optlen));
+  *length = static_cast<unsigned int>(optlen);
+  return result == 0;
 }
 
 bool SocketBase::JoinMulticast(intptr_t fd,

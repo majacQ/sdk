@@ -4,35 +4,33 @@
 
 part of dart.collection;
 
-/**
- * Base class for implementing a [Map].
- *
- * This class has a basic implementation of all but five of the members of
- * [Map].
- * A basic `Map` class can be implemented by extending this class and
- * implementing `keys`, `operator[]`, `operator[]=`, `remove` and `clear`.
- * The remaining operations are implemented in terms of these five.
- *
- * The `keys` iterable should have efficient [Iterable.length] and
- * [Iterable.contains] operations, and it should catch concurrent modifications
- * of the keys while iterating.
- *
- * A more efficient implementation is usually possible by overriding
- * some of the other members as well.
- */
+/// Base class for implementing a [Map].
+///
+/// This class has a basic implementation of all but five of the members of
+/// [Map].
+/// A basic `Map` class can be implemented by extending this class and
+/// implementing `keys`, `operator[]`, `operator[]=`, `remove` and `clear`.
+/// The remaining operations are implemented in terms of these five.
+///
+/// The `keys` iterable should have efficient [Iterable.length] and
+/// [Iterable.contains] operations, and it should catch concurrent modifications
+/// of the keys while iterating.
+///
+/// A more efficient implementation is usually possible by overriding
+/// some of the other members as well.
 abstract class MapBase<K, V> extends MapMixin<K, V> {
-  static String mapToString(Map m) {
+  static String mapToString(Map<Object?, Object?> m) {
     // Reuses the list in IterableBase for detecting toString cycles.
     if (_isToStringVisiting(m)) {
       return '{...}';
     }
 
-    var result = new StringBuffer();
+    var result = StringBuffer();
     try {
       _toStringVisiting.add(m);
       result.write('{');
       bool first = true;
-      m.forEach((k, v) {
+      m.forEach((Object? k, Object? v) {
         if (!first) {
           result.write(', ');
         }
@@ -50,33 +48,36 @@ abstract class MapBase<K, V> extends MapMixin<K, V> {
     return result.toString();
   }
 
-  static _id(x) => x;
+  static Object? _id(Object? x) => x;
 
-  /**
-   * Fills a [Map] with key/value pairs computed from [iterable].
-   *
-   * This method is used by [Map] classes in the named constructor
-   * `fromIterable`.
-   */
+  /// Fills a [Map] with key/value pairs computed from [iterable].
+  ///
+  /// This method is used by [Map] classes in the named constructor
+  /// `fromIterable`.
   static void _fillMapWithMappedIterable(
-      Map map, Iterable iterable, key(element), value(element)) {
+      Map<Object?, Object?> map,
+      Iterable<Object?> iterable,
+      Object? Function(Object? element)? key,
+      Object? Function(Object? element)? value) {
     key ??= _id;
     value ??= _id;
+
+    if (key == null) throw "!"; // TODO(38493): The `??=` should promote.
+    if (value == null) throw "!"; // TODO(38493): The `??=` should promote.
 
     for (var element in iterable) {
       map[key(element)] = value(element);
     }
   }
 
-  /**
-   * Fills a map by associating the [keys] to [values].
-   *
-   * This method is used by [Map] classes in the named constructor
-   * `fromIterables`.
-   */
-  static void _fillMapWithIterables(Map map, Iterable keys, Iterable values) {
-    Iterator keyIterator = keys.iterator;
-    Iterator valueIterator = values.iterator;
+  /// Fills a map by associating the [keys] to [values].
+  ///
+  /// This method is used by [Map] classes in the named constructor
+  /// `fromIterables`.
+  static void _fillMapWithIterables(Map<Object?, Object?> map,
+      Iterable<Object?> keys, Iterable<Object?> values) {
+    Iterator<Object?> keyIterator = keys.iterator;
+    Iterator<Object?> valueIterator = values.iterator;
 
     bool hasNextKey = keyIterator.moveNext();
     bool hasNextValue = valueIterator.moveNext();
@@ -88,32 +89,30 @@ abstract class MapBase<K, V> extends MapMixin<K, V> {
     }
 
     if (hasNextKey || hasNextValue) {
-      throw new ArgumentError("Iterables do not have same length.");
+      throw ArgumentError("Iterables do not have same length.");
     }
   }
 }
 
-/**
- * Mixin implementing a [Map].
- *
- * This mixin has a basic implementation of all but five of the members of
- * [Map].
- * A basic `Map` class can be implemented by mixin in this class and
- * implementing `keys`, `operator[]`, `operator[]=`, `remove` and `clear`.
- * The remaining operations are implemented in terms of these five.
- *
- * The `keys` iterable should have efficient [Iterable.length] and
- * [Iterable.contains] operations, and it should catch concurrent modifications
- * of the keys while iterating.
- *
- * A more efficient implementation is usually possible by overriding
- * some of the other members as well.
- */
+/// Mixin implementing a [Map].
+///
+/// This mixin has a basic implementation of all but five of the members of
+/// [Map].
+/// A basic `Map` class can be implemented by mixin in this class and
+/// implementing `keys`, `operator[]`, `operator[]=`, `remove` and `clear`.
+/// The remaining operations are implemented in terms of these five.
+///
+/// The `keys` iterable should have efficient [Iterable.length] and
+/// [Iterable.contains] operations, and it should catch concurrent modifications
+/// of the keys while iterating.
+///
+/// A more efficient implementation is usually possible by overriding
+/// some of the other members as well.
 abstract class MapMixin<K, V> implements Map<K, V> {
   Iterable<K> get keys;
-  V operator [](Object key);
+  V? operator [](Object? key);
   operator []=(K key, V value);
-  V remove(Object key);
+  V? remove(Object? key);
   // The `clear` operation should not be based on `remove`.
   // It should clear the map even if some keys are not equal to themselves.
   void clear();
@@ -121,17 +120,17 @@ abstract class MapMixin<K, V> implements Map<K, V> {
   Map<RK, RV> cast<RK, RV>() => Map.castFrom<K, V, RK, RV>(this);
   void forEach(void action(K key, V value)) {
     for (K key in keys) {
-      action(key, this[key]);
+      action(key, this[key] as V);
     }
   }
 
   void addAll(Map<K, V> other) {
     for (K key in other.keys) {
-      this[key] = other[key];
+      this[key] = other[key] as V;
     }
   }
 
-  bool containsValue(Object value) {
+  bool containsValue(Object? value) {
     for (K key in keys) {
       if (this[key] == value) return true;
     }
@@ -140,35 +139,35 @@ abstract class MapMixin<K, V> implements Map<K, V> {
 
   V putIfAbsent(K key, V ifAbsent()) {
     if (containsKey(key)) {
-      return this[key];
+      return this[key] as V;
     }
     return this[key] = ifAbsent();
   }
 
-  V update(K key, V update(V value), {V ifAbsent()}) {
+  V update(K key, V update(V value), {V Function()? ifAbsent}) {
     if (this.containsKey(key)) {
-      return this[key] = update(this[key]);
+      return this[key] = update(this[key] as V);
     }
     if (ifAbsent != null) {
       return this[key] = ifAbsent();
     }
-    throw new ArgumentError.value(key, "key", "Key not in map.");
+    throw ArgumentError.value(key, "key", "Key not in map.");
   }
 
   void updateAll(V update(K key, V value)) {
     for (var key in this.keys) {
-      this[key] = update(key, this[key]);
+      this[key] = update(key, this[key] as V);
     }
   }
 
   Iterable<MapEntry<K, V>> get entries {
-    return keys.map((K key) => new MapEntry<K, V>(key, this[key]));
+    return keys.map((K key) => MapEntry<K, V>(key, this[key] as V));
   }
 
   Map<K2, V2> map<K2, V2>(MapEntry<K2, V2> transform(K key, V value)) {
     var result = <K2, V2>{};
     for (var key in this.keys) {
-      var entry = transform(key, this[key]);
+      var entry = transform(key, this[key] as V);
       result[entry.key] = entry.value;
     }
     return result;
@@ -183,50 +182,46 @@ abstract class MapMixin<K, V> implements Map<K, V> {
   void removeWhere(bool test(K key, V value)) {
     var keysToRemove = <K>[];
     for (var key in keys) {
-      if (test(key, this[key])) keysToRemove.add(key);
+      if (test(key, this[key] as V)) keysToRemove.add(key);
     }
     for (var key in keysToRemove) {
       this.remove(key);
     }
   }
 
-  bool containsKey(Object key) => keys.contains(key);
+  bool containsKey(Object? key) => keys.contains(key);
   int get length => keys.length;
   bool get isEmpty => keys.isEmpty;
   bool get isNotEmpty => keys.isNotEmpty;
-  Iterable<V> get values => new _MapBaseValueIterable<K, V>(this);
+  Iterable<V> get values => _MapBaseValueIterable<K, V>(this);
   String toString() => MapBase.mapToString(this);
 }
 
-/**
- * Basic implementation of an unmodifiable [Map].
- *
- * This class has a basic implementation of all but two of the members of
- * an umodifiable [Map].
- * A simple unmodifiable `Map` class can be implemented by extending this
- * class and implementing `keys` and `operator[]`.
- *
- * Modifying operations throw when used.
- * The remaining non-modifying operations are implemented in terms of `keys`
- * and `operator[]`.
- *
- * The `keys` iterable should have efficient [Iterable.length] and
- * [Iterable.contains] operations, and it should catch concurrent modifications
- * of the keys while iterating.
- *
- * A more efficient implementation is usually possible by overriding
- * some of the other members as well.
- */
+/// Basic implementation of an unmodifiable [Map].
+///
+/// This class has a basic implementation of all but two of the members of
+/// an umodifiable [Map].
+/// A simple unmodifiable `Map` class can be implemented by extending this
+/// class and implementing `keys` and `operator[]`.
+///
+/// Modifying operations throw when used.
+/// The remaining non-modifying operations are implemented in terms of `keys`
+/// and `operator[]`.
+///
+/// The `keys` iterable should have efficient [Iterable.length] and
+/// [Iterable.contains] operations, and it should catch concurrent modifications
+/// of the keys while iterating.
+///
+/// A more efficient implementation is usually possible by overriding
+/// some of the other members as well.
 abstract class UnmodifiableMapBase<K, V> = MapBase<K, V>
     with _UnmodifiableMapMixin<K, V>;
 
-/**
- * Implementation of [Map.values] based on the map and its [Map.keys] iterable.
- *
- * Iterable that iterates over the values of a `Map`.
- * It accesses the values by iterating over the keys of the map, and using the
- * map's `operator[]` to lookup the keys.
- */
+/// Implementation of [Map.values] based on the map and its [Map.keys] iterable.
+///
+/// Iterable that iterates over the values of a `Map`.
+/// It accesses the values by iterating over the keys of the map, and using the
+/// map's `operator[]` to lookup the keys.
 class _MapBaseValueIterable<K, V> extends EfficientLengthIterable<V> {
   final Map<K, V> _map;
   _MapBaseValueIterable(this._map);
@@ -234,23 +229,21 @@ class _MapBaseValueIterable<K, V> extends EfficientLengthIterable<V> {
   int get length => _map.length;
   bool get isEmpty => _map.isEmpty;
   bool get isNotEmpty => _map.isNotEmpty;
-  V get first => _map[_map.keys.first];
-  V get single => _map[_map.keys.single];
-  V get last => _map[_map.keys.last];
+  V get first => _map[_map.keys.first] as V;
+  V get single => _map[_map.keys.single] as V;
+  V get last => _map[_map.keys.last] as V;
 
-  Iterator<V> get iterator => new _MapBaseValueIterator<K, V>(_map);
+  Iterator<V> get iterator => _MapBaseValueIterator<K, V>(_map);
 }
 
-/**
- * Iterator created by [_MapBaseValueIterable].
- *
- * Iterates over the values of a map by iterating its keys and lookup up the
- * values.
- */
+/// Iterator created by [_MapBaseValueIterable].
+///
+/// Iterates over the values of a map by iterating its keys and lookup up the
+/// values.
 class _MapBaseValueIterator<K, V> implements Iterator<V> {
   final Iterator<K> _keys;
   final Map<K, V> _map;
-  V _current;
+  V? _current;
 
   _MapBaseValueIterator(Map<K, V> map)
       : _map = map,
@@ -265,73 +258,71 @@ class _MapBaseValueIterator<K, V> implements Iterator<V> {
     return false;
   }
 
-  V get current => _current;
+  V get current => _current as V;
 }
 
-/**
- * Mixin that overrides mutating map operations with implementations that throw.
- */
+/// Mixin that overrides mutating map operations with implementations that
+/// throw.
 abstract class _UnmodifiableMapMixin<K, V> implements Map<K, V> {
-  /** This operation is not supported by an unmodifiable map. */
+  /// This operation is not supported by an unmodifiable map.
   void operator []=(K key, V value) {
-    throw new UnsupportedError("Cannot modify unmodifiable map");
+    throw UnsupportedError("Cannot modify unmodifiable map");
   }
 
-  /** This operation is not supported by an unmodifiable map. */
+  /// This operation is not supported by an unmodifiable map.
   void addAll(Map<K, V> other) {
-    throw new UnsupportedError("Cannot modify unmodifiable map");
+    throw UnsupportedError("Cannot modify unmodifiable map");
   }
 
-  /** This operation is not supported by an unmodifiable map. */
+  /// This operation is not supported by an unmodifiable map.
   void addEntries(Iterable<MapEntry<K, V>> entries) {
-    throw new UnsupportedError("Cannot modify unmodifiable map");
+    throw UnsupportedError("Cannot modify unmodifiable map");
   }
 
-  /** This operation is not supported by an unmodifiable map. */
+  /// This operation is not supported by an unmodifiable map.
   void clear() {
-    throw new UnsupportedError("Cannot modify unmodifiable map");
+    throw UnsupportedError("Cannot modify unmodifiable map");
   }
 
-  /** This operation is not supported by an unmodifiable map. */
-  V remove(Object key) {
-    throw new UnsupportedError("Cannot modify unmodifiable map");
+  /// This operation is not supported by an unmodifiable map.
+  V? remove(Object? key) {
+    throw UnsupportedError("Cannot modify unmodifiable map");
   }
 
-  /** This operation is not supported by an unmodifiable map. */
+  /// This operation is not supported by an unmodifiable map.
   void removeWhere(bool test(K key, V value)) {
-    throw new UnsupportedError("Cannot modify unmodifiable map");
+    throw UnsupportedError("Cannot modify unmodifiable map");
   }
 
-  /** This operation is not supported by an unmodifiable map. */
+  /// This operation is not supported by an unmodifiable map.
   V putIfAbsent(K key, V ifAbsent()) {
-    throw new UnsupportedError("Cannot modify unmodifiable map");
+    throw UnsupportedError("Cannot modify unmodifiable map");
   }
 
-  /** This operation is not supported by an unmodifiable map. */
-  V update(K key, V update(V value), {V ifAbsent()}) {
-    throw new UnsupportedError("Cannot modify unmodifiable map");
+  /// This operation is not supported by an unmodifiable map.
+  V update(K key, V update(V value), {V Function()? ifAbsent}) {
+    throw UnsupportedError("Cannot modify unmodifiable map");
   }
 
-  /** This operation is not supported by an unmodifiable map. */
+  /// This operation is not supported by an unmodifiable map.
   void updateAll(V update(K key, V value)) {
-    throw new UnsupportedError("Cannot modify unmodifiable map");
+    throw UnsupportedError("Cannot modify unmodifiable map");
   }
 }
 
-/**
- * Wrapper around a class that implements [Map] that only exposes `Map` members.
- *
- * A simple wrapper that delegates all `Map` members to the map provided in the
- * constructor.
- *
- * Base for delegating map implementations like [UnmodifiableMapView].
- */
+/// Wrapper around a class that implements [Map] that only exposes `Map`
+/// members.
+///
+/// A simple wrapper that delegates all `Map` members to the map provided in the
+/// constructor.
+///
+/// Base for delegating map implementations like [UnmodifiableMapView].
 class MapView<K, V> implements Map<K, V> {
   final Map<K, V> _map;
   const MapView(Map<K, V> map) : _map = map;
 
   Map<RK, RV> cast<RK, RV>() => _map.cast<RK, RV>();
-  V operator [](Object key) => _map[key];
+  V? operator [](Object? key) => _map[key];
   void operator []=(K key, V value) {
     _map[key] = value;
   }
@@ -345,8 +336,8 @@ class MapView<K, V> implements Map<K, V> {
   }
 
   V putIfAbsent(K key, V ifAbsent()) => _map.putIfAbsent(key, ifAbsent);
-  bool containsKey(Object key) => _map.containsKey(key);
-  bool containsValue(Object value) => _map.containsValue(value);
+  bool containsKey(Object? key) => _map.containsKey(key);
+  bool containsValue(Object? value) => _map.containsValue(value);
   void forEach(void action(K key, V value)) {
     _map.forEach(action);
   }
@@ -355,7 +346,7 @@ class MapView<K, V> implements Map<K, V> {
   bool get isNotEmpty => _map.isNotEmpty;
   int get length => _map.length;
   Iterable<K> get keys => _map.keys;
-  V remove(Object key) => _map.remove(key);
+  V? remove(Object? key) => _map.remove(key);
   String toString() => _map.toString();
   Iterable<V> get values => _map.values;
 
@@ -368,7 +359,7 @@ class MapView<K, V> implements Map<K, V> {
   Map<K2, V2> map<K2, V2>(MapEntry<K2, V2> transform(K key, V value)) =>
       _map.map<K2, V2>(transform);
 
-  V update(K key, V update(V value), {V ifAbsent()}) =>
+  V update(K key, V update(V value), {V Function()? ifAbsent}) =>
       _map.update(key, update, ifAbsent: ifAbsent);
 
   void updateAll(V update(K key, V value)) {
@@ -380,17 +371,15 @@ class MapView<K, V> implements Map<K, V> {
   }
 }
 
-/**
- * View of a [Map] that disallow modifying the map.
- *
- * A wrapper around a `Map` that forwards all members to the map provided in
- * the constructor, except for operations that modify the map.
- * Modifying operations throw instead.
- */
+/// View of a [Map] that disallow modifying the map.
+///
+/// A wrapper around a `Map` that forwards all members to the map provided in
+/// the constructor, except for operations that modify the map.
+/// Modifying operations throw instead.
 class UnmodifiableMapView<K, V> extends MapView<K, V>
     with _UnmodifiableMapMixin<K, V> {
   UnmodifiableMapView(Map<K, V> map) : super(map);
 
   Map<RK, RV> cast<RK, RV>() =>
-      new UnmodifiableMapView<RK, RV>(_map.cast<RK, RV>());
+      UnmodifiableMapView<RK, RV>(_map.cast<RK, RV>());
 }

@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library set_test;
 
 import 'package:expect/expect.dart';
@@ -482,6 +484,66 @@ void testASetFrom(setFrom) {
   Expect.isTrue(aSet.length == 1);
 }
 
+void testUnmodifiable(Set source) {
+  var unmodifiable = Set.unmodifiable(source);
+
+  Expect.throwsUnsupportedError(() {
+    unmodifiable.add(3);
+  }, "add");
+
+  Expect.throwsUnsupportedError(() {
+    unmodifiable.addAll({1, 2, 3});
+  }, "addAll");
+
+  Expect.throwsUnsupportedError(() {
+    unmodifiable.addAll(<int>{});
+  }, "addAll empty");
+
+  Expect.throwsUnsupportedError(() {
+    unmodifiable.remove(3);
+  }, "remove");
+
+  Expect.throwsUnsupportedError(() {
+    unmodifiable.removeAll({1, 2, 3});
+  }, "removeAll");
+
+  Expect.throwsUnsupportedError(() {
+    unmodifiable.removeAll(<int>{});
+  }, "removeAll empty");
+
+  Expect.throwsUnsupportedError(() {
+    unmodifiable.retainAll({1, 2, 3});
+  }, "retainAll");
+
+  Expect.throwsUnsupportedError(() {
+    unmodifiable.retainAll(<int>{});
+  }, "retainAll empty");
+
+  Expect.throwsUnsupportedError(() {
+    unmodifiable.removeWhere((_) => true);
+  }, "removeWhere");
+
+  Expect.throwsUnsupportedError(() {
+    unmodifiable.retainWhere((_) => false);
+  }, "retainWhere");
+
+  Expect.throwsUnsupportedError(() {
+    unmodifiable.clear();
+  }, "clear");
+}
+
+void testUnmodifiableSetIsNotUpdatedIfSourceSetIsUpdated() {
+  var modifiable = {1};
+  var unmodifiable = Set.unmodifiable(modifiable);
+
+  modifiable.add(2);
+  Expect.notEquals(modifiable.length, unmodifiable.length);
+  Expect.setEquals({2}, modifiable.difference(unmodifiable));
+  modifiable.removeAll({1, 2});
+  Expect.setEquals({1}, unmodifiable.difference(modifiable));
+  Expect.setEquals({1}, unmodifiable);
+}
+
 main() {
   testMain(() => new HashSet());
   testMain(() => new LinkedHashSet());
@@ -553,4 +615,7 @@ main() {
   testASetFrom((x) => new HashSet<A>.from(x));
   testASetFrom((x) => new LinkedHashSet<A>.from(x));
   testASetFrom((x) => new SplayTreeSet<A>.from(x, identityCompare));
+
+  testUnmodifiable({1});
+  testUnmodifiableSetIsNotUpdatedIfSourceSetIsUpdated();
 }

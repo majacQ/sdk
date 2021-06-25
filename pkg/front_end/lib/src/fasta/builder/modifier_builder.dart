@@ -4,63 +4,52 @@
 
 library fasta.modifier_builder;
 
-import '../modifier.dart'
-    show
-        abstractMask,
-        constMask,
-        covariantMask,
-        externalMask,
-        finalMask,
-        hasInitializerMask,
-        initializingFormalMask,
-        namedMixinApplicationMask,
-        staticMask;
+import '../modifier.dart';
 
-import 'builder.dart' show Declaration;
+import 'builder.dart';
 
-abstract class ModifierBuilder extends Declaration {
-  final Declaration parent;
+abstract class ModifierBuilder implements Builder {
+  String? get name;
 
-  final int charOffset;
+  bool get isNative;
+}
 
-  final Uri fileUri;
-
-  ModifierBuilder(this.parent, this.charOffset, [Uri fileUri])
-      : fileUri = fileUri ?? parent?.fileUri;
-
+abstract class ModifierBuilderImpl extends BuilderImpl
+    implements ModifierBuilder {
   int get modifiers;
 
-  bool get isAbstract => (modifiers & abstractMask) != 0;
+  String get debugName;
 
+  @override
+  Builder? parent;
+
+  @override
+  final int charOffset;
+
+  @override
+  final Uri? fileUri;
+
+  ModifierBuilderImpl(Builder? parent, this.charOffset, [Uri? fileUri])
+      : this.fileUri = fileUri ?? parent?.fileUri,
+        this.parent = parent;
+
+  @override
   bool get isConst => (modifiers & constMask) != 0;
 
-  bool get isCovariant => (modifiers & covariantMask) != 0;
-
-  bool get isExternal => (modifiers & externalMask) != 0;
-
+  @override
   bool get isFinal => (modifiers & finalMask) != 0;
 
+  @override
   bool get isStatic => (modifiers & staticMask) != 0;
 
-  bool get isNamedMixinApplication {
-    return (modifiers & namedMixinApplicationMask) != 0;
-  }
-
-  bool get hasInitializer => (modifiers & hasInitializerMask) != 0;
-
-  bool get isInitializingFormal => (modifiers & initializingFormalMask) != 0;
-
-  bool get isClassMember => false;
-
-  String get name;
-
+  @override
   bool get isNative => false;
-
-  String get debugName;
 
   StringBuffer printOn(StringBuffer buffer) {
     return buffer..write(name ?? fullNameForErrors);
   }
 
-  String toString() => "$debugName(${printOn(new StringBuffer())})";
+  @override
+  String toString() =>
+      "${isPatch ? 'patch ' : ''}$debugName(${printOn(new StringBuffer())})";
 }

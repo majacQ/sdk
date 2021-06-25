@@ -2,37 +2,22 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+#if !defined(DART_PRECOMPILED_RUNTIME)
+
 #include "vm/kernel.h"
 
-#include "vm/compiler/frontend/constant_evaluator.h"
+#include "vm/bit_vector.h"
+#include "vm/compiler/frontend/constant_reader.h"
 #include "vm/compiler/frontend/kernel_translation_helper.h"
+#include "vm/compiler/jit/compiler.h"
 #include "vm/longjump.h"
 #include "vm/object_store.h"
 #include "vm/parser.h"  // For Parser::kParameter* constants.
+#include "vm/stack_frame.h"
 
-#if !defined(DART_PRECOMPILED_RUNTIME)
 
 namespace dart {
 namespace kernel {
-
-bool FieldHasFunctionLiteralInitializer(const Field& field,
-                                        TokenPosition* start,
-                                        TokenPosition* end) {
-  Zone* zone = Thread::Current()->zone();
-  const Script& script = Script::Handle(zone, field.Script());
-
-  TranslationHelper translation_helper(Thread::Current());
-  translation_helper.InitFromScript(script);
-
-  KernelReaderHelper kernel_reader_helper(
-      zone, &translation_helper, Script::Handle(zone, field.Script()),
-      ExternalTypedData::Handle(zone, field.KernelData()),
-      field.KernelDataProgramOffset());
-  kernel_reader_helper.SetOffset(field.kernel_offset());
-  kernel::FieldHelper field_helper(&kernel_reader_helper);
-  field_helper.ReadUntilExcluding(kernel::FieldHelper::kEnd, true);
-  return field_helper.FieldHasFunctionLiteralInitializer(start, end);
-}
 
 KernelLineStartsReader::KernelLineStartsReader(
     const dart::TypedData& line_starts_data,
@@ -50,27 +35,16 @@ KernelLineStartsReader::KernelLineStartsReader(
   }
 }
 
-intptr_t KernelLineStartsReader::LineNumberForPosition(
-    intptr_t position) const {
-  intptr_t line_count = line_starts_data_.Length();
+int32_t KernelLineStartsReader::MaxPosition() const {
+  const intptr_t line_count = line_starts_data_.Length();
   intptr_t current_start = 0;
-  for (intptr_t i = 0; i < line_count; ++i) {
+  for (intptr_t i = 0; i < line_count; i++) {
     current_start += helper_->At(line_starts_data_, i);
-    if (current_start > position) {
-      // If current_start is greater than the desired position, it means that
-      // it is for the line after |position|. However, since line numbers
-      // start at 1, we just return |i|.
-      return i;
-    }
-
-    if (current_start == position) {
-      return i + 1;
-    }
   }
-  return line_count;
+  return current_start;
 }
 
-void KernelLineStartsReader::LocationForPosition(intptr_t position,
+bool KernelLineStartsReader::LocationForPosition(intptr_t position,
                                                  intptr_t* line,
                                                  intptr_t* col) const {
   intptr_t line_count = line_starts_data_.Length();
@@ -80,46 +54,43 @@ void KernelLineStartsReader::LocationForPosition(intptr_t position,
     current_start += helper_->At(line_starts_data_, i);
     if (current_start > position) {
       *line = i;
-      if (col != NULL) {
+      if (col != nullptr) {
         *col = position - previous_start + 1;
       }
-      return;
+      return true;
     }
     if (current_start == position) {
       *line = i + 1;
-      if (col != NULL) {
+      if (col != nullptr) {
         *col = 1;
       }
-      return;
+      return true;
     }
     previous_start = current_start;
   }
 
-  // If the start of any of the lines did not cross |position|,
-  // then it means the position falls on the last line.
-  *line = line_count;
-  if (col != NULL) {
-    *col = position - current_start + 1;
-  }
+  return false;
 }
 
-void KernelLineStartsReader::TokenRangeAtLine(
-    intptr_t source_length,
+bool KernelLineStartsReader::TokenRangeAtLine(
     intptr_t line_number,
     TokenPosition* first_token_index,
     TokenPosition* last_token_index) const {
-  ASSERT(line_number <= line_starts_data_.Length());
+  if (line_number < 0 || line_number > line_starts_data_.Length()) {
+    return false;
+  }
   intptr_t cumulative = 0;
   for (intptr_t i = 0; i < line_number; ++i) {
     cumulative += helper_->At(line_starts_data_, i);
   }
-  *first_token_index = dart::TokenPosition(cumulative);
+  *first_token_index = dart::TokenPosition::Deserialize(cumulative);
   if (line_number == line_starts_data_.Length()) {
-    *last_token_index = dart::TokenPosition(source_length);
+    *last_token_index = *first_token_index;
   } else {
-    *last_token_index = dart::TokenPosition(
+    *last_token_index = dart::TokenPosition::Deserialize(
         cumulative + helper_->At(line_starts_data_, line_number) - 1);
   }
+  return true;
 }
 
 int32_t KernelLineStartsReader::KernelInt8LineStartsHelper::At(
@@ -150,8 +121,7 @@ class KernelTokenPositionCollector : public KernelReaderHelper {
       intptr_t data_program_offset,
       intptr_t initial_script_index,
       intptr_t record_for_script_id,
-      GrowableArray<intptr_t>* record_token_positions_into,
-      GrowableArray<intptr_t>* record_yield_positions_into)
+      GrowableArray<intptr_t>* record_token_positions_into)
       : KernelReaderHelper(zone,
                            translation_helper,
                            script,
@@ -159,13 +129,11 @@ class KernelTokenPositionCollector : public KernelReaderHelper {
                            data_program_offset),
         current_script_id_(initial_script_index),
         record_for_script_id_(record_for_script_id),
-        record_token_positions_into_(record_token_positions_into),
-        record_yield_positions_into_(record_yield_positions_into) {}
+        record_token_positions_into_(record_token_positions_into) {}
 
   void CollectTokenPositions(intptr_t kernel_offset);
 
   void RecordTokenPosition(TokenPosition position) override;
-  void RecordYieldPosition(TokenPosition position) override;
 
   void set_current_script_id(intptr_t id) override { current_script_id_ = id; }
 
@@ -173,7 +141,6 @@ class KernelTokenPositionCollector : public KernelReaderHelper {
   intptr_t current_script_id_;
   intptr_t record_for_script_id_;
   GrowableArray<intptr_t>* record_token_positions_into_;
-  GrowableArray<intptr_t>* record_yield_positions_into_;
 
   DISALLOW_COPY_AND_ASSIGN(KernelTokenPositionCollector);
 };
@@ -207,14 +174,7 @@ void KernelTokenPositionCollector::CollectTokenPositions(
 void KernelTokenPositionCollector::RecordTokenPosition(TokenPosition position) {
   if (record_for_script_id_ == current_script_id_ &&
       record_token_positions_into_ != NULL && position.IsReal()) {
-    record_token_positions_into_->Add(position.value());
-  }
-}
-
-void KernelTokenPositionCollector::RecordYieldPosition(TokenPosition position) {
-  if (record_for_script_id_ == current_script_id_ &&
-      record_yield_positions_into_ != NULL && position.IsReal()) {
-    record_yield_positions_into_->Add(position.value());
+    record_token_positions_into_->Add(position.Serialize());
   }
 }
 
@@ -230,10 +190,10 @@ static int LowestFirst(const intptr_t* a, const intptr_t* b) {
  * possibly contain duplicate and unsorted data at the end.
  * Otherwise (when sublist doesn't exist in list) return new empty array.
  */
-static RawArray* AsSortedDuplicateFreeArray(GrowableArray<intptr_t>* source) {
+static ArrayPtr AsSortedDuplicateFreeArray(GrowableArray<intptr_t>* source) {
   intptr_t size = source->length();
   if (size == 0) {
-    return Object::empty_array().raw();
+    return Object::empty_array().ptr();
   }
 
   source->Sort(LowestFirst);
@@ -251,10 +211,10 @@ static RawArray* AsSortedDuplicateFreeArray(GrowableArray<intptr_t>* source) {
     smi_value = Smi::New(source->At(i));
     array_object.SetAt(i, smi_value);
   }
-  return array_object.raw();
+  return array_object.ptr();
 }
 
-static void ProcessTokenPositionsEntry(
+static void CollectKernelDataTokenPositions(
     const ExternalTypedData& kernel_data,
     const Script& script,
     const Script& entry_script,
@@ -262,8 +222,7 @@ static void ProcessTokenPositionsEntry(
     intptr_t data_kernel_offset,
     Zone* zone,
     TranslationHelper* helper,
-    GrowableArray<intptr_t>* token_positions,
-    GrowableArray<intptr_t>* yield_positions) {
+    GrowableArray<intptr_t>* token_positions) {
   if (kernel_data.IsNull()) {
     return;
   }
@@ -271,7 +230,7 @@ static void ProcessTokenPositionsEntry(
   KernelTokenPositionCollector token_position_collector(
       zone, helper, script, kernel_data, data_kernel_offset,
       entry_script.kernel_script_index(), script.kernel_script_index(),
-      token_positions, yield_positions);
+      token_positions);
 
   token_position_collector.CollectTokenPositions(kernel_offset);
 }
@@ -279,15 +238,15 @@ static void ProcessTokenPositionsEntry(
 void CollectTokenPositionsFor(const Script& interesting_script) {
   Thread* thread = Thread::Current();
   Zone* zone = thread->zone();
+  interesting_script.LookupSourceAndLineStarts(zone);
   TranslationHelper helper(thread);
   helper.InitFromScript(interesting_script);
 
   GrowableArray<intptr_t> token_positions(10);
-  GrowableArray<intptr_t> yield_positions(1);
 
-  Isolate* isolate = thread->isolate();
-  const GrowableObjectArray& libs =
-      GrowableObjectArray::Handle(zone, isolate->object_store()->libraries());
+  auto isolate_group = thread->isolate_group();
+  const GrowableObjectArray& libs = GrowableObjectArray::Handle(
+      zone, isolate_group->object_store()->libraries());
   Library& lib = Library::Handle(zone);
   Object& entry = Object::Handle(zone);
   Script& entry_script = Script::Handle(zone);
@@ -298,14 +257,16 @@ void CollectTokenPositionsFor(const Script& interesting_script) {
   auto& temp_function = Function::Handle(zone);
   for (intptr_t i = 0; i < libs.Length(); i++) {
     lib ^= libs.At(i);
+    lib.EnsureTopLevelClassIsFinalized();
     DictionaryIterator it(lib);
     while (it.HasNext()) {
       entry = it.GetNext();
       data = ExternalTypedData::null();
       if (entry.IsClass()) {
         const Class& klass = Class::Cast(entry);
-        if (klass.script() == interesting_script.raw()) {
-          token_positions.Add(klass.token_pos().value());
+        if (klass.script() == interesting_script.ptr()) {
+          token_positions.Add(klass.token_pos().Serialize());
+          token_positions.Add(klass.end_token_pos().Serialize());
         }
         if (klass.is_finalized()) {
           temp_array = klass.fields();
@@ -316,29 +277,29 @@ void CollectTokenPositionsFor(const Script& interesting_script) {
               continue;
             }
             entry_script = temp_field.Script();
-            if (entry_script.raw() != interesting_script.raw()) {
+            if (entry_script.ptr() != interesting_script.ptr()) {
               continue;
             }
             data = temp_field.KernelData();
-            ProcessTokenPositionsEntry(data, interesting_script, entry_script,
-                                       temp_field.kernel_offset(),
-                                       temp_field.KernelDataProgramOffset(),
-                                       zone, &helper, &token_positions,
-                                       &yield_positions);
+            CollectKernelDataTokenPositions(
+                data, interesting_script, entry_script,
+                temp_field.kernel_offset(),
+                temp_field.KernelDataProgramOffset(), zone, &helper,
+                &token_positions);
           }
-          temp_array = klass.functions();
+          temp_array = klass.current_functions();
           for (intptr_t i = 0; i < temp_array.Length(); ++i) {
             temp_function ^= temp_array.At(i);
             entry_script = temp_function.script();
-            if (entry_script.raw() != interesting_script.raw()) {
+            if (entry_script.ptr() != interesting_script.ptr()) {
               continue;
             }
             data = temp_function.KernelData();
-            ProcessTokenPositionsEntry(data, interesting_script, entry_script,
-                                       temp_function.kernel_offset(),
-                                       temp_function.KernelDataProgramOffset(),
-                                       zone, &helper, &token_positions,
-                                       &yield_positions);
+            CollectKernelDataTokenPositions(
+                data, interesting_script, entry_script,
+                temp_function.kernel_offset(),
+                temp_function.KernelDataProgramOffset(), zone, &helper,
+                &token_positions);
           }
         } else {
           // Class isn't finalized yet: read the data attached to it.
@@ -350,26 +311,24 @@ void CollectTokenPositionsFor(const Script& interesting_script) {
           const intptr_t class_offset = klass.kernel_offset();
 
           entry_script = klass.script();
-          if (entry_script.raw() != interesting_script.raw()) {
+          if (entry_script.ptr() != interesting_script.ptr()) {
             continue;
           }
-          ProcessTokenPositionsEntry(data, interesting_script, entry_script,
-                                     class_offset, library_kernel_offset, zone,
-                                     &helper, &token_positions,
-                                     &yield_positions);
+          CollectKernelDataTokenPositions(
+              data, interesting_script, entry_script, class_offset,
+              library_kernel_offset, zone, &helper, &token_positions);
         }
       } else if (entry.IsFunction()) {
-        temp_function ^= entry.raw();
+        temp_function ^= entry.ptr();
         entry_script = temp_function.script();
-        if (entry_script.raw() != interesting_script.raw()) {
+        if (entry_script.ptr() != interesting_script.ptr()) {
           continue;
         }
         data = temp_function.KernelData();
-        ProcessTokenPositionsEntry(data, interesting_script, entry_script,
-                                   temp_function.kernel_offset(),
-                                   temp_function.KernelDataProgramOffset(),
-                                   zone, &helper, &token_positions,
-                                   &yield_positions);
+        CollectKernelDataTokenPositions(data, interesting_script, entry_script,
+                                        temp_function.kernel_offset(),
+                                        temp_function.KernelDataProgramOffset(),
+                                        zone, &helper, &token_positions);
       } else if (entry.IsField()) {
         const Field& field = Field::Cast(entry);
         if (field.kernel_offset() <= 0) {
@@ -377,24 +336,83 @@ void CollectTokenPositionsFor(const Script& interesting_script) {
           continue;
         }
         entry_script = field.Script();
-        if (entry_script.raw() != interesting_script.raw()) {
+        if (entry_script.ptr() != interesting_script.ptr()) {
           continue;
         }
         data = field.KernelData();
-        ProcessTokenPositionsEntry(data, interesting_script, entry_script,
-                                   field.kernel_offset(),
-                                   field.KernelDataProgramOffset(), zone,
-                                   &helper, &token_positions, &yield_positions);
+        CollectKernelDataTokenPositions(
+            data, interesting_script, entry_script, field.kernel_offset(),
+            field.KernelDataProgramOffset(), zone, &helper, &token_positions);
       }
     }
   }
 
-  Script& script = Script::Handle(zone, interesting_script.raw());
+  Script& script = Script::Handle(zone, interesting_script.ptr());
   Array& array_object = Array::Handle(zone);
   array_object = AsSortedDuplicateFreeArray(&token_positions);
   script.set_debug_positions(array_object);
-  array_object = AsSortedDuplicateFreeArray(&yield_positions);
-  script.set_yield_positions(array_object);
+}
+
+#if !defined(PRODUCT) && !defined(DART_PRECOMPILED_RUNTIME)
+ArrayPtr CollectConstConstructorCoverageFrom(const Script& interesting_script) {
+  Thread* thread = Thread::Current();
+  Zone* zone = thread->zone();
+  interesting_script.LookupSourceAndLineStarts(zone);
+  TranslationHelper helper(thread);
+  helper.InitFromScript(interesting_script);
+
+  ExternalTypedData& data =
+      ExternalTypedData::Handle(zone, interesting_script.constant_coverage());
+
+  KernelReaderHelper kernel_reader(zone, &helper, interesting_script, data, 0);
+
+  // Read "constant coverage constructors".
+  const intptr_t constant_coverage_constructors = kernel_reader.ReadUInt();
+  const Array& constructors =
+      Array::Handle(Array::New(constant_coverage_constructors));
+  for (intptr_t i = 0; i < constant_coverage_constructors; ++i) {
+    NameIndex kernel_name = kernel_reader.ReadCanonicalNameReference();
+    Class& klass = Class::ZoneHandle(
+        zone,
+        helper.LookupClassByKernelClass(helper.EnclosingName(kernel_name)));
+    const Function& target = Function::ZoneHandle(
+        zone, helper.LookupConstructorByKernelConstructor(klass, kernel_name));
+    constructors.SetAt(i, target);
+  }
+  return constructors.ptr();
+}
+#endif  // !defined(PRODUCT) && !defined(DART_PRECOMPILED_RUNTIME)
+
+ObjectPtr EvaluateStaticConstFieldInitializer(const Field& field) {
+  ASSERT(field.is_static() && field.is_const());
+
+  LongJumpScope jump;
+  if (setjmp(*jump.Set()) == 0) {
+    Thread* thread = Thread::Current();
+    Zone* zone = thread->zone();
+    TranslationHelper helper(thread);
+    Script& script = Script::Handle(zone, field.Script());
+    helper.InitFromScript(script);
+
+    const Class& owner_class = Class::Handle(zone, field.Owner());
+    ActiveClass active_class;
+    ActiveClassScope active_class_scope(&active_class, &owner_class);
+
+    KernelReaderHelper kernel_reader(
+        zone, &helper, script,
+        ExternalTypedData::Handle(zone, field.KernelData()),
+        field.KernelDataProgramOffset());
+    kernel_reader.SetOffset(field.kernel_offset());
+    ConstantReader constant_reader(&kernel_reader, &active_class);
+
+    FieldHelper field_helper(&kernel_reader);
+    field_helper.ReadUntilExcluding(FieldHelper::kInitializer);
+    ASSERT(field_helper.IsConst());
+
+    return constant_reader.ReadConstantInitializer();
+  } else {
+    return Thread::Current()->StealStickyError();
+  }
 }
 
 class MetadataEvaluator : public KernelReaderHelper {
@@ -410,11 +428,10 @@ class MetadataEvaluator : public KernelReaderHelper {
                            script,
                            data,
                            data_program_offset),
-        type_translator_(this, active_class, /* finalize= */ true),
-        constant_evaluator_(this, &type_translator_, active_class, nullptr) {}
+        constant_reader_(this, active_class) {}
 
-  RawObject* EvaluateMetadata(intptr_t kernel_offset,
-                              bool is_annotations_offset) {
+  ObjectPtr EvaluateMetadata(intptr_t kernel_offset,
+                             bool is_annotations_offset) {
     SetOffset(kernel_offset);
 
     // Library and LibraryDependency objects do not have a tag in kernel binary.
@@ -435,49 +452,54 @@ class MetadataEvaluator : public KernelReaderHelper {
       } else if (tag == kConstructor) {
         ConstructorHelper constructor_helper(this);
         constructor_helper.ReadUntilExcluding(ConstructorHelper::kAnnotations);
+      } else if (tag == kFunctionDeclaration) {
+        ReadTag();
+        ReadPosition();  // fileOffset
+        VariableDeclarationHelper variable_declaration_helper(this);
+        variable_declaration_helper.ReadUntilExcluding(
+            VariableDeclarationHelper::kAnnotations);
       } else {
-        FATAL("No support for metadata on this type of kernel node\n");
+        FATAL("No support for metadata on this type of kernel node: %" Pd32
+              "\n",
+              tag);
       }
     }
 
-    return constant_evaluator_.EvaluateAnnotations();
+    return constant_reader_.ReadAnnotations();
   }
 
  private:
-  TypeTranslator type_translator_;
-  ConstantEvaluator constant_evaluator_;
+  ConstantReader constant_reader_;
 
   DISALLOW_COPY_AND_ASSIGN(MetadataEvaluator);
 };
 
-RawObject* EvaluateMetadata(const Field& metadata_field,
-                            bool is_annotations_offset) {
+ObjectPtr EvaluateMetadata(const Library& library,
+                           intptr_t kernel_offset,
+                           bool is_annotations_offset) {
   LongJumpScope jump;
   if (setjmp(*jump.Set()) == 0) {
     Thread* thread = Thread::Current();
     Zone* zone = thread->zone();
     TranslationHelper helper(thread);
-    Script& script = Script::Handle(zone, metadata_field.Script());
+    Script& script = Script::Handle(
+        zone, Class::Handle(zone, library.toplevel_class()).script());
     helper.InitFromScript(script);
 
-    const Class& owner_class = Class::Handle(zone, metadata_field.Owner());
+    const Class& owner_class = Class::Handle(zone, library.toplevel_class());
     ActiveClass active_class;
     ActiveClassScope active_class_scope(&active_class, &owner_class);
 
     MetadataEvaluator metadata_evaluator(
         zone, &helper, script,
-        ExternalTypedData::Handle(zone, metadata_field.KernelData()),
-        metadata_field.KernelDataProgramOffset(), &active_class);
+        ExternalTypedData::Handle(zone, library.kernel_data()),
+        library.kernel_offset(), &active_class);
 
-    return metadata_evaluator.EvaluateMetadata(metadata_field.kernel_offset(),
+    return metadata_evaluator.EvaluateMetadata(kernel_offset,
                                                is_annotations_offset);
 
   } else {
-    Thread* thread = Thread::Current();
-    Error& error = Error::Handle();
-    error = thread->sticky_error();
-    thread->clear_sticky_error();
-    return error.raw();
+    return Thread::Current()->StealStickyError();
   }
 }
 
@@ -494,21 +516,19 @@ class ParameterDescriptorBuilder : public KernelReaderHelper {
                            script,
                            data,
                            data_program_offset),
-        type_translator_(this, active_class, /* finalize= */ true),
-        constant_evaluator_(this, &type_translator_, active_class, nullptr) {}
+        constant_reader_(this, active_class) {}
 
-  RawObject* BuildParameterDescriptor(intptr_t kernel_offset);
+  ObjectPtr BuildParameterDescriptor(const Function& function);
 
  private:
-  TypeTranslator type_translator_;
-  ConstantEvaluator constant_evaluator_;
+  ConstantReader constant_reader_;
 
   DISALLOW_COPY_AND_ASSIGN(ParameterDescriptorBuilder);
 };
 
-RawObject* ParameterDescriptorBuilder::BuildParameterDescriptor(
-    intptr_t kernel_offset) {
-  SetOffset(kernel_offset);
+ObjectPtr ParameterDescriptorBuilder::BuildParameterDescriptor(
+    const Function& function) {
+  SetOffset(function.kernel_offset());
   ReadUntilFunctionNode();
   FunctionNodeHelper function_node_helper(this);
   function_node_helper.ReadUntilExcluding(
@@ -536,14 +556,16 @@ RawObject* ParameterDescriptorBuilder::BuildParameterDescriptor(
                            helper.IsFinal() ? Bool::True() : Bool::False());
 
     Tag tag = ReadTag();  // read (first part of) initializer.
-    if (tag == kSomething) {
-      // this will (potentially) read the initializer, but reset the position.
+    if ((tag == kSomething) && !function.is_abstract()) {
+      // This will read the initializer.
       Instance& constant = Instance::ZoneHandle(
-          zone_, constant_evaluator_.EvaluateExpression(ReaderOffset()));
-      SkipExpression();  // read (actual) initializer.
+          zone_, constant_reader_.ReadConstantExpression());
       param_descriptor.SetAt(entry_start + Parser::kParameterDefaultValueOffset,
                              constant);
     } else {
+      if (tag == kSomething) {
+        SkipExpression();  // Skip initializer.
+      }
       param_descriptor.SetAt(entry_start + Parser::kParameterDefaultValueOffset,
                              Object::null_instance());
     }
@@ -553,7 +575,7 @@ RawObject* ParameterDescriptorBuilder::BuildParameterDescriptor(
       VariableDeclarationHelper helper(this);
       helper.ReadUntilExcluding(VariableDeclarationHelper::kAnnotations);
       Object& metadata =
-          Object::ZoneHandle(zone_, constant_evaluator_.EvaluateAnnotations());
+          Object::ZoneHandle(zone_, constant_reader_.ReadAnnotations());
       param_descriptor.SetAt(entry_start + Parser::kParameterMetadataOffset,
                              metadata);
     } else {
@@ -561,10 +583,10 @@ RawObject* ParameterDescriptorBuilder::BuildParameterDescriptor(
                              Object::null_instance());
     }
   }
-  return param_descriptor.raw();
+  return param_descriptor.ptr();
 }
 
-RawObject* BuildParameterDescriptor(const Function& function) {
+ObjectPtr BuildParameterDescriptor(const Function& function) {
   LongJumpScope jump;
   if (setjmp(*jump.Set()) == 0) {
     Thread* thread = Thread::Current();
@@ -582,112 +604,140 @@ RawObject* BuildParameterDescriptor(const Function& function) {
         ExternalTypedData::Handle(zone, function.KernelData()),
         function.KernelDataProgramOffset(), &active_class);
 
-    return builder.BuildParameterDescriptor(function.kernel_offset());
+    return builder.BuildParameterDescriptor(function);
   } else {
-    Thread* thread = Thread::Current();
-    Error& error = Error::Handle();
-    error = thread->sticky_error();
-    thread->clear_sticky_error();
-    return error.raw();
+    return Thread::Current()->StealStickyError();
   }
 }
 
-bool NeedsDynamicInvocationForwarder(const Function& function) {
+void ReadParameterCovariance(const Function& function,
+                             BitVector* is_covariant,
+                             BitVector* is_generic_covariant_impl) {
   Thread* thread = Thread::Current();
   Zone* zone = thread->zone();
 
-  TranslationHelper helper(thread);
-  Script& script = Script::Handle(zone, function.script());
-  helper.InitFromScript(script);
+  const intptr_t num_params = function.NumParameters();
+  ASSERT(is_covariant->length() == num_params);
+  ASSERT(is_generic_covariant_impl->length() == num_params);
 
-  // Setup a [ActiveClassScope] and a [ActiveMemberScope] which will be used
-  // e.g. for type translation.
-
-  const Class& owner_class = Class::Handle(zone, function.Owner());
-  Function& outermost_function =
-      Function::Handle(zone, function.GetOutermostFunction());
-
-  ActiveClass active_class;
-  ActiveClassScope active_class_scope(&active_class, &owner_class);
-  ActiveMemberScope active_member(&active_class, &outermost_function);
-  ActiveTypeParametersScope active_type_params(&active_class, function, zone);
+  const auto& script = Script::Handle(zone, function.script());
+  TranslationHelper translation_helper(thread);
+  translation_helper.InitFromScript(script);
 
   KernelReaderHelper reader_helper(
-      zone, &helper, script,
+      zone, &translation_helper, script,
       ExternalTypedData::Handle(zone, function.KernelData()),
       function.KernelDataProgramOffset());
 
-  TypeTranslator type_translator(&reader_helper, &active_class,
-                                 /* finalize= */ true);
-
   reader_helper.SetOffset(function.kernel_offset());
-
-  // Handle setters.
-  if (reader_helper.PeekTag() == kField) {
-    ASSERT(function.IsImplicitSetterFunction());
-    FieldHelper field_helper(&reader_helper);
-    field_helper.ReadUntilIncluding(FieldHelper::kFlags);
-    return !(field_helper.IsCovariant() ||
-             field_helper.IsGenericCovariantImpl());
-  }
-
   reader_helper.ReadUntilFunctionNode();
 
   FunctionNodeHelper function_node_helper(&reader_helper);
-  function_node_helper.ReadUntilExcluding(FunctionNodeHelper::kTypeParameters);
-  intptr_t num_type_params = reader_helper.ReadListLength();
-
-  for (intptr_t i = 0; i < num_type_params; ++i) {
-    TypeParameterHelper helper(&reader_helper);
-    helper.ReadUntilExcludingAndSetJustRead(TypeParameterHelper::kBound);
-    AbstractType& bound = type_translator.BuildType();  // read bound
-    helper.Finish();
-
-    if (!bound.IsTopType() && !helper.IsGenericCovariantImpl()) {
-      return true;
-    }
-  }
-  function_node_helper.SetJustRead(FunctionNodeHelper::kTypeParameters);
   function_node_helper.ReadUntilExcluding(
       FunctionNodeHelper::kPositionalParameters);
 
   // Positional.
   const intptr_t num_positional_params = reader_helper.ReadListLength();
-  for (intptr_t i = 0; i < num_positional_params; ++i) {
+  intptr_t param_index = function.NumImplicitParameters();
+  for (intptr_t i = 0; i < num_positional_params; ++i, ++param_index) {
     VariableDeclarationHelper helper(&reader_helper);
-    helper.ReadUntilExcluding(VariableDeclarationHelper::kType);
-    AbstractType& type = type_translator.BuildType();  // read type.
-    helper.SetJustRead(VariableDeclarationHelper::kType);
     helper.ReadUntilExcluding(VariableDeclarationHelper::kEnd);
 
-    if (!type.IsTopType() && !helper.IsGenericCovariantImpl() &&
-        !helper.IsCovariant()) {
-      return true;
+    if (helper.IsCovariant()) {
+      is_covariant->Add(param_index);
+    }
+    if (helper.IsGenericCovariantImpl()) {
+      is_generic_covariant_impl->Add(param_index);
     }
   }
 
   // Named.
   const intptr_t num_named_params = reader_helper.ReadListLength();
-  for (intptr_t i = 0; i < num_named_params; ++i) {
+  for (intptr_t i = 0; i < num_named_params; ++i, ++param_index) {
     VariableDeclarationHelper helper(&reader_helper);
-    helper.ReadUntilExcluding(VariableDeclarationHelper::kType);
-    AbstractType& type = type_translator.BuildType();  // read type.
-    helper.SetJustRead(VariableDeclarationHelper::kType);
     helper.ReadUntilExcluding(VariableDeclarationHelper::kEnd);
 
-    if (!type.IsTopType() && !helper.IsGenericCovariantImpl() &&
-        !helper.IsCovariant()) {
+    if (helper.IsCovariant()) {
+      is_covariant->Add(param_index);
+    }
+    if (helper.IsGenericCovariantImpl()) {
+      is_generic_covariant_impl->Add(param_index);
+    }
+  }
+}
+
+bool NeedsDynamicInvocationForwarder(const Function& function) {
+  Zone* zone = Thread::Current()->zone();
+
+  // Right now closures do not need a dyn:* forwarder.
+  // See https://github.com/dart-lang/sdk/issues/40813
+  if (function.IsClosureFunction()) return false;
+
+  // Method extractors have no parameters to check and return value is a closure
+  // and therefore not an unboxed primitive type.
+  if (function.IsMethodExtractor()) {
+    return false;
+  }
+
+  // Invoke field dispatchers are dynamically generated, will invoke a getter to
+  // obtain the field value and then invoke ".call()" on the result.
+  // Those dynamically generated dispathers don't have proper kernel metadata
+  // associated with them - we can therefore not query if there are dynamic
+  // calls to them or not and are therefore conservative.
+  if (function.IsInvokeFieldDispatcher()) {
+    return true;
+  }
+
+  // The dyn:* forwarders perform unboxing of parameters before calling the
+  // actual target (which accepts unboxed parameters) and boxes return values
+  // of the return value.
+  if (function.HasUnboxedParameters() || function.HasUnboxedReturnValue()) {
+    return true;
+  }
+
+  // There are no parameters to type check for getters and if the return value
+  // is boxed, then the dyn:* forwarder is not needed.
+  if (function.IsImplicitGetterFunction()) {
+    return false;
+  }
+
+  // Covariant parameters (both explicitly covariant and generic-covariant-impl)
+  // are checked in the body of a function and therefore don't need checks in a
+  // dynamic invocation forwarder. So dynamic invocation forwarder is only
+  // needed if there are non-covariant parameters of non-top type.
+  if (function.IsImplicitSetterFunction()) {
+    const auto& field = Field::Handle(zone, function.accessor_field());
+    return !(field.is_covariant() || field.is_generic_covariant_impl());
+  }
+
+  const auto& type_params =
+      TypeParameters::Handle(zone, function.type_parameters());
+  if (!type_params.IsNull()) {
+    auto& bound = AbstractType::Handle(zone);
+    for (intptr_t i = 0, n = type_params.Length(); i < n; ++i) {
+      bound = type_params.BoundAt(i);
+      if (!bound.IsTopTypeForSubtyping() &&
+          !type_params.IsGenericCovariantImplAt(i)) {
+        return true;
+      }
+    }
+  }
+
+  const intptr_t num_params = function.NumParameters();
+  BitVector is_covariant(zone, num_params);
+  BitVector is_generic_covariant_impl(zone, num_params);
+  ReadParameterCovariance(function, &is_covariant, &is_generic_covariant_impl);
+
+  auto& type = AbstractType::Handle(zone);
+  for (intptr_t i = function.NumImplicitParameters(); i < num_params; ++i) {
+    type = function.ParameterTypeAt(i);
+    if (!type.IsTopTypeForSubtyping() &&
+        !is_generic_covariant_impl.Contains(i) && !is_covariant.Contains(i)) {
       return true;
     }
   }
 
   return false;
-}
-
-bool IsFieldInitializer(const Function& function, Zone* zone) {
-  return (function.kind() == RawFunction::kImplicitStaticFinalGetter) &&
-         String::Handle(zone, function.name())
-             .StartsWith(Symbols::InitPrefix());
 }
 
 static ProcedureAttributesMetadata ProcedureAttributesOf(
@@ -723,6 +773,18 @@ ProcedureAttributesMetadata ProcedureAttributesOf(const Field& field,
   return ProcedureAttributesOf(
       zone, script, ExternalTypedData::Handle(zone, field.KernelData()),
       field.KernelDataProgramOffset(), field.kernel_offset());
+}
+
+TableSelectorMetadata* TableSelectorMetadataForProgram(
+    const KernelProgramInfo& info,
+    Zone* zone) {
+  TranslationHelper translation_helper(Thread::Current());
+  translation_helper.InitFromKernelProgramInfo(info);
+  const auto& data = ExternalTypedData::Handle(zone, info.metadata_payloads());
+  KernelReaderHelper reader_helper(zone, &translation_helper,
+                                   Script::Handle(zone), data, 0);
+  TableSelectorMetadataHelper table_selector_metadata_helper(&reader_helper);
+  return table_selector_metadata_helper.GetTableSelectorMetadata(zone);
 }
 
 }  // namespace kernel

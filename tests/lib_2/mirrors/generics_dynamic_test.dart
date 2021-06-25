@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import 'dart:mirrors';
 import 'package:expect/expect.dart';
 
@@ -28,8 +30,8 @@ main() {
   TypeMirror cTypeArgument = cNestedInstance.typeArguments.first;
   TypeMirror superA = bDecl.superclass;
   TypeMirror superC = bDecl.superinterfaces.single;
-  MethodMirror m = bDecl.declarations[#m];
-  VariableMirror field = bDecl.declarations[#field];
+  MethodMirror m = bDecl.declarations[#m] as MethodMirror;
+  VariableMirror field = bDecl.declarations[#field] as VariableMirror;
   TypeMirror returnTypeA = m.returnType;
   TypeMirror parameterTypeA = m.parameters.first.type;
   TypeMirror fieldTypeA = field.type;

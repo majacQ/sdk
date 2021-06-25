@@ -5,6 +5,10 @@
 #ifndef RUNTIME_VM_COMPILER_BACKEND_RANGE_ANALYSIS_H_
 #define RUNTIME_VM_COMPILER_BACKEND_RANGE_ANALYSIS_H_
 
+#if defined(DART_PRECOMPILED_RUNTIME)
+#error "AOT runtime should not use compiler sources (including header files)"
+#endif  // defined(DART_PRECOMPILED_RUNTIME)
+
 #include "vm/compiler/backend/flow_graph.h"
 #include "vm/compiler/backend/il.h"
 
@@ -12,16 +16,23 @@ namespace dart {
 
 class RangeBoundary : public ValueObject {
  public:
-  enum Kind {
-    kUnknown,
-    kNegativeInfinity,
-    kPositiveInfinity,
-    kSymbol,
-    kConstant,
-  };
+#define FOR_EACH_RANGE_BOUNDARY_KIND(V)                                        \
+  V(Unknown)                                                                   \
+  V(NegativeInfinity)                                                          \
+  V(PositiveInfinity)                                                          \
+  V(Symbol)                                                                    \
+  V(Constant)
+
+#define KIND_DEFN(name) k##name,
+  enum Kind { FOR_EACH_RANGE_BOUNDARY_KIND(KIND_DEFN) };
+#undef KIND_DEFN
+
+  static const char* KindToCString(Kind kind);
+  static bool ParseKind(const char* str, Kind* out);
 
   enum RangeSize {
     kRangeBoundarySmi,
+    kRangeBoundaryInt16,
     kRangeBoundaryInt32,
     kRangeBoundaryInt64,
   };
@@ -64,7 +75,8 @@ class RangeBoundary : public ValueObject {
   static RangeBoundary FromDefinition(Definition* defn, int64_t offs = 0);
 
   static bool IsValidOffsetForSymbolicRangeBoundary(int64_t offset) {
-    if ((offset > (kMaxInt64 - kSmiMax)) || (offset < (kMinInt64 - kSmiMin))) {
+    if ((offset > (kMaxInt64 - compiler::target::kSmiMax)) ||
+        (offset < (kMinInt64 - compiler::target::kSmiMin))) {
       // Avoid creating symbolic range boundaries which can wrap around.
       return false;
     }
@@ -72,16 +84,22 @@ class RangeBoundary : public ValueObject {
   }
 
   // Construct a RangeBoundary for the constant MinSmi value.
-  static RangeBoundary MinSmi() { return FromConstant(Smi::kMinValue); }
+  static RangeBoundary MinSmi() {
+    return FromConstant(compiler::target::kSmiMin);
+  }
 
   // Construct a RangeBoundary for the constant MaxSmi value.
-  static RangeBoundary MaxSmi() { return FromConstant(Smi::kMaxValue); }
+  static RangeBoundary MaxSmi() {
+    return FromConstant(compiler::target::kSmiMax);
+  }
 
   // Construct a RangeBoundary for the constant kMin value.
   static RangeBoundary MinConstant(RangeSize size) {
     switch (size) {
       case kRangeBoundarySmi:
-        return FromConstant(Smi::kMinValue);
+        return FromConstant(compiler::target::kSmiMin);
+      case kRangeBoundaryInt16:
+        return FromConstant(kMinInt16);
       case kRangeBoundaryInt32:
         return FromConstant(kMinInt32);
       case kRangeBoundaryInt64:
@@ -94,7 +112,9 @@ class RangeBoundary : public ValueObject {
   static RangeBoundary MaxConstant(RangeSize size) {
     switch (size) {
       case kRangeBoundarySmi:
-        return FromConstant(Smi::kMaxValue);
+        return FromConstant(compiler::target::kSmiMax);
+      case kRangeBoundaryInt16:
+        return FromConstant(kMaxInt16);
       case kRangeBoundaryInt32:
         return FromConstant(kMaxInt32);
       case kRangeBoundaryInt64:
@@ -138,7 +158,8 @@ class RangeBoundary : public ValueObject {
 
   // Returns true when this is a constant that is outside of Smi range.
   bool OverflowedSmi() const {
-    return (IsConstant() && !Smi::IsValid(ConstantValue())) || IsInfinity();
+    return (IsConstant() && !compiler::target::IsSmi(ConstantValue())) ||
+           IsInfinity();
   }
 
   bool Overflowed(RangeBoundary::RangeSize size) const {
@@ -225,7 +246,7 @@ class RangeBoundary : public ValueObject {
   // IsSymbol() -> upper bound computed from definition + offset.
   RangeBoundary UpperBound() const;
 
-  void PrintTo(BufferFormatter* f) const;
+  void PrintTo(BaseTextBuffer* f) const;
   const char* ToCString() const;
 
   static RangeBoundary Add(const RangeBoundary& a,
@@ -244,8 +265,10 @@ class RangeBoundary : public ValueObject {
                            int64_t shift_count) {
     ASSERT(value_boundary.IsConstant());
     ASSERT(shift_count >= 0);
-    int64_t value = static_cast<int64_t>(value_boundary.ConstantValue());
-    int64_t result = value >> shift_count;
+    const int64_t value = static_cast<int64_t>(value_boundary.ConstantValue());
+    const int64_t result = (shift_count <= 63)
+                               ? (value >> shift_count)
+                               : (value >= 0 ? 0 : -1);  // Dart semantics
     return RangeBoundary(result);
   }
 
@@ -279,6 +302,8 @@ class RangeBoundary : public ValueObject {
   int64_t SmiLowerBound() const { return LowerBound(kRangeBoundarySmi); }
 
  private:
+  friend class FlowGraphDeserializer;  // For setting fields directly.
+
   RangeBoundary(Kind kind, int64_t value, int64_t offset)
       : kind_(kind), value_(value), offset_(offset) {}
 
@@ -321,7 +346,7 @@ class Range : public ZoneAllocated {
                  RangeBoundary::MaxConstant(size));
   }
 
-  void PrintTo(BufferFormatter* f) const;
+  void PrintTo(BaseTextBuffer* f) const;
   static const char* ToCString(const Range* range);
 
   bool Equals(const Range* other) {
@@ -414,6 +439,27 @@ class Range : public ZoneAllocated {
            !max().UpperBound().Overflowed(size);
   }
 
+  // Returns true if this range fits without truncation into
+  // the given representation.
+  static bool Fits(Range* range, Representation rep) {
+    if (range == nullptr) return false;
+
+    switch (rep) {
+      case kUnboxedInt64:
+        return true;
+
+      case kUnboxedInt32:
+        return range->Fits(RangeBoundary::kRangeBoundaryInt32);
+
+      case kUnboxedUint32:
+        return range->IsWithin(0, kMaxUint32);
+
+      default:
+        break;
+    }
+    return false;
+  }
+
   // Clamp this to be within size.
   void Clamp(RangeBoundary::RangeSize size);
 
@@ -436,10 +482,25 @@ class Range : public ZoneAllocated {
                   const Range* right_range,
                   RangeBoundary* min,
                   RangeBoundary* max);
+
+  static void TruncDiv(const Range* left_range,
+                       const Range* right_range,
+                       RangeBoundary* min,
+                       RangeBoundary* max);
+
+  static void Mod(const Range* right_range,
+                  RangeBoundary* min,
+                  RangeBoundary* max);
+
   static void Shr(const Range* left_range,
                   const Range* right_range,
                   RangeBoundary* min,
                   RangeBoundary* max);
+
+  static void Ushr(const Range* left_range,
+                   const Range* right_range,
+                   RangeBoundary* min,
+                   RangeBoundary* max);
 
   static void Shl(const Range* left_range,
                   const Range* right_range,
@@ -475,6 +536,8 @@ class Range : public ZoneAllocated {
                        Range* result);
 
  private:
+  friend class FlowGraphDeserializer;  // For setting min_/max_ directly.
+
   RangeBoundary min_;
   RangeBoundary max_;
 
@@ -560,7 +623,9 @@ class RangeAnalysis : public ValueObject {
                                        Instruction* after);
 
   bool ConstrainValueAfterBranch(Value* use, Definition* defn);
-  void ConstrainValueAfterCheckArrayBound(Value* use, Definition* defn);
+  void ConstrainValueAfterCheckBound(Value* use,
+                                     CheckBoundBase* check,
+                                     Definition* defn);
 
   // Infer ranges for integer (smi or mint) definitions.
   void InferRanges();
@@ -605,8 +670,8 @@ class RangeAnalysis : public ValueObject {
   GrowableArray<BinaryInt64OpInstr*> binary_int64_ops_;
   GrowableArray<ShiftIntegerOpInstr*> shift_int64_ops_;
 
-  // All CheckArrayBound instructions.
-  GrowableArray<CheckArrayBoundInstr*> bounds_checks_;
+  // All CheckArrayBound/GenericCheckBound instructions.
+  GrowableArray<CheckBoundBase*> bounds_checks_;
 
   // All Constraints inserted during InsertConstraints phase. They are treated
   // as smi values.

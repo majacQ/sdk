@@ -11,7 +11,6 @@
 #include "platform/assert.h"
 #include "platform/globals.h"
 #include "vm/allocation.h"
-#include "vm/ast.h"
 #include "vm/class_finalizer.h"
 #include "vm/hash_table.h"
 #include "vm/kernel.h"
@@ -31,6 +30,7 @@ class ScopeBuildingResult;
 }  // namespace kernel
 
 class ArgumentsDescriptor;
+class BitVector;
 class Isolate;
 class LocalScope;
 class LocalVariable;
@@ -56,19 +56,17 @@ class ParsedFunction : public ZoneAllocated {
   const Function& function() const { return function_; }
   const Code& code() const { return code_; }
 
-  SequenceNode* node_sequence() const { return node_sequence_; }
-  void SetNodeSequence(SequenceNode* node_sequence);
+  LocalScope* scope() const { return scope_; }
+  void set_scope(LocalScope* scope) {
+    ASSERT(scope_ == nullptr);
+    ASSERT(scope != nullptr);
+    scope_ = scope;
+  }
 
   RegExpCompileData* regexp_compile_data() const {
     return regexp_compile_data_;
   }
   void SetRegExpCompileData(RegExpCompileData* regexp_compile_data);
-
-  LocalVariable* instantiator() const { return instantiator_; }
-  void set_instantiator(LocalVariable* instantiator) {
-    ASSERT(instantiator != NULL);
-    instantiator_ = instantiator;
-  }
 
   LocalVariable* function_type_arguments() const {
     return function_type_arguments_;
@@ -90,7 +88,7 @@ class ParsedFunction : public ZoneAllocated {
 #if defined(DEBUG)
     if (list == NULL) return;
     for (intptr_t i = 0; i < list->length(); i++) {
-      ASSERT(list->At(i)->IsZoneHandle() || list->At(i)->InVMHeap());
+      ASSERT(list->At(i)->IsZoneHandle() || list->At(i)->InVMIsolateHeap());
     }
 #endif
   }
@@ -108,6 +106,17 @@ class ParsedFunction : public ZoneAllocated {
 
   bool has_arg_desc_var() const { return arg_desc_var_ != NULL; }
   LocalVariable* arg_desc_var() const { return arg_desc_var_; }
+
+  LocalVariable* receiver_var() const {
+    ASSERT(receiver_var_ != nullptr);
+    return receiver_var_;
+  }
+  void set_receiver_var(LocalVariable* value) {
+    ASSERT(receiver_var_ == nullptr);
+    ASSERT(value != nullptr);
+    receiver_var_ = value;
+  }
+  bool has_receiver_var() const { return receiver_var_ != nullptr; }
 
   LocalVariable* expression_temp_var() const {
     ASSERT(has_expression_temp_var());
@@ -147,12 +156,6 @@ class ParsedFunction : public ZoneAllocated {
   LocalVariable* EnsureExpressionTemp();
   LocalVariable* EnsureEntryPointsTemp();
 
-  bool HasDeferredPrefixes() const { return deferred_prefixes_->length() != 0; }
-  ZoneGrowableArray<const LibraryPrefix*>* deferred_prefixes() const {
-    return deferred_prefixes_;
-  }
-  void AddDeferredPrefix(const LibraryPrefix& prefix);
-
   ZoneGrowableArray<const Field*>* guarded_fields() const {
     return guarded_fields_;
   }
@@ -162,18 +165,17 @@ class ParsedFunction : public ZoneAllocated {
 
   void AllocateVariables();
   void AllocateIrregexpVariables(intptr_t num_stack_locals);
-  void AllocateBytecodeVariables(intptr_t num_stack_locals);
 
   void record_await() { have_seen_await_expr_ = true; }
   bool have_seen_await() const { return have_seen_await_expr_; }
   bool is_forwarding_stub() const {
-    return forwarding_stub_super_target_ != -1;
+    return forwarding_stub_super_target_ != nullptr;
   }
-  kernel::NameIndex forwarding_stub_super_target() const {
+  const Function* forwarding_stub_super_target() const {
     return forwarding_stub_super_target_;
   }
-  void MarkForwardingStub(kernel::NameIndex target) {
-    forwarding_stub_super_target_ = target;
+  void MarkForwardingStub(const Function* forwarding_target) {
+    forwarding_stub_super_target_ = forwarding_target;
   }
 
   Thread* thread() const { return thread_; }
@@ -204,21 +206,76 @@ class ParsedFunction : public ZoneAllocated {
     return raw_parameters_->At(i);
   }
 
+  LocalVariable* ParameterVariable(intptr_t i) const {
+    ASSERT((i >= 0) && (i < function_.NumParameters()));
+    ASSERT(scope() != nullptr);
+    return scope()->VariableAt(i);
+  }
+
+  // Remembers the set of covariant parameters.
+  // [covariant_parameters] is a bitvector of function.NumParameters() length.
+  void SetCovariantParameters(const BitVector* covariant_parameters);
+
+  // Remembers the set of generic-covariant-impl parameters.
+  // [covariant_parameters] is a bitvector of function.NumParameters() length.
+  void SetGenericCovariantImplParameters(
+      const BitVector* generic_covariant_impl_parameters);
+
+  bool HasCovariantParametersInfo() const {
+    return covariant_parameters_ != nullptr;
+  }
+
+  // Returns true if i-th parameter is covariant.
+  // SetCovariantParameters should be called before using this method.
+  bool IsCovariantParameter(intptr_t i) const;
+
+  // Returns true if i-th parameter is generic-covariant-impl.
+  // SetGenericCovariantImplParameters should be called before using this
+  // method.
+  bool IsGenericCovariantImplParameter(intptr_t i) const;
+
+  // Variables needed for the InvokeFieldDispatcher for dynamic closure calls,
+  // because they are both read and written to by the builders.
+  struct DynamicClosureCallVars : ZoneAllocated {
+    DynamicClosureCallVars(Zone* zone, intptr_t num_named)
+        : named_argument_parameter_indices(zone, num_named) {}
+
+#define FOR_EACH_DYNAMIC_CLOSURE_CALL_VARIABLE(V)                              \
+  V(current_function, Function, CurrentFunction)                               \
+  V(current_num_processed, Smi, CurrentNumProcessed)                           \
+  V(current_param_index, Smi, CurrentParamIndex)                               \
+  V(current_type_param, Dynamic, CurrentTypeParam)                             \
+  V(function_type_args, Dynamic, FunctionTypeArgs)
+
+#define DEFINE_FIELD(Name, _, __) LocalVariable* Name = nullptr;
+    FOR_EACH_DYNAMIC_CLOSURE_CALL_VARIABLE(DEFINE_FIELD)
+#undef DEFINE_FIELD
+
+    // An array of local variables, one for each named parameter in the
+    // saved arguments descriptor.
+    ZoneGrowableArray<LocalVariable*> named_argument_parameter_indices;
+  };
+
+  DynamicClosureCallVars* dynamic_closure_call_vars() const {
+    return dynamic_closure_call_vars_;
+  }
+  DynamicClosureCallVars* EnsureDynamicClosureCallVars();
+
  private:
   Thread* thread_;
   const Function& function_;
   Code& code_;
-  SequenceNode* node_sequence_;
+  LocalScope* scope_;
   RegExpCompileData* regexp_compile_data_;
-  LocalVariable* instantiator_;
   LocalVariable* function_type_arguments_;
   LocalVariable* parent_type_arguments_;
   LocalVariable* current_context_var_;
   LocalVariable* arg_desc_var_;
+  LocalVariable* receiver_var_ = nullptr;
   LocalVariable* expression_temp_var_;
   LocalVariable* entry_points_temp_var_;
   LocalVariable* finally_return_temp_var_;
-  ZoneGrowableArray<const LibraryPrefix*>* deferred_prefixes_;
+  DynamicClosureCallVars* dynamic_closure_call_vars_;
   ZoneGrowableArray<const Field*>* guarded_fields_;
   ZoneGrowableArray<const Instance*>* default_parameter_values_;
 
@@ -229,8 +286,11 @@ class ParsedFunction : public ZoneAllocated {
   int num_stack_locals_;
   bool have_seen_await_expr_;
 
-  kernel::NameIndex forwarding_stub_super_target_;
+  const Function* forwarding_stub_super_target_ = nullptr;
   kernel::ScopeBuildingResult* kernel_scopes_;
+
+  const BitVector* covariant_parameters_ = nullptr;
+  const BitVector* generic_covariant_impl_parameters_ = nullptr;
 
   friend class Parser;
   DISALLOW_COPY_AND_ASSIGN(ParsedFunction);

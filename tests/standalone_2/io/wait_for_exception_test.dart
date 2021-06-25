@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import 'dart:async';
 import 'dart:cli';
 
@@ -11,12 +13,12 @@ import 'package:expect/expect.dart';
 main() {
   asyncStart();
   Completer<bool> c = new Completer<bool>();
-  runZoned(() {
+  runZonedGuarded(() {
     Timer.run(() {
       asyncEnd();
       throw "Error";
     });
-  }, onError: (e) {
+  }, (e, s) {
     Expect.isTrue(e is String);
     c.complete(true);
   });

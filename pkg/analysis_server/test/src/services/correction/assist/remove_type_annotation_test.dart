@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'assist_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(RemoveTypeAnnotationTest);
   });
@@ -19,8 +19,8 @@ class RemoveTypeAnnotationTest extends AssistProcessorTest {
   @override
   AssistKind get kind => DartAssistKind.REMOVE_TYPE_ANNOTATION;
 
-  test_classField() async {
-    await resolveTestUnit('''
+  Future<void> test_classField() async {
+    await resolveTestCode('''
 class A {
   int v = 1;
 }
@@ -32,8 +32,8 @@ class A {
 ''');
   }
 
-  test_classField_final() async {
-    await resolveTestUnit('''
+  Future<void> test_classField_final() async {
+    await resolveTestCode('''
 class A {
   final int v = 1;
 }
@@ -45,35 +45,28 @@ class A {
 ''');
   }
 
-  test_field_noInitializer() async {
-    await resolveTestUnit('''
+  Future<void> test_field_noInitializer() async {
+    await resolveTestCode('''
 class A {
-  int v;
+  int? v;
 }
 ''');
-    await assertNoAssistAt('v;');
+    await assertNoAssistAt('v');
   }
 
-  test_localVariable_noInitializer() async {
-    await resolveTestUnit('''
+  Future<void> test_instanceCreation_freeStanding() async {
+    await resolveTestCode('''
+class A {}
+
 main() {
-  int v;
+  A();
 }
 ''');
-    await assertNoAssistAt('v;');
+    await assertNoAssistAt('A();');
   }
 
-  test_localVariable_onInitializer() async {
-    await resolveTestUnit('''
-main() {
-  final int v = 1;
-}
-''');
-    await assertNoAssistAt('1;');
-  }
-
-  test_localVariable() async {
-    await resolveTestUnit('''
+  Future<void> test_localVariable() async {
+    await resolveTestCode('''
 main() {
   int a = 1, b = 2;
 }
@@ -85,8 +78,8 @@ main() {
 ''');
   }
 
-  test_localVariable_const() async {
-    await resolveTestUnit('''
+  Future<void> test_localVariable_const() async {
+    await resolveTestCode('''
 main() {
   const int v = 1;
 }
@@ -98,8 +91,8 @@ main() {
 ''');
   }
 
-  test_localVariable_final() async {
-    await resolveTestUnit('''
+  Future<void> test_localVariable_final() async {
+    await resolveTestCode('''
 main() {
   final int v = 1;
 }
@@ -111,24 +104,65 @@ main() {
 ''');
   }
 
-  test_topLevelVariable_noInitializer() async {
-    verifyNoTestUnitErrors = false;
-    await resolveTestUnit('''
-int v;
+  Future<void> test_localVariable_noInitializer() async {
+    await resolveTestCode('''
+main() {
+  int v;
+}
 ''');
     await assertNoAssistAt('v;');
   }
 
-  test_topLevelVariable_syntheticName() async {
-    verifyNoTestUnitErrors = false;
-    await resolveTestUnit('''
-MyType
+  Future<void> test_localVariable_onInitializer() async {
+    await resolveTestCode('''
+main() {
+  final int v = 1;
+}
 ''');
-    await assertNoAssistAt('MyType');
+    await assertNoAssistAt('1;');
   }
 
-  test_topLevelVariable() async {
-    await resolveTestUnit('''
+  Future<void> test_loopVariable() async {
+    await resolveTestCode('''
+main() {
+  for(int i = 0; i < 3; i++) {}
+}
+''');
+    await assertHasAssistAt('int ', '''
+main() {
+  for(var i = 0; i < 3; i++) {}
+}
+''');
+  }
+
+  Future<void> test_loopVariable_nested() async {
+    await resolveTestCode('''
+main() {
+  var v = () {
+    for (int x in <int>[]) {}
+  };
+}
+''');
+    await assertHasAssistAt('int x', '''
+main() {
+  var v = () {
+    for (var x in <int>[]) {}
+  };
+}
+''');
+  }
+
+  Future<void> test_loopVariable_noType() async {
+    await resolveTestCode('''
+main() {
+  for(var i = 0; i < 3; i++) {}
+}
+''');
+    await assertNoAssistAt('var ');
+  }
+
+  Future<void> test_topLevelVariable() async {
+    await resolveTestCode('''
 int V = 1;
 ''');
     await assertHasAssistAt('int ', '''
@@ -136,12 +170,28 @@ var V = 1;
 ''');
   }
 
-  test_topLevelVariable_final() async {
-    await resolveTestUnit('''
+  Future<void> test_topLevelVariable_final() async {
+    await resolveTestCode('''
 final int V = 1;
 ''');
     await assertHasAssistAt('int ', '''
 final V = 1;
 ''');
+  }
+
+  Future<void> test_topLevelVariable_noInitializer() async {
+    verifyNoTestUnitErrors = false;
+    await resolveTestCode('''
+int v;
+''');
+    await assertNoAssistAt('v;');
+  }
+
+  Future<void> test_topLevelVariable_syntheticName() async {
+    verifyNoTestUnitErrors = false;
+    await resolveTestCode('''
+MyType
+''');
+    await assertNoAssistAt('MyType');
   }
 }

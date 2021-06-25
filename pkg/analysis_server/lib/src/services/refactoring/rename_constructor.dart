@@ -1,8 +1,6 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-
-import 'dart:async';
 
 import 'package:analysis_server/src/protocol_server.dart' hide Element;
 import 'package:analysis_server/src/services/correction/status.dart';
@@ -22,9 +20,7 @@ import 'package:analyzer/src/generated/java_core.dart';
 import 'package:analyzer/src/generated/source.dart';
 import 'package:analyzer_plugin/utilities/range_factory.dart';
 
-/**
- * A [Refactoring] for renaming [ConstructorElement]s.
- */
+/// A [Refactoring] for renaming [ConstructorElement]s.
 class RenameConstructorRefactoringImpl extends RenameRefactoringImpl {
   final AnalysisSession session;
 
@@ -37,32 +33,28 @@ class RenameConstructorRefactoringImpl extends RenameRefactoringImpl {
 
   @override
   String get refactoringName {
-    return "Rename Constructor";
+    return 'Rename Constructor';
   }
 
   @override
   Future<RefactoringStatus> checkFinalConditions() {
-    RefactoringStatus result = new RefactoringStatus();
-    return new Future.value(result);
+    var result = RefactoringStatus();
+    return Future.value(result);
   }
 
   @override
   RefactoringStatus checkNewName() {
-    RefactoringStatus result = super.checkNewName();
+    var result = super.checkNewName();
     result.addStatus(validateConstructorName(newName));
-    if (newName != null) {
-      _analyzePossibleConflicts(result);
-    }
+    _analyzePossibleConflicts(result);
     return result;
   }
 
   @override
   Future<void> fillChange() async {
-    // TODO(brianwilkerson) Determine whether this await is necessary.
-    await null;
     // prepare references
-    List<SearchMatch> matches = await searchEngine.searchReferences(element);
-    List<SourceReference> references = getSourceReferences(matches);
+    var matches = await searchEngine.searchReferences(element);
+    var references = getSourceReferences(matches);
     // append declaration
     if (element.isSynthetic) {
       await _replaceSynthetic();
@@ -70,39 +62,37 @@ class RenameConstructorRefactoringImpl extends RenameRefactoringImpl {
       references.add(_createDeclarationReference());
     }
     // update references
-    String replacement = newName.isEmpty ? '' : '.$newName';
-    for (SourceReference reference in references) {
+    var replacement = newName.isEmpty ? '' : '.$newName';
+    for (var reference in references) {
       reference.addEdit(change, replacement);
     }
   }
 
   void _analyzePossibleConflicts(RefactoringStatus result) {
-    ClassElement parentClass = element.enclosingElement;
+    var parentClass = element.enclosingElement;
     // Check if the "newName" is the name of the enclosing class.
     if (parentClass.name == newName) {
       result.addError('The constructor should not have the same name '
           'as the name of the enclosing class.');
     }
     // check if there are members with "newName" in the same ClassElement
-    for (Element newNameMember in getChildren(parentClass, newName)) {
-      String message = format(
-          "Class '{0}' already declares {1} with name '{2}'.",
-          parentClass.displayName,
-          getElementKindName(newNameMember),
-          newName);
+    for (var newNameMember in getChildren(parentClass, newName)) {
+      var message = format("Class '{0}' already declares {1} with name '{2}'.",
+          parentClass.displayName, getElementKindName(newNameMember), newName);
       result.addError(message, newLocation_fromElement(newNameMember));
     }
   }
 
   SourceReference _createDeclarationReference() {
     SourceRange sourceRange;
-    int offset = element.periodOffset;
+    var offset = element.periodOffset;
+    var nameEnd = element.nameEnd!;
     if (offset != null) {
-      sourceRange = range.startOffsetEndOffset(offset, element.nameEnd);
+      sourceRange = range.startOffsetEndOffset(offset, nameEnd);
     } else {
-      sourceRange = new SourceRange(element.nameEnd, 0);
+      sourceRange = SourceRange(nameEnd, 0);
     }
-    return new SourceReference(new SearchMatchImpl(
+    return SourceReference(SearchMatchImpl(
         element.source.fullName,
         element.library.source,
         element.source,
@@ -115,23 +105,40 @@ class RenameConstructorRefactoringImpl extends RenameRefactoringImpl {
   }
 
   Future<void> _replaceSynthetic() async {
-    // TODO(brianwilkerson) Determine whether this await is necessary.
-    await null;
-    ClassElement classElement = element.enclosingElement;
+    var classElement = element.enclosingElement;
 
     var result = await AnalysisSessionHelper(session)
         .getElementDeclaration(classElement);
-    ClassDeclaration classNode = result.node;
-    var utils = new CorrectionUtils(result.resolvedUnit);
-    var location = utils.prepareNewConstructorLocation(classNode);
+    if (result == null) {
+      return;
+    }
+
+    var classNode = result.node;
+    if (classNode is! ClassDeclaration) {
+      return;
+    }
+
+    var resolvedUnit = result.resolvedUnit;
+    if (resolvedUnit == null) {
+      return;
+    }
+
+    var utils = CorrectionUtils(resolvedUnit);
+    var location =
+        utils.prepareNewConstructorLocation(resolvedUnit.session, classNode);
+    if (location == null) {
+      return;
+    }
+
+    var header = '${classElement.name}.$newName();';
     doSourceChange_addElementEdit(
-        change,
-        classElement,
-        new SourceEdit(
-            location.offset,
-            0,
-            location.prefix +
-                '${classElement.name}.$newName();' +
-                location.suffix));
+      change,
+      classElement,
+      SourceEdit(
+        location.offset,
+        0,
+        location.prefix + header + location.suffix,
+      ),
+    );
   }
 }

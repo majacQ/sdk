@@ -2,8 +2,6 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-#if !defined(DART_PRECOMPILED_RUNTIME)
-
 #include "vm/compiler/backend/redundancy_elimination.h"
 
 #include "vm/bit_vector.h"
@@ -12,12 +10,17 @@
 #include "vm/compiler/backend/il_printer.h"
 #include "vm/compiler/backend/loops.h"
 #include "vm/hash_map.h"
+#include "vm/object_store.h"
 #include "vm/stack_frame.h"
 
 namespace dart {
 
 DEFINE_FLAG(bool, dead_store_elimination, true, "Eliminate dead stores");
 DEFINE_FLAG(bool, load_cse, true, "Use redundant load elimination.");
+DEFINE_FLAG(bool,
+            optimize_lazy_initializer_calls,
+            true,
+            "Eliminate redundant lazy initializer calls.");
 DEFINE_FLAG(bool,
             trace_load_optimization,
             false,
@@ -95,7 +98,7 @@ class CSEInstructionMap : public ValueObject {
 //   - given allocations X and Y no place inside X can be aliased with any place
 //     inside Y even if any of them or both escape.
 //
-// It important to realize that single place can belong to multiple aliases.
+// It is important to realize that single place can belong to multiple aliases.
 // For example place X.f with aliased allocation X belongs both to X.f and *.f
 // aliases. Likewise X[C] with non-aliased allocation X belongs to X[C] and X[*]
 // aliases.
@@ -185,7 +188,7 @@ class Place : public ValueObject {
       case Instruction::kLoadStaticField:
         set_kind(kStaticField);
         set_representation(instr->AsLoadStaticField()->representation());
-        static_field_ = &instr->AsLoadStaticField()->StaticField();
+        static_field_ = &instr->AsLoadStaticField()->field();
         *is_load = true;
         break;
 
@@ -202,7 +205,7 @@ class Place : public ValueObject {
         LoadIndexedInstr* load_indexed = instr->AsLoadIndexed();
         set_representation(load_indexed->representation());
         instance_ = load_indexed->array()->definition()->OriginalDefinition();
-        SetIndex(load_indexed->index()->definition(),
+        SetIndex(load_indexed->index()->definition()->OriginalDefinition(),
                  load_indexed->index_scale(), load_indexed->class_id());
         *is_load = true;
         break;
@@ -213,7 +216,7 @@ class Place : public ValueObject {
         set_representation(store_indexed->RequiredInputRepresentation(
             StoreIndexedInstr::kValuePos));
         instance_ = store_indexed->array()->definition()->OriginalDefinition();
-        SetIndex(store_indexed->index()->definition(),
+        SetIndex(store_indexed->index()->definition()->OriginalDefinition(),
                  store_indexed->index_scale(), store_indexed->class_id());
         *is_store = true;
         break;
@@ -221,6 +224,19 @@ class Place : public ValueObject {
 
       default:
         break;
+    }
+  }
+
+  // Construct a place from an allocation where the place represents a store to
+  // a slot that corresponds to the given input position.
+  // Otherwise, constructs a kNone place.
+  Place(AllocationInstr* alloc, intptr_t input_pos)
+      : flags_(0), instance_(nullptr), raw_selector_(0), id_(0) {
+    if (const Slot* slot = alloc->SlotForInput(input_pos)) {
+      set_representation(alloc->RequiredInputRepresentation(input_pos));
+      instance_ = alloc;
+      set_kind(kInstanceField);
+      instance_field_ = slot;
     }
   }
 
@@ -308,6 +324,23 @@ class Place : public ValueObject {
     ASSERT(element_size() < to);
     return Place(ElementSizeBits::update(to, flags_), instance_,
                  RoundByteOffset(to, index_constant_));
+  }
+
+  // Given alias X[ByteOffs|S], smaller element size S' and index from 0 to
+  // S/S' - 1 return alias X[ByteOffs + S'*index|S'] - this is the byte offset
+  // of a smaller typed array element which is contained within this typed
+  // array element.
+  // For example X[8|kInt32] contains inside X[8|kInt16] (index is 0) and
+  // X[10|kInt16] (index is 1).
+  Place ToSmallerElement(ElementSize to, intptr_t index) const {
+    ASSERT(kind() == kConstantIndexed);
+    ASSERT(element_size() != kNoSize);
+    ASSERT(element_size() > to);
+    ASSERT(index >= 0);
+    ASSERT(index <
+           ElementSizeMultiplier(element_size()) / ElementSizeMultiplier(to));
+    return Place(ElementSizeBits::update(to, flags_), instance_,
+                 ByteOffsetToSmallerElement(to, index, index_constant_));
   }
 
   intptr_t id() const { return id_; }
@@ -408,13 +441,14 @@ class Place : public ValueObject {
     }
   }
 
-  intptr_t Hashcode() const {
-    return (flags_ * 63 + reinterpret_cast<intptr_t>(instance_)) * 31 +
-           FieldHashcode();
+  uword Hash() const {
+    return FinalizeHash(
+        CombineHashes(flags_, reinterpret_cast<uword>(instance_)),
+        kBitsPerInt32 - 1);
   }
 
-  bool Equals(const Place* other) const {
-    return (flags_ == other->flags_) && (instance_ == other->instance_) &&
+  bool Equals(const Place& other) const {
+    return (flags_ == other.flags_) && (instance_ == other.instance_) &&
            SameField(other);
   }
 
@@ -422,24 +456,22 @@ class Place : public ValueObject {
   static Place* Wrap(Zone* zone, const Place& place, intptr_t id);
 
   static bool IsAllocation(Definition* defn) {
-    return (defn != NULL) &&
-           (defn->IsAllocateObject() || defn->IsCreateArray() ||
-            defn->IsAllocateUninitializedContext() ||
-            (defn->IsStaticCall() &&
-             defn->AsStaticCall()->IsRecognizedFactory()));
+    return (defn != NULL) && (defn->IsAllocation() ||
+                              (defn->IsStaticCall() &&
+                               defn->AsStaticCall()->IsRecognizedFactory()));
   }
 
  private:
   Place(uword flags, Definition* instance, intptr_t selector)
       : flags_(flags), instance_(instance), raw_selector_(selector), id_(0) {}
 
-  bool SameField(const Place* other) const {
+  bool SameField(const Place& other) const {
     return (kind() == kStaticField)
-               ? (static_field().Original() == other->static_field().Original())
-               : (raw_selector_ == other->raw_selector_);
+               ? (static_field().Original() == other.static_field().Original())
+               : (raw_selector_ == other.raw_selector_);
   }
 
-  intptr_t FieldHashcode() const {
+  uword FieldHash() const {
     return (kind() == kStaticField)
                ? String::Handle(Field::Handle(static_field().Original()).name())
                      .Hash()
@@ -461,11 +493,22 @@ class Place : public ValueObject {
     if ((index_constant != NULL) && index_constant->value().IsSmi()) {
       const intptr_t index_value = Smi::Cast(index_constant->value()).Value();
       const ElementSize size = ElementSizeFor(class_id);
-      const bool is_typed_data = (size != kNoSize);
+      const bool is_typed_access = (size != kNoSize);
+      // Indexing into [RawTypedDataView]/[RawExternalTypedData happens via a
+      // untagged load of the `_data` field (which points to C memory).
+      //
+      // Indexing into dart:ffi's [RawPointer] happens via loading of the
+      // `c_memory_address_`, converting it to an integer, doing some arithmetic
+      // and finally using IntConverterInstr to convert to a untagged
+      // representation.
+      //
+      // In both cases the array used for load/store has untagged
+      // representation.
+      const bool can_be_view = instance_->representation() == kUntagged;
 
       // If we are writing into the typed data scale the index to
       // get byte offset. Otherwise ignore the scale.
-      if (!is_typed_data) {
+      if (!is_typed_access) {
         scale = 1;
       }
 
@@ -473,9 +516,11 @@ class Place : public ValueObject {
       if ((0 <= index_value) && (index_value < (kMaxInt32 / scale))) {
         const intptr_t scaled_index = index_value * scale;
 
-        // Guard against unaligned byte offsets.
-        if (!is_typed_data ||
-            Utils::IsAligned(scaled_index, ElementSizeMultiplier(size))) {
+        // Guard against unaligned byte offsets and access through raw
+        // memory pointer (which can be pointing into another typed data).
+        if (!is_typed_access ||
+            (!can_be_view &&
+             Utils::IsAligned(scaled_index, ElementSizeMultiplier(size)))) {
           set_kind(kConstantIndexed);
           set_element_size(size);
           index_constant_ = scaled_index;
@@ -548,6 +593,12 @@ class Place : public ValueObject {
     return offset & ~(ElementSizeMultiplier(size) - 1);
   }
 
+  static intptr_t ByteOffsetToSmallerElement(ElementSize size,
+                                             intptr_t index,
+                                             intptr_t base_offset) {
+    return base_offset + index * ElementSizeMultiplier(size);
+  }
+
   class KindBits : public BitField<uword, Kind, 0, 3> {};
   class RepresentationBits
       : public BitField<uword, Representation, KindBits::kNextBit, 11> {};
@@ -594,11 +645,9 @@ class PhiPlaceMoves : public ZoneAllocated {
                           intptr_t from,
                           intptr_t to) {
     const intptr_t block_num = block->preorder_number();
-    while (moves_.length() <= block_num) {
-      moves_.Add(NULL);
-    }
+    moves_.EnsureLength(block_num + 1, nullptr);
 
-    if (moves_[block_num] == NULL) {
+    if (moves_[block_num] == nullptr) {
       moves_[block_num] = new (zone) ZoneGrowableArray<Move>(5);
     }
 
@@ -890,13 +939,42 @@ class AliasedSet : public ZoneAllocated {
 
             // X[C|S] aliases with X[RoundDown(C, S')|S'] and likewise
             // *[C|S] aliases with *[RoundDown(C, S')|S'].
-            const Place larger_alias =
-                alias->ToLargerElement(static_cast<Place::ElementSize>(i));
-            CrossAlias(alias, larger_alias);
-            if (has_aliased_instance) {
-              // If X is an aliased instance then X[C|S] aliases
-              // with *[RoundDown(C, S')|S'].
-              CrossAlias(alias, larger_alias.CopyWithoutInstance());
+            CrossAlias(alias, alias->ToLargerElement(
+                                  static_cast<Place::ElementSize>(i)));
+          }
+
+          if (has_aliased_instance) {
+            // If X is an aliased instance then X[C|S] aliases *[C'|S'] for all
+            // related combinations of C' and S'.
+            // Caveat: this propagation is not symmetric (we would not know
+            // to propagate aliasing from *[C'|S'] to X[C|S] when visiting
+            // *[C'|S']) and thus we need to handle both element sizes smaller
+            // and larger than S.
+            const Place no_instance_alias = alias->CopyWithoutInstance();
+            for (intptr_t i = Place::kInt8; i <= Place::kLargestElementSize;
+                 i++) {
+              // Skip element sizes that a guaranteed to have no
+              // representatives.
+              if (!typed_data_access_sizes_.Contains(alias->element_size())) {
+                continue;
+              }
+
+              const auto other_size = static_cast<Place::ElementSize>(i);
+              if (other_size > alias->element_size()) {
+                // X[C|S] aliases all larger elements which cover it:
+                // *[RoundDown(C, S')|S'] for S' > S.
+                CrossAlias(alias,
+                           no_instance_alias.ToLargerElement(other_size));
+              } else if (other_size < alias->element_size()) {
+                // X[C|S] aliases all sub-elements of smaller size:
+                // *[C+j*S'|S'] for S' < S and j from 0 to S/S' - 1.
+                const auto num_smaller_elements =
+                    1 << (alias->element_size() - other_size);
+                for (intptr_t j = 0; j < num_smaller_elements; j++) {
+                  CrossAlias(alias,
+                             no_instance_alias.ToSmallerElement(other_size, j));
+                }
+              }
             }
           }
         }
@@ -940,8 +1018,9 @@ class AliasedSet : public ZoneAllocated {
       return true;
     }
 
-    return (place->kind() == Place::kInstanceField) &&
-           !CanBeAliased(place->instance());
+    return ((place->kind() == Place::kInstanceField) ||
+            (place->kind() == Place::kConstantIndexed)) &&
+           (place->instance() != nullptr) && !CanBeAliased(place->instance());
   }
 
   // Returns true if there are direct loads from the given place.
@@ -951,19 +1030,27 @@ class AliasedSet : public ZoneAllocated {
     for (Value* use = defn->input_use_list(); use != NULL;
          use = use->next_use()) {
       Instruction* instr = use->instruction();
-      if ((instr->IsRedefinition() || instr->IsAssertAssignable()) &&
-          HasLoadsFromPlace(instr->AsDefinition(), place)) {
+      if (UseIsARedefinition(use) &&
+          HasLoadsFromPlace(instr->Cast<Definition>(), place)) {
         return true;
       }
       bool is_load = false, is_store;
       Place load_place(instr, &is_load, &is_store);
 
-      if (is_load && load_place.Equals(place)) {
+      if (is_load && load_place.Equals(*place)) {
         return true;
       }
     }
 
     return false;
+  }
+
+  // Returns true if the given [use] is a redefinition (e.g. RedefinitionInstr,
+  // CheckNull, CheckArrayBound, etc).
+  static bool UseIsARedefinition(Value* use) {
+    Instruction* instr = use->instruction();
+    return instr->IsDefinition() &&
+           (instr->Cast<Definition>()->RedefinedValue() == use);
   }
 
   // Check if any use of the definition can create an alias.
@@ -972,14 +1059,13 @@ class AliasedSet : public ZoneAllocated {
     for (Value* use = defn->input_use_list(); use != NULL;
          use = use->next_use()) {
       Instruction* instr = use->instruction();
-      if (instr->IsPushArgument() || instr->IsCheckedSmiOp() ||
-          instr->IsCheckedSmiComparison() ||
+      if (instr->HasUnknownSideEffects() || instr->IsLoadUntagged() ||
           (instr->IsStoreIndexed() &&
            (use->use_index() == StoreIndexedInstr::kValuePos)) ||
           instr->IsStoreStaticField() || instr->IsPhi()) {
         return true;
-      } else if ((instr->IsAssertAssignable() || instr->IsRedefinition()) &&
-                 AnyUseCreatesAlias(instr->AsDefinition())) {
+      } else if (UseIsARedefinition(use) &&
+                 AnyUseCreatesAlias(instr->Cast<Definition>())) {
         return true;
       } else if ((instr->IsStoreInstanceField() &&
                   (use->use_index() !=
@@ -1007,33 +1093,58 @@ class AliasedSet : public ZoneAllocated {
           }
         }
         return true;
+      } else if (auto* const alloc = instr->AsAllocation()) {
+        // Treat inputs to an allocation instruction exactly as if they were
+        // manually stored using a StoreInstanceField instruction.
+        if (alloc->Identity().IsAliased()) {
+          return true;
+        }
+        Place input_place(alloc, use->use_index());
+        if (HasLoadsFromPlace(alloc, &input_place)) {
+          return true;
+        }
+        if (alloc->Identity().IsUnknown()) {
+          alloc->SetIdentity(AliasIdentity::NotAliased());
+          aliasing_worklist_.Add(alloc);
+        }
       }
     }
     return false;
   }
 
+  void MarkDefinitionAsAliased(Definition* d) {
+    auto* const defn = d->OriginalDefinition();
+    if (defn->Identity().IsNotAliased()) {
+      defn->SetIdentity(AliasIdentity::Aliased());
+      identity_rollback_.Add(defn);
+
+      // Add to worklist to propagate the mark transitively.
+      aliasing_worklist_.Add(defn);
+    }
+  }
+
   // Mark any value stored into the given object as potentially aliased.
   void MarkStoredValuesEscaping(Definition* defn) {
+    // Find all inputs corresponding to fields if allocating an object.
+    if (auto* const alloc = defn->AsAllocation()) {
+      for (intptr_t i = 0; i < alloc->InputCount(); i++) {
+        if (auto* const slot = alloc->SlotForInput(i)) {
+          MarkDefinitionAsAliased(alloc->InputAt(i)->definition());
+        }
+      }
+    }
     // Find all stores into this object.
     for (Value* use = defn->input_use_list(); use != NULL;
          use = use->next_use()) {
-      if (use->instruction()->IsRedefinition() ||
-          use->instruction()->IsAssertAssignable()) {
-        MarkStoredValuesEscaping(use->instruction()->AsDefinition());
+      auto instr = use->instruction();
+      if (UseIsARedefinition(use)) {
+        MarkStoredValuesEscaping(instr->AsDefinition());
         continue;
       }
       if ((use->use_index() == StoreInstanceFieldInstr::kInstancePos) &&
-          use->instruction()->IsStoreInstanceField()) {
-        StoreInstanceFieldInstr* store =
-            use->instruction()->AsStoreInstanceField();
-        Definition* value = store->value()->definition()->OriginalDefinition();
-        if (value->Identity().IsNotAliased()) {
-          value->SetIdentity(AliasIdentity::Aliased());
-          identity_rollback_.Add(value);
-
-          // Add to worklist to propagate the mark transitively.
-          aliasing_worklist_.Add(value);
-        }
+          instr->IsStoreInstanceField()) {
+        MarkDefinitionAsAliased(
+            instr->AsStoreInstanceField()->value()->definition());
       }
     }
   }
@@ -1174,6 +1285,19 @@ static PhiPlaceMoves* ComputePhiMoves(
   return phi_moves;
 }
 
+DART_FORCE_INLINE static void SetPlaceId(Instruction* instr, intptr_t id) {
+  instr->SetPassSpecificId(CompilerPass::kCSE, id);
+}
+
+DART_FORCE_INLINE static bool HasPlaceId(const Instruction* instr) {
+  return instr->HasPassSpecificId(CompilerPass::kCSE);
+}
+
+DART_FORCE_INLINE static intptr_t GetPlaceId(const Instruction* instr) {
+  ASSERT(HasPlaceId(instr));
+  return instr->GetPassSpecificId(CompilerPass::kCSE);
+}
+
 enum CSEMode { kOptimizeLoads, kOptimizeStores };
 
 static AliasedSet* NumberPlaces(
@@ -1211,7 +1335,7 @@ static AliasedSet* NumberPlaces(
         }
       }
 
-      instr->set_place_id(result->id());
+      SetPlaceId(instr, result->id());
     }
   }
 
@@ -1238,8 +1362,8 @@ static bool IsLoopInvariantLoad(ZoneGrowableArray<BitVector*>* sets,
                                 intptr_t loop_header_index,
                                 Instruction* instr) {
   return IsLoadEliminationCandidate(instr) && (sets != NULL) &&
-         instr->HasPlaceId() && ((*sets)[loop_header_index] != NULL) &&
-         (*sets)[loop_header_index]->Contains(instr->place_id());
+         HasPlaceId(instr) &&
+         (*sets)[loop_header_index]->Contains(GetPlaceId(instr));
 }
 
 LICM::LICM(FlowGraph* flow_graph) : flow_graph_(flow_graph) {
@@ -1249,17 +1373,21 @@ LICM::LICM(FlowGraph* flow_graph) : flow_graph_(flow_graph) {
 void LICM::Hoist(ForwardInstructionIterator* it,
                  BlockEntryInstr* pre_header,
                  Instruction* current) {
-  if (current->IsCheckClass()) {
-    current->AsCheckClass()->set_licm_hoisted(true);
-  } else if (current->IsCheckSmi()) {
-    current->AsCheckSmi()->set_licm_hoisted(true);
-  } else if (current->IsCheckEitherNonSmi()) {
-    current->AsCheckEitherNonSmi()->set_licm_hoisted(true);
-  } else if (current->IsCheckArrayBound()) {
-    ASSERT(!FLAG_precompiled_mode);  // AOT uses non-deopting GenericCheckBound
-    current->AsCheckArrayBound()->set_licm_hoisted(true);
-  } else if (current->IsTestCids()) {
-    current->AsTestCids()->set_licm_hoisted(true);
+  if (auto check = current->AsCheckClass()) {
+    check->set_licm_hoisted(true);
+  } else if (auto check = current->AsCheckSmi()) {
+    check->set_licm_hoisted(true);
+  } else if (auto check = current->AsCheckEitherNonSmi()) {
+    check->set_licm_hoisted(true);
+  } else if (auto check = current->AsCheckArrayBound()) {
+    ASSERT(!CompilerState::Current().is_aot());  // speculative in JIT only
+    check->set_licm_hoisted(true);
+  } else if (auto check = current->AsGenericCheckBound()) {
+    ASSERT(CompilerState::Current().is_aot());  // non-speculative in AOT only
+    // Does not deopt, so no need for licm_hoisted flag.
+    USE(check);
+  } else if (auto check = current->AsTestCids()) {
+    check->set_licm_hoisted(true);
   }
   if (FLAG_trace_optimization) {
     THR_Print("Hoisting instruction %s:%" Pd " from B%" Pd " to B%" Pd "\n",
@@ -1276,6 +1404,9 @@ void LICM::Hoist(ForwardInstructionIterator* it,
   GotoInstr* last = pre_header->last_instruction()->AsGoto();
   // Using kind kEffect will not assign a fresh ssa temporary index.
   flow_graph()->InsertBefore(last, current, last->env(), FlowGraph::kEffect);
+  // If the hoisted instruction lazy-deopts, it should continue at the start of
+  // the Goto (of which we copy the deopt-id from).
+  current->env()->MarkAsLazyDeoptToBeforeDeoptId();
   current->CopyDeoptIdFrom(*last);
 }
 
@@ -1331,7 +1462,7 @@ void LICM::TrySpecializeSmiPhi(PhiInstr* phi,
 
 void LICM::OptimisticallySpecializeSmiPhis() {
   if (flow_graph()->function().ProhibitsHoistingCheckClass() ||
-      FLAG_precompiled_mode) {
+      CompilerState::Current().is_aot()) {
     // Do not hoist any: Either deoptimized on a hoisted check,
     // or compiling precompiled code where we can't do optimistic
     // hoisting of checks.
@@ -1353,27 +1484,61 @@ void LICM::OptimisticallySpecializeSmiPhis() {
   }
 }
 
+// Returns true if instruction may have a "visible" effect,
+static bool MayHaveVisibleEffect(Instruction* instr) {
+  switch (instr->tag()) {
+    case Instruction::kStoreInstanceField:
+    case Instruction::kStoreStaticField:
+    case Instruction::kStoreIndexed:
+    case Instruction::kStoreIndexedUnsafe:
+      return true;
+    default:
+      return instr->HasUnknownSideEffects() || instr->MayThrow();
+  }
+}
+
 void LICM::Optimize() {
   if (flow_graph()->function().ProhibitsHoistingCheckClass()) {
     // Do not hoist any.
     return;
   }
 
+  // Compute loops and induction in flow graph.
+  const LoopHierarchy& loop_hierarchy = flow_graph()->GetLoopHierarchy();
   const ZoneGrowableArray<BlockEntryInstr*>& loop_headers =
-      flow_graph()->GetLoopHierarchy().headers();
+      loop_hierarchy.headers();
+  loop_hierarchy.ComputeInduction();
 
   ZoneGrowableArray<BitVector*>* loop_invariant_loads =
       flow_graph()->loop_invariant_loads();
 
+  // Iterate over all loops.
   for (intptr_t i = 0; i < loop_headers.length(); ++i) {
     BlockEntryInstr* header = loop_headers[i];
-    // Skip loop that don't have a pre-header block.
-    BlockEntryInstr* pre_header = header->ImmediateDominator();
-    if (pre_header == NULL) continue;
 
-    for (BitVector::Iterator loop_it(header->loop_info()->blocks());
-         !loop_it.Done(); loop_it.Advance()) {
+    // Skip loops that don't have a pre-header block.
+    BlockEntryInstr* pre_header = header->ImmediateDominator();
+    if (pre_header == nullptr) {
+      continue;
+    }
+
+    // Flag that remains true as long as the loop has not seen any instruction
+    // that may have a "visible" effect (write, throw, or other side-effect).
+    bool seen_visible_effect = false;
+
+    // Iterate over all blocks in the loop.
+    LoopInfo* loop = header->loop_info();
+    for (BitVector::Iterator loop_it(loop->blocks()); !loop_it.Done();
+         loop_it.Advance()) {
       BlockEntryInstr* block = flow_graph()->preorder()[loop_it.Current()];
+
+      // Preserve the "visible" effect flag as long as the preorder traversal
+      // sees always-taken blocks. This way, we can only hoist invariant
+      // may-throw instructions that are always seen during the first iteration.
+      if (!seen_visible_effect && !loop->IsAlwaysTaken(block)) {
+        seen_visible_effect = true;
+      }
+      // Iterate over all instructions in the block.
       for (ForwardInstructionIterator it(block); !it.Done(); it.Advance()) {
         Instruction* current = it.Current();
 
@@ -1382,28 +1547,151 @@ void LICM::Optimize() {
         // Otherwise we might move load past the initialization.
         if (LoadStaticFieldInstr* load = current->AsLoadStaticField()) {
           if (load->AllowsCSE() && !load->IsFieldInitialized()) {
+            seen_visible_effect = true;
             continue;
           }
         }
 
+        // Determine if we can hoist loop invariant code. Even may-throw
+        // instructions can be hoisted as long as its exception is still
+        // the very first "visible" effect of the loop.
+        bool is_loop_invariant = false;
         if ((current->AllowsCSE() ||
              IsLoopInvariantLoad(loop_invariant_loads, i, current)) &&
-            !current->MayThrow()) {
-          bool inputs_loop_invariant = true;
-          for (int i = 0; i < current->InputCount(); ++i) {
+            (!seen_visible_effect || !current->MayThrow())) {
+          is_loop_invariant = true;
+          for (intptr_t i = 0; i < current->InputCount(); ++i) {
             Definition* input_def = current->InputAt(i)->definition();
             if (!input_def->GetBlock()->Dominates(pre_header)) {
-              inputs_loop_invariant = false;
+              is_loop_invariant = false;
               break;
             }
           }
-          if (inputs_loop_invariant) {
-            Hoist(&it, pre_header, current);
-          }
+        }
+
+        // Hoist if all inputs are loop invariant. If not hoisted, any
+        // instruction that writes, may throw, or has an unknown side
+        // effect invalidates the first "visible" effect flag.
+        if (is_loop_invariant) {
+          Hoist(&it, pre_header, current);
+        } else if (!seen_visible_effect && MayHaveVisibleEffect(current)) {
+          seen_visible_effect = true;
         }
       }
     }
   }
+}
+
+void DelayAllocations::Optimize(FlowGraph* graph) {
+  // Go through all Allocation instructions and move them down to their
+  // dominant use when doing so is sound.
+  DirectChainedHashMap<IdentitySetKeyValueTrait<Instruction*>> moved;
+  for (BlockIterator block_it = graph->reverse_postorder_iterator();
+       !block_it.Done(); block_it.Advance()) {
+    BlockEntryInstr* block = block_it.Current();
+
+    for (ForwardInstructionIterator instr_it(block); !instr_it.Done();
+         instr_it.Advance()) {
+      Definition* def = instr_it.Current()->AsDefinition();
+      if (def != nullptr && def->IsAllocation() && def->env() == nullptr &&
+          !moved.HasKey(def)) {
+        Instruction* use = DominantUse(def);
+        if (use != nullptr && !use->IsPhi() && IsOneTimeUse(use, def)) {
+          instr_it.RemoveCurrentFromGraph();
+          def->InsertBefore(use);
+          moved.Insert(def);
+        }
+      }
+    }
+  }
+}
+
+Instruction* DelayAllocations::DominantUse(Definition* def) {
+  // Find the use that dominates all other uses.
+
+  // Collect all uses.
+  DirectChainedHashMap<IdentitySetKeyValueTrait<Instruction*>> uses;
+  for (Value::Iterator it(def->input_use_list()); !it.Done(); it.Advance()) {
+    Instruction* use = it.Current()->instruction();
+    uses.Insert(use);
+  }
+  for (Value::Iterator it(def->env_use_list()); !it.Done(); it.Advance()) {
+    Instruction* use = it.Current()->instruction();
+    uses.Insert(use);
+  }
+
+  // Find the dominant use.
+  Instruction* dominant_use = nullptr;
+  auto use_it = uses.GetIterator();
+  while (auto use = use_it.Next()) {
+    // Start with the instruction before the use, then walk backwards through
+    // blocks in the dominator chain until we hit the definition or another use.
+    Instruction* instr = nullptr;
+    if (auto phi = (*use)->AsPhi()) {
+      // For phi uses, the dominant use only has to dominate the
+      // predecessor block corresponding to the phi input.
+      ASSERT(phi->InputCount() == phi->block()->PredecessorCount());
+      for (intptr_t i = 0; i < phi->InputCount(); i++) {
+        if (phi->InputAt(i)->definition() == def) {
+          instr = phi->block()->PredecessorAt(i)->last_instruction();
+          break;
+        }
+      }
+      ASSERT(instr != nullptr);
+    } else {
+      instr = (*use)->previous();
+    }
+
+    bool dominated = false;
+    while (instr != def) {
+      if (uses.HasKey(instr)) {
+        // We hit another use.
+        dominated = true;
+        break;
+      }
+      if (auto block = instr->AsBlockEntry()) {
+        instr = block->dominator()->last_instruction();
+      } else {
+        instr = instr->previous();
+      }
+    }
+    if (!dominated) {
+      if (dominant_use != nullptr) {
+        // More than one use reached the definition, which means no use
+        // dominates all other uses.
+        return nullptr;
+      }
+      dominant_use = *use;
+    }
+  }
+
+  return dominant_use;
+}
+
+bool DelayAllocations::IsOneTimeUse(Instruction* use, Definition* def) {
+  // Check that this use is always executed at most once for each execution of
+  // the definition, i.e. that there is no path from the use to itself that
+  // doesn't pass through the definition.
+  BlockEntryInstr* use_block = use->GetBlock();
+  BlockEntryInstr* def_block = def->GetBlock();
+  if (use_block == def_block) return true;
+
+  DirectChainedHashMap<IdentitySetKeyValueTrait<BlockEntryInstr*>> seen;
+  GrowableArray<BlockEntryInstr*> worklist;
+  worklist.Add(use_block);
+
+  while (!worklist.is_empty()) {
+    BlockEntryInstr* block = worklist.RemoveLast();
+    for (intptr_t i = 0; i < block->PredecessorCount(); i++) {
+      BlockEntryInstr* pred = block->PredecessorAt(i);
+      if (pred == use_block) return false;
+      if (pred == def_block) continue;
+      if (seen.HasKey(pred)) continue;
+      seen.Insert(pred);
+      worklist.Add(pred);
+    }
+  }
+  return true;
 }
 
 class LoadOptimizer : public ValueObject {
@@ -1436,7 +1724,6 @@ class LoadOptimizer : public ValueObject {
 
   ~LoadOptimizer() { aliased_set_->RollbackAliasedIdentites(); }
 
-  Isolate* isolate() const { return graph_->isolate(); }
   Zone* zone() const { return graph_->zone(); }
 
   static bool OptimizeGraph(FlowGraph* graph) {
@@ -1444,9 +1731,7 @@ class LoadOptimizer : public ValueObject {
 
     // For now, bail out for large functions to avoid OOM situations.
     // TODO(fschneider): Fix the memory consumption issue.
-    intptr_t function_length = graph->function().end_token_pos().Pos() -
-                               graph->function().token_pos().Pos();
-    if (function_length >= FLAG_huge_method_cutoff_in_tokens) {
+    if (graph->function().SourceSize() >= FLAG_huge_method_cutoff_in_tokens) {
       return false;
     }
 
@@ -1467,6 +1752,10 @@ class LoadOptimizer : public ValueObject {
 
  private:
   bool Optimize() {
+    // Initializer calls should be eliminated before ComputeInitialSets()
+    // in order to calculate kill sets more precisely.
+    OptimizeLazyInitialization();
+
     ComputeInitialSets();
     ComputeOutSets();
     ComputeOutValues();
@@ -1476,6 +1765,166 @@ class LoadOptimizer : public ValueObject {
     ForwardLoads();
     EmitPhis();
     return forwarded_;
+  }
+
+  bool CallsInitializer(Instruction* instr) {
+    if (auto* load_field = instr->AsLoadField()) {
+      return load_field->calls_initializer();
+    } else if (auto* load_static = instr->AsLoadStaticField()) {
+      return load_static->calls_initializer();
+    }
+    return false;
+  }
+
+  void ClearCallsInitializer(Instruction* instr) {
+    if (auto* load_field = instr->AsLoadField()) {
+      load_field->set_calls_initializer(false);
+    } else if (auto* load_static = instr->AsLoadStaticField()) {
+      load_static->set_calls_initializer(false);
+    } else {
+      UNREACHABLE();
+    }
+  }
+
+  // Returns true if given instruction stores the sentinel value.
+  // Such a store doesn't initialize corresponding field.
+  bool IsSentinelStore(Instruction* instr) {
+    Value* value = nullptr;
+    if (auto* store_field = instr->AsStoreInstanceField()) {
+      value = store_field->value();
+    } else if (auto* store_static = instr->AsStoreStaticField()) {
+      value = store_static->value();
+    }
+    return value != nullptr && value->BindsToConstant() &&
+           (value->BoundConstant().ptr() == Object::sentinel().ptr());
+  }
+
+  // This optimization pass tries to get rid of lazy initializer calls in
+  // LoadField and LoadStaticField instructions. The "initialized" state of
+  // places is propagated through the flow graph.
+  void OptimizeLazyInitialization() {
+    if (!FLAG_optimize_lazy_initializer_calls) {
+      return;
+    }
+
+    // 1) Populate 'gen' sets with places which are initialized at each basic
+    // block. Optimize lazy initializer calls within basic block and
+    // figure out if there are lazy intializer calls left to optimize.
+    bool has_lazy_initializer_calls = false;
+    for (BlockIterator block_it = graph_->reverse_postorder_iterator();
+         !block_it.Done(); block_it.Advance()) {
+      BlockEntryInstr* block = block_it.Current();
+      BitVector* gen = gen_[block->preorder_number()];
+
+      for (ForwardInstructionIterator instr_it(block); !instr_it.Done();
+           instr_it.Advance()) {
+        Instruction* instr = instr_it.Current();
+
+        bool is_load = false, is_store = false;
+        Place place(instr, &is_load, &is_store);
+
+        if (is_store && !IsSentinelStore(instr)) {
+          gen->Add(GetPlaceId(instr));
+        } else if (is_load) {
+          const auto place_id = GetPlaceId(instr);
+          if (CallsInitializer(instr)) {
+            if (gen->Contains(place_id)) {
+              ClearCallsInitializer(instr);
+            } else {
+              has_lazy_initializer_calls = true;
+            }
+          }
+          gen->Add(place_id);
+        }
+      }
+
+      // Spread initialized state through outgoing phis.
+      PhiPlaceMoves::MovesList phi_moves =
+          aliased_set_->phi_moves()->GetOutgoingMoves(block);
+      if (phi_moves != nullptr) {
+        for (intptr_t i = 0, n = phi_moves->length(); i < n; ++i) {
+          const intptr_t from = (*phi_moves)[i].from();
+          const intptr_t to = (*phi_moves)[i].to();
+          if ((from != to) && gen->Contains(from)) {
+            gen->Add(to);
+          }
+        }
+      }
+    }
+
+    if (has_lazy_initializer_calls) {
+      // 2) Propagate initialized state between blocks, calculating
+      // incoming initialized state. Iterate until reaching fixed point.
+      BitVector* temp = new (Z) BitVector(Z, aliased_set_->max_place_id());
+      bool changed = true;
+      while (changed) {
+        changed = false;
+
+        for (BlockIterator block_it = graph_->reverse_postorder_iterator();
+             !block_it.Done(); block_it.Advance()) {
+          BlockEntryInstr* block = block_it.Current();
+          BitVector* block_in = in_[block->preorder_number()];
+          BitVector* gen = gen_[block->preorder_number()];
+
+          // Incoming initialized state is the intersection of all
+          // outgoing initialized states of predecessors.
+          if (block->IsGraphEntry()) {
+            temp->Clear();
+          } else {
+            temp->SetAll();
+            ASSERT(block->PredecessorCount() > 0);
+            for (intptr_t i = 0, pred_count = block->PredecessorCount();
+                 i < pred_count; ++i) {
+              BlockEntryInstr* pred = block->PredecessorAt(i);
+              BitVector* pred_out = gen_[pred->preorder_number()];
+              temp->Intersect(pred_out);
+            }
+          }
+
+          if (!temp->Equals(*block_in)) {
+            ASSERT(block_in->SubsetOf(*temp));
+            block_in->AddAll(temp);
+            gen->AddAll(temp);
+            changed = true;
+          }
+        }
+      }
+
+      // 3) Single pass through basic blocks to optimize lazy
+      // initializer calls using calculated incoming inter-block
+      // initialized state.
+      for (BlockIterator block_it = graph_->reverse_postorder_iterator();
+           !block_it.Done(); block_it.Advance()) {
+        BlockEntryInstr* block = block_it.Current();
+        BitVector* block_in = in_[block->preorder_number()];
+
+        for (ForwardInstructionIterator instr_it(block); !instr_it.Done();
+             instr_it.Advance()) {
+          Instruction* instr = instr_it.Current();
+          if (CallsInitializer(instr) &&
+              block_in->Contains(GetPlaceId(instr))) {
+            ClearCallsInitializer(instr);
+          }
+        }
+      }
+    }
+
+    // Clear sets which are also used in the main part of load forwarding.
+    for (intptr_t i = 0, n = graph_->preorder().length(); i < n; ++i) {
+      gen_[i]->Clear();
+      in_[i]->Clear();
+    }
+  }
+
+  // Only forward stores to normal arrays, float64, and simd arrays
+  // to loads because other array stores (intXX/uintXX/float32)
+  // may implicitly convert the value stored.
+  bool CanForwardStore(StoreIndexedInstr* array_store) {
+    return ((array_store == nullptr) ||
+            (array_store->class_id() == kArrayCid) ||
+            (array_store->class_id() == kTypedDataFloat64ArrayCid) ||
+            (array_store->class_id() == kTypedDataFloat32ArrayCid) ||
+            (array_store->class_id() == kTypedDataFloat32x4ArrayCid));
   }
 
   // Compute sets of loads generated and killed by each block.
@@ -1528,34 +1977,48 @@ class LoadOptimizer : public ValueObject {
             // instruction that still points to the old place with a more
             // generic alias.
             const intptr_t old_alias_id = aliased_set_->LookupAliasId(
-                aliased_set_->places()[instr->place_id()]->ToAlias());
+                aliased_set_->places()[GetPlaceId(instr)]->ToAlias());
             killed = aliased_set_->GetKilledSet(old_alias_id);
           }
 
-          if (killed != NULL) {
+          // Find canonical place of store.
+          Place* canonical_place = nullptr;
+          if (CanForwardStore(instr->AsStoreIndexed())) {
+            canonical_place = aliased_set_->LookupCanonical(&place);
+            if (canonical_place != nullptr) {
+              // Is this a redundant store (stored value already resides
+              // in this field)?
+              const intptr_t place_id = canonical_place->id();
+              if (gen->Contains(place_id)) {
+                ASSERT((out_values != nullptr) &&
+                       ((*out_values)[place_id] != nullptr));
+                if ((*out_values)[place_id] == GetStoredValue(instr)) {
+                  if (FLAG_trace_optimization) {
+                    THR_Print("Removing redundant store to place %" Pd
+                              " in block B%" Pd "\n",
+                              GetPlaceId(instr), block->block_id());
+                  }
+                  instr_it.RemoveCurrentFromGraph();
+                  continue;
+                }
+              }
+            }
+          }
+
+          // Update kill/gen/out_values (after inspection of incoming values).
+          if (killed != nullptr) {
             kill->AddAll(killed);
             // There is no need to clear out_values when clearing GEN set
             // because only those values that are in the GEN set
             // will ever be used.
             gen->RemoveAll(killed);
           }
-
-          // Only forward stores to normal arrays, float64, and simd arrays
-          // to loads because other array stores (intXX/uintXX/float32)
-          // may implicitly convert the value stored.
-          StoreIndexedInstr* array_store = instr->AsStoreIndexed();
-          if ((array_store == NULL) || (array_store->class_id() == kArrayCid) ||
-              (array_store->class_id() == kTypedDataFloat64ArrayCid) ||
-              (array_store->class_id() == kTypedDataFloat32ArrayCid) ||
-              (array_store->class_id() == kTypedDataFloat32x4ArrayCid)) {
-            Place* canonical_place = aliased_set_->LookupCanonical(&place);
-            if (canonical_place != NULL) {
-              // Store has a corresponding numbered place that might have a
-              // load. Try forwarding stored value to it.
-              gen->Add(canonical_place->id());
-              if (out_values == NULL) out_values = CreateBlockOutValues();
-              (*out_values)[canonical_place->id()] = GetStoredValue(instr);
-            }
+          if (canonical_place != nullptr) {
+            // Store has a corresponding numbered place that might have a
+            // load. Try forwarding stored value to it.
+            gen->Add(canonical_place->id());
+            if (out_values == nullptr) out_values = CreateBlockOutValues();
+            (*out_values)[canonical_place->id()] = GetStoredValue(instr);
           }
 
           ASSERT(!instr->IsDefinition() ||
@@ -1566,8 +2029,8 @@ class LoadOptimizer : public ValueObject {
           // load forwarding.
           const Place* canonical = aliased_set_->LookupCanonical(&place);
           if ((canonical != NULL) &&
-              (canonical->id() != instr->AsDefinition()->place_id())) {
-            instr->AsDefinition()->set_place_id(canonical->id());
+              (canonical->id() != GetPlaceId(instr->AsDefinition()))) {
+            SetPlaceId(instr->AsDefinition(), canonical->id());
           }
         }
 
@@ -1578,7 +2041,6 @@ class LoadOptimizer : public ValueObject {
           // set because only those values that are in the GEN set
           // will ever be used.
           gen->RemoveAll(aliased_set_->aliased_by_effects());
-          continue;
         }
 
         Definition* defn = instr->AsDefinition();
@@ -1586,49 +2048,82 @@ class LoadOptimizer : public ValueObject {
           continue;
         }
 
-        // For object allocation forward initial values of the fields to
-        // subsequent loads except for final fields of escaping objects.
-        // Final fields are initialized in constructor which potentially was
-        // not inlined into the function that we are currently optimizing.
-        // However at the same time we assume that values of the final fields
-        // can be forwarded across side-effects. If we add 'null' as known
-        // values for these fields here we will incorrectly propagate this
-        // null across constructor invocation.
-        AllocateObjectInstr* alloc = instr->AsAllocateObject();
-        if ((alloc != NULL)) {
+        if (auto* const alloc = instr->AsAllocation()) {
+          if (!alloc->ObjectIsInitialized()) {
+            // Since the allocated object is uninitialized, we can't forward
+            // any values from it.
+            continue;
+          }
           for (Value* use = alloc->input_use_list(); use != NULL;
                use = use->next_use()) {
-            // Look for all immediate loads from this object.
             if (use->use_index() != 0) {
+              // Not a potential immediate load or store, since they take the
+              // instance as the first input.
+              continue;
+            }
+            intptr_t place_id = -1;
+            Definition* forward_def = nullptr;
+            const Slot* slot = nullptr;
+            if (auto* const load = use->instruction()->AsLoadField()) {
+              place_id = GetPlaceId(load);
+              slot = &load->slot();
+            } else if (auto* const store =
+                           use->instruction()->AsStoreInstanceField()) {
+              ASSERT(!alloc->IsArrayAllocation());
+              place_id = GetPlaceId(store);
+              slot = &store->slot();
+            } else if (use->instruction()->IsLoadIndexed() ||
+                       use->instruction()->IsStoreIndexed()) {
+              ASSERT(alloc->IsArrayAllocation());
+              if (alloc->IsAllocateTypedData()) {
+                // Typed data payload elements are unboxed and initialized to
+                // zero, so don't forward a tagged null value.
+                continue;
+              }
+              if (aliased_set_->CanBeAliased(alloc)) {
+                continue;
+              }
+              place_id = GetPlaceId(use->instruction());
+              if (aliased_set_->places()[place_id]->kind() !=
+                  Place::kConstantIndexed) {
+                continue;
+              }
+              // Set initial value of array element to null.
+              forward_def = graph_->constant_null();
+            } else {
+              // Not an immediate load or store.
               continue;
             }
 
-            LoadFieldInstr* load = use->instruction()->AsLoadField();
-            if (load != NULL) {
-              // Found a load. Initialize current value of the field to null for
-              // normal fields, or with type arguments.
-
-              // If the object escapes then don't forward final fields - see
-              // the comment above for explanation.
-              if (aliased_set_->CanBeAliased(alloc) &&
-                  load->slot().IsDartField() && load->slot().is_immutable()) {
+            ASSERT(place_id != -1);
+            if (slot != nullptr) {
+              ASSERT(forward_def == nullptr);
+              // Final fields are initialized in constructors. However, at the
+              // same time we assume that known values of final fields can be
+              // forwarded across side-effects. For an escaping object, one such
+              // side effect can be an uninlined constructor invocation. Thus,
+              // if we add 'null' as known initial values for these fields,
+              // this null will be incorrectly propagated across any uninlined
+              // constructor invocation and used instead of the real value.
+              if (aliased_set_->CanBeAliased(alloc) && slot->IsDartField() &&
+                  slot->is_immutable()) {
                 continue;
               }
 
-              Definition* forward_def = graph_->constant_null();
-              if (alloc->ArgumentCount() > 0) {
-                ASSERT(alloc->ArgumentCount() == 1);
-                intptr_t type_args_offset =
-                    alloc->cls().type_arguments_field_offset();
-                if (load->slot().IsTypeArguments() &&
-                    load->slot().offset_in_bytes() == type_args_offset) {
-                  forward_def = alloc->PushArgumentAt(0)->value()->definition();
-                }
+              const intptr_t pos = alloc->InputForSlot(*slot);
+              if (pos != -1) {
+                forward_def = alloc->InputAt(pos)->definition();
+              } else {
+                // Fields not provided as an input to the instruction are
+                // initialized to null during allocation.
+                forward_def = graph_->constant_null();
               }
-              gen->Add(load->place_id());
-              if (out_values == NULL) out_values = CreateBlockOutValues();
-              (*out_values)[load->place_id()] = forward_def;
             }
+
+            ASSERT(forward_def != nullptr);
+            gen->Add(place_id);
+            if (out_values == nullptr) out_values = CreateBlockOutValues();
+            (*out_values)[place_id] = forward_def;
           }
           continue;
         }
@@ -1637,7 +2132,7 @@ class LoadOptimizer : public ValueObject {
           continue;
         }
 
-        const intptr_t place_id = defn->place_id();
+        const intptr_t place_id = GetPlaceId(defn);
         if (gen->Contains(place_id)) {
           // This is a locally redundant load.
           ASSERT((out_values != NULL) && ((*out_values)[place_id] != NULL));
@@ -1813,7 +2308,7 @@ class LoadOptimizer : public ValueObject {
               (in_[preorder_number]->Contains(place_id))) {
             PhiInstr* phi = new (Z)
                 PhiInstr(block->AsJoinEntry(), block->PredecessorCount());
-            phi->set_place_id(place_id);
+            SetPlaceId(phi, place_id);
             pending_phis.Add(phi);
             in_value = phi;
           }
@@ -1951,14 +2446,14 @@ class LoadOptimizer : public ValueObject {
     // Incoming values are different. Phi is required to merge.
     PhiInstr* phi =
         new (Z) PhiInstr(block->AsJoinEntry(), block->PredecessorCount());
-    phi->set_place_id(place_id);
+    SetPlaceId(phi, place_id);
     FillPhiInputs(phi);
     return phi;
   }
 
   void FillPhiInputs(PhiInstr* phi) {
     BlockEntryInstr* block = phi->GetBlock();
-    const intptr_t place_id = phi->place_id();
+    const intptr_t place_id = GetPlaceId(phi);
 
     for (intptr_t i = 0; i < block->PredecessorCount(); i++) {
       BlockEntryInstr* pred = block->PredecessorAt(i);
@@ -2002,9 +2497,9 @@ class LoadOptimizer : public ValueObject {
 
       for (intptr_t i = 0; i < loads->length(); i++) {
         Definition* load = (*loads)[i];
-        if (!in->Contains(load->place_id())) continue;  // No incoming value.
+        if (!in->Contains(GetPlaceId(load))) continue;  // No incoming value.
 
-        Definition* replacement = MergeIncomingValues(block, load->place_id());
+        Definition* replacement = MergeIncomingValues(block, GetPlaceId(load));
         ASSERT(replacement != NULL);
 
         // Sets of outgoing values are not linked into use lists so
@@ -2089,7 +2584,7 @@ class LoadOptimizer : public ValueObject {
   bool CanBeCongruent(Definition* a, Definition* b) {
     return (a->tag() == b->tag()) &&
            ((a->IsPhi() && (a->GetBlock() == b->GetBlock())) ||
-            (a->AllowsCSE() && a->AttributesEqual(b)));
+            (a->AllowsCSE() && a->AttributesEqual(*b)));
   }
 
   // Given two definitions check if they are congruent under assumption that
@@ -2384,9 +2879,7 @@ class StoreOptimizer : public LivenessAnalysis {
 
     // For now, bail out for large functions to avoid OOM situations.
     // TODO(fschneider): Fix the memory consumption issue.
-    intptr_t function_length = graph->function().end_token_pos().Pos() -
-                               graph->function().token_pos().Pos();
-    if (function_length >= FLAG_huge_method_cutoff_in_tokens) {
+    if (graph->function().SourceSize() >= FLAG_huge_method_cutoff_in_tokens) {
       return;
     }
 
@@ -2454,17 +2947,17 @@ class StoreOptimizer : public LivenessAnalysis {
 
         // Handle stores.
         if (is_store) {
-          if (kill->Contains(instr->place_id())) {
-            if (!live_in->Contains(instr->place_id()) &&
+          if (kill->Contains(GetPlaceId(instr))) {
+            if (!live_in->Contains(GetPlaceId(instr)) &&
                 CanEliminateStore(instr)) {
               if (FLAG_trace_optimization) {
                 THR_Print("Removing dead store to place %" Pd " in block B%" Pd
                           "\n",
-                          instr->place_id(), block->block_id());
+                          GetPlaceId(instr), block->block_id());
               }
               instr_it.RemoveCurrentFromGraph();
             }
-          } else if (!live_in->Contains(instr->place_id())) {
+          } else if (!live_in->Contains(GetPlaceId(instr))) {
             // Mark this store as down-ward exposed: They are the only
             // candidates for the global store elimination.
             if (exposed_stores == NULL) {
@@ -2476,8 +2969,8 @@ class StoreOptimizer : public LivenessAnalysis {
             exposed_stores->Add(instr);
           }
           // Interfering stores kill only loads from the same place.
-          kill->Add(instr->place_id());
-          live_in->Remove(instr->place_id());
+          kill->Add(GetPlaceId(instr));
+          live_in->Remove(GetPlaceId(instr));
           continue;
         }
 
@@ -2538,11 +3031,11 @@ class StoreOptimizer : public LivenessAnalysis {
         }
         // Eliminate a downward exposed store if the corresponding place is not
         // in live-out.
-        if (!live_out->Contains(instr->place_id()) &&
+        if (!live_out->Contains(GetPlaceId(instr)) &&
             CanEliminateStore(instr)) {
           if (FLAG_trace_optimization) {
             THR_Print("Removing dead store to place %" Pd " block B%" Pd "\n",
-                      instr->place_id(), block->block_id());
+                      GetPlaceId(instr), block->block_id());
           }
           instr->RemoveFromGraph(/* ignored */ false);
         }
@@ -2573,21 +3066,35 @@ void DeadStoreElimination::Optimize(FlowGraph* graph) {
 // Allocation Sinking
 //
 
+static bool IsValidLengthForAllocationSinking(
+    ArrayAllocationInstr* array_alloc) {
+  const intptr_t kMaxAllocationSinkingNumElements = 32;
+  if (!array_alloc->HasConstantNumElements()) {
+    return false;
+  }
+  const intptr_t length = array_alloc->GetConstantNumElements();
+  return (length >= 0) && (length <= kMaxAllocationSinkingNumElements);
+}
+
 // Returns true if the given instruction is an allocation that
 // can be sunk by the Allocation Sinking pass.
 static bool IsSupportedAllocation(Instruction* instr) {
-  return instr->IsAllocateObject() || instr->IsAllocateUninitializedContext();
+  return instr->IsAllocation() &&
+         (!instr->IsArrayAllocation() ||
+          IsValidLengthForAllocationSinking(instr->AsArrayAllocation()));
 }
 
 enum SafeUseCheck { kOptimisticCheck, kStrictCheck };
 
 // Check if the use is safe for allocation sinking. Allocation sinking
-// candidates can only be used at store instructions:
+// candidates can only be used as inputs to store and allocation instructions:
 //
 //     - any store into the allocation candidate itself is unconditionally safe
 //       as it just changes the rematerialization state of this candidate;
-//     - store into another object is only safe if another object is allocation
-//       candidate.
+//     - store into another object is only safe if the other object is
+//       an allocation candidate.
+//     - use as input to another allocation is only safe if the other allocation
+//       is a candidate.
 //
 // We use a simple fix-point algorithm to discover the set of valid candidates
 // (see CollectCandidates method), that's why this IsSafeUse can operate in two
@@ -2602,14 +3109,53 @@ enum SafeUseCheck { kOptimisticCheck, kStrictCheck };
 // optimistically and then checks each collected candidate strictly and unmarks
 // invalid candidates transitively until only strictly valid ones remain.
 static bool IsSafeUse(Value* use, SafeUseCheck check_type) {
+  ASSERT(IsSupportedAllocation(use->definition()));
+
   if (use->instruction()->IsMaterializeObject()) {
     return true;
   }
 
-  StoreInstanceFieldInstr* store = use->instruction()->AsStoreInstanceField();
-  if (store != NULL) {
+  if (auto* const alloc = use->instruction()->AsAllocation()) {
+    return IsSupportedAllocation(alloc) &&
+           ((check_type == kOptimisticCheck) ||
+            alloc->Identity().IsAllocationSinkingCandidate());
+  }
+
+  if (auto* store = use->instruction()->AsStoreInstanceField()) {
     if (use == store->value()) {
       Definition* instance = store->instance()->definition();
+      return IsSupportedAllocation(instance) &&
+             ((check_type == kOptimisticCheck) ||
+              instance->Identity().IsAllocationSinkingCandidate());
+    }
+    return true;
+  }
+
+  if (auto* store = use->instruction()->AsStoreIndexed()) {
+    if (use == store->index()) {
+      return false;
+    }
+    if (use == store->array()) {
+      if (!store->index()->BindsToSmiConstant()) {
+        return false;
+      }
+      const intptr_t index = store->index()->BoundSmiConstant();
+      if (index < 0 || index >= use->definition()
+                                    ->AsArrayAllocation()
+                                    ->GetConstantNumElements()) {
+        return false;
+      }
+      if (auto* alloc_typed_data = use->definition()->AsAllocateTypedData()) {
+        if (store->class_id() != alloc_typed_data->class_id() ||
+            !store->aligned() ||
+            store->index_scale() != compiler::target::Instance::ElementSizeFor(
+                                        alloc_typed_data->class_id())) {
+          return false;
+        }
+      }
+    }
+    if (use == store->value()) {
+      Definition* instance = store->array()->definition();
       return IsSupportedAllocation(instance) &&
              ((check_type == kOptimisticCheck) ||
               instance->Identity().IsAllocationSinkingCandidate());
@@ -2641,13 +3187,29 @@ static bool IsAllocationSinkingCandidate(Definition* alloc,
 
 // If the given use is a store into an object then return an object we are
 // storing into.
-static Definition* StoreInto(Value* use) {
-  StoreInstanceFieldInstr* store = use->instruction()->AsStoreInstanceField();
-  if (store != NULL) {
+static Definition* StoreDestination(Value* use) {
+  if (auto* const alloc = use->instruction()->AsAllocation()) {
+    return alloc;
+  }
+  if (auto* const store = use->instruction()->AsStoreInstanceField()) {
     return store->instance()->definition();
   }
+  if (auto* const store = use->instruction()->AsStoreIndexed()) {
+    return store->array()->definition();
+  }
+  return nullptr;
+}
 
-  return NULL;
+// If the given instruction is a load from an object, then return an object
+// we are loading from.
+static Definition* LoadSource(Definition* instr) {
+  if (auto load = instr->AsLoadField()) {
+    return load->instance()->definition();
+  }
+  if (auto load = instr->AsLoadIndexed()) {
+    return load->array()->definition();
+  }
+  return nullptr;
 }
 
 // Remove the given allocation from the graph. It is not observable.
@@ -2660,11 +3222,36 @@ void AllocationSinking::EliminateAllocation(Definition* alloc) {
               alloc->ssa_temp_index());
   }
 
-  // As an allocation sinking candidate it is only used in stores to its own
-  // fields. Remove these stores.
-  for (Value* use = alloc->input_use_list(); use != NULL;
-       use = alloc->input_use_list()) {
-    use->instruction()->RemoveFromGraph();
+  // As an allocation sinking candidate, remove stores to this candidate.
+  // Do this in a two-step process, as this allocation may be used multiple
+  // times in a single instruction (e.g., as the instance and the value in
+  // a StoreInstanceField). This means multiple entries may be removed from the
+  // use list when removing instructions, not just the current one, so
+  // Value::Iterator cannot be safely used.
+  GrowableArray<Instruction*> stores_to_remove;
+  for (Value* use = alloc->input_use_list(); use != nullptr;
+       use = use->next_use()) {
+    Instruction* const instr = use->instruction();
+    Definition* const instance = StoreDestination(use);
+    // All uses of a candidate should be stores or other allocations.
+    ASSERT(instance != nullptr);
+    if (instance == alloc) {
+      // An allocation instruction cannot be a direct input to itself.
+      ASSERT(!instr->IsAllocation());
+      stores_to_remove.Add(instr);
+    } else {
+      // The candidate is being stored into another candidate, either through
+      // a store instruction or as the input to a to-be-eliminated allocation,
+      // so this instruction will be removed with the other candidate.
+      ASSERT(candidates_.Contains(instance));
+    }
+  }
+
+  for (auto* const store : stores_to_remove) {
+    // Avoid calling RemoveFromGraph() more than once on the same instruction.
+    if (store->previous() != nullptr) {
+      store->RemoveFromGraph();
+    }
   }
 
 // There should be no environment uses. The pass replaced them with
@@ -2674,14 +3261,8 @@ void AllocationSinking::EliminateAllocation(Definition* alloc) {
     ASSERT(use->instruction()->IsMaterializeObject());
   }
 #endif
-  ASSERT(alloc->input_use_list() == NULL);
+
   alloc->RemoveFromGraph();
-  if (alloc->ArgumentCount() > 0) {
-    ASSERT(alloc->ArgumentCount() == 1);
-    for (intptr_t i = 0; i < alloc->ArgumentCount(); ++i) {
-      alloc->PushArgumentAt(i)->RemoveFromGraph();
-    }
-  }
 }
 
 // Find allocation instructions that can be potentially eliminated and
@@ -2758,23 +3339,23 @@ void AllocationSinking::NormalizeMaterializations() {
 }
 
 // We transitively insert materializations at each deoptimization exit that
-// might see the given allocation (see ExitsCollector). Some of this
+// might see the given allocation (see ExitsCollector). Some of these
 // materializations are not actually used and some fail to compute because
 // they are inserted in the block that is not dominated by the allocation.
-// Remove them unused materializations from the graph.
+// Remove unused materializations from the graph.
 void AllocationSinking::RemoveUnusedMaterializations() {
   intptr_t j = 0;
   for (intptr_t i = 0; i < materializations_.length(); i++) {
     MaterializeObjectInstr* mat = materializations_[i];
-    if ((mat->input_use_list() == NULL) && (mat->env_use_list() == NULL)) {
+    if ((mat->input_use_list() == nullptr) &&
+        (mat->env_use_list() == nullptr)) {
       // Check if this materialization failed to compute and remove any
       // unforwarded loads. There were no loads from any allocation sinking
       // candidate in the beginning so it is safe to assume that any encountered
       // load was inserted by CreateMaterializationAt.
       for (intptr_t i = 0; i < mat->InputCount(); i++) {
-        LoadFieldInstr* load = mat->InputAt(i)->definition()->AsLoadField();
-        if ((load != NULL) &&
-            (load->instance()->definition() == mat->allocation())) {
+        Definition* load = mat->InputAt(i)->definition();
+        if (LoadSource(load) == mat->allocation()) {
           load->ReplaceUsesWith(flow_graph_->constant_null());
           load->RemoveFromGraph();
         }
@@ -2835,14 +3416,16 @@ void AllocationSinking::DiscoverFailedCandidates() {
       alloc->set_env_use_list(NULL);
       for (Value* use = alloc->input_use_list(); use != NULL;
            use = use->next_use()) {
-        if (use->instruction()->IsLoadField()) {
-          LoadFieldInstr* load = use->instruction()->AsLoadField();
+        if (use->instruction()->IsLoadField() ||
+            use->instruction()->IsLoadIndexed()) {
+          Definition* load = use->instruction()->AsDefinition();
           load->ReplaceUsesWith(flow_graph_->constant_null());
           load->RemoveFromGraph();
         } else {
           ASSERT(use->instruction()->IsMaterializeObject() ||
                  use->instruction()->IsPhi() ||
-                 use->instruction()->IsStoreInstanceField());
+                 use->instruction()->IsStoreInstanceField() ||
+                 use->instruction()->IsStoreIndexed());
         }
       }
     } else {
@@ -2884,17 +3467,34 @@ void AllocationSinking::Optimize() {
   //   v_1     <- LoadField(v_0, field_1)
   //           ...
   //   v_N     <- LoadField(v_0, field_N)
-  //   v_{N+1} <- MaterializeObject(field_1 = v_1, ..., field_N = v_{N})
+  //   v_{N+1} <- MaterializeObject(field_1 = v_1, ..., field_N = v_N)
+  //
+  // For typed data objects materialization looks like this:
+  //   v_1     <- LoadIndexed(v_0, index_1)
+  //           ...
+  //   v_N     <- LoadIndexed(v_0, index_N)
+  //   v_{N+1} <- MaterializeObject([index_1] = v_1, ..., [index_N] = v_N)
+  //
+  // For arrays materialization looks like this:
+  //   v_1     <- LoadIndexed(v_0, index_1)
+  //           ...
+  //   v_N     <- LoadIndexed(v_0, index_N)
+  //   v_{N+1} <- LoadField(v_0, Array.type_arguments)
+  //   v_{N+2} <- MaterializeObject([index_1] = v_1, ..., [index_N] = v_N,
+  //                                type_arguments = v_{N+1})
+  //
   for (intptr_t i = 0; i < candidates_.length(); i++) {
     InsertMaterializations(candidates_[i]);
   }
 
-  // Run load forwarding to eliminate LoadField instructions inserted above.
+  // Run load forwarding to eliminate LoadField/LoadIndexed instructions
+  // inserted above.
+  //
   // All loads will be successfully eliminated because:
-  //   a) they use fields (not offsets) and thus provide precise aliasing
+  //   a) they use fields/constant indices and thus provide precise aliasing
   //      information
-  //   b) candidate does not escape and thus its fields is not affected by
-  //      external effects from calls.
+  //   b) candidate does not escape and thus its fields/elements are not
+  //      affected by external effects from calls.
   LoadOptimizer::OptimizeGraph(flow_graph_);
 
   NormalizeMaterializations();
@@ -2907,7 +3507,8 @@ void AllocationSinking::Optimize() {
 
   // At this point we have computed the state of object at each deoptimization
   // point and we can eliminate it. Loads inserted above were forwarded so there
-  // are no uses of the allocation just as in the begging of the pass.
+  // are no uses of the allocation outside other candidates to eliminate, just
+  // as in the beginning of the pass.
   for (intptr_t i = 0; i < candidates_.length(); i++) {
     EliminateAllocation(candidates_[i]);
   }
@@ -2936,14 +3537,10 @@ void AllocationSinking::DetachMaterializations() {
 }
 
 // Add a field/offset to the list of fields if it is not yet present there.
-static bool AddSlot(ZoneGrowableArray<const Slot*>* slots, const Slot& slot) {
-  for (auto s : *slots) {
-    if (s == &slot) {
-      return false;
-    }
+static void AddSlot(ZoneGrowableArray<const Slot*>* slots, const Slot& slot) {
+  if (!slots->Contains(&slot)) {
+    slots->Add(&slot);
   }
-  slots->Add(&slot);
-  return true;
 }
 
 // Find deoptimization exit for the given materialization assuming that all
@@ -2998,23 +3595,63 @@ void AllocationSinking::CreateMaterializationAt(
   // instruction.
   Instruction* load_point = FirstMaterializationAt(exit);
 
-  // Insert load instruction for every field.
+  // Insert load instruction for every field and element.
   for (auto slot : slots) {
-    LoadFieldInstr* load =
-        new (Z) LoadFieldInstr(new (Z) Value(alloc), *slot, alloc->token_pos());
+    Definition* load = nullptr;
+    if (slot->IsArrayElement()) {
+      intptr_t array_cid, index;
+      if (alloc->IsCreateArray()) {
+        array_cid = kArrayCid;
+        index =
+            compiler::target::Array::index_at_offset(slot->offset_in_bytes());
+      } else if (auto alloc_typed_data = alloc->AsAllocateTypedData()) {
+        array_cid = alloc_typed_data->class_id();
+        index = slot->offset_in_bytes() /
+                compiler::target::Instance::ElementSizeFor(array_cid);
+      } else {
+        UNREACHABLE();
+      }
+      load = new (Z) LoadIndexedInstr(
+          new (Z) Value(alloc),
+          new (Z) Value(
+              flow_graph_->GetConstant(Smi::ZoneHandle(Z, Smi::New(index)))),
+          /*index_unboxed=*/false,
+          /*index_scale=*/compiler::target::Instance::ElementSizeFor(array_cid),
+          array_cid, kAlignedAccess, DeoptId::kNone, alloc->source());
+    } else {
+      load =
+          new (Z) LoadFieldInstr(new (Z) Value(alloc), *slot, alloc->source());
+    }
     flow_graph_->InsertBefore(load_point, load, nullptr, FlowGraph::kValue);
     values->Add(new (Z) Value(load));
   }
 
-  MaterializeObjectInstr* mat = nullptr;
-  if (alloc->IsAllocateObject()) {
-    mat = new (Z)
-        MaterializeObjectInstr(alloc->AsAllocateObject(), slots, values);
+  const Class* cls = nullptr;
+  intptr_t num_elements = -1;
+  if (auto instr = alloc->AsAllocateObject()) {
+    cls = &(instr->cls());
+  } else if (alloc->IsAllocateClosure()) {
+    cls = &Class::ZoneHandle(
+        flow_graph_->isolate_group()->object_store()->closure_class());
+  } else if (auto instr = alloc->AsAllocateContext()) {
+    cls = &Class::ZoneHandle(Object::context_class());
+    num_elements = instr->num_context_variables();
+  } else if (auto instr = alloc->AsAllocateUninitializedContext()) {
+    cls = &Class::ZoneHandle(Object::context_class());
+    num_elements = instr->num_context_variables();
+  } else if (auto instr = alloc->AsCreateArray()) {
+    cls = &Class::ZoneHandle(
+        flow_graph_->isolate_group()->object_store()->array_class());
+    num_elements = instr->GetConstantNumElements();
+  } else if (auto instr = alloc->AsAllocateTypedData()) {
+    cls = &Class::ZoneHandle(
+        flow_graph_->isolate_group()->class_table()->At(instr->class_id()));
+    num_elements = instr->GetConstantNumElements();
   } else {
-    ASSERT(alloc->IsAllocateUninitializedContext());
-    mat = new (Z) MaterializeObjectInstr(
-        alloc->AsAllocateUninitializedContext(), slots, values);
+    UNREACHABLE();
   }
+  MaterializeObjectInstr* mat = new (Z) MaterializeObjectInstr(
+      alloc->AsAllocation(), *cls, num_elements, slots, values);
 
   flow_graph_->InsertBefore(exit, mat, nullptr, FlowGraph::kValue);
 
@@ -3022,15 +3659,7 @@ void AllocationSinking::CreateMaterializationAt(
   // MaterializeObject instruction.
   // We must preserve the identity: all mentions are replaced by the same
   // materialization.
-  for (Environment::DeepIterator env_it(exit->env()); !env_it.Done();
-       env_it.Advance()) {
-    Value* use = env_it.CurrentValue();
-    if (use->definition() == alloc) {
-      use->RemoveFromUseList();
-      use->set_definition(mat);
-      mat->AddEnvUse(use);
-    }
-  }
+  exit->ReplaceInEnvironment(alloc, mat);
 
   // Mark MaterializeObject as an environment use of this allocation.
   // This will allow us to discover it when we are looking for deoptimization
@@ -3047,7 +3676,7 @@ void AllocationSinking::CreateMaterializationAt(
 // present there.
 template <typename T>
 void AddInstruction(GrowableArray<T*>* list, T* value) {
-  ASSERT(!value->IsGraphEntry());
+  ASSERT(!value->IsGraphEntry() && !value->IsFunctionEntry());
   for (intptr_t i = 0; i < list->length(); i++) {
     if ((*list)[i] == value) {
       return;
@@ -3077,7 +3706,7 @@ void AllocationSinking::ExitsCollector::Collect(Definition* alloc) {
   // this object.
   for (Value* use = alloc->input_use_list(); use != NULL;
        use = use->next_use()) {
-    Definition* obj = StoreInto(use);
+    Definition* obj = StoreDestination(use);
     if ((obj != NULL) && (obj != alloc)) {
       AddInstruction(&worklist_, obj);
     }
@@ -3101,22 +3730,43 @@ void AllocationSinking::ExitsCollector::CollectTransitively(Definition* alloc) {
 }
 
 void AllocationSinking::InsertMaterializations(Definition* alloc) {
-  // Collect all fields that are written for this instance.
+  // Collect all fields and array elements that are written for this instance.
   auto slots = new (Z) ZoneGrowableArray<const Slot*>(5);
 
   for (Value* use = alloc->input_use_list(); use != NULL;
        use = use->next_use()) {
-    StoreInstanceFieldInstr* store = use->instruction()->AsStoreInstanceField();
-    if ((store != NULL) && (store->instance()->definition() == alloc)) {
-      AddSlot(slots, store->slot());
+    if (StoreDestination(use) == alloc) {
+      // Allocation instructions cannot be used in as inputs to themselves.
+      ASSERT(!use->instruction()->AsAllocation());
+      if (auto store = use->instruction()->AsStoreInstanceField()) {
+        AddSlot(slots, store->slot());
+      } else if (auto store = use->instruction()->AsStoreIndexed()) {
+        const intptr_t index = store->index()->BoundSmiConstant();
+        intptr_t offset = -1;
+        if (alloc->IsCreateArray()) {
+          offset = compiler::target::Array::element_offset(index);
+        } else if (alloc->IsAllocateTypedData()) {
+          offset = index * store->index_scale();
+        } else {
+          UNREACHABLE();
+        }
+        AddSlot(slots,
+                Slot::GetArrayElementSlot(flow_graph_->thread(), offset));
+      }
     }
   }
 
-  if (alloc->ArgumentCount() > 0) {
-    AllocateObjectInstr* alloc_object = alloc->AsAllocateObject();
-    ASSERT(alloc_object->ArgumentCount() == 1);
-    AddSlot(slots, Slot::GetTypeArgumentsSlotFor(flow_graph_->thread(),
-                                                 alloc_object->cls()));
+  if (auto* const allocation = alloc->AsAllocation()) {
+    for (intptr_t pos = 0; pos < allocation->InputCount(); pos++) {
+      if (auto* const slot = allocation->SlotForInput(pos)) {
+        // Don't add slots for immutable length slots if not already added
+        // above, as they are already represented as the number of elements in
+        // the MaterializeObjectInstr.
+        if (!slot->IsImmutableLengthSlot()) {
+          AddSlot(slots, *slot);
+        }
+      }
+    }
   }
 
   // Collect all instructions that mention this object in the environment.
@@ -3128,18 +3778,285 @@ void AllocationSinking::InsertMaterializations(Definition* alloc) {
   }
 }
 
-void TryCatchAnalyzer::Optimize(FlowGraph* flow_graph) {
+// TryCatchAnalyzer tries to reduce the state that needs to be synchronized
+// on entry to the catch by discovering Parameter-s which are never used
+// or which are always constant.
+//
+// This analysis is similar to dead/redundant phi elimination because
+// Parameter instructions serve as "implicit" phis.
+//
+// Caveat: when analyzing which Parameter-s are redundant we limit ourselves to
+// constant values because CatchBlockEntry-s are hanging out directly from
+// GraphEntry and thus they are only dominated by constants from GraphEntry -
+// thus we can't replace Parameter with arbitrary Definition which is not a
+// Constant even if we know that this Parameter is redundant and would always
+// evaluate to that Definition.
+class TryCatchAnalyzer : public ValueObject {
+ public:
+  explicit TryCatchAnalyzer(FlowGraph* flow_graph, bool is_aot)
+      : flow_graph_(flow_graph),
+        is_aot_(is_aot),
+        // Initial capacity is selected based on trivial examples.
+        worklist_(flow_graph, /*initial_capacity=*/10) {}
+
+  // Run analysis and eliminate dead/redundant Parameter-s.
+  void Optimize();
+
+ private:
+  // In precompiled mode we can eliminate all parameters that have no real uses
+  // and subsequently clear out corresponding slots in the environments assigned
+  // to instructions that can throw an exception which would be caught by
+  // the corresponding CatchEntryBlock.
+  //
+  // Computing "dead" parameters is essentially a fixed point algorithm because
+  // Parameter value can flow into another Parameter via an environment attached
+  // to an instruction that can throw.
+  //
+  // Note: this optimization pass assumes that environment values are only
+  // used during catching, that is why it should only be used in AOT mode.
+  void OptimizeDeadParameters() {
+    ASSERT(is_aot_);
+
+    NumberCatchEntryParameters();
+    ComputeIncomingValues();
+    CollectAliveParametersOrPhis();
+    PropagateLivenessToInputs();
+    EliminateDeadParameters();
+  }
+
+  static intptr_t GetParameterId(const Instruction* instr) {
+    return instr->GetPassSpecificId(CompilerPass::kTryCatchOptimization);
+  }
+
+  static void SetParameterId(Instruction* instr, intptr_t id) {
+    instr->SetPassSpecificId(CompilerPass::kTryCatchOptimization, id);
+  }
+
+  static bool HasParameterId(Instruction* instr) {
+    return instr->HasPassSpecificId(CompilerPass::kTryCatchOptimization);
+  }
+
+  // Assign sequential ids to each ParameterInstr in each CatchEntryBlock.
+  // Collect reverse mapping from try indexes to corresponding catches.
+  void NumberCatchEntryParameters() {
+    for (auto catch_entry : flow_graph_->graph_entry()->catch_entries()) {
+      const GrowableArray<Definition*>& idefs =
+          *catch_entry->initial_definitions();
+      for (auto idef : idefs) {
+        if (idef->IsParameter()) {
+          SetParameterId(idef, parameter_info_.length());
+          parameter_info_.Add(new ParameterInfo(idef->AsParameter()));
+        }
+      }
+
+      catch_by_index_.EnsureLength(catch_entry->catch_try_index() + 1, nullptr);
+      catch_by_index_[catch_entry->catch_try_index()] = catch_entry;
+    }
+  }
+
+  // Compute potential incoming values for each Parameter in each catch block
+  // by looking into environments assigned to MayThrow instructions within
+  // blocks covered by the corresponding catch.
+  void ComputeIncomingValues() {
+    for (auto block : flow_graph_->reverse_postorder()) {
+      if (block->try_index() == kInvalidTryIndex) {
+        continue;
+      }
+
+      ASSERT(block->try_index() < catch_by_index_.length());
+      auto catch_entry = catch_by_index_[block->try_index()];
+      const auto& idefs = *catch_entry->initial_definitions();
+
+      for (ForwardInstructionIterator instr_it(block); !instr_it.Done();
+           instr_it.Advance()) {
+        Instruction* current = instr_it.Current();
+        if (!current->MayThrow()) continue;
+
+        Environment* env = current->env()->Outermost();
+        ASSERT(env != nullptr);
+
+        for (intptr_t env_idx = 0; env_idx < idefs.length(); ++env_idx) {
+          if (ParameterInstr* param = idefs[env_idx]->AsParameter()) {
+            Definition* defn = env->ValueAt(env_idx)->definition();
+
+            // Add defn as an incoming value to the parameter if it is not
+            // already present in the list.
+            bool found = false;
+            for (auto other_defn :
+                 parameter_info_[GetParameterId(param)]->incoming) {
+              if (other_defn == defn) {
+                found = true;
+                break;
+              }
+            }
+            if (!found) {
+              parameter_info_[GetParameterId(param)]->incoming.Add(defn);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Find all parameters (and phis) that are definitely alive - because they
+  // have non-phi uses and place them into worklist.
+  //
+  // Note: phis that only have phi (and environment) uses would be marked as
+  // dead.
+  void CollectAliveParametersOrPhis() {
+    for (auto block : flow_graph_->reverse_postorder()) {
+      if (JoinEntryInstr* join = block->AsJoinEntry()) {
+        if (join->phis() == nullptr) continue;
+
+        for (auto phi : *join->phis()) {
+          phi->mark_dead();
+          if (HasNonPhiUse(phi)) {
+            MarkLive(phi);
+          }
+        }
+      }
+    }
+
+    for (auto info : parameter_info_) {
+      if (HasNonPhiUse(info->instr)) {
+        MarkLive(info->instr);
+      }
+    }
+  }
+
+  // Propagate liveness from live parameters and phis to other parameters and
+  // phis transitively.
+  void PropagateLivenessToInputs() {
+    while (!worklist_.IsEmpty()) {
+      Definition* defn = worklist_.RemoveLast();
+      if (ParameterInstr* param = defn->AsParameter()) {
+        auto s = parameter_info_[GetParameterId(param)];
+        for (auto input : s->incoming) {
+          MarkLive(input);
+        }
+      } else if (PhiInstr* phi = defn->AsPhi()) {
+        for (intptr_t i = 0; i < phi->InputCount(); i++) {
+          MarkLive(phi->InputAt(i)->definition());
+        }
+      }
+    }
+  }
+
+  // Mark definition as live if it is a dead Phi or a dead Parameter and place
+  // them into worklist.
+  void MarkLive(Definition* defn) {
+    if (PhiInstr* phi = defn->AsPhi()) {
+      if (!phi->is_alive()) {
+        phi->mark_alive();
+        worklist_.Add(phi);
+      }
+    } else if (ParameterInstr* param = defn->AsParameter()) {
+      if (HasParameterId(param)) {
+        auto input_s = parameter_info_[GetParameterId(param)];
+        if (!input_s->alive) {
+          input_s->alive = true;
+          worklist_.Add(param);
+        }
+      }
+    }
+  }
+
+  // Replace all dead parameters with null value and clear corresponding
+  // slots in environments.
+  void EliminateDeadParameters() {
+    for (auto info : parameter_info_) {
+      if (!info->alive) {
+        info->instr->ReplaceUsesWith(flow_graph_->constant_null());
+      }
+    }
+
+    for (auto block : flow_graph_->reverse_postorder()) {
+      if (block->try_index() == -1) continue;
+
+      auto catch_entry = catch_by_index_[block->try_index()];
+      const auto& idefs = *catch_entry->initial_definitions();
+
+      for (ForwardInstructionIterator instr_it(block); !instr_it.Done();
+           instr_it.Advance()) {
+        Instruction* current = instr_it.Current();
+        if (!current->MayThrow()) continue;
+
+        Environment* env = current->env()->Outermost();
+        RELEASE_ASSERT(env != nullptr);
+
+        for (intptr_t env_idx = 0; env_idx < idefs.length(); ++env_idx) {
+          if (ParameterInstr* param = idefs[env_idx]->AsParameter()) {
+            if (!parameter_info_[GetParameterId(param)]->alive) {
+              env->ValueAt(env_idx)->BindToEnvironment(
+                  flow_graph_->constant_null());
+            }
+          }
+        }
+      }
+    }
+
+    DeadCodeElimination::RemoveDeadAndRedundantPhisFromTheGraph(flow_graph_);
+  }
+
+  // Returns true if definition has a use in an instruction which is not a phi.
+  static bool HasNonPhiUse(Definition* defn) {
+    for (Value* use = defn->input_use_list(); use != nullptr;
+         use = use->next_use()) {
+      if (!use->instruction()->IsPhi()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  struct ParameterInfo : public ZoneAllocated {
+    explicit ParameterInfo(ParameterInstr* instr) : instr(instr) {}
+
+    ParameterInstr* instr;
+    bool alive = false;
+    GrowableArray<Definition*> incoming;
+  };
+
+  FlowGraph* const flow_graph_;
+  const bool is_aot_;
+
+  // Additional information for each Parameter from each CatchBlockEntry.
+  // Parameter-s are numbered and their number is stored in
+  // Instruction::place_id() field which is otherwise not used for anything
+  // at this stage.
+  GrowableArray<ParameterInfo*> parameter_info_;
+
+  // Mapping from catch_try_index to corresponding CatchBlockEntry-s.
+  GrowableArray<CatchBlockEntryInstr*> catch_by_index_;
+
+  // Worklist for live Phi and Parameter instructions which need to be
+  // processed by PropagateLivenessToInputs.
+  DefinitionWorklist worklist_;
+};
+
+void OptimizeCatchEntryStates(FlowGraph* flow_graph, bool is_aot) {
+  if (flow_graph->graph_entry()->catch_entries().is_empty()) {
+    return;
+  }
+
+  TryCatchAnalyzer analyzer(flow_graph, is_aot);
+  analyzer.Optimize();
+}
+
+void TryCatchAnalyzer::Optimize() {
+  // Analyze catch entries and remove "dead" Parameter instructions.
+  if (is_aot_) {
+    OptimizeDeadParameters();
+  }
+
   // For every catch-block: Iterate over all call instructions inside the
   // corresponding try-block and figure out for each environment value if it
   // is the same constant at all calls. If yes, replace the initial definition
   // at the catch-entry with this constant.
   const GrowableArray<CatchBlockEntryInstr*>& catch_entries =
-      flow_graph->graph_entry()->catch_entries();
+      flow_graph_->graph_entry()->catch_entries();
 
-  for (intptr_t catch_idx = 0; catch_idx < catch_entries.length();
-       ++catch_idx) {
-    CatchBlockEntryInstr* catch_entry = catch_entries[catch_idx];
-
+  for (auto catch_entry : catch_entries) {
     // Initialize cdefs with the original initial definitions (ParameterInstr).
     // The following representation is used:
     // ParameterInstr => unknown
@@ -3153,10 +4070,10 @@ void TryCatchAnalyzer::Optimize(FlowGraph* flow_graph) {
     // generator functions they may be context-allocated in which case they are
     // not tracked in the environment anyway.
 
-    cdefs[flow_graph->EnvIndex(catch_entry->raw_exception_var())] = NULL;
-    cdefs[flow_graph->EnvIndex(catch_entry->raw_stacktrace_var())] = NULL;
+    cdefs[flow_graph_->EnvIndex(catch_entry->raw_exception_var())] = nullptr;
+    cdefs[flow_graph_->EnvIndex(catch_entry->raw_stacktrace_var())] = nullptr;
 
-    for (BlockIterator block_it = flow_graph->reverse_postorder_iterator();
+    for (BlockIterator block_it = flow_graph_->reverse_postorder_iterator();
          !block_it.Done(); block_it.Advance()) {
       BlockEntryInstr* block = block_it.Current();
       if (block->try_index() == catch_entry->catch_try_index()) {
@@ -3165,17 +4082,17 @@ void TryCatchAnalyzer::Optimize(FlowGraph* flow_graph) {
           Instruction* current = instr_it.Current();
           if (current->MayThrow()) {
             Environment* env = current->env()->Outermost();
-            ASSERT(env != NULL);
+            ASSERT(env != nullptr);
             for (intptr_t env_idx = 0; env_idx < cdefs.length(); ++env_idx) {
-              if (cdefs[env_idx] != NULL && !cdefs[env_idx]->IsConstant() &&
+              if (cdefs[env_idx] != nullptr && !cdefs[env_idx]->IsConstant() &&
                   env->ValueAt(env_idx)->BindsToConstant()) {
                 // If the recorded definition is not a constant, record this
                 // definition as the current constant definition.
                 cdefs[env_idx] = env->ValueAt(env_idx)->definition();
               }
               if (cdefs[env_idx] != env->ValueAt(env_idx)->definition()) {
-                // Non-constant definitions are reset to NULL.
-                cdefs[env_idx] = NULL;
+                // Non-constant definitions are reset to nullptr.
+                cdefs[env_idx] = nullptr;
               }
             }
           }
@@ -3183,14 +4100,17 @@ void TryCatchAnalyzer::Optimize(FlowGraph* flow_graph) {
       }
     }
     for (intptr_t j = 0; j < idefs->length(); ++j) {
-      if (cdefs[j] != NULL && cdefs[j]->IsConstant()) {
-        // TODO(fschneider): Use constants from the constant pool.
+      if (cdefs[j] != nullptr && cdefs[j]->IsConstant()) {
         Definition* old = (*idefs)[j];
         ConstantInstr* orig = cdefs[j]->AsConstant();
         ConstantInstr* copy =
-            new (flow_graph->zone()) ConstantInstr(orig->value());
-        copy->set_ssa_temp_index(flow_graph->alloc_ssa_temp_index());
+            new (flow_graph_->zone()) ConstantInstr(orig->value());
+        copy->set_ssa_temp_index(flow_graph_->alloc_ssa_temp_index());
+        if (FlowGraph::NeedsPairLocation(copy->representation())) {
+          flow_graph_->alloc_ssa_temp_index();
+        }
         old->ReplaceUsesWith(copy);
+        copy->set_previous(old->previous());  // partial link
         (*idefs)[j] = copy;
       }
     }
@@ -3218,7 +4138,7 @@ void DeadCodeElimination::EliminateDeadPhis(FlowGraph* flow_graph) {
         PhiInstr* phi = it.Current();
         // Phis that have uses and phis inside try blocks are
         // marked as live.
-        if (HasRealUse(phi) || join->InsideTryBlock()) {
+        if (HasRealUse(phi)) {
           live_phis.Add(phi);
           phi->mark_alive();
         } else {
@@ -3240,31 +4160,26 @@ void DeadCodeElimination::EliminateDeadPhis(FlowGraph* flow_graph) {
     }
   }
 
-  for (BlockIterator it(flow_graph->postorder_iterator()); !it.Done();
-       it.Advance()) {
-    JoinEntryInstr* join = it.Current()->AsJoinEntry();
-    if (join != NULL) {
-      if (join->phis_ == NULL) continue;
+  RemoveDeadAndRedundantPhisFromTheGraph(flow_graph);
+}
+
+void DeadCodeElimination::RemoveDeadAndRedundantPhisFromTheGraph(
+    FlowGraph* flow_graph) {
+  for (auto block : flow_graph->postorder()) {
+    if (JoinEntryInstr* join = block->AsJoinEntry()) {
+      if (join->phis_ == nullptr) continue;
 
       // Eliminate dead phis and compact the phis_ array of the block.
       intptr_t to_index = 0;
       for (intptr_t i = 0; i < join->phis_->length(); ++i) {
         PhiInstr* phi = (*join->phis_)[i];
-        if (phi != NULL) {
+        if (phi != nullptr) {
           if (!phi->is_alive()) {
             phi->ReplaceUsesWith(flow_graph->constant_null());
             phi->UnuseAllInputs();
-            (*join->phis_)[i] = NULL;
+            (*join->phis_)[i] = nullptr;
             if (FLAG_trace_optimization) {
               THR_Print("Removing dead phi v%" Pd "\n", phi->ssa_temp_index());
-            }
-          } else if (phi->IsRedundant()) {
-            phi->ReplaceUsesWith(phi->InputAt(0)->definition());
-            phi->UnuseAllInputs();
-            (*join->phis_)[i] = NULL;
-            if (FLAG_trace_optimization) {
-              THR_Print("Removing redundant phi v%" Pd "\n",
-                        phi->ssa_temp_index());
             }
           } else {
             (*join->phis_)[to_index++] = phi;
@@ -3272,7 +4187,7 @@ void DeadCodeElimination::EliminateDeadPhis(FlowGraph* flow_graph) {
         }
       }
       if (to_index == 0) {
-        join->phis_ = NULL;
+        join->phis_ = nullptr;
       } else {
         join->phis_->TruncateTo(to_index);
       }
@@ -3280,7 +4195,118 @@ void DeadCodeElimination::EliminateDeadPhis(FlowGraph* flow_graph) {
   }
 }
 
+// Returns true if [current] instruction can be possibly eliminated
+// (if its result is not used).
+static bool CanEliminateInstruction(Instruction* current,
+                                    BlockEntryInstr* block) {
+  ASSERT(current->GetBlock() == block);
+  if (MayHaveVisibleEffect(current) || current->CanDeoptimize() ||
+      current == block->last_instruction() || current->IsMaterializeObject() ||
+      current->IsCheckStackOverflow() || current->IsReachabilityFence() ||
+      current->IsEnterHandleScope() || current->IsExitHandleScope() ||
+      current->IsRawStoreField()) {
+    return false;
+  }
+  return true;
+}
+
+void DeadCodeElimination::EliminateDeadCode(FlowGraph* flow_graph) {
+  GrowableArray<Instruction*> worklist;
+  BitVector live(flow_graph->zone(), flow_graph->current_ssa_temp_index());
+
+  // Mark all instructions with side-effects as live.
+  for (BlockIterator block_it = flow_graph->reverse_postorder_iterator();
+       !block_it.Done(); block_it.Advance()) {
+    BlockEntryInstr* block = block_it.Current();
+    for (ForwardInstructionIterator it(block); !it.Done(); it.Advance()) {
+      Instruction* current = it.Current();
+      ASSERT(!current->IsPushArgument());
+      // TODO(alexmarkov): take control dependencies into account and
+      // eliminate dead branches/conditions.
+      if (!CanEliminateInstruction(current, block)) {
+        worklist.Add(current);
+        if (Definition* def = current->AsDefinition()) {
+          if (def->HasSSATemp()) {
+            live.Add(def->ssa_temp_index());
+          }
+        }
+      }
+    }
+  }
+
+  // Iteratively follow inputs of instructions in the work list.
+  while (!worklist.is_empty()) {
+    Instruction* current = worklist.RemoveLast();
+    for (intptr_t i = 0, n = current->InputCount(); i < n; ++i) {
+      Definition* input = current->InputAt(i)->definition();
+      ASSERT(input->HasSSATemp());
+      if (!live.Contains(input->ssa_temp_index())) {
+        worklist.Add(input);
+        live.Add(input->ssa_temp_index());
+      }
+    }
+    for (intptr_t i = 0, n = current->ArgumentCount(); i < n; ++i) {
+      Definition* input = current->ArgumentAt(i);
+      ASSERT(input->HasSSATemp());
+      if (!live.Contains(input->ssa_temp_index())) {
+        worklist.Add(input);
+        live.Add(input->ssa_temp_index());
+      }
+    }
+    if (current->env() != nullptr) {
+      for (Environment::DeepIterator it(current->env()); !it.Done();
+           it.Advance()) {
+        Definition* input = it.CurrentValue()->definition();
+        ASSERT(!input->IsPushArgument());
+        if (input->HasSSATemp() && !live.Contains(input->ssa_temp_index())) {
+          worklist.Add(input);
+          live.Add(input->ssa_temp_index());
+        }
+      }
+    }
+  }
+
+  // Remove all instructions which are not marked as live.
+  for (BlockIterator block_it = flow_graph->reverse_postorder_iterator();
+       !block_it.Done(); block_it.Advance()) {
+    BlockEntryInstr* block = block_it.Current();
+    if (JoinEntryInstr* join = block->AsJoinEntry()) {
+      for (PhiIterator it(join); !it.Done(); it.Advance()) {
+        PhiInstr* current = it.Current();
+        if (!live.Contains(current->ssa_temp_index())) {
+          it.RemoveCurrentFromGraph();
+        }
+      }
+    }
+    for (ForwardInstructionIterator it(block); !it.Done(); it.Advance()) {
+      Instruction* current = it.Current();
+      if (!CanEliminateInstruction(current, block)) {
+        continue;
+      }
+      ASSERT(!current->IsPushArgument());
+      ASSERT((current->ArgumentCount() == 0) || !current->HasPushArguments());
+      if (Definition* def = current->AsDefinition()) {
+        if (def->HasSSATemp() && live.Contains(def->ssa_temp_index())) {
+          continue;
+        }
+      }
+      it.RemoveCurrentFromGraph();
+    }
+  }
+}
+
+// Returns true if function is marked with vm:unsafe:no-interrupts pragma.
+static bool IsMarkedWithNoInterrupts(const Function& function) {
+  Object& options = Object::Handle();
+  return Library::FindPragma(dart::Thread::Current(),
+                             /*only_core=*/false, function,
+                             Symbols::vm_unsafe_no_interrupts(),
+                             /*multiple=*/false, &options);
+}
+
 void CheckStackOverflowElimination::EliminateStackOverflow(FlowGraph* graph) {
+  const bool should_remove_all = IsMarkedWithNoInterrupts(graph->function());
+
   CheckStackOverflowInstr* first_stack_overflow_instr = NULL;
   for (BlockIterator block_it = graph->reverse_postorder_iterator();
        !block_it.Done(); block_it.Advance()) {
@@ -3290,6 +4316,11 @@ void CheckStackOverflowElimination::EliminateStackOverflow(FlowGraph* graph) {
       Instruction* current = it.Current();
 
       if (CheckStackOverflowInstr* instr = current->AsCheckStackOverflow()) {
+        if (should_remove_all) {
+          it.RemoveCurrentFromGraph();
+          continue;
+        }
+
         if (first_stack_overflow_instr == NULL) {
           first_stack_overflow_instr = instr;
           ASSERT(!first_stack_overflow_instr->in_loop());
@@ -3313,5 +4344,3 @@ void CheckStackOverflowElimination::EliminateStackOverflow(FlowGraph* graph) {
 }
 
 }  // namespace dart
-
-#endif  // !defined(DART_PRECOMPILED_RUNTIME)

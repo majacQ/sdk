@@ -2,8 +2,6 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-#if !defined(DART_PRECOMPILED_RUNTIME)
-
 #include "vm/compiler/backend/branch_optimizer.h"
 
 #include "vm/compiler/backend/flow_graph.h"
@@ -169,16 +167,8 @@ void BranchSimplifier::Simplify(FlowGraph* flow_graph) {
           new_branch->comparison()->SetDeoptId(*comparison);
           // The phi can be used in the branch's environment.  Rename such
           // uses.
-          for (Environment::DeepIterator it(new_branch->env()); !it.Done();
-               it.Advance()) {
-            Value* use = it.CurrentValue();
-            if (use->definition() == phi) {
-              Definition* replacement = phi->InputAt(i)->definition();
-              use->RemoveFromUseList();
-              use->set_definition(replacement);
-              replacement->AddEnvUse(use);
-            }
-          }
+          Definition* replacement = phi->InputAt(i)->definition();
+          new_branch->ReplaceInEnvironment(phi, replacement);
         }
 
         new_branch->InsertBefore(old_goto);
@@ -357,5 +347,3 @@ void IfConverter::Simplify(FlowGraph* flow_graph) {
 }
 
 }  // namespace dart
-
-#endif  // !defined(DART_PRECOMPILED_RUNTIME)

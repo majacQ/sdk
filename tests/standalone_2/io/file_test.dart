@@ -4,6 +4,8 @@
 //
 // Dart test program for testing file I/O.
 
+// @dart = 2.9
+
 // OtherResources=empty_file
 // OtherResources=file_test.txt
 // OtherResources=fixed_length_file
@@ -209,7 +211,7 @@ class FileTest {
     var input = file.openRead();
     var output = outputFile.openWrite();
     Completer done = new Completer();
-    input.pipe(output).then((_) {
+    input.cast<List<int>>().pipe(output).then((_) {
       var copy = outputFile.openRead();
       int position = 0;
       copy.listen((d) {
@@ -777,12 +779,12 @@ class FileTest {
     await openedFile.writeFrom(const [1, 2, 3]);
 
     await openedFile.setPosition(0);
-    var list = [null, null, null];
+    var list = <int>[null, null, null];
     Expect.equals(3, await openedFile.readInto(list));
     Expect.listEquals([1, 2, 3], list);
 
-    read(start, end, length, expected) async {
-      var list = [null, null, null];
+    read(int start, int end, int length, List<int> expected) async {
+      var list = <int>[null, null, null];
       await openedFile.setPosition(0);
       Expect.equals(length, await openedFile.readInto(list, start, end));
       Expect.listEquals(expected, list);
@@ -808,12 +810,12 @@ class FileTest {
     openedFile.writeFromSync(const [1, 2, 3]);
 
     openedFile.setPositionSync(0);
-    var list = [null, null, null];
+    var list = <int>[null, null, null];
     Expect.equals(3, openedFile.readIntoSync(list));
     Expect.listEquals([1, 2, 3], list);
 
     read(start, end, length, expected) {
-      var list = [null, null, null];
+      var list = <int>[null, null, null];
       openedFile.setPositionSync(0);
       Expect.equals(length, openedFile.readIntoSync(list, start, end));
       Expect.listEquals(expected, list);
@@ -988,7 +990,9 @@ class FileTest {
     file.createSync();
     var output = file.openWrite();
     output.close();
-    output.add(buffer); // Ignored.
+    Expect.throws(() {
+      output.add(buffer);
+    });
     output.done.then((_) {
       file.deleteSync();
       asyncTestDone("testCloseExceptionStream");
@@ -1599,6 +1603,56 @@ class FileTest {
     }
   }
 
+  static void testAbsolute() {
+    var currentDirectory = Directory.current;
+    Directory.current = tempDirectory;
+    var file = File("temp.txt");
+    Expect.isFalse(file.isAbsolute);
+    file.writeAsStringSync("content");
+
+    var absFile = file.absolute;
+    Expect.isTrue(absFile.isAbsolute);
+    Expect.isTrue(absFile.path.startsWith(tempDirectory.path));
+
+    Expect.equals("content", absFile.readAsStringSync());
+
+    // An empty file path should be accepted.
+    File('').absolute;
+
+    if (Platform.isWindows &&
+        tempDirectory.path.startsWith(RegExp(r"^[a-zA-Z]:"))) {
+      var driveRelativeFile = File(absFile.path.substring(2));
+      Expect.isFalse(driveRelativeFile.isAbsolute);
+      Expect.equals("content", driveRelativeFile.readAsStringSync());
+
+      var absFile3 = driveRelativeFile.absolute;
+      Expect.isTrue(absFile3.isAbsolute);
+      Expect.equals(absFile.path, absFile3.path);
+      Expect.equals("content", absFile3.readAsStringSync());
+
+      // Convert CWD from X:\path to \\localhost\X$\path.
+      var uncPath = r"\\localhost\" +
+          tempDirectory.path[0] +
+          r"$" +
+          tempDirectory.path.substring(2);
+      Directory.current = uncPath;
+      Expect.equals("content", file.readAsStringSync());
+
+      var absFile4 = file.absolute;
+      Expect.isTrue(absFile4.isAbsolute);
+      Expect.equals("content", absFile4.readAsStringSync());
+
+      Expect.equals("content", driveRelativeFile.readAsStringSync());
+
+      var absFile5 = driveRelativeFile.absolute;
+      Expect.isTrue(absFile5.isAbsolute);
+      Expect.isTrue(absFile5.path.startsWith(uncPath));
+      Expect.equals("content", absFile5.readAsStringSync());
+    }
+    file.deleteSync();
+    Directory.current = currentDirectory;
+  }
+
   static String getFilename(String path) {
     return Platform.script.resolve(path).toFilePath();
   }
@@ -1674,6 +1728,7 @@ class FileTest {
       testSetLastAccessedSync();
       testSetLastAccessedSyncDirectory();
       testDoubleAsyncOperation();
+      testAbsolute();
       asyncEnd();
     });
   }

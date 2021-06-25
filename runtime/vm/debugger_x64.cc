@@ -8,7 +8,6 @@
 #include "vm/debugger.h"
 
 #include "vm/code_patcher.h"
-#include "vm/compiler/assembler/assembler.h"
 #include "vm/cpu.h"
 #include "vm/instructions.h"
 #include "vm/stub_code.h"
@@ -17,20 +16,22 @@ namespace dart {
 
 #ifndef PRODUCT
 
-RawCode* CodeBreakpoint::OrigStubAddress() const {
+CodePtr CodeBreakpoint::OrigStubAddress() const {
   return saved_value_;
 }
 
 void CodeBreakpoint::PatchCode() {
-  ASSERT(!is_enabled_);
+  ASSERT(!IsEnabled());
   Code& stub_target = Code::Handle();
   switch (breakpoint_kind_) {
-    case RawPcDescriptors::kIcCall:
-    case RawPcDescriptors::kUnoptStaticCall:
-      stub_target = StubCode::ICCallBreakpoint().raw();
+    case UntaggedPcDescriptors::kIcCall:
+      stub_target = StubCode::ICCallBreakpoint().ptr();
       break;
-    case RawPcDescriptors::kRuntimeCall:
-      stub_target = StubCode::RuntimeCallBreakpoint().raw();
+    case UntaggedPcDescriptors::kUnoptStaticCall:
+      stub_target = StubCode::UnoptStaticCallBreakpoint().ptr();
+      break;
+    case UntaggedPcDescriptors::kRuntimeCall:
+      stub_target = StubCode::RuntimeCallBreakpoint().ptr();
       break;
     default:
       UNREACHABLE();
@@ -38,16 +39,15 @@ void CodeBreakpoint::PatchCode() {
   const Code& code = Code::Handle(code_);
   saved_value_ = CodePatcher::GetStaticCallTargetAt(pc_, code);
   CodePatcher::PatchPoolPointerCallAt(pc_, code, stub_target);
-  is_enabled_ = true;
 }
 
 void CodeBreakpoint::RestoreCode() {
-  ASSERT(is_enabled_);
+  ASSERT(IsEnabled());
   const Code& code = Code::Handle(code_);
   switch (breakpoint_kind_) {
-    case RawPcDescriptors::kIcCall:
-    case RawPcDescriptors::kUnoptStaticCall:
-    case RawPcDescriptors::kRuntimeCall: {
+    case UntaggedPcDescriptors::kIcCall:
+    case UntaggedPcDescriptors::kUnoptStaticCall:
+    case UntaggedPcDescriptors::kRuntimeCall: {
       CodePatcher::PatchPoolPointerCallAt(pc_, code,
                                           Code::Handle(saved_value_));
       break;
@@ -55,7 +55,6 @@ void CodeBreakpoint::RestoreCode() {
     default:
       UNREACHABLE();
   }
-  is_enabled_ = false;
 }
 
 #endif  // !PRODUCT

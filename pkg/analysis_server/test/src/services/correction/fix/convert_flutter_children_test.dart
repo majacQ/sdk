@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'fix_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(ConvertFlutterChildrenTest);
   });
@@ -19,9 +19,16 @@ class ConvertFlutterChildrenTest extends FixProcessorTest {
   @override
   FixKind get kind => DartFixKind.CONVERT_FLUTTER_CHILDREN;
 
-  test_undefinedParameter_multiLine() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  @override
+  void setUp() {
+    super.setUp();
+    writeTestPackageConfig(
+      flutter: true,
+    );
+  }
+
+  Future<void> test_undefinedParameter_multiLine() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 build() {
   return new Center(
@@ -47,9 +54,8 @@ build() {
 ''');
   }
 
-  test_undefinedParameter_notWidget() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  Future<void> test_undefinedParameter_notWidget() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 build() {
   return new Center(
@@ -62,9 +68,8 @@ build() {
     await assertNoFix();
   }
 
-  test_undefinedParameter_singleLine() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  Future<void> test_undefinedParameter_singleLine() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 build() {
   return new Center(
@@ -84,9 +89,8 @@ build() {
 ''');
   }
 
-  test_undefinedParameter_singleLine2() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  Future<void> test_undefinedParameter_singleLine2() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 build() {
   var text = new Text('foo');

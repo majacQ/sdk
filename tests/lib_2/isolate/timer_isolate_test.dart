@@ -2,11 +2,16 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
+// VMOptions=--enable-isolate-groups --experimental-enable-isolate-groups-jit
+// VMOptions=--no-enable-isolate-groups
+
 library multiple_timer_test;
 
 import 'dart:isolate';
 import 'dart:async';
-import 'package:expect/async_minitest.dart';
+import 'package:async_helper/async_minitest.dart';
 
 const Duration TIMEOUT = const Duration(milliseconds: 100);
 

@@ -7,31 +7,29 @@ import 'package:analyzer/dart/analysis/context_root.dart';
 import 'package:analyzer/dart/analysis/session.dart';
 import 'package:analyzer/file_system/file_system.dart';
 import 'package:analyzer/src/dart/analysis/driver.dart' show AnalysisDriver;
+import 'package:analyzer/src/dart/sdk/sdk.dart';
 import 'package:analyzer/src/generated/engine.dart' show AnalysisOptions;
+import 'package:analyzer/src/workspace/workspace.dart';
 
-/**
- * An analysis context whose implementation is based on an analysis driver.
- */
+/// An analysis context whose implementation is based on an analysis driver.
 class DriverBasedAnalysisContext implements AnalysisContext {
-  /**
-   * The resource provider used to access the file system.
-   */
+  /// The resource provider used to access the file system.
   final ResourceProvider resourceProvider;
 
   @override
   final ContextRoot contextRoot;
 
-  /**
-   * The driver on which this context is based.
-   */
+  /// The driver on which this context is based.
   final AnalysisDriver driver;
 
-  /**
-   * Initialize a newly created context that uses the given [resourceProvider]
-   * to access the file system and that is based on the given analysis [driver].
-   */
+  /// Initialize a newly created context that uses the given [resourceProvider]
+  /// to access the file system and that is based on the given analysis
+  /// [driver].
   DriverBasedAnalysisContext(
-      this.resourceProvider, this.contextRoot, this.driver) {
+    this.resourceProvider,
+    this.contextRoot,
+    this.driver,
+  ) {
     driver.analysisContext = this;
   }
 
@@ -41,23 +39,18 @@ class DriverBasedAnalysisContext implements AnalysisContext {
   @override
   AnalysisSession get currentSession => driver.currentSession;
 
-  @deprecated
   @override
-  List<String> get excludedPaths => contextRoot.excludedPaths.toList();
-
-  @deprecated
-  @override
-  List<String> get includedPaths => contextRoot.includedPaths.toList();
-
-  @deprecated
-  @override
-  Iterable<String> analyzedFiles() {
-    return contextRoot.analyzedFiles();
+  Folder? get sdkRoot {
+    var sdk = driver.sourceFactory.dartSdk;
+    if (sdk is FolderBasedDartSdk) {
+      return sdk.directory;
+    }
+    return null;
   }
 
-  @deprecated
+  @Deprecated('Use contextRoot.workspace instead')
   @override
-  bool isAnalyzed(String path) {
-    return contextRoot.isAnalyzed(path);
+  Workspace get workspace {
+    return contextRoot.workspace;
   }
 }

@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'fix_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(ChangeToStaticAccessTest);
   });
@@ -19,12 +19,12 @@ class ChangeToStaticAccessTest extends FixProcessorTest {
   @override
   FixKind get kind => DartFixKind.CHANGE_TO_STATIC_ACCESS;
 
-  test_method() async {
-    await resolveTestUnit('''
+  Future<void> test_method() async {
+    await resolveTestCode('''
 class A {
   static foo() {}
 }
-main(A a) {
+void f(A a) {
   a.foo();
 }
 ''');
@@ -32,13 +32,32 @@ main(A a) {
 class A {
   static foo() {}
 }
-main(A a) {
+void f(A a) {
   A.foo();
 }
 ''');
   }
 
-  test_method_importType() async {
+  Future<void> test_method_extension() async {
+    await resolveTestCode('''
+extension E on int {
+  static void foo() {}
+}
+main() {
+  0.foo();
+}
+''');
+    await assertHasFix('''
+extension E on int {
+  static void foo() {}
+}
+main() {
+  E.foo();
+}
+''');
+  }
+
+  Future<void> test_method_importType() async {
     addSource('/home/test/lib/a.dart', r'''
 class A {
   static foo() {}
@@ -49,10 +68,10 @@ import 'package:test/a.dart';
 
 class B extends A {}
 ''');
-    await resolveTestUnit('''
+    await resolveTestCode('''
 import 'package:test/b.dart';
 
-main(B b) {
+void f(B b) {
   b.foo();
 }
 ''');
@@ -60,33 +79,35 @@ main(B b) {
 import 'package:test/a.dart';
 import 'package:test/b.dart';
 
-main(B b) {
+void f(B b) {
   A.foo();
 }
 ''');
   }
 
-  test_method_prefixLibrary() async {
-    await resolveTestUnit('''
+  Future<void> test_method_prefixLibrary() async {
+    await resolveTestCode('''
 import 'dart:async' as pref;
-main(pref.Future f) {
+
+void f(pref.Future f) {
   f.wait([]);
 }
 ''');
     await assertHasFix('''
 import 'dart:async' as pref;
-main(pref.Future f) {
+
+void f(pref.Future f) {
   pref.Future.wait([]);
 }
 ''');
   }
 
-  test_property() async {
-    await resolveTestUnit('''
+  Future<void> test_property() async {
+    await resolveTestCode('''
 class A {
   static get foo => 42;
 }
-main(A a) {
+void f(A a) {
   a.foo;
 }
 ''');
@@ -94,13 +115,33 @@ main(A a) {
 class A {
   static get foo => 42;
 }
-main(A a) {
+void f(A a) {
   A.foo;
 }
 ''');
   }
 
-  test_property_importType() async {
+  @failingTest
+  Future<void> test_property_extension() async {
+    await resolveTestCode('''
+extension E on int {
+  static int get foo => 42;
+}
+main() {
+  0.foo;
+}
+''');
+    await assertHasFix('''
+extension E on int {
+  static int get foo => 42;
+}
+main() {
+  E.foo;
+}
+''');
+  }
+
+  Future<void> test_property_importType() async {
     addSource('/home/test/lib/a.dart', r'''
 class A {
   static get foo => null;
@@ -111,10 +152,10 @@ import 'package:test/a.dart';
 
 class B extends A {}
 ''');
-    await resolveTestUnit('''
+    await resolveTestCode('''
 import 'package:test/b.dart';
 
-main(B b) {
+void f(B b) {
   b.foo;
 }
 ''');
@@ -122,7 +163,7 @@ main(B b) {
 import 'package:test/a.dart';
 import 'package:test/b.dart';
 
-main(B b) {
+void f(B b) {
   A.foo;
 }
 ''');

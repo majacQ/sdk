@@ -1,8 +1,11 @@
 // Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-//
-// OtherScripts=error_at_spawnuri_iso.dart
+
+// @dart = 2.9
+
+// VMOptions=--enable-isolate-groups --experimental-enable-isolate-groups-jit
+// VMOptions=--no-enable-isolate-groups
 
 library error_at_spawnuri;
 

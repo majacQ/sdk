@@ -13,18 +13,21 @@ abstract class _Indexed {
 abstract class IndexedLibrary extends _Indexed implements LibraryEntity {
   /// Library index used for fast lookup in [KernelToElementMapBase].
   int get libraryIndex => _index;
+  @override
   int get hashCode => 7 * _index + 2;
 }
 
 abstract class IndexedClass extends _Indexed implements ClassEntity {
   /// Class index used for fast lookup in [KernelToElementMapBase].
   int get classIndex => _index;
+  @override
   int get hashCode => 7 * _index + 1;
 }
 
 abstract class IndexedMember extends _Indexed implements MemberEntity {
   /// Member index used for fast lookup in [KernelToElementMapBase].
   int get memberIndex => _index;
+  @override
   int get hashCode => 7 * _index;
 }
 
@@ -42,17 +45,14 @@ abstract class IndexedTypeVariable extends _Indexed
   int get typeVariableIndex => _index;
 }
 
-abstract class IndexedTypedef extends _Indexed implements TypedefEntity {
-  /// Typedef index used for fast lookup in [KernelToElementMapBase].
-  int get typedefIndex => _index;
-}
-
 abstract class IndexedLocal extends _Indexed implements Local {
   int get localIndex => _index;
 }
 
 /// Base implementation for an index based map of entities of type [E].
 abstract class EntityMapBase<E extends _Indexed> {
+  bool _closed = false;
+
   int _size = 0;
   List<E> _list = <E>[];
 
@@ -64,6 +64,14 @@ abstract class EntityMapBase<E extends _Indexed> {
 
   /// Returns the number (null and non-null) entities in the map.
   int get length => _list.length;
+
+  /// Closes the entity map, prohibiting further registration.
+  ///
+  /// This is used to ensure that no new entities are added while serializing
+  /// modular code generation data.
+  void close() {
+    _closed = true;
+  }
 }
 
 /// Index based map of entities of type [E].
@@ -73,6 +81,8 @@ class EntityMap<E extends _Indexed> extends EntityMapBase<E> {
   /// The index of [entity] is set to match its index in the entity list in this
   /// map.
   E0 register<E0 extends E>(E0 entity) {
+    assert(
+        !_closed, "Trying to register $entity @ ${_list.length} when closed.");
     assert(entity != null);
     assert(entity._index == null);
     entity._index = _list.length;
@@ -131,6 +141,8 @@ class EntityDataMap<E extends _Indexed, D> extends EntityDataMapBase<E, D> {
   /// The index of [entity] is set to match its index in the entity and data
   /// lists in this map.
   E0 register<E0 extends E, D0 extends D>(E0 entity, D0 data) {
+    assert(
+        !_closed, "Trying to register $entity @ ${_list.length} when closed.");
     assert(entity != null);
     assert(entity._index == null);
     assert(
@@ -196,6 +208,8 @@ class EntityDataEnvMap<E extends _Indexed, D, V>
   /// environment lists in this map.
   E0 register<E0 extends E, D0 extends D, V0 extends V>(
       E0 entity, D0 data, V0 env) {
+    assert(
+        !_closed, "Trying to register $entity @ ${_list.length} when closed.");
     assert(entity != null);
     assert(entity._index == null);
     assert(

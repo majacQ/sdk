@@ -2,13 +2,14 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 // Regression test for the dart2js implementation of runtime types.
 
 library test.type_mirror_for_type;
 
 import 'package:expect/expect.dart';
 
-@MirrorsUsed(targets: 'test.type_mirror_for_type')
 import 'dart:mirrors';
 
 class C<T> {}

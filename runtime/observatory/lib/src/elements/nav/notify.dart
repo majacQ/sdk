@@ -5,26 +5,20 @@
 import 'dart:html';
 import 'dart:async';
 import 'package:observatory/models.dart' as M;
-import 'package:observatory/src/elements/helpers/tag.dart';
+import 'package:observatory/src/elements/helpers/custom_element.dart';
 import 'package:observatory/src/elements/helpers/rendering_scheduler.dart';
 import 'package:observatory/src/elements/nav/notify_event.dart';
 import 'package:observatory/src/elements/nav/notify_exception.dart';
 
-class NavNotifyElement extends HtmlElement implements Renderable {
-  static const tag = const Tag<NavNotifyElement>('nav-notify',
-      dependencies: const [
-        NavNotifyEventElement.tag,
-        NavNotifyExceptionElement.tag
-      ]);
-
-  RenderingScheduler _r;
+class NavNotifyElement extends CustomElement implements Renderable {
+  late RenderingScheduler<NavNotifyElement> _r;
 
   Stream<RenderedEvent<NavNotifyElement>> get onRendered => _r.onRendered;
 
-  M.NotificationRepository _repository;
-  StreamSubscription _subscription;
+  late M.NotificationRepository _repository;
+  StreamSubscription? _subscription;
 
-  bool _notifyOnPause;
+  late bool _notifyOnPause;
 
   bool get notifyOnPause => _notifyOnPause;
 
@@ -32,17 +26,17 @@ class NavNotifyElement extends HtmlElement implements Renderable {
       _notifyOnPause = _r.checkAndReact(_notifyOnPause, value);
 
   factory NavNotifyElement(M.NotificationRepository repository,
-      {bool notifyOnPause: true, RenderingQueue queue}) {
+      {bool notifyOnPause: true, RenderingQueue? queue}) {
     assert(repository != null);
     assert(notifyOnPause != null);
-    NavNotifyElement e = document.createElement(tag.name);
+    NavNotifyElement e = new NavNotifyElement.created();
     e._r = new RenderingScheduler<NavNotifyElement>(e, queue: queue);
     e._repository = repository;
     e._notifyOnPause = notifyOnPause;
     return e;
   }
 
-  NavNotifyElement.created() : super.created();
+  NavNotifyElement.created() : super.created('nav-notify');
 
   @override
   void attached() {
@@ -56,7 +50,7 @@ class NavNotifyElement extends HtmlElement implements Renderable {
     super.detached();
     children = <Element>[];
     _r.disable(notify: true);
-    _subscription.cancel();
+    _subscription!.cancel();
   }
 
   void render() {
@@ -82,12 +76,14 @@ class NavNotifyElement extends HtmlElement implements Renderable {
 
   Element _toElement(M.Notification notification) {
     if (notification is M.EventNotification) {
-      return new NavNotifyEventElement(notification.event, queue: _r.queue)
-        ..onDelete.listen((_) => _repository.delete(notification));
+      return (new NavNotifyEventElement(notification.event, queue: _r.queue)
+            ..onDelete.listen((_) => _repository.delete(notification)))
+          .element;
     } else if (notification is M.ExceptionNotification) {
-      return new NavNotifyExceptionElement(notification.exception,
-          stacktrace: notification.stacktrace, queue: _r.queue)
-        ..onDelete.listen((_) => _repository.delete(notification));
+      return (new NavNotifyExceptionElement(notification.exception,
+              stacktrace: notification.stacktrace, queue: _r.queue)
+            ..onDelete.listen((_) => _repository.delete(notification)))
+          .element;
     } else {
       assert(false);
       return new DivElement()..text = 'Invalid Notification Type';

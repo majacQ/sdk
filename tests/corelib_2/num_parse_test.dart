@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import "package:expect/expect.dart";
 
 const whiteSpace = const [
@@ -135,7 +137,9 @@ void main() {
   testIntAround(0x10000000000000); // 2^52
   testIntAround(0x20000000000000); // 2^53
   testIntAround(0x40000000000000); // 2^54
-  testIntAround(0x7ffffffffffffffe); // 2^63
+  // 0x7ffffffffffffffe on int-is-64-bit implementations, rounded up on
+  // int-is-double implementations.
+  testIntAround(0x7ffffffffffff000 + 0xffe); // 2^63
 
   testDouble(0.0);
   testDouble(5e-324);

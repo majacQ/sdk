@@ -2,9 +2,10 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library test.typedef_in_signature_test;
 
-@MirrorsUsed(targets: 'test.typedef_in_signature_test')
 import 'dart:mirrors';
 
 import "package:expect/expect.dart";
@@ -13,11 +14,9 @@ typedef int foo();
 typedef String foo2();
 typedef foo foo3(foo2 x);
 
-foo2 bar(foo x) {
-  return null;
-}
+foo2 bar(foo x) => throw "does-not-return"; //
 
-foo3 gee(int x, foo3 tt) => null;
+foo3 gee(int x, foo3 tt) => throw "does-not-return"; //
 
 main() {
   var lm = currentMirrorSystem().findLibrary(#test.typedef_in_signature_test);

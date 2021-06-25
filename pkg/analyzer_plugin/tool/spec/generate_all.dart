@@ -4,7 +4,7 @@
 
 import 'dart:io';
 
-import 'package:analyzer/src/codegen/tools.dart';
+import 'package:analyzer_utilities/tools.dart';
 import 'package:path/path.dart';
 
 import 'codegen_dart_protocol.dart' as codegen_dart_protocol;
@@ -14,24 +14,21 @@ import 'codegen_protocol_common.dart' as codegen_protocol_common;
 import 'codegen_protocol_constants.dart' as codegen_protocol_constants;
 import 'to_html.dart' as to_html;
 
-/**
- * Generate all targets.
- */
-main() async {
-  String script = Platform.script.toFilePath(windows: Platform.isWindows);
-  String pkgPath = normalize(join(dirname(script), '..', '..'));
+/// Generate all targets.
+Future<void> main() async {
+  var script = Platform.script.toFilePath(windows: Platform.isWindows);
+  var pkgPath = normalize(join(dirname(script), '..', '..'));
   await GeneratedContent.generateAll(pkgPath, allTargets);
 }
 
-/**
- * Get a list of all generated targets.
- */
+/// Get a list of all generated targets.
 List<GeneratedContent> get allTargets {
-  List<GeneratedContent> targets = <GeneratedContent>[];
+  var targets = <GeneratedContent>[];
   targets.add(codegen_dart_protocol.target(true));
   targets.add(codegen_inttest_methods.target);
   targets.add(codegen_matchers.target);
-  targets.add(codegen_protocol_common.target(true));
+  targets.add(codegen_protocol_common.pluginTarget(true));
+  targets.add(codegen_protocol_common.clientTarget(true));
   targets.add(codegen_protocol_constants.target);
   targets.add(to_html.target);
   return targets;

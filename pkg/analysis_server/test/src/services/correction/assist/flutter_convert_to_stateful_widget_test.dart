@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'assist_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(FlutterConvertToStatefulWidgetTest);
   });
@@ -19,51 +19,83 @@ class FlutterConvertToStatefulWidgetTest extends AssistProcessorTest {
   @override
   AssistKind get kind => DartAssistKind.FLUTTER_CONVERT_TO_STATEFUL_WIDGET;
 
-  test_empty() async {
-    addFlutterPackage();
-    await resolveTestUnit(r'''
+  @override
+  void setUp() {
+    super.setUp();
+    writeTestPackageConfig(
+      flutter: true,
+    );
+  }
+
+  Future<void> test_empty() async {
+    await resolveTestCode(r'''
 import 'package:flutter/material.dart';
 
 class /*caret*/MyWidget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    return new Container();
+    return Container();
   }
 }
 ''');
     await assertHasAssist(r'''
 import 'package:flutter/material.dart';
 
-class /*caret*/MyWidget extends StatefulWidget {
+class MyWidget extends StatefulWidget {
   @override
-  MyWidgetState createState() {
-    return new MyWidgetState();
-  }
+  State<MyWidget> createState() => _MyWidgetState();
 }
 
-class MyWidgetState extends State<MyWidget> {
+class _MyWidgetState extends State<MyWidget> {
   @override
   Widget build(BuildContext context) {
-    return new Container();
+    return Container();
   }
 }
 ''');
   }
 
-  test_fields() async {
-    addFlutterPackage();
-    await resolveTestUnit(r'''
+  Future<void> test_empty_typeParam() async {
+    await resolveTestCode(r'''
+import 'package:flutter/material.dart';
+
+class /*caret*/MyWidget<T> extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container();
+  }
+}
+''');
+    await assertHasAssist(r'''
+import 'package:flutter/material.dart';
+
+class MyWidget<T> extends StatefulWidget {
+  @override
+  State<MyWidget<T>> createState() => _MyWidgetState<T>();
+}
+
+class _MyWidgetState<T> extends State<MyWidget<T>> {
+  @override
+  Widget build(BuildContext context) {
+    return Container();
+  }
+}
+''');
+  }
+
+  Future<void> test_fields() async {
+    await resolveTestCode(r'''
 import 'package:flutter/material.dart';
 
 class /*caret*/MyWidget extends StatelessWidget {
-  static String staticField1;
+  static String staticField1 = '';
   final String instanceField1;
   final String instanceField2;
-  String instanceField3;
-  static String staticField2;
-  String instanceField4;
-  String instanceField5;
-  static String staticField3;
+  String instanceField3 = '';
+  static String staticField2 = '';
+  String instanceField4 = '';
+  String instanceField5 = '';
+  static String staticField3 = '';
 
   MyWidget(this.instanceField1) : instanceField2 = '' {
     instanceField3 = '';
@@ -72,16 +104,16 @@ class /*caret*/MyWidget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     instanceField4 = instanceField1;
-    return new Row(
+    return Row(
       children: [
-        new Text(instanceField1),
-        new Text(instanceField2),
-        new Text(instanceField3),
-        new Text(instanceField4),
-        new Text(instanceField5),
-        new Text(staticField1),
-        new Text(staticField2),
-        new Text(staticField3),
+        Text(instanceField1),
+        Text(instanceField2),
+        Text(instanceField3),
+        Text(instanceField4),
+        Text(instanceField5),
+        Text(staticField1),
+        Text(staticField2),
+        Text(staticField3),
       ],
     );
   }
@@ -90,42 +122,40 @@ class /*caret*/MyWidget extends StatelessWidget {
     await assertHasAssist(r'''
 import 'package:flutter/material.dart';
 
-class /*caret*/MyWidget extends StatefulWidget {
-  static String staticField1;
+class MyWidget extends StatefulWidget {
+  static String staticField1 = '';
   final String instanceField1;
   final String instanceField2;
-  String instanceField3;
-  static String staticField2;
-  static String staticField3;
+  String instanceField3 = '';
+  static String staticField2 = '';
+  static String staticField3 = '';
 
   MyWidget(this.instanceField1) : instanceField2 = '' {
     instanceField3 = '';
   }
 
   @override
-  MyWidgetState createState() {
-    return new MyWidgetState();
-  }
+  State<MyWidget> createState() => _MyWidgetState();
 }
 
-class MyWidgetState extends State<MyWidget> {
-  String instanceField4;
+class _MyWidgetState extends State<MyWidget> {
+  String instanceField4 = '';
 
-  String instanceField5;
+  String instanceField5 = '';
 
   @override
   Widget build(BuildContext context) {
     instanceField4 = widget.instanceField1;
-    return new Row(
+    return Row(
       children: [
-        new Text(widget.instanceField1),
-        new Text(widget.instanceField2),
-        new Text(widget.instanceField3),
-        new Text(instanceField4),
-        new Text(instanceField5),
-        new Text(MyWidget.staticField1),
-        new Text(MyWidget.staticField2),
-        new Text(MyWidget.staticField3),
+        Text(widget.instanceField1),
+        Text(widget.instanceField2),
+        Text(widget.instanceField3),
+        Text(instanceField4),
+        Text(instanceField5),
+        Text(MyWidget.staticField1),
+        Text(MyWidget.staticField2),
+        Text(MyWidget.staticField3),
       ],
     );
   }
@@ -133,20 +163,19 @@ class MyWidgetState extends State<MyWidget> {
 ''');
   }
 
-  test_getters() async {
-    addFlutterPackage();
-    await resolveTestUnit(r'''
+  Future<void> test_getters() async {
+    await resolveTestCode(r'''
 import 'package:flutter/material.dart';
 
 class /*caret*/MyWidget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    return new Row(
+    return Row(
       children: [
-        new Text(staticGetter1),
-        new Text(staticGetter2),
-        new Text(instanceGetter1),
-        new Text(instanceGetter2),
+        Text(staticGetter1),
+        Text(staticGetter2),
+        Text(instanceGetter1),
+        Text(instanceGetter2),
       ],
     );
   }
@@ -163,26 +192,24 @@ class /*caret*/MyWidget extends StatelessWidget {
     await assertHasAssist(r'''
 import 'package:flutter/material.dart';
 
-class /*caret*/MyWidget extends StatefulWidget {
+class MyWidget extends StatefulWidget {
   @override
-  MyWidgetState createState() {
-    return new MyWidgetState();
-  }
+  State<MyWidget> createState() => _MyWidgetState();
 
   static String get staticGetter1 => '';
 
   static String get staticGetter2 => '';
 }
 
-class MyWidgetState extends State<MyWidget> {
+class _MyWidgetState extends State<MyWidget> {
   @override
   Widget build(BuildContext context) {
-    return new Row(
+    return Row(
       children: [
-        new Text(MyWidget.staticGetter1),
-        new Text(MyWidget.staticGetter2),
-        new Text(instanceGetter1),
-        new Text(instanceGetter2),
+        Text(MyWidget.staticGetter1),
+        Text(MyWidget.staticGetter2),
+        Text(instanceGetter1),
+        Text(instanceGetter2),
       ],
     );
   }
@@ -194,25 +221,24 @@ class MyWidgetState extends State<MyWidget> {
 ''');
   }
 
-  test_methods() async {
-    addFlutterPackage();
-    await resolveTestUnit(r'''
+  Future<void> test_methods() async {
+    await resolveTestCode(r'''
 import 'package:flutter/material.dart';
 
 class /*caret*/MyWidget extends StatelessWidget {
-  static String staticField;
+  static String staticField = '';
   final String instanceField1;
-  String instanceField2;
+  String instanceField2 = '';
 
   MyWidget(this.instanceField1);
 
   @override
   Widget build(BuildContext context) {
-    return new Row(
+    return Row(
       children: [
-        new Text(instanceField1),
-        new Text(instanceField2),
-        new Text(staticField),
+        Text(instanceField1),
+        Text(instanceField2),
+        Text(staticField),
       ],
     );
   }
@@ -239,16 +265,14 @@ class /*caret*/MyWidget extends StatelessWidget {
     await assertHasAssist(r'''
 import 'package:flutter/material.dart';
 
-class /*caret*/MyWidget extends StatefulWidget {
-  static String staticField;
+class MyWidget extends StatefulWidget {
+  static String staticField = '';
   final String instanceField1;
 
   MyWidget(this.instanceField1);
 
   @override
-  MyWidgetState createState() {
-    return new MyWidgetState();
-  }
+  State<MyWidget> createState() => _MyWidgetState();
 
   static void staticMethod1() {
     print('static 1');
@@ -259,16 +283,16 @@ class /*caret*/MyWidget extends StatefulWidget {
   }
 }
 
-class MyWidgetState extends State<MyWidget> {
-  String instanceField2;
+class _MyWidgetState extends State<MyWidget> {
+  String instanceField2 = '';
 
   @override
   Widget build(BuildContext context) {
-    return new Row(
+    return Row(
       children: [
-        new Text(widget.instanceField1),
-        new Text(instanceField2),
-        new Text(MyWidget.staticField),
+        Text(widget.instanceField1),
+        Text(instanceField2),
+        Text(MyWidget.staticField),
       ],
     );
   }
@@ -286,38 +310,62 @@ class MyWidgetState extends State<MyWidget> {
 ''');
   }
 
-  test_notClass() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  Future<void> test_noExtraUnderscore() async {
+    await resolveTestCode(r'''
+import 'package:flutter/material.dart';
+
+class /*caret*/_MyWidget extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container();
+  }
+}
+''');
+    await assertHasAssist(r'''
+import 'package:flutter/material.dart';
+
+class _MyWidget extends StatefulWidget {
+  @override
+  State<_MyWidget> createState() => _MyWidgetState();
+}
+
+class _MyWidgetState extends State<_MyWidget> {
+  @override
+  Widget build(BuildContext context) {
+    return Container();
+  }
+}
+''');
+  }
+
+  Future<void> test_notClass() async {
+    await resolveTestCode('''
 import 'package:flutter/material.dart';
 /*caret*/main() {}
 ''');
-    assertNoAssist();
+    await assertNoAssist();
   }
 
-  test_notStatelessWidget() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  Future<void> test_notStatelessWidget() async {
+    await resolveTestCode('''
 import 'package:flutter/material.dart';
 class /*caret*/MyWidget extends Text {
   MyWidget() : super('');
 }
 ''');
-    assertNoAssist();
+    await assertNoAssist();
   }
 
-  test_notWidget() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  Future<void> test_notWidget() async {
+    await resolveTestCode('''
 import 'package:flutter/material.dart';
 class /*caret*/MyWidget {}
 ''');
-    assertNoAssist();
+    await assertNoAssist();
   }
 
-  test_simple() async {
-    addFlutterPackage();
-    await resolveTestUnit(r'''
+  Future<void> test_simple() async {
+    await resolveTestCode(r'''
 import 'package:flutter/material.dart';
 
 class /*caret*/MyWidget extends StatelessWidget {
@@ -328,12 +376,12 @@ class /*caret*/MyWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return new Row(
+    return Row(
       children: [
-        new Text(aaa),
-        new Text(bbb),
-        new Text('$aaa'),
-        new Text('${bbb}'),
+        Text(aaa),
+        Text(bbb),
+        Text('$aaa'),
+        Text('${bbb}'),
       ],
     );
   }
@@ -342,27 +390,25 @@ class /*caret*/MyWidget extends StatelessWidget {
     await assertHasAssist(r'''
 import 'package:flutter/material.dart';
 
-class /*caret*/MyWidget extends StatefulWidget {
+class MyWidget extends StatefulWidget {
   final String aaa;
   final String bbb;
 
   const MyWidget(this.aaa, this.bbb);
 
   @override
-  MyWidgetState createState() {
-    return new MyWidgetState();
-  }
+  State<MyWidget> createState() => _MyWidgetState();
 }
 
-class MyWidgetState extends State<MyWidget> {
+class _MyWidgetState extends State<MyWidget> {
   @override
   Widget build(BuildContext context) {
-    return new Row(
+    return Row(
       children: [
-        new Text(widget.aaa),
-        new Text(widget.bbb),
-        new Text('${widget.aaa}'),
-        new Text('${widget.bbb}'),
+        Text(widget.aaa),
+        Text(widget.bbb),
+        Text('${widget.aaa}'),
+        Text('${widget.bbb}'),
       ],
     );
   }
@@ -370,32 +416,29 @@ class MyWidgetState extends State<MyWidget> {
 ''');
   }
 
-  test_tail() async {
-    addFlutterPackage();
-    await resolveTestUnit(r'''
+  Future<void> test_tail() async {
+    await resolveTestCode(r'''
 import 'package:flutter/material.dart';
 
 class /*caret*/MyWidget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    return new Container();
+    return Container();
   }
 }
 ''');
     await assertHasAssist(r'''
 import 'package:flutter/material.dart';
 
-class /*caret*/MyWidget extends StatefulWidget {
+class MyWidget extends StatefulWidget {
   @override
-  MyWidgetState createState() {
-    return new MyWidgetState();
-  }
+  State<MyWidget> createState() => _MyWidgetState();
 }
 
-class MyWidgetState extends State<MyWidget> {
+class _MyWidgetState extends State<MyWidget> {
   @override
   Widget build(BuildContext context) {
-    return new Container();
+    return Container();
   }
 }
 ''');

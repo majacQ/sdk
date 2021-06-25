@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library test.hot_get_field;
 
 import 'dart:mirrors';
@@ -38,7 +40,8 @@ testPrivate() {
 testPrivateWrongLibrary() {
   var c = new C();
   var im = reflect(c);
-  var selector = MirrorSystem.getSymbol('_field', reflectClass(Mirror).owner);
+  var selector = MirrorSystem.getSymbol(
+      '_field', reflectClass(Mirror).owner as LibraryMirror);
 
   for (int i = 0; i < (2 * optimizationThreshold); i++) {
     Expect.throwsNoSuchMethodError(() => im.getField(selector));

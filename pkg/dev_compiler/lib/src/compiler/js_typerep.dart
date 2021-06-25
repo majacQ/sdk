@@ -1,4 +1,7 @@
 /// An abstraction of the JS types
+
+// @dart = 2.9
+
 abstract class JSType {
   const JSType();
 
@@ -31,9 +34,13 @@ abstract class JSType {
 /// Inhabited by booleans (including JSBool), null, and undefined
 class JSBoolean extends JSType {
   const JSBoolean();
+  @override
   bool get isPrimitive => true;
+  @override
   bool get isPrimitiveInJS => true;
+  @override
   bool get isFalsey => true;
+  @override
   String get primitiveTypeOf => 'boolean';
 }
 
@@ -45,42 +52,59 @@ class JSBoolean extends JSType {
 /// It's defined in our "dart:_interceptors".
 class JSNumber extends JSType {
   const JSNumber();
+  @override
   bool get isPrimitive => true;
+  @override
   bool get isPrimitiveInJS => true;
+  @override
   bool get isFalsey => true;
+  @override
   String get primitiveTypeOf => 'number';
 }
 
 /// Inhabited by null and undefined
 class JSNull extends JSType {
   const JSNull();
+  @override
   bool get isPrimitive => false;
+  @override
   bool get isPrimitiveInJS => false;
+  @override
   bool get isFalsey => true;
 }
 
 /// Inhabited by objects, null, and undefined
 class JSObject extends JSType {
   const JSObject();
+  @override
   bool get isPrimitive => false;
+  @override
   bool get isPrimitiveInJS => false;
+  @override
   bool get isFalsey => false;
 }
 
 /// Inhabited by strings (including JSString), null, and undefined
 class JSString extends JSType {
   const JSString();
+  @override
   bool get isPrimitive => true;
+  @override
   bool get isPrimitiveInJS => false;
+  @override
   bool get isFalsey => true;
+  @override
   String get primitiveTypeOf => 'string';
 }
 
 /// Inhabitance not statically known
 class JSUnknown extends JSType {
   const JSUnknown();
+  @override
   bool get isPrimitive => false;
+  @override
   bool get isPrimitiveInJS => false;
+  @override
   bool get isFalsey => true;
 }
 

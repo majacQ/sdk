@@ -55,13 +55,24 @@ getters, setters and constructors):
 @pragma("vm:entry-point")
 @pragma("vm:entry-point", true/false)
 @pragma("vm:entry-point", !const bool.formEnvironment("dart.vm.product"))
+@pragma("vm:entry-point", "get")
+@pragma("vm:entry-point", "call")
 void foo() { ... }
 ```
 
-If the second parameter is missing, `null` or `true`, the procedure will
-available for lookup and invocation directly from native or VM code. If the
-procedure is a *generative* constructor, the enclosing class will also be marked
-for allocation from native or VM code.
+If the second parameter is missing, `null` or `true`, the procedure (and its
+closurized form, excluding constructors and setters) will available for lookup
+and invocation directly from native or VM code.
+
+If the procedure is a *generative* constructor, the enclosing class must also be
+annotated for allocation from native or VM code.
+
+If the annotation is "get" or "call", the procedure will only be available for
+closurization (access via `Dart_GetField`) or invocation (access via
+`Dart_Invoke`).
+
+"@pragma("vm:entry-point", "get") against constructors or setters is disallowed
+since they cannot be closurized.
 
 ### Fields
 
@@ -83,3 +94,5 @@ the interface of the enclosing class are marked for native invocation. If the
 'get'/'set' parameter is used, only the getter/setter is marked. For static
 fields, the implicit getter is always marked. The third form does not make sense
 for static fields because they do not belong to an interface.
+
+Note that no form of entry-point annotation allows invoking a field.

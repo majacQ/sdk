@@ -3,6 +3,8 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:kernel/ast.dart' as ir;
+import 'package:kernel/src/printer.dart' as ir;
+import 'package:kernel/text/ast_to_text.dart' as ir show debugNodeToString;
 
 /// Collection of scope data collected for a single member.
 class ClosureScopeModel {
@@ -14,9 +16,10 @@ class ClosureScopeModel {
       <ir.Node, KernelCapturedScope>{};
 
   /// Collected [ScopeInfo] data for nodes.
-  Map<ir.TreeNode, KernelScopeInfo> closuresToGenerate =
-      <ir.TreeNode, KernelScopeInfo>{};
+  Map<ir.LocalFunction, KernelScopeInfo> closuresToGenerate =
+      <ir.LocalFunction, KernelScopeInfo>{};
 
+  @override
   String toString() {
     return '$scopeInfo\n$capturedScopesMap\n$closuresToGenerate';
   }
@@ -76,6 +79,7 @@ class KernelScopeInfo {
       this.thisUsedAsFreeVariableIfNeedsRti,
       this.hasThisLocal);
 
+  @override
   String toString() {
     StringBuffer sb = new StringBuffer();
     sb.write('KernelScopeInfo(this=$hasThisLocal,');
@@ -185,6 +189,9 @@ enum VariableUseKind {
   /// A type variable passed as the type argument of a list literal.
   listLiteral,
 
+  /// A type variable passed as the type argument of a set literal.
+  setLiteral,
+
   /// A type variable passed as the type argument of a map literal.
   mapLiteral,
 
@@ -222,9 +229,8 @@ enum VariableUseKind {
 class VariableUse {
   final VariableUseKind kind;
   final ir.Member member;
-  final ir.TreeNode /*ir.FunctionDeclaration|ir.FunctionExpression*/
-      localFunction;
-  final ir.MethodInvocation invocation;
+  final ir.LocalFunction localFunction;
+  final ir.Expression invocation;
   final ir.Instantiation instantiation;
 
   const VariableUse._simple(this.kind)
@@ -243,10 +249,7 @@ class VariableUse {
       : this.kind = VariableUseKind.localParameter,
         this.member = null,
         this.invocation = null,
-        this.instantiation = null {
-    assert(localFunction is ir.FunctionDeclaration ||
-        localFunction is ir.FunctionExpression);
-  }
+        this.instantiation = null;
 
   VariableUse.memberReturnType(this.member)
       : this.kind = VariableUseKind.memberReturnType,
@@ -258,10 +261,7 @@ class VariableUse {
       : this.kind = VariableUseKind.localReturnType,
         this.member = null,
         this.invocation = null,
-        this.instantiation = null {
-    assert(localFunction is ir.FunctionDeclaration ||
-        localFunction is ir.FunctionExpression);
-  }
+        this.instantiation = null;
 
   VariableUse.constructorTypeArgument(this.member)
       : this.kind = VariableUseKind.constructorTypeArgument,
@@ -284,10 +284,7 @@ class VariableUse {
   VariableUse.localTypeArgument(this.localFunction, this.invocation)
       : this.kind = VariableUseKind.localTypeArgument,
         this.member = null,
-        this.instantiation = null {
-    assert(localFunction is ir.FunctionDeclaration ||
-        localFunction is ir.FunctionExpression);
-  }
+        this.instantiation = null;
 
   VariableUse.instantiationTypeArgument(this.instantiation)
       : this.kind = VariableUseKind.instantiationTypeArgument,
@@ -307,12 +304,16 @@ class VariableUse {
   static const VariableUse listLiteral =
       const VariableUse._simple(VariableUseKind.listLiteral);
 
+  static const VariableUse setLiteral =
+      const VariableUse._simple(VariableUseKind.setLiteral);
+
   static const VariableUse mapLiteral =
       const VariableUse._simple(VariableUseKind.mapLiteral);
 
   static const VariableUse fieldType =
       const VariableUse._simple(VariableUseKind.fieldType);
 
+  @override
   int get hashCode =>
       kind.hashCode * 11 +
       member.hashCode * 13 +
@@ -320,6 +321,7 @@ class VariableUse {
       invocation.hashCode * 19 +
       instantiation.hashCode * 23;
 
+  @override
   bool operator ==(other) {
     if (identical(this, other)) return true;
     if (other is! VariableUse) return false;
@@ -330,6 +332,7 @@ class VariableUse {
         instantiation == other.instantiation;
   }
 
+  @override
   String toString() => 'VariableUse(kind=$kind,member=$member,'
       'localFunction=$localFunction,invocation=$invocation,'
       'instantiation=$instantiation)';
@@ -340,7 +343,7 @@ enum TypeVariableKind { cls, method, local, function }
 /// A fake ir.Node that holds the TypeParameterType as well as the context in
 /// which it occurs.
 class TypeVariableTypeWithContext implements ir.Node {
-  final ir.Node context;
+  final ir.TreeNode context;
   final ir.TypeParameterType type;
   final TypeVariableKind kind;
   final ir.TreeNode typeDeclaration;
@@ -377,9 +380,7 @@ class TypeVariableTypeWithContext implements ir.Node {
     } else {
       // We have a generic local function type variable, like `T` in
       // `m() { local<T>() { ... } ... }`.
-      assert(
-          typeDeclaration.parent is ir.FunctionExpression ||
-              typeDeclaration.parent is ir.FunctionDeclaration,
+      assert(typeDeclaration.parent is ir.LocalFunction,
           "Unexpected type declaration: $typeDeclaration");
       kind = TypeVariableKind.local;
       typeDeclaration = typeDeclaration.parent;
@@ -392,22 +393,39 @@ class TypeVariableTypeWithContext implements ir.Node {
   TypeVariableTypeWithContext.internal(
       this.type, this.context, this.kind, this.typeDeclaration);
 
-  accept(ir.Visitor v) {
+  @override
+  R accept<R>(ir.Visitor<R> v) {
     throw new UnsupportedError('TypeVariableTypeWithContext.accept');
   }
 
+  @override
   visitChildren(ir.Visitor v) {
     throw new UnsupportedError('TypeVariableTypeWithContext.visitChildren');
   }
 
+  @override
   int get hashCode => type.hashCode;
 
+  @override
   bool operator ==(other) {
     if (other is! TypeVariableTypeWithContext) return false;
     return type == other.type && context == other.context;
   }
 
-  String toString() =>
-      'TypeVariableTypeWithContext(type=$type,context=$context,'
-      'kind=$kind,typeDeclaration=$typeDeclaration)';
+  @override
+  String toString() => 'TypeVariableTypeWithContext(${toStringInternal()})';
+
+  @override
+  String toStringInternal() =>
+      'type=${type.toStringInternal()},context=${context.toStringInternal()},'
+      'kind=$kind,typeDeclaration=${typeDeclaration.toStringInternal()}';
+
+  @override
+  String toText(ir.AstTextStrategy strategy) => type.toText(strategy);
+
+  @override
+  void toTextInternal(ir.AstPrinter printer) => type.toTextInternal(printer);
+
+  @override
+  String leakingDebugToString() => ir.debugNodeToString(this);
 }

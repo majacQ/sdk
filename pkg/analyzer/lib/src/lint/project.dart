@@ -1,26 +1,27 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'dart:async';
 import 'dart:io';
 
 import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/dart/element/element.dart';
 import 'package:analyzer/src/dart/analysis/driver.dart';
-import 'package:analyzer/src/generated/resolver.dart';
+import 'package:analyzer/src/dart/resolver/scope.dart';
 import 'package:analyzer/src/generated/source.dart';
 import 'package:analyzer/src/lint/io.dart';
 import 'package:analyzer/src/lint/pub.dart';
+import 'package:collection/collection.dart';
 import 'package:path/path.dart' as p;
 
-Pubspec _findAndParsePubspec(Directory root) {
+Pubspec? _findAndParsePubspec(Directory root) {
   if (root.existsSync()) {
-    File pubspec = root
+    var pubspec = root
         .listSync(followLinks: false)
-        .firstWhere((f) => isPubspecFile(f), orElse: () => null);
+        .whereType<File>()
+        .firstWhereOrNull((f) => isPubspecFile(f));
     if (pubspec != null) {
-      return new Pubspec.parse(pubspec.readAsStringSync(),
+      return Pubspec.parse(pubspec.readAsStringSync(),
           sourceUrl: p.toUri(pubspec.path));
     }
   }
@@ -30,15 +31,15 @@ Pubspec _findAndParsePubspec(Directory root) {
 /// A semantic representation of a Dart project.
 ///
 /// Projects provide a semantic model of a Dart project based on the
-/// [pub package layout conventions](https://www.dartlang.org/tools/pub/package-layout.html).
+/// [pub package layout conventions](https://dart.dev/tools/pub/package-layout).
 /// This model allows clients to traverse project contents in a convenient and
 /// standardized way, access global information (such as whether elements are
 /// in the "public API") and resources that have special meanings in the
 /// context of pub package layout conventions.
 class DartProject {
-  _ApiModel _apiModel;
-  String _name;
-  Pubspec _pubspec;
+  late final _ApiModel _apiModel;
+  String? _name;
+  Pubspec? _pubspec;
 
   /// Project root.
   final Directory root;
@@ -48,10 +49,10 @@ class DartProject {
   /// used.
   ///
   /// Note: clients should call [create] which performs API model initialization.
-  DartProject._(AnalysisDriver driver, List<Source> sources, {Directory dir})
+  DartProject._(AnalysisDriver driver, List<Source> sources, {Directory? dir})
       : root = dir ?? Directory.current {
     _pubspec = _findAndParsePubspec(root);
-    _apiModel = new _ApiModel(driver, sources, root);
+    _apiModel = _ApiModel(driver, sources, root);
   }
 
   /// The project's name.
@@ -62,7 +63,7 @@ class DartProject {
   String get name => _name ??= _calculateName();
 
   /// The project's pubspec.
-  Pubspec get pubspec => _pubspec;
+  Pubspec? get pubspec => _pubspec;
 
   /// Returns `true` if the given element is part of this project's public API.
   ///
@@ -73,10 +74,11 @@ class DartProject {
   bool isApi(Element element) => _apiModel.contains(element);
 
   String _calculateName() {
+    final pubspec = this.pubspec;
     if (pubspec != null) {
       var nameEntry = pubspec.name;
       if (nameEntry != null) {
-        return nameEntry.value.text;
+        return nameEntry.value.text!;
       }
     }
     return p.basename(root.path);
@@ -87,10 +89,8 @@ class DartProject {
   /// If a [dir] is unspecified the current working directory will be
   /// used.
   static Future<DartProject> create(AnalysisDriver driver, List<Source> sources,
-      {Directory dir}) async {
-    // TODO(brianwilkerson) Determine whether this await is necessary.
-    await null;
-    DartProject project = new DartProject._(driver, sources, dir: dir);
+      {Directory? dir}) async {
+    DartProject project = DartProject._(driver, sources, dir: dir);
     await project._apiModel._calculate();
     return project;
   }
@@ -98,22 +98,22 @@ class DartProject {
 
 /// An object that can be used to visit Dart project structure.
 abstract class ProjectVisitor<T> {
-  T visit(DartProject project) => null;
+  T? visit(DartProject project) => null;
 }
 
 /// Captures the project's API as defined by pub package layout standards.
 class _ApiModel {
   final AnalysisDriver driver;
-  final List<Source> sources;
+  final List<Source>? sources;
   final Directory root;
-  final Set<LibraryElement> elements = new Set();
+  final Set<Element> elements = {};
 
   _ApiModel(this.driver, this.sources, this.root) {
     _calculate();
   }
 
   /// Return `true` if this element is part of the public API for this package.
-  bool contains(Element element) {
+  bool contains(Element? element) {
     while (element != null) {
       if (!element.isPrivate && elements.contains(element)) {
         return true;
@@ -123,29 +123,29 @@ class _ApiModel {
     return false;
   }
 
-  _calculate() async {
-    // TODO(brianwilkerson) Determine whether this await is necessary.
-    await null;
-    if (sources == null || sources.isEmpty) {
+  Future<void> _calculate() async {
+    if (sources == null || sources!.isEmpty) {
       return;
     }
 
     String libDir = root.path + '/lib';
     String libSrcDir = libDir + '/src';
 
-    for (Source source in sources) {
+    for (Source source in sources!) {
       String path = source.uri.path;
       if (path.startsWith(libDir) && !path.startsWith(libSrcDir)) {
-        ResolvedUnitResult result = await driver.getResult(source.fullName);
-        LibraryElement library = result.libraryElement;
+        var result = await driver.getResult2(source.fullName);
+        if (result is ResolvedUnitResult) {
+          LibraryElement library = result.libraryElement;
 
-        NamespaceBuilder namespaceBuilder = new NamespaceBuilder();
-        Namespace exports =
-            namespaceBuilder.createExportNamespaceForLibrary(library);
-        Namespace public =
-            namespaceBuilder.createPublicNamespaceForLibrary(library);
-        elements.addAll(exports.definedNames.values);
-        elements.addAll(public.definedNames.values);
+          NamespaceBuilder namespaceBuilder = NamespaceBuilder();
+          Namespace exports =
+              namespaceBuilder.createExportNamespaceForLibrary(library);
+          Namespace public =
+              namespaceBuilder.createPublicNamespaceForLibrary(library);
+          elements.addAll(exports.definedNames.values);
+          elements.addAll(public.definedNames.values);
+        }
       }
     }
   }

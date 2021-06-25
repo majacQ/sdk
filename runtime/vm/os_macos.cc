@@ -16,7 +16,7 @@
 #include <sys/time.h>        // NOLINT
 #include <unistd.h>          // NOLINT
 #if HOST_OS_IOS
-#include <syslog.h>      // NOLINT
+#include <syslog.h>  // NOLINT
 #endif
 
 #include "platform/utils.h"
@@ -106,11 +106,6 @@ int64_t OS::GetCurrentMonotonicMicros() {
 }
 
 int64_t OS::GetCurrentThreadCPUMicros() {
-#if HOST_OS_IOS
-  // Thread CPU time appears unreliable on iOS, sometimes incorrectly reporting
-  // no time elapsed.
-  return -1;
-#else
   mach_msg_type_number_t count = THREAD_BASIC_INFO_COUNT;
   thread_basic_info_data_t info_data;
   thread_basic_info_t info = &info_data;
@@ -124,7 +119,10 @@ int64_t OS::GetCurrentThreadCPUMicros() {
   thread_cpu_micros += info->user_time.microseconds;
   thread_cpu_micros += info->system_time.microseconds;
   return thread_cpu_micros;
-#endif
+}
+
+int64_t OS::GetCurrentThreadCPUMicrosForTimeline() {
+  return OS::GetCurrentThreadCPUMicros();
 }
 
 intptr_t OS::ActivationFrameAlignment() {
@@ -139,8 +137,6 @@ intptr_t OS::ActivationFrameAlignment() {
   return 16;  // iOS simulator
 #elif TARGET_ARCH_X64
   return 16;  // iOS simulator
-#elif TARGET_ARCH_DBC
-  return 16;
 #else
 #error Unimplemented
 #endif
@@ -149,25 +145,6 @@ intptr_t OS::ActivationFrameAlignment() {
   // Function Call Guide".
   return 16;
 #endif  // HOST_OS_IOS
-}
-
-intptr_t OS::PreferredCodeAlignment() {
-#if defined(TARGET_ARCH_IA32) || defined(TARGET_ARCH_X64) ||                   \
-    defined(TARGET_ARCH_ARM64) || defined(TARGET_ARCH_DBC)
-  const int kMinimumAlignment = 32;
-#elif defined(TARGET_ARCH_ARM)
-  const int kMinimumAlignment = 16;
-#else
-#error Unsupported architecture.
-#endif
-  intptr_t alignment = kMinimumAlignment;
-  // TODO(5411554): Allow overriding default code alignment for
-  // testing purposes.
-  // Flags::DebugIsInt("codealign", &alignment);
-  ASSERT(Utils::IsPowerOfTwo(alignment));
-  ASSERT(alignment >= kMinimumAlignment);
-  ASSERT(alignment <= OS::kMaxPreferredCodeAlignment);
-  return alignment;
 }
 
 int OS::NumberOfAvailableProcessors() {
@@ -211,7 +188,6 @@ DART_NOINLINE uintptr_t OS::GetProgramCounter() {
   return reinterpret_cast<uintptr_t>(
       __builtin_extract_return_addr(__builtin_return_address(0)));
 }
-
 
 void OS::Print(const char* format, ...) {
 #if HOST_OS_IOS
@@ -323,7 +299,10 @@ void OS::Init() {
 
 void OS::Cleanup() {}
 
+void OS::PrepareToAbort() {}
+
 void OS::Abort() {
+  PrepareToAbort();
   abort();
 }
 

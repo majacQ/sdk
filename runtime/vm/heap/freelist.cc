@@ -21,21 +21,17 @@ FreeListElement* FreeListElement::AsElement(uword addr, intptr_t size) {
 
   FreeListElement* result = reinterpret_cast<FreeListElement*>(addr);
 
-  uint32_t tags = 0;
-  tags = RawObject::SizeTag::update(size, tags);
-  tags = RawObject::ClassIdTag::update(kFreeListElement, tags);
+  uword tags = 0;
+  tags = UntaggedObject::SizeTag::update(size, tags);
+  tags = UntaggedObject::ClassIdTag::update(kFreeListElement, tags);
   ASSERT((addr & kNewObjectAlignmentOffset) == kOldObjectAlignmentOffset);
-  tags = RawObject::OldBit::update(true, tags);
-  tags = RawObject::OldAndNotMarkedBit::update(true, tags);
-  tags = RawObject::OldAndNotRememberedBit::update(true, tags);
-  tags = RawObject::NewBit::update(false, tags);
+  tags = UntaggedObject::OldBit::update(true, tags);
+  tags = UntaggedObject::OldAndNotMarkedBit::update(true, tags);
+  tags = UntaggedObject::OldAndNotRememberedBit::update(true, tags);
+  tags = UntaggedObject::NewBit::update(false, tags);
   result->tags_ = tags;
-#if defined(HASH_IN_OBJECT_HEADER)
-  // Clearing this is mostly for neatness. The identityHashCode
-  // of free list entries is not used.
-  result->hash_ = 0;
-#endif
-  if (size > RawObject::SizeTag::kMaxSizeTag) {
+
+  if (size > UntaggedObject::SizeTag::kMaxSizeTag) {
     *result->SizeAddress() = size;
   }
   result->set_next(NULL);
@@ -51,26 +47,23 @@ void FreeListElement::Init() {
 
 intptr_t FreeListElement::HeaderSizeFor(intptr_t size) {
   if (size == 0) return 0;
-  return ((size > RawObject::SizeTag::kMaxSizeTag) ? 3 : 2) * kWordSize;
+  return ((size > UntaggedObject::SizeTag::kMaxSizeTag) ? 3 : 2) * kWordSize;
 }
 
-FreeList::FreeList()
-    : mutex_(new Mutex()),
-      freelist_search_budget_(kInitialFreeListSearchBudget) {
+FreeList::FreeList() : mutex_() {
   Reset();
 }
 
 FreeList::~FreeList() {
-  delete mutex_;
 }
 
 uword FreeList::TryAllocate(intptr_t size, bool is_protected) {
-  MutexLocker ml(mutex_);
+  MutexLocker ml(&mutex_);
   return TryAllocateLocked(size, is_protected);
 }
 
 uword FreeList::TryAllocateLocked(intptr_t size, bool is_protected) {
-  DEBUG_ASSERT(mutex_->IsOwnedByCurrentThread());
+  DEBUG_ASSERT(mutex_.IsOwnedByCurrentThread());
   // Precondition: is_protected is false or else all free list elements are
   // in non-writable pages.
 
@@ -97,7 +90,7 @@ uword FreeList::TryAllocateLocked(intptr_t size, bool is_protected) {
         // the call to SplitElementAfterAndEnqueue.
         // If the remainder size is zero, only the element itself needs to
         // be made writable.
-        intptr_t remainder_size = element->Size() - size;
+        intptr_t remainder_size = element->HeapSize() - size;
         intptr_t region_size =
             size + FreeListElement::HeaderSizeFor(remainder_size);
         VirtualMemory::Protect(reinterpret_cast<void*>(element), region_size,
@@ -121,10 +114,10 @@ uword FreeList::TryAllocateLocked(intptr_t size, bool is_protected) {
   // reset the search budget.
   intptr_t tries_left = freelist_search_budget_ + (size >> kWordSizeLog2);
   while (current != NULL) {
-    if (current->Size() >= size) {
+    if (current->HeapSize() >= size) {
       // Found an element large enough to hold the requested size. Dequeue,
       // split and enqueue the remainder.
-      intptr_t remainder_size = current->Size() - size;
+      intptr_t remainder_size = current->HeapSize() - size;
       intptr_t region_size =
           size + FreeListElement::HeaderSizeFor(remainder_size);
       if (is_protected) {
@@ -176,12 +169,12 @@ uword FreeList::TryAllocateLocked(intptr_t size, bool is_protected) {
 }
 
 void FreeList::Free(uword addr, intptr_t size) {
-  MutexLocker ml(mutex_);
+  MutexLocker ml(&mutex_);
   FreeLocked(addr, size);
 }
 
 void FreeList::FreeLocked(uword addr, intptr_t size) {
-  DEBUG_ASSERT(mutex_->IsOwnedByCurrentThread());
+  DEBUG_ASSERT(mutex_.IsOwnedByCurrentThread());
   // Precondition required by AsElement and EnqueueElement: the (page
   // containing the) header of the freed block should be writable.  This is
   // the case when called for newly allocated pages because they are
@@ -194,23 +187,12 @@ void FreeList::FreeLocked(uword addr, intptr_t size) {
 }
 
 void FreeList::Reset() {
-  MutexLocker ml(mutex_);
+  MutexLocker ml(&mutex_);
   free_map_.Reset();
   last_free_small_size_ = -1;
   for (int i = 0; i < (kNumLists + 1); i++) {
     free_lists_[i] = NULL;
   }
-}
-
-intptr_t FreeList::IndexForSize(intptr_t size) {
-  ASSERT(size >= kObjectAlignment);
-  ASSERT(Utils::IsAligned(size, kObjectAlignment));
-
-  intptr_t index = size >> kObjectAlignmentLog2;
-  if (index >= kNumLists) {
-    index = kNumLists;
-  }
-  return index;
 }
 
 void FreeList::EnqueueElement(FreeListElement* element, intptr_t index) {
@@ -224,25 +206,8 @@ void FreeList::EnqueueElement(FreeListElement* element, intptr_t index) {
   free_lists_[index] = element;
 }
 
-FreeListElement* FreeList::DequeueElement(intptr_t index) {
-  FreeListElement* result = free_lists_[index];
-  FreeListElement* next = result->next();
-  if (next == NULL && index != kNumLists) {
-    intptr_t size = index << kObjectAlignmentLog2;
-    if (size == last_free_small_size_) {
-      // Note: This is -1 * kObjectAlignment if no other small sizes remain.
-      last_free_small_size_ =
-          free_map_.ClearLastAndFindPrevious(index) * kObjectAlignment;
-    } else {
-      free_map_.Set(index, false);
-    }
-  }
-  free_lists_[index] = next;
-  return result;
-}
-
 intptr_t FreeList::LengthLocked(int index) const {
-  DEBUG_ASSERT(mutex_->IsOwnedByCurrentThread());
+  DEBUG_ASSERT(mutex_.IsOwnedByCurrentThread());
   ASSERT(index >= 0);
   ASSERT(index < kNumLists);
   intptr_t result = 0;
@@ -255,22 +220,18 @@ intptr_t FreeList::LengthLocked(int index) const {
 }
 
 void FreeList::PrintSmall() const {
-  int small_sizes = 0;
-  int small_objects = 0;
   intptr_t small_bytes = 0;
   for (int i = 0; i < kNumLists; ++i) {
     if (free_lists_[i] == NULL) {
       continue;
     }
-    small_sizes += 1;
     intptr_t list_length = LengthLocked(i);
-    small_objects += list_length;
     intptr_t list_bytes = list_length * i * kObjectAlignment;
     small_bytes += list_bytes;
     OS::PrintErr(
         "small %3d [%8d bytes] : "
         "%8" Pd " objs; %8.1f KB; %8.1f cum KB\n",
-        i, i * kObjectAlignment, list_length,
+        i, static_cast<int>(i * kObjectAlignment), list_length,
         list_bytes / static_cast<double>(KB),
         small_bytes / static_cast<double>(KB));
   }
@@ -300,20 +261,16 @@ class IntptrPair {
 };
 
 void FreeList::PrintLarge() const {
-  int large_sizes = 0;
-  int large_objects = 0;
   intptr_t large_bytes = 0;
   MallocDirectChainedHashMap<NumbersKeyValueTrait<IntptrPair> > map;
   FreeListElement* node;
   for (node = free_lists_[kNumLists]; node != NULL; node = node->next()) {
-    IntptrPair* pair = map.Lookup(node->Size());
+    IntptrPair* pair = map.Lookup(node->HeapSize());
     if (pair == NULL) {
-      large_sizes += 1;
-      map.Insert(IntptrPair(node->Size(), 1));
+      map.Insert(IntptrPair(node->HeapSize(), 1));
     } else {
       pair->set_second(pair->second() + 1);
     }
-    large_objects += 1;
   }
 
   MallocDirectChainedHashMap<NumbersKeyValueTrait<IntptrPair> >::Iterator it =
@@ -334,7 +291,7 @@ void FreeList::PrintLarge() const {
 }
 
 void FreeList::Print() const {
-  MutexLocker ml(mutex_);
+  MutexLocker ml(&mutex_);
   PrintSmall();
   PrintLarge();
 }
@@ -345,7 +302,7 @@ void FreeList::SplitElementAfterAndEnqueue(FreeListElement* element,
   // Precondition required by AsElement and EnqueueElement: either
   // element->Size() == size, or else the (page containing the) header of
   // the remainder element starting at element + size is writable.
-  intptr_t remainder_size = element->Size() - size;
+  intptr_t remainder_size = element->HeapSize() - size;
   if (remainder_size == 0) return;
 
   uword remainder_address = reinterpret_cast<uword>(element) + size;
@@ -353,24 +310,34 @@ void FreeList::SplitElementAfterAndEnqueue(FreeListElement* element,
   intptr_t remainder_index = IndexForSize(remainder_size);
   EnqueueElement(element, remainder_index);
 
-  // Postcondition: when allocating in a protected page, the remainder
-  // element is no longer writable unless it is in the same page as the
-  // allocated element.  (The allocated element is still writable, and the
-  // remainder element will be protected when the allocated one is).
-  if (is_protected &&
-      !VirtualMemory::InSamePage(remainder_address - 1, remainder_address)) {
-    VirtualMemory::Protect(reinterpret_cast<void*>(remainder_address),
-                           remainder_size, VirtualMemory::kReadExecute);
+  // Postcondition: when allocating in a protected page, the fraction of the
+  // remainder element which does not share a page with the allocated element is
+  // no longer writable. This means that if the remainder's header is not fully
+  // contained in the last page of the allocation, we need to re-protect the
+  // page it ends on.
+  if (is_protected) {
+    const uword remainder_header_size =
+        FreeListElement::HeaderSizeFor(remainder_size);
+    if (!VirtualMemory::InSamePage(
+            remainder_address - 1,
+            remainder_address + remainder_header_size - 1)) {
+      VirtualMemory::Protect(
+          reinterpret_cast<void*>(
+              Utils::RoundUp(remainder_address, VirtualMemory::PageSize())),
+          remainder_address + remainder_header_size -
+              Utils::RoundUp(remainder_address, VirtualMemory::PageSize()),
+          VirtualMemory::kReadExecute);
+    }
   }
 }
 
 FreeListElement* FreeList::TryAllocateLarge(intptr_t minimum_size) {
-  MutexLocker ml(mutex_);
+  MutexLocker ml(&mutex_);
   return TryAllocateLargeLocked(minimum_size);
 }
 
 FreeListElement* FreeList::TryAllocateLargeLocked(intptr_t minimum_size) {
-  DEBUG_ASSERT(mutex_->IsOwnedByCurrentThread());
+  DEBUG_ASSERT(mutex_.IsOwnedByCurrentThread());
   FreeListElement* previous = NULL;
   FreeListElement* current = free_lists_[kNumLists];
   // TODO(koda): Find largest.
@@ -379,7 +346,7 @@ FreeListElement* FreeList::TryAllocateLargeLocked(intptr_t minimum_size) {
       freelist_search_budget_ + (minimum_size >> kWordSizeLog2);
   while (current != NULL) {
     FreeListElement* next = current->next();
-    if (current->Size() >= minimum_size) {
+    if (current->HeapSize() >= minimum_size) {
       if (previous == NULL) {
         free_lists_[kNumLists] = next;
       } else {
@@ -396,26 +363,6 @@ FreeListElement* FreeList::TryAllocateLargeLocked(intptr_t minimum_size) {
     current = next;
   }
   return NULL;
-}
-
-uword FreeList::TryAllocateSmallLocked(intptr_t size) {
-  DEBUG_ASSERT(mutex_->IsOwnedByCurrentThread());
-  if (size > last_free_small_size_) {
-    return 0;
-  }
-  int index = IndexForSize(size);
-  if (index != kNumLists && free_map_.Test(index)) {
-    return reinterpret_cast<uword>(DequeueElement(index));
-  }
-  if ((index + 1) < kNumLists) {
-    intptr_t next_index = free_map_.Next(index + 1);
-    if (next_index != -1) {
-      FreeListElement* element = DequeueElement(next_index);
-      SplitElementAfterAndEnqueue(element, size, false);
-      return reinterpret_cast<uword>(element);
-    }
-  }
-  return 0;
 }
 
 }  // namespace dart

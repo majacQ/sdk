@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library test.reflected_type_function_types;
 
 import 'dart:mirrors';
@@ -13,7 +15,8 @@ typedef bool Predicate(num n);
 bool somePredicate(num n) => n < 0;
 
 main() {
-  FunctionTypeMirror numToBool1 = reflect(somePredicate).type;
+  FunctionTypeMirror numToBool1 =
+      reflect(somePredicate).type as FunctionTypeMirror;
   FunctionTypeMirror numToBool2 =
       (reflectType(Predicate) as TypedefMirror).referent;
 

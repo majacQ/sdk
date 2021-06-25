@@ -1,3 +1,5 @@
+
+// @dart = 2.9
 @JS()
 library js_typed_interop_type3_test;
 
@@ -34,22 +36,22 @@ class F {
   F(this.foo);
 }
 
-@NoInline()
+@pragma('dart2js:noInline')
 testA(A o) {
   return o.foo;
 }
 
-@NoInline()
+@pragma('dart2js:noInline')
 testC(C o) {
   return o.foo;
 }
 
-@NoInline()
+@pragma('dart2js:noInline')
 testD(D o) {
   return o.foo;
 }
 
-@NoInline()
+@pragma('dart2js:noInline')
 testF(F o) {
   return o.foo;
 }

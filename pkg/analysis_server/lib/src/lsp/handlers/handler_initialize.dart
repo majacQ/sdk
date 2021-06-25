@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+import 'dart:io';
+
 import 'package:analysis_server/lsp_protocol/protocol_generated.dart';
 import 'package:analysis_server/lsp_protocol/protocol_special.dart';
 import 'package:analysis_server/src/lsp/handlers/handler_states.dart';
@@ -12,73 +14,69 @@ class InitializeMessageHandler
     extends MessageHandler<InitializeParams, InitializeResult> {
   InitializeMessageHandler(LspAnalysisServer server) : super(server);
 
+  @override
   Method get handlesMessage => Method.initialize;
 
   @override
-  InitializeParams convertParams(Map<String, dynamic> json) =>
-      InitializeParams.fromJson(json);
+  LspJsonHandler<InitializeParams> get jsonHandler =>
+      InitializeParams.jsonHandler;
 
-  ErrorOr<InitializeResult> handle(InitializeParams params) {
+  @override
+  ErrorOr<InitializeResult> handle(
+      InitializeParams params, CancellationToken token) {
+    server.handleClientConnection(
+      params.capabilities,
+      params.initializationOptions,
+    );
+
     final openWorkspacePaths = <String>[];
-
-    if (params.workspaceFolders != null) {
-      params.workspaceFolders.forEach((wf) {
-        openWorkspacePaths.add(Uri.parse(wf.uri).toFilePath());
-      });
+    final workspaceFolders = params.workspaceFolders;
+    final rootUri = params.rootUri;
+    final rootPath = params.rootPath;
+    // The onlyAnalyzeProjectsWithOpenFiles flag allows opening huge folders
+    // without setting them as analysis roots. Instead, analysis roots will be
+    // based only on the open files.
+    if (!server.initializationOptions.onlyAnalyzeProjectsWithOpenFiles) {
+      if (workspaceFolders != null) {
+        workspaceFolders.forEach((wf) {
+          final uri = Uri.parse(wf.uri);
+          // Only file URIs are supported, but there's no way to signal this to
+          // the LSP client (and certainly not before initialization).
+          if (uri.isScheme('file')) {
+            openWorkspacePaths.add(uri.toFilePath());
+          }
+        });
+      }
+      if (rootUri != null) {
+        final uri = Uri.parse(rootUri);
+        if (uri.isScheme('file')) {
+          openWorkspacePaths.add(uri.toFilePath());
+        }
+      } else if (rootPath != null) {
+        openWorkspacePaths.add(rootPath);
+      }
     }
-    if (params.rootUri != null) {
-      openWorkspacePaths.add(Uri.parse(params.rootUri).toFilePath());
-      // ignore: deprecated_member_use
-    } else if (params.rootPath != null) {
-      openWorkspacePaths.add(params.rootUri);
+
+    server.messageHandler = InitializingStateMessageHandler(
+      server,
+      openWorkspacePaths,
+    );
+
+    final capabilities = server.capabilitiesComputer
+        .computeServerCapabilities(server.clientCapabilities!);
+    server.capabilities = capabilities;
+
+    var sdkVersion = Platform.version;
+    if (sdkVersion.contains(' ')) {
+      sdkVersion = sdkVersion.substring(0, sdkVersion.indexOf(' '));
     }
 
-    server.setClientCapabilities(params.capabilities);
-    server.messageHandler =
-        new InitializingStateMessageHandler(server, openWorkspacePaths);
-
-    return success(new InitializeResult(new ServerCapabilities(
-        Either2<TextDocumentSyncOptions, num>.t1(new TextDocumentSyncOptions(
-          true,
-          TextDocumentSyncKind.Incremental,
-          false,
-          false,
-          null,
-        )),
-        true, // hoverProvider
-        new CompletionOptions(
-          false,
-          // Set the characters that will cause the editor to automatically
-          // trigger completion.
-          // TODO(dantup): This is quite eager and may need filtering in the
-          // completion handler.
-          // See https://github.com/Dart-Code/Dart-Code/blob/c616c93c87972713454eb0518f97c0278201a99a/src/providers/dart_completion_item_provider.ts#L36
-          r'''.: =(${'"/\'''.split(''),
-        ),
-        new SignatureHelpOptions(
-          // TODO(dantup): Signature help triggering is even more sensitive to
-          // bad chars, so we'll need to implement the logic described here:
-          // https://github.com/dart-lang/sdk/issues/34241
-          [],
-        ),
-        true, // definitionProvider
-        null,
-        null,
-        true, // referencesProvider
-        null,
-        true, // documentSymbolProvider
-        null,
-        null,
-        null,
-        true, // documentFormattingProvider
-        false, // documentRangeFormattingProvider
-        new DocumentOnTypeFormattingOptions('}', [';']),
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null)));
+    return success(InitializeResult(
+      capabilities: capabilities,
+      serverInfo: InitializeResultServerInfo(
+        name: 'Dart SDK LSP Analysis Server',
+        version: sdkVersion,
+      ),
+    ));
   }
 }

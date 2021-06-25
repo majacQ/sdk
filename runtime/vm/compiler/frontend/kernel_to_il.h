@@ -5,13 +5,17 @@
 #ifndef RUNTIME_VM_COMPILER_FRONTEND_KERNEL_TO_IL_H_
 #define RUNTIME_VM_COMPILER_FRONTEND_KERNEL_TO_IL_H_
 
-#if !defined(DART_PRECOMPILED_RUNTIME)
+#if defined(DART_PRECOMPILED_RUNTIME)
+#error "AOT runtime should not use compiler sources (including header files)"
+#endif  // defined(DART_PRECOMPILED_RUNTIME)
 
 #include "vm/growable_array.h"
 #include "vm/hash_map.h"
 
 #include "vm/compiler/backend/flow_graph.h"
 #include "vm/compiler/backend/il.h"
+#include "vm/compiler/ffi/marshaller.h"
+#include "vm/compiler/ffi/native_type.h"
 #include "vm/compiler/frontend/base_flow_graph_builder.h"
 #include "vm/compiler/frontend/kernel_translation_helper.h"
 #include "vm/compiler/frontend/scope_builder.h"
@@ -41,6 +45,12 @@ struct YieldContinuation {
   YieldContinuation() : entry(NULL), try_index(kInvalidTryIndex) {}
 };
 
+enum class TypeChecksToBuild {
+  kCheckAllTypeParameterBounds,
+  kCheckNonCovariantTypeParameterBounds,
+  kCheckCovariantTypeParameterBounds,
+};
+
 class FlowGraphBuilder : public BaseFlowGraphBuilder {
  public:
   FlowGraphBuilder(ParsedFunction* parsed_function,
@@ -59,12 +69,90 @@ class FlowGraphBuilder : public BaseFlowGraphBuilder {
   BlockEntryInstr* BuildPrologue(BlockEntryInstr* normal_entry,
                                  PrologueInfo* prologue_info);
 
+  // Return names of optional named parameters of [function].
+  ArrayPtr GetOptionalParameterNames(const Function& function);
+
+  // Generate fragment which pushes all explicit parameters of [function].
+  Fragment PushExplicitParameters(
+      const Function& function,
+      const Function& target = Function::null_function());
+
   FlowGraph* BuildGraphOfMethodExtractor(const Function& method);
   FlowGraph* BuildGraphOfNoSuchMethodDispatcher(const Function& function);
+
+  struct ClosureCallInfo;
+
+  // Tests whether the closure function is generic and branches to the
+  // appropriate fragment.
+  Fragment TestClosureFunctionGeneric(const ClosureCallInfo& info,
+                                      Fragment generic,
+                                      Fragment not_generic);
+
+  // Tests whether the function parameter at the given index is required and
+  // branches to the appropriate fragment. Loads the parameter index to
+  // check from info.vars->current_param_index.
+  Fragment TestClosureFunctionNamedParameterRequired(
+      const ClosureCallInfo& info,
+      Fragment set,
+      Fragment not_set);
+
+  // Builds a fragment that, if there are no provided function type arguments,
+  // calculates the appropriate TAV to use instead. Stores either the provided
+  // or calculated function type arguments in vars->function_type_args.
+  Fragment BuildClosureCallDefaultTypeHandling(const ClosureCallInfo& info);
+
+  // The BuildClosureCall...Check methods differs from the checks built in the
+  // PrologueBuilder in that they are built for invoke field dispatchers,
+  // where the ArgumentsDescriptor is known at compile time but the specific
+  // closure function is retrieved at runtime.
+
+  // Builds checks that the given named arguments have valid argument names
+  // and, in the case of null safe code, that all required named parameters
+  // are provided.
+  Fragment BuildClosureCallNamedArgumentsCheck(const ClosureCallInfo& info);
+
+  // Builds checks for checking the arguments of a call are valid for the
+  // function retrieved at runtime from the closure.
+  Fragment BuildClosureCallArgumentsValidCheck(const ClosureCallInfo& info);
+
+  // Builds checks that the type arguments of a call are consistent with the
+  // bounds of the closure function type parameters. Assumes that the closure
+  // function is generic.
+  Fragment BuildClosureCallTypeArgumentsTypeCheck(const ClosureCallInfo& info);
+
+  // Builds checks for type checking a given argument of the closure call using
+  // parameter information from the closure function retrieved at runtime.
+  //
+  // For named arguments, arg_name is a compile-time constant retrieved from
+  // the saved arguments descriptor. For positional arguments, null is passed.
+  Fragment BuildClosureCallArgumentTypeCheck(const ClosureCallInfo& info,
+                                             LocalVariable* param_index,
+                                             intptr_t arg_index,
+                                             const String& arg_name);
+
+  // Builds checks for type checking the arguments of a call using parameter
+  // information for the function retrieved at runtime from the closure.
+  Fragment BuildClosureCallArgumentTypeChecks(const ClosureCallInfo& info);
+
+  // Main entry point for building checks.
+  Fragment BuildDynamicClosureCallChecks(LocalVariable* closure);
+
   FlowGraph* BuildGraphOfInvokeFieldDispatcher(const Function& function);
+  FlowGraph* BuildGraphOfFfiTrampoline(const Function& function);
+  FlowGraph* BuildGraphOfFfiCallback(const Function& function);
+  FlowGraph* BuildGraphOfFfiNative(const Function& function);
 
   Fragment NativeFunctionBody(const Function& function,
                               LocalVariable* first_parameter);
+
+  // Every recognized method has a body expressed in IL.
+  bool IsRecognizedMethodForFlowGraph(const Function& function);
+  FlowGraph* BuildGraphOfRecognizedMethod(const Function& function);
+
+  Fragment BuildTypedDataViewFactoryConstructor(const Function& function,
+                                                classid_t cid);
+  Fragment BuildTypedDataFactoryConstructor(const Function& function,
+                                            classid_t cid);
 
   Fragment EnterScope(intptr_t kernel_offset,
                       const LocalScope** scope = nullptr);
@@ -80,17 +168,13 @@ class FlowGraphBuilder : public BaseFlowGraphBuilder {
   Fragment TranslateInstantiatedTypeArguments(
       const TypeArguments& type_arguments);
 
-  Fragment AllocateObject(TokenPosition position,
-                          const Class& klass,
-                          intptr_t argument_count);
-  Fragment AllocateObject(const Class& klass, const Function& closure_function);
   Fragment CatchBlockEntry(const Array& handler_types,
                            intptr_t handler_index,
                            bool needs_stacktrace,
                            bool is_synthesized);
   Fragment TryCatch(int try_handler_index);
   Fragment CheckStackOverflowInPrologue(TokenPosition position);
-  Fragment CloneContext(const GrowableArray<LocalVariable*>& context_variables);
+  Fragment CloneContext(const ZoneGrowableArray<const Slot*>& context_slots);
 
   Fragment InstanceCall(
       TokenPosition position,
@@ -100,27 +184,27 @@ class FlowGraphBuilder : public BaseFlowGraphBuilder {
       intptr_t argument_count,
       const Array& argument_names,
       intptr_t checked_argument_count,
-      const Function& interface_target,
+      const Function& interface_target = Function::null_function(),
+      const Function& tearoff_interface_target = Function::null_function(),
       const InferredTypeMetadata* result_type = nullptr,
       bool use_unchecked_entry = false,
-      const CallSiteAttributesMetadata* call_site_attrs = nullptr);
+      const CallSiteAttributesMetadata* call_site_attrs = nullptr,
+      bool receiver_is_not_smi = false);
 
-  Fragment ClosureCall(TokenPosition position,
-                       intptr_t type_args_len,
-                       intptr_t argument_count,
-                       const Array& argument_names,
-                       bool use_unchecked_entry = false);
+  Fragment FfiCall(const compiler::ffi::CallMarshaller& marshaller);
 
+  Fragment ThrowException(TokenPosition position);
   Fragment RethrowException(TokenPosition position, int catch_try_index);
-  Fragment LoadClassId();
   Fragment LoadLocal(LocalVariable* variable);
-  Fragment InitStaticField(const Field& field);
+  Fragment IndirectGoto(intptr_t target_count);
+  Fragment StoreLateField(const Field& field,
+                          LocalVariable* instance,
+                          LocalVariable* setter_value);
   Fragment NativeCall(const String* name, const Function* function);
-  Fragment Return(TokenPosition position, bool omit_result_type_check = false);
-  Fragment CheckNull(TokenPosition position,
-                     LocalVariable* receiver,
-                     const String& function_name,
-                     bool clear_the_temp = true);
+  Fragment Return(
+      TokenPosition position,
+      bool omit_result_type_check = false,
+      intptr_t yield_index = UntaggedPcDescriptors::kInvalidYieldIndex);
   void SetResultTypeForStaticCall(StaticCallInstr* call,
                                   const Function& target,
                                   intptr_t argument_count,
@@ -137,10 +221,12 @@ class FlowGraphBuilder : public BaseFlowGraphBuilder {
                       const InferredTypeMetadata* result_type = NULL,
                       intptr_t type_args_len = 0,
                       bool use_unchecked_entry = false);
-  Fragment StringInterpolate(TokenPosition position);
   Fragment StringInterpolateSingle(TokenPosition position);
   Fragment ThrowTypeError();
-  Fragment ThrowNoSuchMethodError();
+  Fragment ThrowNoSuchMethodError(const Function& target);
+  Fragment ThrowLateInitializationError(TokenPosition position,
+                                        const char* throw_method_name,
+                                        const String& name);
   Fragment BuildImplicitClosureCreation(const Function& target);
 
   Fragment EvaluateAssertion();
@@ -152,7 +238,7 @@ class FlowGraphBuilder : public BaseFlowGraphBuilder {
       const String& dst_name,
       AssertAssignableInstr::Kind kind = AssertAssignableInstr::kUnknown);
 
-  Fragment AssertAssignable(
+  Fragment AssertAssignableLoadTypeArguments(
       TokenPosition position,
       const AbstractType& dst_type,
       const String& dst_name,
@@ -161,12 +247,302 @@ class FlowGraphBuilder : public BaseFlowGraphBuilder {
                          const AbstractType& sub_type,
                          const AbstractType& super_type,
                          const String& dst_name);
+  // Assumes destination name, supertype, and subtype are the top of the stack.
+  Fragment AssertSubtype(TokenPosition position);
 
   bool NeedsDebugStepCheck(const Function& function, TokenPosition position);
   bool NeedsDebugStepCheck(Value* value, TokenPosition position);
-  Fragment DebugStepCheck(TokenPosition position);
+
+  // Deals with StoreIndexed not working with kUnboxedFloat.
+  // TODO(dartbug.com/43448): Remove this workaround.
+  Fragment StoreIndexedTypedDataUnboxed(Representation unboxed_representation,
+                                        intptr_t index_scale,
+                                        bool index_unboxed);
+  // Deals with LoadIndexed not working with kUnboxedFloat.
+  // TODO(dartbug.com/43448): Remove this workaround.
+  Fragment LoadIndexedTypedDataUnboxed(Representation unboxed_representation,
+                                       intptr_t index_scale,
+                                       bool index_unboxed);
+
+  // Truncates (instead of deoptimizing) if the origin does not fit into the
+  // target representation.
+  Fragment UnboxTruncate(Representation to);
+
+  // Creates an ffi.Pointer holding a given address (TOS).
+  Fragment FfiPointerFromAddress(const Type& result_type);
+
+  // Pushes an (unboxed) bogus value returned when a native -> Dart callback
+  // throws an exception.
+  Fragment FfiExceptionalReturnValue(const AbstractType& result_type,
+                                     const Representation target);
+
+  // Pops a Dart object and push the unboxed native version, according to the
+  // semantics of FFI argument translation.
+  //
+  // Works for FFI call arguments, and FFI callback return values.
+  Fragment FfiConvertPrimitiveToNative(
+      const compiler::ffi::BaseMarshaller& marshaller,
+      intptr_t arg_index,
+      LocalVariable* api_local_scope);
+
+  // Pops an unboxed native value, and pushes a Dart object, according to the
+  // semantics of FFI argument translation.
+  //
+  // Works for FFI call return values, and FFI callback arguments.
+  Fragment FfiConvertPrimitiveToDart(
+      const compiler::ffi::BaseMarshaller& marshaller,
+      intptr_t arg_index);
+
+  // We pass in `variable` instead of on top of the stack so that we can have
+  // multiple consecutive calls that keep only compound parts on the stack with
+  // no compound parts in between.
+  Fragment FfiCallConvertCompoundArgumentToNative(
+      LocalVariable* variable,
+      const compiler::ffi::BaseMarshaller& marshaller,
+      intptr_t arg_index);
+
+  Fragment FfiCallConvertCompoundReturnToDart(
+      const compiler::ffi::BaseMarshaller& marshaller,
+      intptr_t arg_index);
+
+  // We pass in multiple `definitions`, which are also expected to be the top
+  // of the stack. This eases storing each definition in the resulting struct
+  // or union.
+  Fragment FfiCallbackConvertCompoundArgumentToDart(
+      const compiler::ffi::BaseMarshaller& marshaller,
+      intptr_t arg_index,
+      ZoneGrowableArray<LocalVariable*>* definitions);
+
+  Fragment FfiCallbackConvertCompoundReturnToNative(
+      const compiler::ffi::CallbackMarshaller& marshaller,
+      intptr_t arg_index);
+
+  // Wraps a TypedDataBase from the stack and wraps it in a subclass of
+  // _Compound.
+  Fragment WrapTypedDataBaseInCompound(const AbstractType& compound_type);
+
+  // Loads the _typedDataBase field from a subclass of _Compound.
+  Fragment LoadTypedDataBaseFromCompound();
+
+  // Breaks up a subclass of _Compound in multiple definitions and puts them on
+  // the stack.
+  //
+  // Takes in the _Compound as a local `variable` so that can be anywhere on
+  // the stack and this function can be called multiple times to leave only the
+  // results of this function on the stack without any _Compounds in between.
+  //
+  // The compound contents are heterogeneous, so pass in
+  // `representations` to know what representation to load.
+  Fragment CopyFromCompoundToStack(
+      LocalVariable* variable,
+      const GrowableArray<Representation>& representations);
+
+  // Copy `definitions` into TypedData.
+  //
+  // Expects the TypedData on top of the stack and `definitions` right under it.
+  //
+  // Leaves TypedData on stack.
+  //
+  // The compound contents are heterogeneous, so pass in `representations` to
+  // know what representation to load.
+  Fragment PopFromStackToTypedDataBase(
+      ZoneGrowableArray<LocalVariable*>* definitions,
+      const GrowableArray<Representation>& representations);
+
+  // Copies bytes from a TypedDataBase to the address of an kUnboxedFfiIntPtr.
+  Fragment CopyFromTypedDataBaseToUnboxedAddress(intptr_t length_in_bytes);
+
+  // Copies bytes from the address of an kUnboxedFfiIntPtr to a TypedDataBase.
+  Fragment CopyFromUnboxedAddressToTypedDataBase(intptr_t length_in_bytes);
+
+  // Generates a call to `Thread::EnterApiScope`.
+  Fragment EnterHandleScope();
+
+  // Generates a call to `Thread::api_top_scope`.
+  Fragment GetTopHandleScope();
+
+  // Generates a call to `Thread::ExitApiScope`.
+  Fragment ExitHandleScope();
+
+  // Leaves a `LocalHandle` on the stack.
+  Fragment AllocateHandle(LocalVariable* api_local_scope);
+
+  // Populates the base + offset with a tagged value.
+  Fragment RawStoreField(int32_t offset);
+
+  // Wraps an `Object` from the stack and leaves a `LocalHandle` on the stack.
+  Fragment WrapHandle(LocalVariable* api_local_scope);
+
+  // Unwraps a `LocalHandle` from the stack and leaves the object on the stack.
+  Fragment UnwrapHandle();
+
+  // Wrap the current exception and stacktrace in an unhandled exception.
+  Fragment UnhandledException();
+
+  // Return from a native -> Dart callback. Can only be used in conjunction with
+  // NativeEntry and NativeParameter are used.
+  Fragment NativeReturn(const compiler::ffi::CallbackMarshaller& marshaller);
+
+  // Bit-wise cast between representations.
+  // Pops the input and pushes the converted result.
+  // Currently only works with equal sizes and floating point <-> integer.
+  Fragment BitCast(Representation from, Representation to);
 
   LocalVariable* LookupVariable(intptr_t kernel_offset);
+
+  // Build type argument type checks for the current function.
+  // ParsedFunction should have the following information:
+  //  - is_forwarding_stub()
+  //  - forwarding_stub_super_target()
+  // Scope should be populated with parameter variables including
+  //  - needs_type_check()
+  //  - is_explicit_covariant_parameter()
+  void BuildTypeArgumentTypeChecks(TypeChecksToBuild mode,
+                                   Fragment* implicit_checks);
+
+  // Build argument type checks for the current function.
+  // ParsedFunction should have the following information:
+  //  - is_forwarding_stub()
+  //  - forwarding_stub_super_target()
+  // Scope should be populated with parameter variables including
+  //  - needs_type_check()
+  //  - is_explicit_covariant_parameter()
+  void BuildArgumentTypeChecks(Fragment* explicit_checks,
+                               Fragment* implicit_checks,
+                               Fragment* implicit_redefinitions);
+
+  // Returns true if null assertion is needed for
+  // a parameter of given type.
+  bool NeedsNullAssertion(const AbstractType& type);
+
+  // Builds null assertion for the given parameter.
+  Fragment NullAssertion(LocalVariable* variable);
+
+  // Builds null assertions for all parameters (if needed).
+  Fragment BuildNullAssertions();
+
+  // Builds flow graph for noSuchMethod forwarder.
+  //
+  // If throw_no_such_method_error is set to true, an
+  // instance of NoSuchMethodError is thrown. Otherwise, the instance
+  // noSuchMethod is called.
+  //
+  // ParsedFunction should have the following information:
+  //  - default_parameter_values()
+  //  - is_forwarding_stub()
+  //  - forwarding_stub_super_target()
+  //
+  // Scope should be populated with parameter variables including
+  //  - needs_type_check()
+  //  - is_explicit_covariant_parameter()
+  //
+  FlowGraph* BuildGraphOfNoSuchMethodForwarder(
+      const Function& function,
+      bool is_implicit_closure_function,
+      bool throw_no_such_method_error);
+
+  // If no type arguments are passed to a generic function, we need to fill the
+  // type arguments in with the default types stored on the TypeParameter nodes
+  // in Kernel.
+  //
+  // ParsedFunction should have the following information:
+  //  - DefaultFunctionTypeArguments()
+  //  - function_type_arguments()
+  Fragment BuildDefaultTypeHandling(const Function& function);
+
+  FunctionEntryInstr* BuildSharedUncheckedEntryPoint(
+      Fragment prologue_from_normal_entry,
+      Fragment skippable_checks,
+      Fragment redefinitions_if_skipped,
+      Fragment body);
+  FunctionEntryInstr* BuildSeparateUncheckedEntryPoint(
+      BlockEntryInstr* normal_entry,
+      Fragment normal_prologue,
+      Fragment extra_prologue,
+      Fragment shared_prologue,
+      Fragment body);
+
+  // Builds flow graph for implicit closure function (tear-off).
+  //
+  // ParsedFunction should have the following information:
+  //  - DefaultFunctionTypeArguments()
+  //  - function_type_arguments()
+  //  - default_parameter_values()
+  //  - is_forwarding_stub()
+  //  - forwarding_stub_super_target()
+  //
+  // Scope should be populated with parameter variables including
+  //  - needs_type_check()
+  //  - is_explicit_covariant_parameter()
+  //
+  FlowGraph* BuildGraphOfImplicitClosureFunction(const Function& function);
+
+  // Builds flow graph of implicit field getter, setter, or a
+  // dynamic invocation forwarder to a field setter.
+  //
+  // If field is const, its value should be evaluated and stored in
+  //  - StaticValue()
+  //
+  // Scope should be populated with parameter variables including
+  //  - needs_type_check()
+  //
+  FlowGraph* BuildGraphOfFieldAccessor(const Function& function);
+
+  // Builds flow graph of dynamic invocation forwarder.
+  //
+  // ParsedFunction should have the following information:
+  //  - DefaultFunctionTypeArguments()
+  //  - function_type_arguments()
+  //  - default_parameter_values()
+  //  - is_forwarding_stub()
+  //  - forwarding_stub_super_target()
+  //
+  // Scope should be populated with parameter variables including
+  //  - needs_type_check()
+  //  - is_explicit_covariant_parameter()
+  //
+  FlowGraph* BuildGraphOfDynamicInvocationForwarder(const Function& function);
+
+  void SetConstantRangeOfCurrentDefinition(const Fragment& fragment,
+                                           int64_t min,
+                                           int64_t max);
+
+  // Extracts a packed field out of the unboxed value with representation [rep
+  // on the top of the stack. Picks a sequence that keeps unboxed values on the
+  // expression stack only as needed, switching to Smis as soon as possible.
+  template <typename T>
+  Fragment BuildExtractUnboxedSlotBitFieldIntoSmi(const Slot& slot) {
+    ASSERT(RepresentationUtils::IsUnboxedInteger(slot.representation()));
+    Fragment instructions;
+    if (!Boxing::RequiresAllocation(slot.representation())) {
+      // We don't need to allocate to box this value, so it already fits in
+      // a Smi (and thus the mask must also).
+      instructions += LoadNativeField(slot);
+      instructions += Box(slot.representation());
+      instructions += IntConstant(T::mask_in_place());
+      instructions += SmiBinaryOp(Token::kBIT_AND);
+    } else {
+      // Since kBIT_AND never throws or deoptimizes, we require that the result
+      // of masking the field in place fits into a Smi, so we can use Smi
+      // operations for the shift.
+      static_assert(T::mask_in_place() <= compiler::target::kSmiMax,
+                    "Cannot fit results of masking in place into a Smi");
+      instructions += LoadNativeField(slot);
+      instructions +=
+          UnboxedIntConstant(T::mask_in_place(), slot.representation());
+      instructions += BinaryIntegerOp(Token::kBIT_AND, slot.representation());
+      // Set the range of the definition that will be used as the value in the
+      // box so that ValueFitsSmi() returns true even in unoptimized code.
+      SetConstantRangeOfCurrentDefinition(instructions, 0, T::mask_in_place());
+      instructions += Box(slot.representation());
+    }
+    if (T::shift() != 0) {
+      // Only add the shift operation if it's necessary.
+      instructions += IntConstant(T::shift());
+      instructions += SmiBinaryOp(Token::kSHR);
+    }
+    return instructions;
+  }
 
   TranslationHelper translation_helper_;
   Thread* thread_;
@@ -183,6 +559,7 @@ class FlowGraphBuilder : public BaseFlowGraphBuilder {
   intptr_t try_depth_;
   intptr_t catch_depth_;
   intptr_t for_in_depth_;
+  intptr_t block_expression_depth_;
 
   GraphEntryInstr* graph_entry_;
 
@@ -232,15 +609,70 @@ class FlowGraphBuilder : public BaseFlowGraphBuilder {
 
   ActiveClass active_class_;
 
+  // Cached _PrependTypeArguments.
+  Function& prepend_type_arguments_;
+
+  // Returns the function _PrependTypeArguments from dart:_internal. If the
+  // cached version is null, retrieves it and updates the cache.
+  const Function& PrependTypeArgumentsFunction();
+
+  // Cached _AssertionError._throwNewNullAssertion.
+  Function& throw_new_null_assertion_;
+
+  // Returns the function _AssertionError._throwNewNullAssertion. If the
+  // cached version is null, retrieves it and updates the cache.
+  const Function& ThrowNewNullAssertionFunction();
+
   friend class BreakableBlock;
   friend class CatchBlock;
-  friend class ConstantEvaluator;
+  friend class ProgramState;
   friend class StreamingFlowGraphBuilder;
   friend class SwitchBlock;
   friend class TryCatchBlock;
   friend class TryFinallyBlock;
 
   DISALLOW_COPY_AND_ASSIGN(FlowGraphBuilder);
+};
+
+// Convenience class to save/restore program state.
+// This snapshot denotes a partial state of the flow
+// grap builder that is needed when recursing into
+// the statements and expressions of a finalizer block.
+class ProgramState {
+ public:
+  ProgramState(BreakableBlock* breakable_block,
+               SwitchBlock* switch_block,
+               intptr_t loop_depth,
+               intptr_t for_in_depth,
+               intptr_t try_depth,
+               intptr_t catch_depth,
+               intptr_t block_expression_depth)
+      : breakable_block_(breakable_block),
+        switch_block_(switch_block),
+        loop_depth_(loop_depth),
+        for_in_depth_(for_in_depth),
+        try_depth_(try_depth),
+        catch_depth_(catch_depth),
+        block_expression_depth_(block_expression_depth) {}
+
+  void assignTo(FlowGraphBuilder* builder) const {
+    builder->breakable_block_ = breakable_block_;
+    builder->switch_block_ = switch_block_;
+    builder->loop_depth_ = loop_depth_;
+    builder->for_in_depth_ = for_in_depth_;
+    builder->try_depth_ = try_depth_;
+    builder->catch_depth_ = catch_depth_;
+    builder->block_expression_depth_ = block_expression_depth_;
+  }
+
+ private:
+  BreakableBlock* const breakable_block_;
+  SwitchBlock* const switch_block_;
+  const intptr_t loop_depth_;
+  const intptr_t for_in_depth_;
+  const intptr_t try_depth_;
+  const intptr_t catch_depth_;
+  const intptr_t block_expression_depth_;
 };
 
 class SwitchBlock {
@@ -266,14 +698,17 @@ class SwitchBlock {
   }
 
   // Get destination via absolute target number (i.e. the correct destination
-  // is not not necessarily in this block.
+  // is not necessarily in this block).
   JoinEntryInstr* Destination(intptr_t target_index,
                               TryFinallyBlock** outer_finally = NULL,
                               intptr_t* context_depth = NULL) {
-    // Find corresponding [SwitchStatement].
+    // Verify consistency of program state.
+    ASSERT(builder_->switch_block_ == this);
+    // Find corresponding destination.
     SwitchBlock* block = this;
     while (block->depth_ > target_index) {
       block = block->outer_;
+      ASSERT(block != nullptr);
     }
 
     // Set the outer finally block.
@@ -355,28 +790,34 @@ class TryFinallyBlock {
         outer_(builder->try_finally_block_),
         finalizer_kernel_offset_(finalizer_kernel_offset),
         context_depth_(builder->context_depth_),
+        try_index_(builder_->CurrentTryIndex()),
         // Finalizers are executed outside of the try block hence
         // try depth of finalizers are one less than current try
-        // depth.
-        try_depth_(builder->try_depth_ - 1),
-        try_index_(builder_->CurrentTryIndex()) {
+        // depth. For others, program state is snapshot of current.
+        state_(builder_->breakable_block_,
+               builder_->switch_block_,
+               builder_->loop_depth_,
+               builder_->for_in_depth_,
+               builder_->try_depth_ - 1,
+               builder_->catch_depth_,
+               builder_->block_expression_depth_) {
     builder_->try_finally_block_ = this;
   }
   ~TryFinallyBlock() { builder_->try_finally_block_ = outer_; }
 
+  TryFinallyBlock* outer() const { return outer_; }
   intptr_t finalizer_kernel_offset() const { return finalizer_kernel_offset_; }
   intptr_t context_depth() const { return context_depth_; }
-  intptr_t try_depth() const { return try_depth_; }
   intptr_t try_index() const { return try_index_; }
-  TryFinallyBlock* outer() const { return outer_; }
+  const ProgramState& state() const { return state_; }
 
  private:
   FlowGraphBuilder* const builder_;
   TryFinallyBlock* const outer_;
-  intptr_t finalizer_kernel_offset_;
+  const intptr_t finalizer_kernel_offset_;
   const intptr_t context_depth_;
-  const intptr_t try_depth_;
   const intptr_t try_index_;
+  const ProgramState state_;
 
   DISALLOW_COPY_AND_ASSIGN(TryFinallyBlock);
 };
@@ -406,11 +847,14 @@ class BreakableBlock {
   JoinEntryInstr* BreakDestination(intptr_t label_index,
                                    TryFinallyBlock** outer_finally,
                                    intptr_t* context_depth) {
-    BreakableBlock* block = builder_->breakable_block_;
+    // Verify consistency of program state.
+    ASSERT(builder_->breakable_block_ == this);
+    // Find corresponding destination.
+    BreakableBlock* block = this;
     while (block->index_ != label_index) {
       block = block->outer_;
+      ASSERT(block != nullptr);
     }
-    ASSERT(block != NULL);
     *outer_finally = block->outer_finally_;
     *context_depth = block->context_depth_;
     return block->EnsureDestination();
@@ -467,5 +911,4 @@ class CatchBlock {
 }  // namespace kernel
 }  // namespace dart
 
-#endif  // !defined(DART_PRECOMPILED_RUNTIME)
 #endif  // RUNTIME_VM_COMPILER_FRONTEND_KERNEL_TO_IL_H_

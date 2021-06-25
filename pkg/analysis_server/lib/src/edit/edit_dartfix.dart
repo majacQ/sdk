@@ -1,361 +1,271 @@
-// Copyright (c) 2018, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2018, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'package:analysis_server/plugin/edit/fix/fix_core.dart';
 import 'package:analysis_server/protocol/protocol.dart';
 import 'package:analysis_server/protocol/protocol_generated.dart';
 import 'package:analysis_server/src/analysis_server.dart';
-import 'package:analysis_server/src/edit/fix/prefer_int_literals_fix.dart';
-import 'package:analysis_server/src/edit/fix/prefer_mixin_fix.dart';
-import 'package:analysis_server/src/services/correction/fix.dart';
-import 'package:analysis_server/src/services/correction/fix_internal.dart';
+import 'package:analysis_server/src/edit/fix/dartfix_info.dart';
+import 'package:analysis_server/src/edit/fix/dartfix_listener.dart';
+import 'package:analysis_server/src/edit/fix/dartfix_registrar.dart';
+import 'package:analysis_server/src/edit/fix/fix_code_task.dart';
+import 'package:analysis_server/src/edit/fix/fix_error_task.dart';
+import 'package:analysis_server/src/edit/fix/fix_lint_task.dart';
 import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/dart/analysis/session.dart';
-import 'package:analyzer/dart/ast/ast.dart';
-import 'package:analyzer/dart/element/element.dart';
-import 'package:analyzer/error/error.dart';
-import 'package:analyzer/error/listener.dart';
 import 'package:analyzer/file_system/file_system.dart';
-import 'package:analyzer/src/dart/ast/utilities.dart';
-import 'package:analyzer/src/error/codes.dart';
-import 'package:analyzer/src/generated/source.dart';
-import 'package:analyzer/src/lint/linter.dart';
-import 'package:analyzer/src/lint/linter_visitor.dart';
-import 'package:analyzer/src/lint/registry.dart';
-import 'package:analyzer/src/services/lint.dart';
-import 'package:analyzer_plugin/protocol/protocol_common.dart'
-    show Location, SourceChange, SourceEdit, SourceFileEdit;
-import 'package:front_end/src/fasta/fasta_codes.dart';
-import 'package:front_end/src/scanner/token.dart';
-import 'package:source_span/src/span.dart';
+import 'package:analyzer/src/generated/engine.dart' show AnalysisOptionsImpl;
+import 'package:collection/collection.dart';
 
-class EditDartFix {
+class EditDartFix
+    with FixCodeProcessor, FixErrorProcessor, FixLintProcessor
+    implements DartFixRegistrar {
   final AnalysisServer server;
+
   final Request request;
+  final pkgFolders = <Folder>[];
   final fixFolders = <Folder>[];
   final fixFiles = <File>[];
 
-  List<DartFixSuggestion> suggestions;
-  List<DartFixSuggestion> otherSuggestions;
-  SourceChange sourceChange;
+  DartFixListener listener;
 
-  EditDartFix(this.server, this.request);
-
-  void addFix(String description, Location location, SourceChange change) {
-    suggestions.add(new DartFixSuggestion(description, location: location));
-    for (SourceFileEdit fileEdit in change.edits) {
-      for (SourceEdit sourceEdit in fileEdit.edits) {
-        sourceChange.addEdit(fileEdit.file, fileEdit.fileStamp, sourceEdit);
-      }
-    }
-  }
-
-  void addRecommendation(String description, [Location location]) {
-    otherSuggestions
-        .add(new DartFixSuggestion(description, location: location));
-  }
+  EditDartFix(this.server, this.request) : listener = DartFixListener(server);
 
   Future<Response> compute() async {
-    final params = new EditDartfixParams.fromRequest(request);
+    final params = EditDartfixParams.fromRequest(request);
+    // Determine the fixes to be applied
+    final fixInfo = <DartFixInfo>[];
+    if (params.includePedanticFixes == true) {
+      for (var fix in allFixes) {
+        if (fix.isPedantic && !fixInfo.contains(fix)) {
+          fixInfo.add(fix);
+        }
+      }
+    }
+    var includedFixes = params.includedFixes;
+    if (includedFixes != null) {
+      for (var key in includedFixes) {
+        var info = allFixes.firstWhereOrNull((i) => i.key == key);
+        if (info != null) {
+          fixInfo.add(info);
+        } else {
+          return Response.invalidParameter(
+              request, 'includedFixes', 'Unknown fix: $key');
+        }
+      }
+    }
+    var excludedFixes = params.excludedFixes;
+    if (excludedFixes != null) {
+      for (var key in excludedFixes) {
+        var info = allFixes.firstWhereOrNull((i) => i.key == key);
+        if (info != null) {
+          fixInfo.remove(info);
+        } else {
+          return Response.invalidParameter(
+              request, 'excludedFixes', 'Unknown fix: $key');
+        }
+      }
+    }
+    for (var info in fixInfo) {
+      info.setup(this, listener, params);
+    }
 
     // Validate each included file and directory.
     final resourceProvider = server.resourceProvider;
     final contextManager = server.contextManager;
-    for (String filePath in params.included) {
+
+    // Discard any existing analysis so that the linters set below will be
+    // used to generate errors that can then be fixed.
+    // TODO(danrubel): Rework to use a different approach if this command
+    // will be used from within the IDE.
+    contextManager.refresh();
+
+    for (var filePath in params.included) {
       if (!server.isValidFilePath(filePath)) {
-        return new Response.invalidFilePathFormat(request, filePath);
+        return Response.invalidFilePathFormat(request, filePath);
       }
-      Resource res = resourceProvider.getResource(filePath);
-      if (!res.exists ||
-          !(contextManager.includedPaths.contains(filePath) ||
-              contextManager.isInAnalysisRoot(filePath))) {
-        return new Response.fileNotAnalyzed(request, filePath);
+
+      var analysisContext = contextManager.getContextFor(filePath);
+      if (analysisContext == null) {
+        return Response.fileNotAnalyzed(request, filePath);
       }
+
+      var res = resourceProvider.getResource(filePath);
+      if (!res.exists) {
+        return Response.fileNotAnalyzed(request, filePath);
+      }
+
+      // Set the linters used during analysis. If this command is used from
+      // within an IDE, then this will cause the lint results to change.
+      // TODO(danrubel): Rework to use a different approach if this command
+      // will be used from within the IDE.
+      var driver = analysisContext.driver;
+      var analysisOptions = driver.analysisOptions as AnalysisOptionsImpl;
+      analysisOptions.lint = true;
+      analysisOptions.lintRules = linters;
+
+      var pkgFolder = analysisContext.contextRoot.root;
+      if (!pkgFolders.contains(pkgFolder)) {
+        pkgFolders.add(pkgFolder);
+      }
+
       if (res is Folder) {
         fixFolders.add(res);
       } else {
-        fixFiles.add(res);
+        fixFiles.add(res as File);
       }
     }
 
-    // Get the desired lints
-    final lintRules = Registry.ruleRegistry;
+    String? changedPath;
+    contextManager.driverMap.values.forEach((driver) {
+      // Setup a listener to remember the resource that changed during analysis
+      // so it can be reported if there is an InconsistentAnalysisException.
+      driver.onCurrentSessionAboutToBeDiscarded = (String? path) {
+        changedPath = path;
+      };
+    });
 
-    final preferMixin = lintRules['prefer_mixin'];
-    final preferMixinFix = new PreferMixinFix(this);
-    preferMixin.reporter = preferMixinFix;
+    bool hasErrors;
+    try {
+      hasErrors = await runAllTasks();
+    } on InconsistentAnalysisException catch (_) {
+      // If a resource changed, report the problem without suggesting fixes
+      var changedMessage = changedPath != null
+          ? 'resource changed during analysis: $changedPath'
+          : 'multiple resources changed during analysis.';
+      return EditDartfixResult(
+        [DartFixSuggestion('Analysis canceled because $changedMessage')],
+        listener.otherSuggestions,
+        false, // We may have errors, but we do not know, and it doesn't matter.
+        listener.sourceChange.edits,
+        details: listener.details,
+      ).toResponse(request.id);
+    }
 
-    final preferIntLiterals = lintRules['prefer_int_literals'];
-    final preferIntLiteralsFix = new PreferIntLiteralsFix(this);
-    preferIntLiterals?.reporter = preferIntLiteralsFix;
+    return EditDartfixResult(
+      listener.suggestions,
+      listener.otherSuggestions,
+      hasErrors,
+      listener.sourceChange.edits,
+      details: listener.details,
+    ).toResponse(request.id);
+  }
 
-    // Setup
-    final linters = <Linter>[
-      preferMixin,
-      preferIntLiterals,
-    ];
-    final fixes = <LinterFix>[
-      preferMixinFix,
-      preferIntLiteralsFix,
-    ];
-    final lintVisitorsBySession = <AnalysisSession, _LintVisitors>{};
+  Folder? findPkgFolder(Folder start) {
+    for (var folder in start.withAncestors) {
+      if (folder.getChild('analysis_options.yaml').exists ||
+          folder.getChild('pubspec.yaml').exists) {
+        return folder;
+      }
+    }
+    return null;
+  }
 
-    // TODO(danrubel): Determine if a lint is configured to run as part of
-    // standard analysis and use those results if available instead of
-    // running the lint again.
-
-    // Analyze each source file.
+  Set<String> getPathsToProcess() {
+    final contextManager = server.contextManager;
+    final resourceProvider = server.resourceProvider;
     final resources = <Resource>[];
-    for (String rootPath in contextManager.includedPaths) {
+    for (var rootPath in contextManager.includedPaths) {
       resources.add(resourceProvider.getResource(rootPath));
     }
-    suggestions = <DartFixSuggestion>[];
-    otherSuggestions = <DartFixSuggestion>[];
-    sourceChange = new SourceChange('dartfix');
-    bool hasErrors = false;
+
+    var pathsToProcess = <String>{};
     while (resources.isNotEmpty) {
-      Resource res = resources.removeLast();
+      var res = resources.removeLast();
       if (res is Folder) {
-        for (Resource child in res.getChildren()) {
+        for (var child in res.getChildren()) {
           if (!child.shortName.startsWith('.') &&
-              contextManager.isInAnalysisRoot(child.path)) {
+              server.isAnalyzed(child.path)) {
             resources.add(child);
           }
         }
         continue;
       }
-
-      const maxAttempts = 3;
-      int attempt = 0;
-      while (attempt < maxAttempts) {
-        ResolvedUnitResult result = await server.getResolvedUnit(res.path);
-
-        // TODO(danrubel): Investigate why InconsistentAnalysisException occurs
-        // and whether this is an appropriate way to handle the situation
-        ++attempt;
-        try {
-          CompilationUnit unit = result?.unit;
-          if (unit != null) {
-            if (!hasErrors) {
-              for (AnalysisError error in result.errors) {
-                if (!(await fixError(result, error))) {
-                  if (error.errorCode.type == ErrorType.SYNTACTIC_ERROR) {
-                    hasErrors = true;
-                  }
-                }
-              }
-            }
-            Source source = result.unit.declaredElement.source;
-            for (Linter linter in linters) {
-              if (linter != null) {
-                linter.reporter.source = source;
-              }
-            }
-            var lintVisitors = lintVisitorsBySession[result.session] ??=
-                await _setupLintVisitors(result, linters);
-            if (lintVisitors.astVisitor != null) {
-              unit.accept(lintVisitors.astVisitor);
-            }
-            unit.accept(lintVisitors.linterVisitor);
-            for (LinterFix fix in fixes) {
-              await fix.applyLocalFixes(result);
-            }
-          }
-          break;
-        } on InconsistentAnalysisException catch (_) {
-          if (attempt == maxAttempts) {
-            // TODO(danrubel): Consider improving the edit.dartfix protocol
-            // to gracefully report inconsistent results for a particular
-            // file rather than aborting the entire operation.
-            rethrow;
-          }
-          // try again
-        }
+      if (!isIncluded(res.path)) {
+        continue;
       }
+      pathsToProcess.add(res.path);
     }
-
-    // Cleanup
-    for (Linter linter in linters) {
-      if (linter != null) {
-        linter.reporter.source = null;
-        linter.reporter = null;
-      }
-    }
-
-    // Apply distributed fixes
-    if (preferIntLiterals == null) {
-      // TODO(danrubel): Remove this once linter rolled into sdk/third_party.
-      addRecommendation('*** Convert double literal not available'
-          ' because prefer_int_literal not found. May need to roll linter');
-    }
-    for (LinterFix fix in fixes) {
-      await fix.applyRemainingFixes();
-    }
-
-    return new EditDartfixResult(
-            suggestions, otherSuggestions, hasErrors, sourceChange.edits)
-        .toResponse(request.id);
-  }
-
-  Future<bool> fixError(ResolvedUnitResult result, AnalysisError error) async {
-    if (error.errorCode ==
-        StaticTypeWarningCode.WRONG_NUMBER_OF_TYPE_ARGUMENTS_CONSTRUCTOR) {
-      // TODO(danrubel): Rather than comparing the error codes individually,
-      // it would be better if each error code could specify
-      // whether or not it could be fixed automatically.
-
-      // Fall through to calculate and apply the fix
-    } else {
-      // This error cannot be automatically fixed
-      return false;
-    }
-
-    final dartContext = new DartFixContextImpl(result, error);
-    final processor = new FixProcessor(dartContext);
-    Fix fix = await processor.computeFix();
-    final location = locationFor(result, error.offset, error.length);
-    if (fix != null) {
-      addFix(fix.change.message, location, fix.change);
-    } else {
-      // TODO(danrubel): Determine why the fix could not be applied
-      // and report that in the description.
-      addRecommendation('Could not fix "${error.message}"', location);
-    }
-    return true;
+    return pathsToProcess;
   }
 
   /// Return `true` if the path in within the set of `included` files
   /// or is within an `included` directory.
   bool isIncluded(String filePath) {
-    if (filePath != null) {
-      for (File file in fixFiles) {
-        if (file.path == filePath) {
-          return true;
-        }
+    for (var file in fixFiles) {
+      if (file.path == filePath) {
+        return true;
       }
-      for (Folder folder in fixFolders) {
-        if (folder.contains(filePath)) {
-          return true;
-        }
+    }
+    for (var folder in fixFolders) {
+      if (folder.contains(filePath)) {
+        return true;
       }
     }
     return false;
   }
 
-  Location locationFor(ResolvedUnitResult result, int offset, int length) {
-    final locInfo = result.unit.lineInfo.getLocation(offset);
-    final location = new Location(
-        result.path, offset, length, locInfo.lineNumber, locInfo.columnNumber);
-    return location;
-  }
-
-  Future<_LintVisitors> _setupLintVisitors(
-      ResolvedUnitResult result, List<Linter> linters) async {
-    final visitors = <AstVisitor>[];
-    final registry = new NodeLintRegistry(false);
-    // TODO(paulberry): use an API that provides this information more readily
-    var unitElement = result.unit.declaredElement;
-    var session = result.session;
-    var currentUnit = LinterContextUnit(result.content, result.unit);
-    var allUnits = <LinterContextUnit>[];
-    for (var cu in unitElement.library.units) {
-      if (identical(cu, unitElement)) {
-        allUnits.add(currentUnit);
-      } else {
-        var result = await session.getResolvedUnit(cu.source.fullName);
-        allUnits.add(LinterContextUnit(result.content, result.unit));
-      }
-    }
-    var context = LinterContextImpl(allUnits, currentUnit,
-        session.declaredVariables, result.typeProvider, result.typeSystem);
-    for (Linter linter in linters) {
-      if (linter != null) {
-        final visitor = linter.getVisitor();
-        if (visitor != null) {
-          visitors.add(visitor);
-        }
-        if (linter is NodeLintRule) {
-          (linter as NodeLintRule).registerNodeProcessors(registry, context);
+  /// Call the supplied [process] function to process each compilation unit.
+  Future processResources(
+      Future<void> Function(ResolvedUnitResult result) process) async {
+    final pathsToProcess = getPathsToProcess();
+    var pathsProcessed = <String>{};
+    for (var path in pathsToProcess) {
+      if (pathsProcessed.contains(path)) continue;
+      var driver = server.getAnalysisDriver(path);
+      if (driver != null) {
+        var result = await driver.getResolvedLibrary2(path);
+        if (result is ResolvedLibraryResult) {
+          for (var unit in result.units!) {
+            if (pathsToProcess.contains(unit.path) &&
+                !pathsProcessed.contains(unit.path)) {
+              await process(unit);
+              pathsProcessed.add(unit.path!);
+            }
+          }
+          break;
         }
       }
     }
-    final AstVisitor astVisitor = visitors.isNotEmpty
-        ? new ExceptionHandlingDelegatingAstVisitor(
-            visitors, ExceptionHandlingDelegatingAstVisitor.logException)
-        : null;
-    final AstVisitor linterVisitor = new LinterVisitor(
-        registry, ExceptionHandlingDelegatingAstVisitor.logException);
-    return _LintVisitors(astVisitor, linterVisitor);
-  }
-}
 
-abstract class LinterFix implements ErrorReporter {
-  final EditDartFix dartFix;
-
-  @override
-  Source source;
-
-  LinterFix(this.dartFix);
-
-  /// Apply fixes for the current compilation unit.
-  Future<void> applyLocalFixes(ResolvedUnitResult result);
-
-  /// Apply any fixes remaining after analysis is complete.
-  Future<void> applyRemainingFixes();
-
-  @override
-  void reportError(AnalysisError error) {
-    // ignored
+    for (var path in pathsToProcess.difference(pathsProcessed)) {
+      var result = await server.getResolvedUnit(path);
+      if (result == null || result.unit == null) {
+        continue;
+      }
+      await process(result);
+    }
   }
 
-  @override
-  void reportErrorForElement(ErrorCode errorCode, Element element,
-      [List<Object> arguments]) {
-    // ignored
+  Future<bool> runAllTasks() async {
+    // Process each package
+    for (var pkgFolder in pkgFolders) {
+      await processPackage(pkgFolder);
+    }
+
+    var hasErrors = false;
+
+    // Process each source file.
+    try {
+      await processResources((ResolvedUnitResult result) async {
+        if (await processErrors(result)) {
+          hasErrors = true;
+        }
+        if (numPhases > 0) {
+          await processCodeTasks(0, result);
+        }
+      });
+      for (var phase = 1; phase < numPhases; phase++) {
+        await processResources((ResolvedUnitResult result) async {
+          await processCodeTasks(phase, result);
+        });
+      }
+      await finishCodeTasks();
+    } finally {
+      server.contextManager.driverMap.values
+          .forEach((d) => d.onCurrentSessionAboutToBeDiscarded = null);
+    }
+
+    return hasErrors;
   }
-
-  @override
-  void reportErrorForNode(ErrorCode errorCode, AstNode node,
-      [List<Object> arguments]) {
-    // ignored
-  }
-
-  @override
-  void reportErrorForOffset(ErrorCode errorCode, int offset, int length,
-      [List<Object> arguments]) {
-    // ignored
-  }
-
-  @override
-  void reportErrorForSpan(ErrorCode errorCode, SourceSpan span,
-      [List<Object> arguments]) {
-    // ignored
-  }
-
-  @override
-  void reportErrorForToken(ErrorCode errorCode, Token token,
-      [List<Object> arguments]) {
-    // ignored
-  }
-
-  @override
-  void reportErrorMessage(
-      ErrorCode errorCode, int offset, int length, Message message) {
-    // ignored
-  }
-
-  @override
-  void reportTypeErrorForNode(
-      ErrorCode errorCode, AstNode node, List<Object> arguments) {
-    // ignored
-  }
-}
-
-class _LintVisitors {
-  final AstVisitor astVisitor;
-
-  final AstVisitor linterVisitor;
-
-  _LintVisitors(this.astVisitor, this.linterVisitor);
 }

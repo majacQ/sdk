@@ -1,12 +1,12 @@
+
+// @dart = 2.9
 library WebDBTest;
 
 import 'dart:async';
 import 'dart:html';
 import 'dart:web_sql';
 
-import 'package:unittest/unittest.dart';
-import 'package:unittest/html_config.dart';
-import 'package:async_helper/async_helper.dart';
+import 'package:async_helper/async_minitest.dart';
 
 Future<SqlResultSet> createTable(
     SqlTransaction transaction, String tableName, String columnName) async {
@@ -52,8 +52,6 @@ Future setup() async {
 }
 
 main() async {
-  useHtmlConfiguration();
-
   await setup();
 
   group('Database', () {

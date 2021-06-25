@@ -2,10 +2,12 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-main() {
+// @dart = 2.9
+
+void main() {
   /*bc:3*/ print(/*bc:1*/ foo());
 }
 
-foo() {
-  return /*bc:2*/ "foo!";
+String foo() {
+  return /*bc:2*/ 'foo!';
 }

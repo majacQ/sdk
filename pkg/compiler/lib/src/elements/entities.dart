@@ -33,6 +33,9 @@ abstract class Entity implements Spannable {
 abstract class LibraryEntity extends Entity {
   /// Return the canonical uri that identifies this library.
   Uri get canonicalUri;
+
+  /// Returns whether or not this library has opted into null safety.
+  bool get isNonNullableByDefault;
 }
 
 /// Stripped down super interface for import entities.
@@ -53,6 +56,7 @@ class ImportEntity {
 
   ImportEntity(this.isDeferred, this.name, this.uri, this.enclosingLibraryUri);
 
+  @override
   String toString() => 'import($name:${isDeferred ? ' deferred' : ''})';
 }
 
@@ -72,11 +76,6 @@ abstract class ClassEntity extends Entity {
 
   /// Whether this is an abstract class.
   bool get isAbstract;
-}
-
-abstract class TypedefEntity extends Entity {
-  /// The library in which the typedef was declared.
-  LibraryEntity get library;
 }
 
 abstract class TypeVariableEntity extends Entity {
@@ -196,6 +195,7 @@ class AsyncMarker {
   const AsyncMarker._(this.asyncParserState,
       {this.isAsync: false, this.isYielding: false});
 
+  @override
   String toString() {
     return '${isAsync ? 'async' : 'sync'}${isYielding ? '*' : ''}';
   }
@@ -215,6 +215,10 @@ class AsyncMarker {
   /// Added to make [AsyncMarker] enum-like.
   int get index => values.indexOf(this);
 }
+
+/// Values for variance annotations.
+/// This needs to be kept in sync with values of `Variance` in `dart:_rti`.
+enum Variance { legacyCovariant, covariant, contravariant, invariant }
 
 /// Stripped down super interface for constructor like entities.
 ///
@@ -263,58 +267,123 @@ class ParameterStructure {
   /// debugging data stream.
   static const String tag = 'parameter-structure';
 
-  /// The number of required (positional) parameters.
-  final int requiredParameters;
+  /// The number of required positional parameters.
+  final int requiredPositionalParameters;
 
   /// The number of positional parameters.
   final int positionalParameters;
 
-  /// The named parameters sorted alphabetically.
+  /// All named parameters sorted alphabetically.
   final List<String> namedParameters;
+
+  /// The required named parameters.
+  final Set<String> requiredNamedParameters;
 
   /// The number of type parameters.
   final int typeParameters;
 
-  const ParameterStructure(this.requiredParameters, this.positionalParameters,
-      this.namedParameters, this.typeParameters);
+  static const ParameterStructure getter =
+      ParameterStructure._(0, 0, [], {}, 0);
 
-  const ParameterStructure.getter() : this(0, 0, const <String>[], 0);
+  static const ParameterStructure setter =
+      ParameterStructure._(1, 1, [], {}, 0);
 
-  const ParameterStructure.setter() : this(1, 1, const <String>[], 0);
+  static const ParameterStructure zeroArguments =
+      ParameterStructure._(0, 0, [], {}, 0);
+
+  static const ParameterStructure oneArgument =
+      ParameterStructure._(1, 1, [], {}, 0);
+
+  static const ParameterStructure twoArguments =
+      ParameterStructure._(2, 2, [], {}, 0);
+
+  static const List<ParameterStructure> _simple = [
+    ParameterStructure._(0, 0, [], {}, 0),
+    ParameterStructure._(1, 1, [], {}, 0),
+    ParameterStructure._(2, 2, [], {}, 0),
+    ParameterStructure._(3, 3, [], {}, 0),
+    ParameterStructure._(4, 4, [], {}, 0),
+    ParameterStructure._(5, 5, [], {}, 0),
+  ];
+
+  const ParameterStructure._(
+      this.requiredPositionalParameters,
+      this.positionalParameters,
+      this.namedParameters,
+      this.requiredNamedParameters,
+      this.typeParameters);
+
+  factory ParameterStructure(
+      int requiredPositionalParameters,
+      int positionalParameters,
+      List<String> namedParameters,
+      Set<String> requiredNamedParameters,
+      int typeParameters) {
+    // This simple canonicalization reduces the number of ParameterStructure
+    // objects by over 90%.
+    if (requiredPositionalParameters == positionalParameters &&
+        namedParameters.isEmpty &&
+        requiredNamedParameters.isEmpty &&
+        typeParameters == 0 &&
+        positionalParameters < _simple.length) {
+      return _simple[positionalParameters];
+    }
+
+    // Force sharing of empty collections.
+    if (namedParameters.isEmpty) namedParameters = const [];
+    if (requiredNamedParameters.isEmpty) requiredNamedParameters = const {};
+
+    return ParameterStructure._(
+      requiredPositionalParameters,
+      positionalParameters,
+      namedParameters,
+      requiredNamedParameters,
+      typeParameters,
+    );
+  }
 
   factory ParameterStructure.fromType(FunctionType type) {
-    return new ParameterStructure(
+    return ParameterStructure(
         type.parameterTypes.length,
         type.parameterTypes.length + type.optionalParameterTypes.length,
         type.namedParameters,
+        type.requiredNamedParameters,
         type.typeVariables.length);
   }
 
   /// Deserializes a [ParameterStructure] object from [source].
   factory ParameterStructure.readFromDataSource(DataSource source) {
     source.begin(tag);
-    int requiredParameters = source.readInt();
+    int requiredPositionalParameters = source.readInt();
     int positionalParameters = source.readInt();
     List<String> namedParameters = source.readStrings();
+    Set<String> requiredNamedParameters =
+        source.readStrings(emptyAsNull: true)?.toSet() ?? const <String>{};
     int typeParameters = source.readInt();
     source.end(tag);
-    return new ParameterStructure(requiredParameters, positionalParameters,
-        namedParameters, typeParameters);
+    return ParameterStructure(
+        requiredPositionalParameters,
+        positionalParameters,
+        namedParameters,
+        requiredNamedParameters,
+        typeParameters);
   }
 
   /// Serializes this [ParameterStructure] to [sink].
   void writeToDataSink(DataSink sink) {
     sink.begin(tag);
-    sink.writeInt(requiredParameters);
+    sink.writeInt(requiredPositionalParameters);
     sink.writeInt(positionalParameters);
     sink.writeStrings(namedParameters);
+    sink.writeStrings(requiredNamedParameters);
     sink.writeInt(typeParameters);
     sink.end(tag);
   }
 
   /// The number of optional parameters (positional or named).
   int get optionalParameters =>
-      positionalParameters - requiredParameters + namedParameters.length;
+      (positionalParameters - requiredPositionalParameters) +
+      (namedParameters.length - requiredNamedParameters.length);
 
   /// The total number of parameters (required or optional).
   int get totalParameters => positionalParameters + namedParameters.length;
@@ -322,24 +391,29 @@ class ParameterStructure {
   /// Returns the [CallStructure] corresponding to a call site passing all
   /// parameters both required and optional.
   CallStructure get callStructure {
-    return new CallStructure(positionalParameters + namedParameters.length,
-        namedParameters, typeParameters);
+    return CallStructure(totalParameters, namedParameters, typeParameters);
   }
 
+  @override
   int get hashCode => Hashing.listHash(
       namedParameters,
-      Hashing.objectHash(
-          positionalParameters,
+      Hashing.setHash(
+          requiredNamedParameters,
           Hashing.objectHash(
-              requiredParameters, Hashing.objectHash(typeParameters))));
+              positionalParameters,
+              Hashing.objectHash(requiredPositionalParameters,
+                  Hashing.objectHash(typeParameters)))));
 
+  @override
   bool operator ==(other) {
     if (identical(this, other)) return true;
     if (other is! ParameterStructure) return false;
-    if (requiredParameters != other.requiredParameters ||
+    if (requiredPositionalParameters != other.requiredPositionalParameters ||
         positionalParameters != other.positionalParameters ||
         typeParameters != other.typeParameters ||
-        namedParameters.length != other.namedParameters.length) {
+        namedParameters.length != other.namedParameters.length ||
+        requiredNamedParameters.length !=
+            other.requiredNamedParameters.length) {
       return false;
     }
     for (int i = 0; i < namedParameters.length; i++) {
@@ -347,16 +421,42 @@ class ParameterStructure {
         return false;
       }
     }
+    for (String name in requiredNamedParameters) {
+      if (!other.requiredNamedParameters.contains(name)) return false;
+    }
     return true;
   }
 
+  /// Short textual representation use for testing.
+  String get shortText {
+    StringBuffer sb = StringBuffer();
+    if (typeParameters != 0) {
+      sb.write('<');
+      sb.write(typeParameters);
+      sb.write('>');
+    }
+    sb.write('(');
+    sb.write(positionalParameters);
+    for (var name in namedParameters) {
+      sb.write(',');
+      if (requiredNamedParameters.contains(name)) sb.write('req ');
+      sb.write(name);
+    }
+    sb.write(')');
+    return sb.toString();
+  }
+
+  @override
   String toString() {
-    StringBuffer sb = new StringBuffer();
+    StringBuffer sb = StringBuffer();
     sb.write('ParameterStructure(');
-    sb.write('requiredParameters=$requiredParameters,');
+    sb.write('requiredPositionalParameters=$requiredPositionalParameters,');
     sb.write('positionalParameters=$positionalParameters,');
     sb.write('namedParameters={${namedParameters.join(',')}},');
+    sb.write('requiredNamedParameters={${requiredNamedParameters.join(',')}},');
     sb.write('typeParameters=$typeParameters)');
     return sb.toString();
   }
+
+  int get size => totalParameters + typeParameters;
 }

@@ -77,9 +77,7 @@ ISOLATE_UNIT_TEST_CASE(AllocateScopeHandle) {
   EXPECT_EQ(handle_count, VMHandles::ScopedHandleCount());
 }
 
-static void NoopCallback(void* isolate_callback_data,
-                         Dart_WeakPersistentHandle handle,
-                         void* peer) {}
+static void NoopCallback(void* isolate_callback_data, void* peer) {}
 
 // Unit test for handle validity checks.
 TEST_CASE(CheckHandleValidity) {
@@ -92,7 +90,10 @@ TEST_CASE(CheckHandleValidity) {
     TransitionNativeToVM transition(thread);
     StackZone sz(thread);
     handle = reinterpret_cast<Dart_Handle>(&Smi::ZoneHandle(Smi::New(1)));
-    EXPECT_VALID(handle);
+    {
+      TransitionVMToNative to_native(thread);
+      EXPECT_VALID(handle);
+    }
   }
   EXPECT(!Api::IsValid(handle));
 
@@ -103,14 +104,16 @@ TEST_CASE(CheckHandleValidity) {
       TransitionNativeToVM transition(thread);
       HANDLESCOPE(thread);
       handle = reinterpret_cast<Dart_Handle>(&Smi::Handle(Smi::New(1)));
-      EXPECT_VALID(handle);
+      {
+        TransitionVMToNative to_native(thread);
+        EXPECT_VALID(handle);
+      }
     }
     Dart_ExitScope();
   }
   EXPECT(!Api::IsValid(handle));
 
   // Check validity using persistent handle.
-  Isolate* isolate = Isolate::Current();
   Dart_Handle scoped_handle;
   {
     TransitionNativeToVM transition(thread);
@@ -131,7 +134,6 @@ TEST_CASE(CheckHandleValidity) {
   EXPECT_VALID(handle);
 
   Dart_DeleteWeakPersistentHandle(
-      reinterpret_cast<Dart_Isolate>(isolate),
       reinterpret_cast<Dart_WeakPersistentHandle>(handle));
   EXPECT(!Api::IsValid(handle));
 }

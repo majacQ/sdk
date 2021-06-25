@@ -1,141 +1,236 @@
-// Copyright (c) 2018, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2018, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
-import 'driver_resolution.dart';
-import 'resolution.dart';
-import 'task_resolution.dart';
+import 'context_collection_resolution.dart';
 
 main() {
   defineReflectiveSuite(() {
-    defineReflectiveTests(InstanceMemberInferenceMixinDriverResolutionTest);
-    defineReflectiveTests(InstanceMemberInferenceMixinTaskResolutionTest);
+    defineReflectiveTests(InstanceMemberInferenceClassTest);
   });
 }
 
 @reflectiveTest
-class InstanceMemberInferenceMixinDriverResolutionTest
-    extends DriverResolutionTest with InstanceMemberInferenceMixinMixin {}
-
-mixin InstanceMemberInferenceMixinMixin implements ResolutionTest {
+class InstanceMemberInferenceClassTest extends PubPackageResolutionTest {
   test_invalid_inheritanceCycle() async {
-    addTestFile('''
-mixin A on C {}
-mixin B on A {}
-mixin C on B {}
+    await resolveTestCode('''
+class A extends C {}
+class B extends A {}
+class C extends B {}
 ''');
-    await resolveTestFile();
   }
 
-  test_method_parameter_multiple_different() async {
-    addTestFile('''
+  test_method_parameter_named_multiple_combined() async {
+    await resolveTestCode('''
 class A {
-  foo(int p) => 0;
+  void foo({int p}) {}
 }
 class B {
-  foo(double p) => 0;
+  void foo({num p}) {}
 }
 mixin M on A, B {
-  foo(p) => 0;
+  void foo({p}) {}
 }
 ''');
-    await resolveTestFile();
-
     var p = findElement.method('foo', of: 'M').parameters[0];
-    assertElementTypeDynamic(p.type);
+    assertType(p.type, 'num');
   }
 
-  test_method_parameter_multiple_named_different() async {
-    addTestFile('''
+  test_method_parameter_named_multiple_incompatible() async {
+    await resolveTestCode('''
 class A {
-  foo({int p}) => 0;
+  void foo({int p}) {}
 }
 class B {
-  foo({int q}) => 0;
+  void foo({int q}) {}
 }
 mixin M on A, B {
-  foo({p}) => 0;
+  void foo({p}) {}
 }
 ''');
-    await resolveTestFile();
-
     var p = findElement.method('foo', of: 'M').parameters[0];
-    assertElementTypeDynamic(p.type);
+    assertTypeDynamic(p.type);
   }
 
-  test_method_parameter_multiple_named_same() async {
-    addTestFile('''
+  test_method_parameter_named_multiple_same() async {
+    await resolveTestCode('''
 class A {
-  foo({int p}) => 0;
+  void foo({int p}) {}
 }
 class B {
-  foo({int p}) => 0;
+  void foo({int p}) {}
 }
 mixin M on A, B {
-  foo({p}) => 0;
+  void foo({p}) {}
 }
 ''');
-    await resolveTestFile();
-
     var p = findElement.method('foo', of: 'M').parameters[0];
-    assertElementTypeString(p.type, 'int');
+    assertType(p.type, 'int');
   }
 
-  test_method_parameter_multiple_namedAndRequired() async {
-    addTestFile('''
+  test_method_parameter_namedAndRequired() async {
+    await resolveTestCode('''
 class A {
-  foo({int p}) => 0;
+  void foo({int p}) {}
 }
 class B {
-  foo(int p) => 0;
+  void foo(int p) {}
 }
 mixin M on A, B {
-  foo(p) => 0;
+  void foo(p) {}
 }
 ''');
-    await resolveTestFile();
-
     var p = findElement.method('foo', of: 'M').parameters[0];
-    assertElementTypeDynamic(p.type);
+    assertTypeDynamic(p.type);
   }
 
-  test_method_parameter_multiple_optionalAndRequired() async {
-    addTestFile('''
+  test_method_parameter_required_multiple_combined() async {
+    await resolveTestCode('''
 class A {
-  foo(int p) => 0;
+  void foo(int p) {}
 }
 class B {
-  foo([int p]) => 0;
+  void foo(num p) {}
 }
 mixin M on A, B {
-  foo(p) => 0;
+  void foo(p) {}
 }
 ''');
-    await resolveTestFile();
-
     var p = findElement.method('foo', of: 'M').parameters[0];
-    assertElementTypeString(p.type, 'int');
+    assertType(p.type, 'num');
   }
 
-  test_method_parameter_single_generic() async {
-    addTestFile('''
+  test_method_parameter_required_multiple_different_merge() async {
+    await resolveTestCode('''
+class A {
+  void foo(Object? p) {}
+}
+
+class B {
+  void foo(dynamic p) {}
+}
+
+mixin M on A, B {
+  void foo(p) {}
+}
+''');
+    var p = findElement.method('foo', of: 'M').parameters[0];
+    assertType(p.type, 'Object?');
+  }
+
+  test_method_parameter_required_multiple_incompatible() async {
+    await resolveTestCode('''
+class A {
+  void foo(int p) {}
+}
+class B {
+  void foo(double p) {}
+}
+mixin M on A, B {
+  void foo(p) {}
+}
+''');
+    var p = findElement.method('foo', of: 'M').parameters[0];
+    assertTypeDynamic(p.type);
+  }
+
+  test_method_parameter_required_multiple_same() async {
+    await resolveTestCode('''
+class A {
+  void foo(int p) {}
+}
+class B {
+  void foo(int p) {}
+}
+mixin M on A, B {
+  void foo(p) {}
+}
+''');
+    var p = findElement.method('foo', of: 'M').parameters[0];
+    assertType(p.type, 'int');
+  }
+
+  test_method_parameter_required_single_generic() async {
+    await resolveTestCode('''
 class A<E> {
-  foo(E p) => 0;
+  void foo(E p) {}
 }
 mixin M<T> on A<T> {
-  foo(p) => 0;
+  void foo(p) {}
 }
 ''');
-    await resolveTestFile();
-
     var p = findElement.method('foo', of: 'M').parameters[0];
-    assertElementTypeString(p.type, 'T');
+    assertType(p.type, 'T');
   }
 
-  test_method_return_multiple_different() async {
-    addTestFile('''
+  test_method_parameter_requiredAndPositional() async {
+    await resolveTestCode('''
+class A {
+  void foo(int p) {}
+}
+class B {
+  void foo([int p]) {}
+}
+mixin M on A, B {
+  void foo(p) {}
+}
+''');
+    var p = findElement.method('foo', of: 'M').parameters[0];
+    assertType(p.type, 'int');
+  }
+
+  test_method_return_multiple_different_combined() async {
+    await resolveTestCode('''
+class A {
+  int foo() => 0;
+}
+class B {
+  num foo() => 0.0;
+}
+mixin M on A, B {
+  foo() => 0;
+}
+''');
+    var foo = findElement.method('foo', of: 'M');
+    assertType(foo.returnType, 'int');
+  }
+
+  test_method_return_multiple_different_dynamic() async {
+    await resolveTestCode('''
+class A {
+  int foo() => 0;
+}
+class B {
+  foo() => 0;
+}
+mixin M on A, B {
+  foo() => 0;
+}
+''');
+    var foo = findElement.method('foo', of: 'M');
+    assertType(foo.returnType, 'int');
+  }
+
+  test_method_return_multiple_different_generic() async {
+    await resolveTestCode('''
+class A<E> {
+  E foo() => throw 0;
+}
+class B<E> {
+  E foo() => throw 0;
+}
+mixin M on A<int>, B<double> {
+  foo() => throw 0;
+}
+''');
+    var foo = findElement.method('foo', of: 'M');
+    assertTypeDynamic(foo.returnType);
+  }
+
+  test_method_return_multiple_different_incompatible() async {
+    await resolveTestCode('''
 class A {
   int foo() => 0;
 }
@@ -146,32 +241,30 @@ mixin M on A, B {
   foo() => 0;
 }
 ''');
-    await resolveTestFile();
-
     var foo = findElement.method('foo', of: 'M');
-    assertElementTypeDynamic(foo.returnType);
+    assertTypeDynamic(foo.returnType);
   }
 
-  test_method_return_multiple_different_generic() async {
-    addTestFile('''
-class A<E> {
-  E foo() => null;
+  test_method_return_multiple_different_merge() async {
+    await resolveTestCode('''
+class A {
+  Object? foo() => throw 0;
 }
-class B<E> {
-  E foo() => null;
+
+class B {
+  dynamic foo() => throw 0;
 }
-mixin M on A<int>, B<double> {
-  foo() => null;
+
+mixin M on A, B {
+  foo() => throw 0;
 }
 ''');
-    await resolveTestFile();
-
     var foo = findElement.method('foo', of: 'M');
-    assertElementTypeDynamic(foo.returnType);
+    assertType(foo.returnType, 'Object?');
   }
 
   test_method_return_multiple_different_void() async {
-    addTestFile('''
+    await resolveTestCode('''
 class A {
   int foo() => 0;
 }
@@ -182,32 +275,12 @@ mixin M on A, B {
   foo() => 0;
 }
 ''');
-    await resolveTestFile();
-
     var foo = findElement.method('foo', of: 'M');
-    assertElementTypeDynamic(foo.returnType);
-  }
-
-  test_method_return_multiple_dynamic() async {
-    addTestFile('''
-class A {
-  int foo() => 0;
-}
-class B {
-  foo() => 0;
-}
-mixin M on A, B {
-  foo() => 0;
-}
-''');
-    await resolveTestFile();
-
-    var foo = findElement.method('foo', of: 'M');
-    assertElementTypeDynamic(foo.returnType);
+    assertType(foo.returnType, 'int');
   }
 
   test_method_return_multiple_same_generic() async {
-    addTestFile('''
+    await resolveTestCode('''
 class A<E> {
   E foo() => 0;
 }
@@ -218,14 +291,12 @@ mixin M<T> on A<T>, B<T> {
   foo() => 0;
 }
 ''');
-    await resolveTestFile();
-
     var foo = findElement.method('foo', of: 'M');
-    assertElementTypeString(foo.returnType, 'T');
+    assertType(foo.returnType, 'T');
   }
 
   test_method_return_multiple_same_nonVoid() async {
-    addTestFile('''
+    await resolveTestCode('''
 class A {
   int foo() => 0;
 }
@@ -236,14 +307,12 @@ mixin M on A, B {
   foo() => 0;
 }
 ''');
-    await resolveTestFile();
-
     var foo = findElement.method('foo', of: 'M');
-    assertElementTypeString(foo.returnType, 'int');
+    assertType(foo.returnType, 'int');
   }
 
   test_method_return_multiple_same_void() async {
-    addTestFile('''
+    await resolveTestCode('''
 class A {
   void foo() {};
 }
@@ -254,43 +323,33 @@ mixin M on A, B {
   foo() {};
 }
 ''');
-    await resolveTestFile();
-
     var foo = findElement.method('foo', of: 'M');
-    assertElementTypeString(foo.returnType, 'void');
+    assertType(foo.returnType, 'void');
   }
 
   test_method_return_single() async {
-    addTestFile('''
+    await resolveTestCode('''
 class A {
   int foo() => 0;
 }
-mixin M on A {
+class B extends A {
   foo() => 0;
 }
 ''');
-    await resolveTestFile();
-
-    var foo = findElement.method('foo', of: 'M');
-    assertElementTypeString(foo.returnType, 'int');
+    var foo = findElement.method('foo', of: 'B');
+    assertType(foo.returnType, 'int');
   }
 
   test_method_return_single_generic() async {
-    addTestFile('''
+    await resolveTestCode('''
 class A<E> {
-  E foo() => 0;
+  E foo() => throw 0;
 }
-mixin M<T> on A<T> {
-  foo() => 0;
+class B<T> extends A<T> {
+  foo() => throw 0;
 }
 ''');
-    await resolveTestFile();
-
-    var foo = findElement.method('foo', of: 'M');
-    assertElementTypeString(foo.returnType, 'T');
+    var foo = findElement.method('foo', of: 'B');
+    assertType(foo.returnType, 'T');
   }
 }
-
-@reflectiveTest
-class InstanceMemberInferenceMixinTaskResolutionTest extends TaskResolutionTest
-    with InstanceMemberInferenceMixinMixin {}

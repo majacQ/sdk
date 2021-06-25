@@ -9,12 +9,13 @@ import '../common_elements.dart'
     show CommonElements, KCommonElements, KElementEnvironment;
 import '../elements/entities.dart';
 import '../elements/types.dart';
+import '../inferrer/abstract_value_domain.dart';
 import '../js/js.dart' as jsAst;
 import '../serialization/serialization.dart';
-import '../types/abstract_value_domain.dart';
+import '../universe/class_set.dart';
 import '../universe/selector.dart';
 import '../world.dart' show JClosedWorld;
-import 'namer.dart';
+import 'namer.dart' show ModularNamer, suffixForGetInterceptor;
 import 'native_data.dart';
 
 abstract class InterceptorData {
@@ -35,8 +36,16 @@ abstract class InterceptorData {
   bool fieldHasInterceptedSetter(FieldEntity element);
   bool isInterceptedName(String name);
   bool isInterceptedSelector(Selector selector);
+
+  /// Returns `true` iff [selector] matches an element defined in a class mixed
+  /// into an intercepted class.
+  ///
+  /// These selectors are not eligible for the 'dummy explicit receiver'
+  /// optimization.
   bool isInterceptedMixinSelector(
       Selector selector, AbstractValue mask, JClosedWorld closedWorld);
+
+  /// Set of classes whose methods are intercepted.
   Iterable<ClassEntity> get interceptedClasses;
   bool isMixedIntoInterceptedClass(ClassEntity element);
 
@@ -71,7 +80,7 @@ class InterceptorDataImpl implements InterceptorData {
   /// know whether a send must be intercepted or not.
   final Map<String, Set<MemberEntity>> interceptedMembers;
 
-  /// Set of classes whose methods are intercepted.
+  @override
   final Set<ClassEntity> interceptedClasses;
 
   /// Set of classes used as mixins on intercepted (native and primitive)
@@ -125,6 +134,7 @@ class InterceptorDataImpl implements InterceptorData {
         classesMixedIntoInterceptedClasses);
   }
 
+  @override
   void writeToDataSink(DataSink sink) {
     sink.begin(tag);
     sink.writeInt(interceptedMembers.length);
@@ -137,6 +147,7 @@ class InterceptorDataImpl implements InterceptorData {
     sink.end(tag);
   }
 
+  @override
   bool isInterceptedMethod(MemberEntity element) {
     if (!element.isInstanceMember) return false;
     // TODO(johnniwinther): Avoid this hack.
@@ -146,25 +157,27 @@ class InterceptorDataImpl implements InterceptorData {
     return interceptedMembers[element.name] != null;
   }
 
+  @override
   bool fieldHasInterceptedGetter(FieldEntity element) {
     return interceptedMembers[element.name] != null;
   }
 
+  @override
   bool fieldHasInterceptedSetter(FieldEntity element) {
     return interceptedMembers[element.name] != null;
   }
 
+  @override
   bool isInterceptedName(String name) {
     return interceptedMembers[name] != null;
   }
 
+  @override
   bool isInterceptedSelector(Selector selector) {
     return interceptedMembers[selector.name] != null;
   }
 
-  /// Returns `true` iff [selector] matches an element defined in a class mixed
-  /// into an intercepted class.  These selectors are not eligible for the
-  /// 'dummy explicit receiver' optimization.
+  @override
   bool isInterceptedMixinSelector(
       Selector selector, AbstractValue mask, JClosedWorld closedWorld) {
     Set<MemberEntity> elements =
@@ -182,7 +195,9 @@ class InterceptorDataImpl implements InterceptorData {
     return elements.any((element) {
       return selector.applies(element) &&
           (mask == null ||
-              closedWorld.abstractValueDomain.canHit(mask, element, selector));
+              closedWorld.abstractValueDomain
+                  .isTargetingMember(mask, element, selector.memberName)
+                  .isPotentiallyTrue);
     });
   }
 
@@ -201,6 +216,7 @@ class InterceptorDataImpl implements InterceptorData {
   /// Returns a set of interceptor classes that contain a member named [name]
   ///
   /// Returns an empty set if there is no class. Do not modify the returned set.
+  @override
   Set<ClassEntity> getInterceptedClassesOn(
       String name, JClosedWorld closedWorld) {
     Set<MemberEntity> intercepted = interceptedMembers[name];
@@ -237,11 +253,13 @@ class InterceptorDataImpl implements InterceptorData {
           if (result == null) result = new Set<ClassEntity>();
           result.add(subclass);
         }
+        return IterationStep.CONTINUE;
       });
     }
     return result;
   }
 
+  @override
   bool isInterceptedClass(ClassEntity element) {
     if (element == null) return false;
     if (_nativeData.isNativeOrExtendsNative(element)) return true;
@@ -250,15 +268,17 @@ class InterceptorDataImpl implements InterceptorData {
     return false;
   }
 
+  @override
   bool isMixedIntoInterceptedClass(ClassEntity element) =>
       classesMixedIntoInterceptedClasses.contains(element);
 
+  @override
   bool mayGenerateInstanceofCheck(DartType type, JClosedWorld closedWorld) {
     // We can use an instanceof check for raw types that have no subclass that
     // is mixed-in or in an implements clause.
 
-    if (!type.treatAsRaw) return false;
-    if (type.isFutureOr) return false;
+    if (!closedWorld.dartTypes.treatAsRawType(type)) return false;
+    if (type is FutureOrType) return false;
     InterfaceType interfaceType = type;
     ClassEntity classElement = interfaceType.element;
     if (isInterceptedClass(classElement)) return false;
@@ -289,6 +309,7 @@ class InterceptorDataBuilderImpl implements InterceptorDataBuilder {
   InterceptorDataBuilderImpl(
       this._nativeData, this._elementEnvironment, this._commonElements);
 
+  @override
   InterceptorData close() {
     return new InterceptorDataImpl(
         _nativeData,
@@ -298,6 +319,7 @@ class InterceptorDataBuilderImpl implements InterceptorDataBuilder {
         _classesMixedIntoInterceptedClasses);
   }
 
+  @override
   void addInterceptorsForNativeClassMembers(ClassEntity cls) {
     _elementEnvironment.forEachClassMember(cls,
         (ClassEntity cls, MemberEntity member) {
@@ -315,6 +337,7 @@ class InterceptorDataBuilderImpl implements InterceptorDataBuilder {
     });
   }
 
+  @override
   void addInterceptors(ClassEntity cls) {
     if (_interceptedClasses.add(cls)) {
       _elementEnvironment.forEachClassMember(cls,
@@ -333,55 +356,79 @@ class InterceptorDataBuilderImpl implements InterceptorDataBuilder {
 class OneShotInterceptorData {
   final InterceptorData _interceptorData;
   final CommonElements _commonElements;
+  final NativeData _nativeData;
 
-  OneShotInterceptorData(this._interceptorData, this._commonElements);
+  OneShotInterceptorData(
+      this._interceptorData, this._commonElements, this._nativeData);
 
-  /// A collection of selectors that must have a one shot interceptor generated.
-  final Map<jsAst.Name, Selector> _oneShotInterceptors =
-      <jsAst.Name, Selector>{};
+  Iterable<OneShotInterceptor> get oneShotInterceptors {
+    List<OneShotInterceptor> interceptors = [];
+    for (var map in _oneShotInterceptors.values) {
+      interceptors.addAll(map.values);
+    }
+    return interceptors;
+  }
 
-  Selector getOneShotInterceptorSelector(jsAst.Name name) =>
-      _oneShotInterceptors[name];
+  Map<Selector, Map<String, OneShotInterceptor>> _oneShotInterceptors = {};
 
-  Iterable<jsAst.Name> get oneShotInterceptorNames =>
-      _oneShotInterceptors.keys.toList()..sort();
-
-  /// A map of specialized versions of the [getInterceptorMethod].
+  /// A set of specialized versions of the [getInterceptorMethod].
   ///
   /// Since [getInterceptorMethod] is a hot method at runtime, we're always
   /// specializing it based on the incoming type. The keys in the map are the
   /// names of these specialized versions. Note that the generic version that
   /// contains all possible type checks is also stored in this map.
-  final Map<jsAst.Name, Set<ClassEntity>> _specializedGetInterceptors =
-      <jsAst.Name, Set<ClassEntity>>{};
+  Iterable<SpecializedGetInterceptor> get specializedGetInterceptors =>
+      _specializedGetInterceptors.values;
 
-  Iterable<jsAst.Name> get specializedGetInterceptorNames =>
-      _specializedGetInterceptors.keys.toList()..sort();
-
-  Set<ClassEntity> getSpecializedGetInterceptorsFor(jsAst.Name name) =>
-      _specializedGetInterceptors[name];
+  Map<String, SpecializedGetInterceptor> _specializedGetInterceptors = {};
 
   jsAst.Name registerOneShotInterceptor(
-      Selector selector, Namer namer, JClosedWorld closedWorld) {
+      Selector selector, ModularNamer namer, JClosedWorld closedWorld) {
+    selector = selector.toNormalized();
     Set<ClassEntity> classes =
         _interceptorData.getInterceptedClassesOn(selector.name, closedWorld);
-    jsAst.Name name = namer.nameForGetOneShotInterceptor(selector, classes);
-    if (!_oneShotInterceptors.containsKey(name)) {
-      registerSpecializedGetInterceptor(classes, namer);
-      _oneShotInterceptors[name] = selector;
-    }
-    return name;
+    String key = suffixForGetInterceptor(_commonElements, _nativeData, classes);
+    Map<String, OneShotInterceptor> interceptors =
+        _oneShotInterceptors[selector] ??= {};
+    OneShotInterceptor interceptor =
+        interceptors[key] ??= new OneShotInterceptor(key, selector);
+    interceptor.classes.addAll(classes);
+    registerSpecializedGetInterceptor(classes, namer);
+    return namer.nameForOneShotInterceptor(selector, classes);
   }
 
   void registerSpecializedGetInterceptor(
-      Set<ClassEntity> classes, Namer namer) {
-    jsAst.Name name = namer.nameForGetInterceptor(classes);
+      Set<ClassEntity> classes, ModularNamer namer) {
     if (classes.contains(_commonElements.jsInterceptorClass)) {
       // We can't use a specialized [getInterceptorMethod], so we make
       // sure we emit the one with all checks.
-      _specializedGetInterceptors[name] = _interceptorData.interceptedClasses;
-    } else {
-      _specializedGetInterceptors[name] = classes;
+      classes = _interceptorData.interceptedClasses;
     }
+    String key = suffixForGetInterceptor(_commonElements, _nativeData, classes);
+    SpecializedGetInterceptor interceptor =
+        _specializedGetInterceptors[key] ??= new SpecializedGetInterceptor(key);
+    interceptor.classes.addAll(classes);
   }
+}
+
+class OneShotInterceptor {
+  final Selector selector;
+  final String key;
+  final Set<ClassEntity> classes = {};
+
+  OneShotInterceptor(this.key, this.selector);
+
+  @override
+  String toString() =>
+      'OneShotInterceptor(selector=$selector,key=$key,classes=$classes)';
+}
+
+class SpecializedGetInterceptor {
+  final String key;
+  final Set<ClassEntity> classes = {};
+
+  SpecializedGetInterceptor(this.key);
+
+  @override
+  String toString() => 'SpecializedGetInterceptor(key=$key,classes=$classes)';
 }

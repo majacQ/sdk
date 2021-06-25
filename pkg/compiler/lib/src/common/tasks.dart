@@ -7,6 +7,8 @@ library dart2js.common.tasks;
 import 'dart:async'
     show Future, Zone, ZoneDelegate, ZoneSpecification, runZoned;
 
+import 'metrics.dart';
+
 /// Used to measure where time is spent in the compiler.
 ///
 /// This exposes [measure] and [measureIo], which wrap an action and associate
@@ -16,7 +18,7 @@ import 'dart:async'
 abstract class CompilerTask {
   final Measurer _measurer;
   final Stopwatch _watch;
-  final Map<String, GenericTask> _subtasks = <String, GenericTask>{};
+  final Map<String, GenericTask> _subtasks = {};
 
   int _asyncCount = 0;
 
@@ -32,8 +34,10 @@ abstract class CompilerTask {
   /// only measure time if measurements are enabled.
   bool get _isDisabled => _watch == null;
 
-  /// Name to use for reporting timing information. Subclasses should override
-  /// this with a proper name, otherwise we use the runtime type of the task.
+  /// Name to use for reporting timing information.
+  ///
+  /// Subclasses should override this with a proper name, otherwise we use the
+  /// runtime type of the task.
   String get name => "Unknown task '${this.runtimeType}'";
 
   bool get isRunning => _watch?.isRunning == true;
@@ -161,7 +165,7 @@ abstract class CompilerTask {
     if (_measurer._currentAsyncTask == null) {
       _measurer._currentAsyncTask = this;
     } else if (_measurer._currentAsyncTask != this) {
-      throw "Can't track async task '$name' because"
+      throw "Cannot track async task '$name' because"
           " '${_measurer._currentAsyncTask.name}' is already being tracked.";
     }
     _asyncCount++;
@@ -205,9 +209,13 @@ abstract class CompilerTask {
   int getSubtaskTime(String subtask) => _subtasks[subtask].timing;
 
   bool getSubtaskIsRunning(String subtask) => _subtasks[subtask].isRunning;
+
+  /// Returns the metrics for this task.
+  Metrics get metrics => Metrics.none();
 }
 
 class GenericTask extends CompilerTask {
+  @override
   final String name;
   GenericTask(this.name, Measurer measurer) : super(measurer);
 }
@@ -230,6 +238,7 @@ class Measurer {
   final bool enableTaskMeasurements;
 
   static int _hashCodeGenerator = 197;
+  @override
   final int hashCode = _hashCodeGenerator++;
 
   Measurer({this.enableTaskMeasurements: false});

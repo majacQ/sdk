@@ -11,8 +11,8 @@
 
 namespace dart {
 
+class IsolateGroup;
 class LogBlock;
-class Thread;
 
 #if defined(_MSC_VER)
 #define THR_Print(format, ...) Log::Current()->Print(format, __VA_ARGS__)
@@ -58,7 +58,7 @@ class Log {
   bool ShouldFlush() const;
 
   // Returns false if we should drop log messages related to 'isolate'.
-  static bool ShouldLogForIsolate(const Isolate* isolate);
+  static bool ShouldLogForIsolateGroup(const IsolateGroup* isolate);
 
   static Log noop_log_;
   LogPrinter printer_;
@@ -74,13 +74,13 @@ class Log {
 // Can be nested.
 class LogBlock : public StackResource {
  public:
-  LogBlock(Thread* thread, Log* log)
+  LogBlock(ThreadState* thread, Log* log)
       : StackResource(thread), log_(log), cursor_(log->cursor()) {
     Initialize();
   }
 
   LogBlock()
-      : StackResource(Thread::Current()),
+      : StackResource(ThreadState::Current()),
         log_(Log::Current()),
         cursor_(Log::Current()->cursor()) {
     Initialize();

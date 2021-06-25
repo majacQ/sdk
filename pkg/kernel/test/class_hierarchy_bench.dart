@@ -2,8 +2,12 @@
 // Copyright (c) 2016, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
+
+// @dart = 2.9
+
 import 'package:kernel/kernel.dart';
 import 'package:kernel/class_hierarchy.dart';
+import 'package:kernel/core_types.dart';
 import 'package:args/args.dart';
 import 'class_hierarchy_basic.dart';
 import 'dart:math';
@@ -37,11 +41,11 @@ main(List<String> args) {
   String filename = options.rest.single;
 
   Component component = loadComponentFromBinary(filename);
-
+  CoreTypes coreTypes = new CoreTypes(component);
   ClassHierarchy buildHierarchy() {
     return options['basic']
         ? new BasicClassHierarchy(component)
-        : new ClassHierarchy(component);
+        : new ClassHierarchy(component, coreTypes);
   }
 
   var watch = new Stopwatch()..start();
@@ -66,15 +70,6 @@ main(List<String> args) {
   ClosedWorldClassHierarchy getClassHierarchy() {
     currentHierarchy = (currentHierarchy + 1) % hierarchies.length;
     return hierarchies[currentHierarchy];
-  }
-
-  {
-    var classHierarchy = getClassHierarchy();
-    if (classHierarchy is ClosedWorldClassHierarchy) {
-      for (Class class_ in classes) {
-        classHierarchy.hasProperSubtypes(class_);
-      }
-    }
   }
 
   Random rnd = new Random(12345);
@@ -251,7 +246,7 @@ main(List<String> args) {
     classIds[class_] = classIds.length;
   }
 
-  List<int> depth = new List(classes.length);
+  List<int> depth = new List.filled(classes.length, null);
   for (int i = 0; i < depth.length; ++i) {
     int parentDepth = 0;
     var classNode = classes[i];

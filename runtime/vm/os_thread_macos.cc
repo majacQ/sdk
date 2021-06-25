@@ -14,6 +14,7 @@
 #include <mach/task_info.h>    // NOLINT
 #include <mach/thread_act.h>   // NOLINT
 #include <mach/thread_info.h>  // NOLINT
+#include <signal.h>            // NOLINT
 #include <sys/errno.h>         // NOLINT
 #include <sys/sysctl.h>        // NOLINT
 #include <sys/types.h>         // NOLINT
@@ -21,9 +22,17 @@
 #include "platform/address_sanitizer.h"
 #include "platform/assert.h"
 #include "platform/safe_stack.h"
+#include "platform/signal_blocker.h"
 #include "platform/utils.h"
 
+#include "vm/flags.h"
+
 namespace dart {
+
+DEFINE_FLAG(int,
+            worker_thread_priority,
+            kMinInt,
+            "The thread priority the VM should use for new worker threads.");
 
 #define VALIDATE_PTHREAD_RESULT(result)                                        \
   if (result != 0) {                                                           \
@@ -90,6 +99,20 @@ class ThreadStartData {
 // is used to ensure that the thread is properly destroyed if the thread just
 // exits.
 static void* ThreadStart(void* data_ptr) {
+  if (FLAG_worker_thread_priority != kMinInt) {
+    const pthread_t thread = pthread_self();
+    int policy = SCHED_FIFO;
+    struct sched_param schedule;
+    if (pthread_getschedparam(thread, &policy, &schedule) != 0) {
+      FATAL1("Obtainign sched param failed: errno = %d\n", errno);
+    }
+    schedule.sched_priority = FLAG_worker_thread_priority;
+    if (pthread_setschedparam(thread, policy, &schedule) != 0) {
+      FATAL2("Setting thread priority to %d failed: errno = %d\n",
+             FLAG_worker_thread_priority, errno);
+    }
+  }
+
   ThreadStartData* data = reinterpret_cast<ThreadStartData*>(data_ptr);
 
   const char* name = data->name();
@@ -97,12 +120,14 @@ static void* ThreadStart(void* data_ptr) {
   uword parameter = data->parameter();
   delete data;
 
+  // Set the thread name.
+  pthread_setname_np(name);
+
   // Create new OSThread object and set as TLS for new thread.
   OSThread* thread = OSThread::CreateOSThread();
   if (thread != NULL) {
     OSThread::SetCurrent(thread);
     thread->set_name(name);
-
     // Call the supplied thread start function handing it its parameters.
     function(parameter);
   }
@@ -165,7 +190,7 @@ ThreadId OSThread::GetCurrentThreadId() {
   return pthread_self();
 }
 
-#ifndef PRODUCT
+#ifdef SUPPORT_TIMELINE
 ThreadId OSThread::GetCurrentThreadTraceId() {
   return ThreadIdFromIntPtr(pthread_mach_thread_np(pthread_self()));
 }

@@ -24,7 +24,10 @@ class KernelSourceInformationStrategy
   @override
   SourceInformationBuilder createBuilderForContext(MemberEntity member) {
     return new KernelSourceInformationBuilder(
-        _backendStrategy.elementMap, member);
+        _backendStrategy
+            // ignore:deprecated_member_use_from_same_package
+            .elementMap,
+        member);
   }
 }
 
@@ -39,6 +42,11 @@ String computeKernelElementNameForSourceMaps(
     [CallStructure callStructure]) {
   MemberDefinition definition = elementMap.getMemberDefinition(member);
   switch (definition.kind) {
+    case MemberKind.regular:
+      ir.Member node = definition.node;
+      if (node.isExtensionMember) return _findExtensionMemberName(node);
+      return computeElementNameForSourceMaps(member, callStructure);
+
     case MemberKind.closureCall:
       ir.TreeNode node = definition.node;
       String name;
@@ -65,6 +73,32 @@ String computeKernelElementNameForSourceMaps(
     default:
       return computeElementNameForSourceMaps(member, callStructure);
   }
+}
+
+/// Extract a simple readable name for an extension member.
+String _findExtensionMemberName(ir.Member member) {
+  assert(member.isExtensionMember);
+  for (ir.Extension extension in member.enclosingLibrary.extensions) {
+    for (ir.ExtensionMemberDescriptor descriptor in extension.members) {
+      if (descriptor.member == member.reference) {
+        String extensionName;
+        // Anonymous extensions contain a # on their synthetic name.
+        if (extension.name.contains('#')) {
+          ir.DartType type = extension.onType;
+          if (type is ir.InterfaceType) {
+            extensionName = "${type.classNode.name}.<anonymous extension>";
+          } else {
+            extensionName = "<anonymous extension>";
+          }
+        } else {
+          extensionName = extension.name;
+        }
+        String memberName = descriptor.name.text;
+        return '$extensionName.$memberName';
+      }
+    }
+  }
+  throw StateError('No original name found for extension member $member.');
 }
 
 /// [SourceInformationBuilder] that generates [PositionSourceInformation] from
@@ -106,6 +140,8 @@ class KernelSourceInformationBuilder implements SourceInformationBuilder {
       location = node.location;
       offset = node.fileOffset;
     }
+    assert(
+        location != null, "No location found for $node (${node.runtimeType})");
     return new KernelSourceLocation(location, offset, name);
   }
 
@@ -132,32 +168,24 @@ class KernelSourceInformationBuilder implements SourceInformationBuilder {
   SourceInformation _buildFunctionEnd(MemberEntity member, [ir.TreeNode base]) {
     MemberDefinition definition = _elementMap.getMemberDefinition(member);
     String name = computeKernelElementNameForSourceMaps(_elementMap, member);
-    ir.Node node = definition.node;
     switch (definition.kind) {
       case MemberKind.regular:
+        ir.Member node = definition.node;
         if (node is ir.Procedure) {
           return _buildFunction(name, base ?? node, node.function);
         }
         break;
       case MemberKind.constructor:
       case MemberKind.constructorBody:
-        if (node is ir.Procedure) {
-          return _buildFunction(name, base ?? node, node.function);
-        } else if (node is ir.Constructor) {
-          return _buildFunction(name, base ?? node, node.function);
-        }
-        break;
+        ir.Member node = definition.node;
+        return _buildFunction(name, base ?? node, node.function);
       case MemberKind.closureCall:
-        if (node is ir.FunctionDeclaration) {
-          return _buildFunction(name, base ?? node, node.function);
-        } else if (node is ir.FunctionExpression) {
-          return _buildFunction(name, base ?? node, node.function);
-        }
-        break;
+        ir.LocalFunction node = definition.node;
+        return _buildFunction(name, base ?? node, node.function);
       // TODO(sra): generatorBody
       default:
     }
-    return _buildTreeNode(base ?? node, name: name);
+    return _buildTreeNode(base ?? definition.node, name: name);
   }
 
   /// Creates the source information for exiting a function definition defined
@@ -215,18 +243,11 @@ class KernelSourceInformationBuilder implements SourceInformationBuilder {
         }
         break;
       case MemberKind.closureCall:
-        ir.Node node = definition.node;
-        if (node is ir.FunctionDeclaration) {
-          return _buildBody(node, node.function.body);
-        } else if (node is ir.FunctionExpression) {
-          return _buildBody(node, node.function.body);
-        }
-        break;
+        ir.LocalFunction node = definition.node;
+        return _buildBody(node, node.function.body);
       case MemberKind.generatorBody:
         ir.Node node = definition.node;
-        if (node is ir.FunctionDeclaration) {
-          return _buildBody(node, node.function.body);
-        } else if (node is ir.FunctionExpression) {
+        if (node is ir.LocalFunction) {
           return _buildBody(node, node.function.body);
         } else if (node is ir.Member && node.function != null) {
           return _buildBody(node, node.function.body);
@@ -249,21 +270,11 @@ class KernelSourceInformationBuilder implements SourceInformationBuilder {
         break;
       case MemberKind.constructor:
       case MemberKind.constructorBody:
-        ir.Node node = definition.node;
-        if (node is ir.Procedure) {
-          return _buildFunctionExit(node, node.function);
-        } else if (node is ir.Constructor) {
-          return _buildFunctionExit(node, node.function);
-        }
-        break;
+        ir.Member node = definition.node;
+        return _buildFunctionExit(node, node.function);
       case MemberKind.closureCall:
-        ir.Node node = definition.node;
-        if (node is ir.FunctionDeclaration) {
-          return _buildFunctionExit(node, node.function);
-        } else if (node is ir.FunctionExpression) {
-          return _buildFunctionExit(node, node.function);
-        }
-        break;
+        ir.LocalFunction node = definition.node;
+        return _buildFunctionExit(node, node.function);
       default:
     }
     return _buildTreeNode(definition.node);
@@ -480,8 +491,11 @@ class KernelSourceInformationBuilder implements SourceInformationBuilder {
 }
 
 class KernelSourceLocation extends AbstractSourceLocation {
+  @override
   final int offset;
+  @override
   final String sourceName;
+  @override
   final Uri sourceUri;
 
   KernelSourceLocation(ir.Location location, this.offset, this.sourceName)

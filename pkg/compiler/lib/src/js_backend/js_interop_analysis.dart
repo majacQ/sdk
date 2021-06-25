@@ -14,11 +14,11 @@ import '../universe/world_builder.dart' show SelectorConstraints;
 import 'namer.dart';
 import 'native_data.dart';
 
-jsAst.Statement buildJsInteropBootstrap(CodegenWorldBuilder codegenWorldBuilder,
-    NativeBasicData nativeBasicData, Namer namer) {
+jsAst.Statement buildJsInteropBootstrap(
+    CodegenWorld codegenWorld, NativeBasicData nativeBasicData, Namer namer) {
   if (!nativeBasicData.isJsInteropUsed) return null;
   List<jsAst.Statement> statements = <jsAst.Statement>[];
-  codegenWorldBuilder.forEachInvokedName(
+  codegenWorld.forEachInvokedName(
       (String name, Map<Selector, SelectorConstraints> selectors) {
     selectors.forEach((Selector selector, SelectorConstraints constraints) {
       if (selector.isClosureCall) {
@@ -40,15 +40,16 @@ jsAst.Statement buildJsInteropBootstrap(CodegenWorldBuilder codegenWorldBuilder,
   return new jsAst.Block(statements);
 }
 
-FunctionType buildJsFunctionType() {
+FunctionType buildJsFunctionType(DartTypes dartTypes) {
   // TODO(jacobr): consider using codegenWorldBuilder.isChecks to determine the
   // range of positional arguments that need to be supported by JavaScript
   // function types.
-  return new FunctionType(
-      const DynamicType(),
+  return dartTypes.functionType(
+      dartTypes.dynamicType(),
       const <DartType>[],
-      new List<DartType>.filled(16, const DynamicType()),
+      new List<DartType>.filled(16, dartTypes.dynamicType()),
       const <String>[],
+      const <String>{},
       const <DartType>[],
       const <FunctionTypeVariable>[]);
 }

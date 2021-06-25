@@ -16,13 +16,12 @@
 #error Do not include simulator_arm64.h directly; use simulator.h.
 #endif
 
-#include "vm/constants_arm64.h"
+#include "vm/constants.h"
 
 namespace dart {
 
 class Isolate;
 class Mutex;
-class RawObject;
 class SimulatorSetjmpBuffer;
 class Thread;
 
@@ -69,12 +68,14 @@ class Simulator {
 
   int64_t get_sp() const { return get_register(SPREG); }
 
-  int64_t get_pc() const;
-  int64_t get_last_pc() const;
-  void set_pc(int64_t pc);
+  uint64_t get_pc() const;
+  uint64_t get_last_pc() const;
+  void set_pc(uint64_t pc);
 
   // High address.
   uword stack_base() const { return stack_base_; }
+  // Limit for StackOverflowError.
+  uword overflow_stack_limit() const { return overflow_stack_limit_; }
   // Low address.
   uword stack_limit() const { return stack_limit_; }
 
@@ -101,8 +102,7 @@ class Simulator {
     kRuntimeCall,
     kLeafRuntimeCall,
     kLeafFloatRuntimeCall,
-    kBootstrapNativeCall,
-    kNativeCall
+    kNativeCallWrapper
   };
   static uword RedirectExternalReference(uword function,
                                          CallKind call_kind,
@@ -136,6 +136,7 @@ class Simulator {
   int64_t pc_;
   char* stack_;
   uword stack_limit_;
+  uword overflow_stack_limit_;
   uword stack_base_;
   bool pc_modified_;
   uint64_t icount_;
@@ -167,11 +168,13 @@ class Simulator {
   inline int16_t ReadH(uword addr, Instr* instr);
   inline void WriteH(uword addr, uint16_t value, Instr* instr);
 
-  inline uint32_t ReadWU(uword addr, Instr* instr);
+  inline uint32_t ReadWU(uword addr,
+                         Instr* instr,
+                         bool must_be_aligned = false);
   inline int32_t ReadW(uword addr, Instr* instr);
   inline void WriteW(uword addr, uint32_t value, Instr* instr);
 
-  inline intptr_t ReadX(uword addr, Instr* instr);
+  inline intptr_t ReadX(uword addr, Instr* instr, bool must_be_aligned = false);
   inline void WriteX(uword addr, intptr_t value, Instr* instr);
 
   // Synchronization primitives support.
@@ -181,6 +184,12 @@ class Simulator {
   // 32 bit versions.
   intptr_t ReadExclusiveW(uword addr, Instr* instr);
   intptr_t WriteExclusiveW(uword addr, intptr_t value, Instr* instr);
+
+  // Load Acquire & Store Release.
+  intptr_t ReadAcquire(uword addr, Instr* instr);
+  uint32_t ReadAcquireW(uword addr, Instr* instr);
+  void WriteRelease(uword addr, intptr_t value, Instr* instr);
+  void WriteReleaseW(uword addr, uint32_t value, Instr* instr);
 
   // Exclusive access reservation: address and value observed during
   // load-exclusive. Store-exclusive verifies that address is the same and

@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library test.invoke_natives;
 
 import 'dart:mirrors';
@@ -14,7 +16,7 @@ test(name, action) {
 }
 
 main() {
-  LibraryMirror dartcore = reflectClass(Object).owner;
+  LibraryMirror dartcore = reflectClass(Object).owner as LibraryMirror;
 
   test('List_copyFromObjectArray', () {
     var receiver = new List(3);

@@ -1,5 +1,8 @@
 # Strong Mode Static Checking
 
+**Note: This document is out of date.  Please see [Sound Dart](https://dart.dev/guides/language/sound-dart) for up-to-date
+documentation on Dart's type system.  The work below was a precursor towards Dart's current type system.**
+
 ## Overview
 
 The Dart programming language has an optional, unsound type system.  Although it is similar in appearance to languages such as Java, C#, or C++, its type system and static checking are fundamentally different.  It permits erroneous behavior in ways that may be surprising to programmers coming from those and other conventional typed languages.
@@ -51,7 +54,7 @@ analyzer:
 
 With strong mode, we want to provide stronger typing while preserving the
 terseness of Dart. [Idiomatic Dart
-code](https://www.dartlang.org/effective-dart/) discourages type annotations
+code](https://dart.dev/guides/language/effective-dart) discourages type annotations
 outside of API boundaries, and user shouldn't have to add more types to get
 better checking. Instead, strong mode uses type inference.
 
@@ -440,7 +443,7 @@ main() {
 }
 ```
 
-This option is experimental and may be changed or removed in the future. Feedback is appreciated! Contact us at our [mailing list](https://groups.google.com/a/dartlang.org/forum/#!forum/dev-compiler).
+This option is experimental and may be changed or removed in the future.
 Try it out in your project by editing .analysis_options:
 
 ```yaml
@@ -502,7 +505,7 @@ class C extends Iterable<dynamic> { /* ... */ }
 
 This feature is to prevent accidental use of `dynamic` in code that does not intend to use it.
 
-This option is experimental and may be changed or removed in the future. Feedback is appreciated! Contact us at our [mailing list](https://groups.google.com/a/dartlang.org/forum/#!forum/dev-compiler).
+This option is experimental and may be changed or removed in the future.
 Try it out in your project by editing .analysis_options:
 
 ```yaml
@@ -524,4 +527,4 @@ dartanalyzer --strong --no-implicit-dynamic my_app.dart
 `is` and `as` checks trigger runtime errors.  We are considering introducing static
 errors for these cases.
 
-[dartspec]: https://www.dartlang.org/docs/spec/ "Dart Language Spec"
+[dartspec]: https://dart.dev/guides/language/spec "Dart Language Spec"

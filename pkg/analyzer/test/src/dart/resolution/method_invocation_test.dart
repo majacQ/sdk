@@ -1,292 +1,592 @@
-// Copyright (c) 2018, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2018, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/element/element.dart';
+import 'package:analyzer/src/dart/error/syntactic_errors.dart';
 import 'package:analyzer/src/error/codes.dart';
 import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
-import 'driver_resolution.dart';
+import 'context_collection_resolution.dart';
 
 main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(MethodInvocationResolutionTest);
+    defineReflectiveTests(MethodInvocationResolutionWithNullSafetyTest);
   });
 }
 
 @reflectiveTest
-class MethodInvocationResolutionTest extends DriverResolutionTest {
-  test_error_abstractSuperMemberReference() async {
-    addTestFile(r'''
+class MethodInvocationResolutionTest extends PubPackageResolutionTest
+    with WithoutNullSafetyMixin, MethodInvocationResolutionTestCases {}
+
+mixin MethodInvocationResolutionTestCases on PubPackageResolutionTest {
+  test_clamp_double_context_double() async {
+    await assertNoErrorsInCode('''
+T f<T>() => throw Error();
+g(double a) {
+  h(a.clamp(f(), f()));
+}
+h(double x) {}
+''');
+
+    assertTypeArgumentTypes(findNode.methodInvocation('f(),'),
+        [typeToStringWithNullability ? 'double' : 'num']);
+    assertTypeArgumentTypes(findNode.methodInvocation('f())'),
+        [typeToStringWithNullability ? 'double' : 'num']);
+  }
+
+  test_clamp_double_context_int() async {
+    await assertErrorsInCode(
+        '''
+T f<T>() => throw Error();
+g(double a) {
+  h(a.clamp(f(), f()));
+}
+h(int x) {}
+''',
+        expectedErrorsByNullability(nullable: [
+          error(CompileTimeErrorCode.ARGUMENT_TYPE_NOT_ASSIGNABLE, 45, 17),
+        ], legacy: []));
+
+    assertTypeArgumentTypes(findNode.methodInvocation('f(),'), ['num']);
+    assertTypeArgumentTypes(findNode.methodInvocation('f())'), ['num']);
+  }
+
+  test_clamp_double_context_none() async {
+    await assertNoErrorsInCode('''
+T f<T>() => throw Error();
+g(double a) {
+  a.clamp(f(), f());
+}
+''');
+
+    assertTypeArgumentTypes(findNode.methodInvocation('f(),'), ['num']);
+    assertTypeArgumentTypes(findNode.methodInvocation('f())'), ['num']);
+  }
+
+  test_clamp_double_double_double() async {
+    await assertNoErrorsInCode('''
+f(double a, double b, double c) {
+  a.clamp(b, c);
+}
+''');
+
+    assertMethodInvocation(
+        findNode.methodInvocation('clamp'),
+        elementMatcher(numElement.getMethod('clamp'),
+            isLegacy: isNullSafetySdkAndLegacyLibrary),
+        'num Function(num, num)',
+        expectedType: typeToStringWithNullability ? 'double' : 'num');
+  }
+
+  test_clamp_double_double_int() async {
+    await assertNoErrorsInCode('''
+f(double a, double b, int c) {
+  a.clamp(b, c);
+}
+''');
+
+    assertMethodInvocation(
+        findNode.methodInvocation('clamp'),
+        elementMatcher(numElement.getMethod('clamp'),
+            isLegacy: isNullSafetySdkAndLegacyLibrary),
+        'num Function(num, num)',
+        expectedType: 'num');
+  }
+
+  test_clamp_double_int_double() async {
+    await assertNoErrorsInCode('''
+f(double a, int b, double c) {
+  a.clamp(b, c);
+}
+''');
+
+    assertMethodInvocation(
+        findNode.methodInvocation('clamp'),
+        elementMatcher(numElement.getMethod('clamp'),
+            isLegacy: isNullSafetySdkAndLegacyLibrary),
+        'num Function(num, num)',
+        expectedType: 'num');
+  }
+
+  test_clamp_double_int_int() async {
+    await assertNoErrorsInCode('''
+f(double a, int b, int c) {
+  a.clamp(b, c);
+}
+''');
+
+    assertMethodInvocation(
+        findNode.methodInvocation('clamp'),
+        elementMatcher(numElement.getMethod('clamp'),
+            isLegacy: isNullSafetySdkAndLegacyLibrary),
+        'num Function(num, num)',
+        expectedType: 'num');
+  }
+
+  test_clamp_int_context_double() async {
+    await assertErrorsInCode(
+        '''
+T f<T>() => throw Error();
+g(int a) {
+  h(a.clamp(f(), f()));
+}
+h(double x) {}
+''',
+        expectedErrorsByNullability(nullable: [
+          error(CompileTimeErrorCode.ARGUMENT_TYPE_NOT_ASSIGNABLE, 42, 17),
+        ], legacy: []));
+
+    assertTypeArgumentTypes(findNode.methodInvocation('f(),'), ['num']);
+    assertTypeArgumentTypes(findNode.methodInvocation('f())'), ['num']);
+  }
+
+  test_clamp_int_context_int() async {
+    await assertNoErrorsInCode('''
+T f<T>() => throw Error();
+g(int a) {
+  h(a.clamp(f(), f()));
+}
+h(int x) {}
+''');
+
+    assertTypeArgumentTypes(findNode.methodInvocation('f(),'),
+        [typeToStringWithNullability ? 'int' : 'num']);
+    assertTypeArgumentTypes(findNode.methodInvocation('f())'),
+        [typeToStringWithNullability ? 'int' : 'num']);
+  }
+
+  test_clamp_int_context_none() async {
+    await assertNoErrorsInCode('''
+T f<T>() => throw Error();
+g(int a) {
+  a.clamp(f(), f());
+}
+''');
+
+    assertTypeArgumentTypes(findNode.methodInvocation('f(),'), ['num']);
+    assertTypeArgumentTypes(findNode.methodInvocation('f())'), ['num']);
+  }
+
+  test_clamp_int_double_double() async {
+    await assertNoErrorsInCode('''
+f(int a, double b, double c) {
+  a.clamp(b, c);
+}
+''');
+
+    assertMethodInvocation(
+        findNode.methodInvocation('clamp'),
+        elementMatcher(numElement.getMethod('clamp'),
+            isLegacy: isNullSafetySdkAndLegacyLibrary),
+        'num Function(num, num)',
+        expectedType: 'num');
+  }
+
+  test_clamp_int_double_dynamic() async {
+    await assertNoErrorsInCode('''
+f(int a, double b, dynamic c) {
+  a.clamp(b, c);
+}
+''');
+
+    assertMethodInvocation(
+        findNode.methodInvocation('clamp'),
+        elementMatcher(numElement.getMethod('clamp'),
+            isLegacy: isNullSafetySdkAndLegacyLibrary),
+        'num Function(num, num)',
+        expectedType: 'num');
+  }
+
+  test_clamp_int_double_int() async {
+    await assertNoErrorsInCode('''
+f(int a, double b, int c) {
+  a.clamp(b, c);
+}
+''');
+
+    assertMethodInvocation(
+        findNode.methodInvocation('clamp'),
+        elementMatcher(numElement.getMethod('clamp'),
+            isLegacy: isNullSafetySdkAndLegacyLibrary),
+        'num Function(num, num)',
+        expectedType: 'num');
+  }
+
+  test_clamp_int_dynamic_double() async {
+    await assertNoErrorsInCode('''
+f(int a, dynamic b, double c) {
+  a.clamp(b, c);
+}
+''');
+
+    assertMethodInvocation(
+        findNode.methodInvocation('clamp'),
+        elementMatcher(numElement.getMethod('clamp'),
+            isLegacy: isNullSafetySdkAndLegacyLibrary),
+        'num Function(num, num)',
+        expectedType: 'num');
+  }
+
+  test_clamp_int_dynamic_int() async {
+    await assertNoErrorsInCode('''
+f(int a, dynamic b, int c) {
+  a.clamp(b, c);
+}
+''');
+
+    assertMethodInvocation(
+        findNode.methodInvocation('clamp'),
+        elementMatcher(numElement.getMethod('clamp'),
+            isLegacy: isNullSafetySdkAndLegacyLibrary),
+        'num Function(num, num)',
+        expectedType: 'num');
+  }
+
+  test_clamp_int_int_double() async {
+    await assertNoErrorsInCode('''
+f(int a, int b, double c) {
+  a.clamp(b, c);
+}
+''');
+
+    assertMethodInvocation(
+        findNode.methodInvocation('clamp'),
+        elementMatcher(numElement.getMethod('clamp'),
+            isLegacy: isNullSafetySdkAndLegacyLibrary),
+        'num Function(num, num)',
+        expectedType: 'num');
+  }
+
+  test_clamp_int_int_dynamic() async {
+    await assertNoErrorsInCode('''
+f(int a, int b, dynamic c) {
+  a.clamp(b, c);
+}
+''');
+
+    assertMethodInvocation(
+        findNode.methodInvocation('clamp'),
+        elementMatcher(numElement.getMethod('clamp'),
+            isLegacy: isNullSafetySdkAndLegacyLibrary),
+        'num Function(num, num)',
+        expectedType: 'num');
+  }
+
+  test_clamp_int_int_int() async {
+    await assertNoErrorsInCode('''
+f(int a, int b, int c) {
+  a.clamp(b, c);
+}
+''');
+
+    assertMethodInvocation(
+        findNode.methodInvocation('clamp'),
+        elementMatcher(numElement.getMethod('clamp'),
+            isLegacy: isNullSafetySdkAndLegacyLibrary),
+        'num Function(num, num)',
+        expectedType: typeToStringWithNullability ? 'int' : 'num');
+  }
+
+  test_clamp_int_int_int_from_cascade() async {
+    await assertErrorsInCode(
+        '''
+f(int a, int b, int c) {
+  a..clamp(b, c).isEven;
+}
+''',
+        expectedErrorsByNullability(nullable: [], legacy: [
+          error(CompileTimeErrorCode.UNDEFINED_GETTER, 42, 6),
+        ]));
+
+    assertMethodInvocation(
+        findNode.methodInvocation('clamp'),
+        elementMatcher(numElement.getMethod('clamp'),
+            isLegacy: isNullSafetySdkAndLegacyLibrary),
+        'num Function(num, num)',
+        expectedType: typeToStringWithNullability ? 'int' : 'num');
+  }
+
+  test_clamp_int_int_int_via_extension_explicit() async {
+    await assertNoErrorsInCode('''
+extension E on int {
+  String clamp(int x, int y) => '';
+}
+f(int a, int b, int c) {
+  E(a).clamp(b, c);
+}
+''');
+
+    assertMethodInvocation(
+        findNode.methodInvocation('clamp(b'),
+        elementMatcher(findElement.extension_('E').getMethod('clamp')),
+        'String Function(int, int)',
+        expectedType: 'String');
+  }
+
+  test_clamp_int_int_never() async {
+    await assertNoErrorsInCode('''
+f(int a, int b, Never c) {
+  a.clamp(b, c);
+}
+''');
+
+    assertMethodInvocation(
+        findNode.methodInvocation('clamp'),
+        elementMatcher(numElement.getMethod('clamp'),
+            isLegacy: isNullSafetySdkAndLegacyLibrary),
+        'num Function(num, num)',
+        expectedType: 'num');
+  }
+
+  test_clamp_int_never_int() async {
+    await assertErrorsInCode(
+        '''
+f(int a, Never b, int c) {
+  a.clamp(b, c);
+}
+''',
+        expectedErrorsByNullability(nullable: [
+          error(HintCode.DEAD_CODE, 40, 3),
+        ], legacy: []));
+
+    assertMethodInvocation(
+        findNode.methodInvocation('clamp'),
+        elementMatcher(numElement.getMethod('clamp'),
+            isLegacy: isNullSafetySdkAndLegacyLibrary),
+        'num Function(num, num)',
+        expectedType: 'num');
+  }
+
+  test_clamp_never_int_int() async {
+    await assertErrorsInCode(
+        '''
+f(Never a, int b, int c) {
+  a.clamp(b, c);
+}
+''',
+        expectedErrorsByNullability(nullable: [
+          error(HintCode.RECEIVER_OF_TYPE_NEVER, 29, 1),
+          error(HintCode.DEAD_CODE, 36, 7),
+        ], legacy: [
+          error(CompileTimeErrorCode.UNDEFINED_METHOD, 31, 5),
+        ]));
+
+    assertMethodInvocation(
+        findNode.methodInvocation('clamp'), isNull, 'dynamic',
+        expectedType: typeToStringWithNullability ? 'Never' : 'dynamic');
+  }
+
+  test_clamp_other_context_int() async {
+    await assertErrorsInCode(
+        '''
 abstract class A {
-  void foo(int _);
+  num clamp(String x, String y);
 }
-abstract class B extends A {
-  void bar() {
-    super.foo(0);
+T f<T>() => throw Error();
+g(A a) {
+  h(a.clamp(f(), f()));
+}
+h(int x) {}
+''',
+        expectedErrorsByNullability(nullable: [
+          error(CompileTimeErrorCode.ARGUMENT_TYPE_NOT_ASSIGNABLE, 94, 17),
+        ], legacy: []));
+
+    assertTypeArgumentTypes(findNode.methodInvocation('f(),'), ['String']);
+    assertTypeArgumentTypes(findNode.methodInvocation('f())'), ['String']);
   }
 
-  void foo(int _) {} // does not matter
+  test_clamp_other_int_int() async {
+    await assertNoErrorsInCode('''
+abstract class A {
+  String clamp(int x, int y);
+}
+f(A a, int b, int c) {
+  a.clamp(b, c);
 }
 ''');
-    await resolveTestFile();
-    assertTestErrors([CompileTimeErrorCode.ABSTRACT_SUPER_MEMBER_REFERENCE]);
 
-    var invocation = findNode.methodInvocation('foo(0)');
     assertMethodInvocation(
-      invocation,
-      findElement.method('foo', of: 'A'),
-      '(int) → void',
-    );
-    assertSuperExpression(invocation.target);
+        findNode.methodInvocation('clamp(b'),
+        elementMatcher(findElement.class_('A').getMethod('clamp')),
+        'String Function(int, int)',
+        expectedType: 'String');
   }
 
-  test_error_abstractSuperMemberReference_mixinHasNoSuchMethod() async {
-    addTestFile('''
-class A {
-  int foo();
-  noSuchMethod(im) => 42;
-}
-
-class B extends Object with A {
-  foo() => super.foo(); // ref
-  noSuchMethod(im) => 87;
-}
-''');
-    await resolveTestFile();
-    assertTestErrors([CompileTimeErrorCode.ABSTRACT_SUPER_MEMBER_REFERENCE]);
-
-    var invocation = findNode.methodInvocation('foo(); // ref');
-    assertMethodInvocation(
-      invocation,
-      findElement.method('foo', of: 'A'),
-      '() → int',
-    );
-    assertSuperExpression(invocation.target);
-  }
-
-  test_error_abstractSuperMemberReference_OK_mixinHasConcrete() async {
-    addTestFile('''
+  test_clamp_other_int_int_via_extension_explicit() async {
+    await assertNoErrorsInCode('''
 class A {}
-
-class M {
-  void foo(int _) {}
+extension E on A {
+  String clamp(int x, int y) => '';
 }
-
-class B = A with M;
-
-class C extends B {
-  void bar() {
-    super.foo(0);
-  }
+f(A a, int b, int c) {
+  E(a).clamp(b, c);
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
 
-    var invocation = findNode.methodInvocation('foo(0)');
     assertMethodInvocation(
-      invocation,
-      findElement.method('foo', of: 'M'),
-      '(int) → void',
-    );
-    assertSuperExpression(invocation.target);
+        findNode.methodInvocation('clamp(b'),
+        elementMatcher(findElement.extension_('E').getMethod('clamp')),
+        'String Function(int, int)',
+        expectedType: 'String');
   }
 
-  test_error_abstractSuperMemberReference_OK_superHasNoSuchMethod() async {
-    addTestFile(r'''
-class A {
-  int foo();
-  noSuchMethod(im) => 42;
+  test_clamp_other_int_int_via_extension_implicit() async {
+    await assertNoErrorsInCode('''
+class A {}
+extension E on A {
+  String clamp(int x, int y) => '';
 }
-
-class B extends A {
-  int foo() => super.foo(); // ref
-  noSuchMethod(im) => 87;
+f(A a, int b, int c) {
+  a.clamp(b, c);
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
 
-    var invocation = findNode.methodInvocation('super.foo(); // ref');
     assertMethodInvocation(
-      invocation,
-      findElement.method('foo', of: 'A'),
-      '() → int',
-    );
-    assertSuperExpression(invocation.target);
+        findNode.methodInvocation('clamp(b'),
+        elementMatcher(findElement.extension_('E').getMethod('clamp')),
+        'String Function(int, int)',
+        expectedType: 'String');
   }
 
-  test_error_abstractSuperMemberReference_OK_superSuperHasConcrete() async {
-    addTestFile('''
-abstract class A {
-  void foo(int _) {}
-}
+  test_demoteType() async {
+    await assertNoErrorsInCode(r'''
+void test<T>(T t) {}
 
-abstract class B extends A {
-  void foo(int _);
-}
-
-class C extends B {
-  void bar() {
-    super.foo(0);
+void f<S>(S s) {
+  if (s is int) {
+    test(s);
   }
 }
+
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
 
-    var invocation = findNode.methodInvocation('foo(0)');
-    assertMethodInvocation(
-      invocation,
-      findElement.method('foo', of: 'A'),
-      '(int) → void',
+    assertTypeArgumentTypes(
+      findNode.methodInvocation('test(s)'),
+      ['S'],
     );
-    assertSuperExpression(invocation.target);
   }
 
   test_error_ambiguousImport_topFunction() async {
-    newFile('/test/lib/a.dart', content: r'''
+    newFile('$testPackageLibPath/a.dart', content: r'''
 void foo(int _) {}
 ''');
-    newFile('/test/lib/b.dart', content: r'''
+    newFile('$testPackageLibPath/b.dart', content: r'''
 void foo(int _) {}
 ''');
 
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 import 'a.dart';
 import 'b.dart';
 
 main() {
   foo(0);
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticWarningCode.AMBIGUOUS_IMPORT,
+''', [
+      error(CompileTimeErrorCode.AMBIGUOUS_IMPORT, 46, 3),
     ]);
 
     var invocation = findNode.methodInvocation('foo(0)');
-    assertInvokeType(invocation, '(int) → void');
+    assertInvokeType(invocation, 'void Function(int)');
     assertType(invocation, 'void');
   }
 
   test_error_ambiguousImport_topFunction_prefixed() async {
-    newFile('/test/lib/a.dart', content: r'''
+    newFile('$testPackageLibPath/a.dart', content: r'''
 void foo(int _) {}
 ''');
-    newFile('/test/lib/b.dart', content: r'''
+    newFile('$testPackageLibPath/b.dart', content: r'''
 void foo(int _) {}
 ''');
 
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 import 'a.dart' as p;
 import 'b.dart' as p;
 
 main() {
   p.foo(0);
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticWarningCode.AMBIGUOUS_IMPORT,
+''', [
+      error(CompileTimeErrorCode.AMBIGUOUS_IMPORT, 58, 3),
     ]);
 
     var invocation = findNode.methodInvocation('foo(0)');
-    assertInvokeType(invocation, '(int) → void');
+    assertInvokeType(invocation, 'void Function(int)');
     assertType(invocation, 'void');
   }
 
   test_error_instanceAccessToStaticMember_method() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 class A {
   static void foo(int _) {}
 }
 
-main(A a) {
+void f(A a) {
   a.foo(0);
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticTypeWarningCode.INSTANCE_ACCESS_TO_STATIC_MEMBER,
+''', [
+      error(CompileTimeErrorCode.INSTANCE_ACCESS_TO_STATIC_MEMBER, 59, 3),
     ]);
-    _assertInvalidInvocation(
-      'a.foo(0)',
-      findElement.method('foo'),
-      expectedNameType: '(int) → void',
+    assertMethodInvocation2(
+      findNode.methodInvocation('a.foo(0)'),
+      element: findElement.method('foo'),
+      typeArgumentTypes: [],
+      invokeType: 'void Function(int)',
+      type: 'void',
     );
   }
 
   test_error_invocationOfNonFunction_interface_hasCall_field() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 class C {
-  void Function() call;
+  void Function() call = throw Error();
 }
 
-main(C c) {
+void f(C c) {
   c();
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticTypeWarningCode.INVOCATION_OF_NON_FUNCTION,
+''', [
+      error(CompileTimeErrorCode.INVOCATION_OF_NON_FUNCTION_EXPRESSION, 69, 1),
     ]);
-    _assertInvalidInvocation(
-      'c()',
-      findElement.parameter('c'),
-    );
-  }
 
-  test_error_invocationOfNonFunction_localVariable() async {
-    addTestFile(r'''
-main() {
-  Object foo;
-  foo();
-}
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticTypeWarningCode.INVOCATION_OF_NON_FUNCTION,
-    ]);
-    _assertInvalidInvocation(
-      'foo()',
-      findElement.localVar('foo'),
-      expectedNameType: 'Object',
-    );
-  }
+    var invocation = findNode.functionExpressionInvocation('c();');
+    assertElementNull(invocation);
+    assertInvokeTypeDynamic(invocation);
+    assertTypeDynamic(invocation);
 
-  test_error_invocationOfNonFunction_OK_dynamic_localVariable() async {
-    addTestFile(r'''
-main() {
-  var foo;
-  foo();
-}
-''');
-    await resolveTestFile();
-    assertNoTestErrors();
-    _assertInvalidInvocation('foo();', findElement.localVar('foo'));
+    var cRef = invocation.function as SimpleIdentifier;
+    assertElement(cRef, findElement.parameter('c'));
+    assertType(cRef, 'C');
   }
 
   test_error_invocationOfNonFunction_OK_dynamicGetter_instance() async {
-    addTestFile(r'''
+    await assertNoErrorsInCode(r'''
 class C {
   var foo;
 }
 
-main(C c) {
+void f(C c) {
   c.foo();
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
-    _assertInvalidInvocation('c.foo();', findElement.getter('foo'));
+
+    var invocation = findNode.functionExpressionInvocation('foo();');
+    assertElementNull(invocation);
+    assertInvokeTypeDynamic(invocation);
+    assertTypeDynamic(invocation);
+
+    var foo = invocation.function as PropertyAccess;
+    assertTypeDynamic(foo);
+    assertElement(foo.propertyName, findElement.getter('foo'));
+    assertTypeDynamic(foo.propertyName);
   }
 
   test_error_invocationOfNonFunction_OK_dynamicGetter_superClass() async {
-    addTestFile(r'''
+    await assertNoErrorsInCode(r'''
 class A {
   var foo;
 }
@@ -297,13 +597,19 @@ class B extends A {
   }
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
-    _assertInvalidInvocation('foo();', findElement.getter('foo'));
+
+    var invocation = findNode.functionExpressionInvocation('foo();');
+    assertElementNull(invocation);
+    assertInvokeTypeDynamic(invocation);
+    assertTypeDynamic(invocation);
+
+    var foo = invocation.function as SimpleIdentifier;
+    assertElement(foo, findElement.getter('foo'));
+    assertTypeDynamic(foo);
   }
 
   test_error_invocationOfNonFunction_OK_dynamicGetter_thisClass() async {
-    addTestFile(r'''
+    await assertNoErrorsInCode(r'''
 class C {
   var foo;
 
@@ -312,85 +618,142 @@ class C {
   }
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
-    _assertInvalidInvocation('foo();', findElement.getter('foo'));
+
+    var invocation = findNode.functionExpressionInvocation('foo();');
+    assertElementNull(invocation);
+    assertInvokeTypeDynamic(invocation);
+    assertTypeDynamic(invocation);
+
+    var foo = invocation.function as SimpleIdentifier;
+    assertElement(foo, findElement.getter('foo'));
+    assertTypeDynamic(foo);
   }
 
   test_error_invocationOfNonFunction_OK_Function() async {
-    addTestFile(r'''
+    await assertNoErrorsInCode(r'''
 f(Function foo) {
   foo(1, 2);
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
-    _assertInvalidInvocation('foo(1, 2);', findElement.parameter('foo'));
+
+    var invocation = findNode.functionExpressionInvocation('foo(1, 2);');
+    assertInvokeTypeDynamic(invocation);
+    assertTypeDynamic(invocation);
+
+    var foo = invocation.function as SimpleIdentifier;
+    assertElement(foo, findElement.parameter('foo'));
+    assertType(foo, 'Function');
   }
 
   test_error_invocationOfNonFunction_OK_functionTypeTypeParameter() async {
-    addTestFile(r'''
+    await assertNoErrorsInCode(r'''
 typedef MyFunction = double Function(int _);
 
 class C<T extends MyFunction> {
   T foo;
-  
+  C(this.foo);
+
   main() {
     foo(0);
   }
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
-    assertMethodInvocation(
-      findNode.methodInvocation('foo(0)'),
-      findElement.getter('foo'),
-      '(int) → double',
-    );
+
+    var invocation = findNode.functionExpressionInvocation('foo(0);');
+    assertElementNull(invocation);
+    assertInvokeType(invocation, 'double Function(int)');
+    assertType(invocation, 'double');
+
+    var foo = invocation.function as SimpleIdentifier;
+    assertElement(foo, findElement.getter('foo'));
+    assertType(foo, 'double Function(int)');
+  }
+
+  test_error_invocationOfNonFunction_parameter() async {
+    await assertErrorsInCode(r'''
+main(Object foo) {
+  foo();
+}
+''', [
+      error(CompileTimeErrorCode.INVOCATION_OF_NON_FUNCTION_EXPRESSION, 21, 3),
+    ]);
+
+    var invocation = findNode.functionExpressionInvocation('foo();');
+    assertElementNull(invocation);
+    assertInvokeTypeDynamic(invocation);
+    assertTypeDynamic(invocation);
+
+    var foo = invocation.function as SimpleIdentifier;
+    assertElement(foo, findElement.parameter('foo'));
+    assertType(foo, 'Object');
+  }
+
+  test_error_invocationOfNonFunction_parameter_dynamic() async {
+    await assertNoErrorsInCode(r'''
+main(var foo) {
+  foo();
+}
+''');
+
+    var invocation = findNode.functionExpressionInvocation('foo();');
+    assertElementNull(invocation);
+    assertInvokeTypeDynamic(invocation);
+    assertTypeDynamic(invocation);
+
+    var foo = invocation.function as SimpleIdentifier;
+    assertElement(foo, findElement.parameter('foo'));
+    assertTypeDynamic(foo);
   }
 
   test_error_invocationOfNonFunction_static_hasTarget() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 class C {
-  static int foo;
+  static int foo = 0;
 }
 
 main() {
   C.foo();
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticTypeWarningCode.INVOCATION_OF_NON_FUNCTION,
+''', [
+      error(CompileTimeErrorCode.INVOCATION_OF_NON_FUNCTION_EXPRESSION, 46, 5),
     ]);
-    _assertInvalidInvocation(
-      'foo()',
-      findElement.getter('foo'),
-    );
+
+    var invocation = findNode.functionExpressionInvocation('foo();');
+    assertElementNull(invocation);
+    assertInvokeTypeDynamic(invocation);
+    assertTypeDynamic(invocation);
+
+    var foo = invocation.function as PropertyAccess;
+    assertType(foo, 'int');
+    assertElement(foo.propertyName, findElement.getter('foo'));
+    assertType(foo.propertyName, 'int');
   }
 
   test_error_invocationOfNonFunction_static_noTarget() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 class C {
-  static int foo;
-  
+  static int foo = 0;
+
   main() {
     foo();
   }
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticTypeWarningCode.INVOCATION_OF_NON_FUNCTION,
+''', [
+      error(CompileTimeErrorCode.INVOCATION_OF_NON_FUNCTION_EXPRESSION, 48, 3),
     ]);
-    _assertInvalidInvocation(
-      'foo()',
-      findElement.getter('foo'),
-    );
+
+    var invocation = findNode.functionExpressionInvocation('foo();');
+    assertElementNull(invocation);
+    assertInvokeTypeDynamic(invocation);
+    assertTypeDynamic(invocation);
+
+    var foo = invocation.function as SimpleIdentifier;
+    assertElement(foo, findElement.getter('foo'));
+    assertType(foo, 'int');
   }
 
   test_error_invocationOfNonFunction_super_getter() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 class A {
   int get foo => 0;
 }
@@ -400,80 +763,83 @@ class B extends A {
     super.foo();
   }
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticTypeWarningCode.INVOCATION_OF_NON_FUNCTION,
+''', [
+      error(CompileTimeErrorCode.INVOCATION_OF_NON_FUNCTION_EXPRESSION, 68, 9),
     ]);
-    _assertInvalidInvocation(
-      'foo()',
-      findElement.getter('foo'),
-    );
+
+    var invocation = findNode.functionExpressionInvocation('foo();');
+    assertElementNull(invocation);
+    assertInvokeTypeDynamic(invocation);
+    assertTypeDynamic(invocation);
+
+    var foo = invocation.function as PropertyAccess;
+    assertType(foo, 'int');
+    assertElement(foo.propertyName, findElement.getter('foo'));
+    assertType(foo.propertyName, 'int');
+
+    assertSuperExpression(foo.target);
   }
 
   test_error_prefixIdentifierNotFollowedByDot() async {
-    newFile('/test/lib/a.dart', content: r'''
+    newFile('$testPackageLibPath/a.dart', content: r'''
 void foo() {}
 ''');
 
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 import 'a.dart' as prefix;
 
 main() {
   prefix?.foo();
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      CompileTimeErrorCode.PREFIX_IDENTIFIER_NOT_FOLLOWED_BY_DOT,
+''', [
+      error(CompileTimeErrorCode.PREFIX_IDENTIFIER_NOT_FOLLOWED_BY_DOT, 39, 6),
     ]);
 
-    var import = _importFinder('package:test/a.dart');
+    var import = findElement.importFind('package:test/a.dart');
 
     var invocation = findNode.methodInvocation('foo();');
     assertMethodInvocation(
       invocation,
       import.topFunction('foo'),
-      '() → void',
+      'void Function()',
     );
     assertImportPrefix(invocation.target, import.prefix);
   }
 
   test_error_prefixIdentifierNotFollowedByDot_deferred() async {
-    addTestFile(r'''
+    var question = typeToStringWithNullability ? '?' : '';
+    await assertErrorsInCode(r'''
 import 'dart:math' deferred as math;
 
 main() {
   math?.loadLibrary();
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      CompileTimeErrorCode.PREFIX_IDENTIFIER_NOT_FOLLOWED_BY_DOT,
+''', [
+      error(HintCode.UNUSED_IMPORT, 7, 11),
+      error(CompileTimeErrorCode.PREFIX_IDENTIFIER_NOT_FOLLOWED_BY_DOT, 49, 4),
     ]);
 
-    var import = _importFinder('dart:math');
+    var import = findElement.importFind('dart:math');
 
     var invocation = findNode.methodInvocation('loadLibrary()');
     assertMethodInvocation(
       invocation,
       import.importedLibrary.loadLibraryFunction,
-      '() → Future<dynamic>',
+      'Future<dynamic> Function()',
+      expectedType: 'Future<dynamic>$question',
     );
     assertImportPrefix(invocation.target, import.prefix);
   }
 
   test_error_prefixIdentifierNotFollowedByDot_invoke() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 import 'dart:math' as foo;
 
 main() {
   foo();
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      CompileTimeErrorCode.PREFIX_IDENTIFIER_NOT_FOLLOWED_BY_DOT,
+''', [
+      error(CompileTimeErrorCode.PREFIX_IDENTIFIER_NOT_FOLLOWED_BY_DOT, 39, 3),
     ]);
     _assertInvalidInvocation(
       'foo()',
@@ -483,72 +849,62 @@ main() {
   }
 
   test_error_undefinedFunction() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 main() {
   foo(0);
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticTypeWarningCode.UNDEFINED_FUNCTION,
+''', [
+      error(CompileTimeErrorCode.UNDEFINED_FUNCTION, 11, 3),
     ]);
     _assertUnresolvedMethodInvocation('foo(0)');
   }
 
   test_error_undefinedFunction_hasTarget_importPrefix() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 import 'dart:math' as math;
 
 main() {
   math.foo(0);
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticTypeWarningCode.UNDEFINED_FUNCTION,
+''', [
+      error(CompileTimeErrorCode.UNDEFINED_FUNCTION, 45, 3),
     ]);
     _assertUnresolvedMethodInvocation('foo(0);');
   }
 
   test_error_undefinedIdentifier_target() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 main() {
   bar.foo(0);
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticWarningCode.UNDEFINED_IDENTIFIER,
+''', [
+      error(CompileTimeErrorCode.UNDEFINED_IDENTIFIER, 11, 3),
     ]);
     _assertUnresolvedMethodInvocation('foo(0);');
   }
 
   test_error_undefinedMethod_hasTarget_class() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 class C {}
 main() {
   C.foo(0);
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticTypeWarningCode.UNDEFINED_METHOD,
+''', [
+      error(CompileTimeErrorCode.UNDEFINED_METHOD, 24, 3),
     ]);
     _assertUnresolvedMethodInvocation('foo(0);');
   }
 
   test_error_undefinedMethod_hasTarget_class_arguments() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 class C {}
 
-int x;
+int x = 0;
 main() {
   C.foo(x);
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticTypeWarningCode.UNDEFINED_METHOD,
+''', [
+      error(CompileTimeErrorCode.UNDEFINED_METHOD, 36, 3),
     ]);
 
     _assertUnresolvedMethodInvocation('foo(x);');
@@ -556,7 +912,7 @@ main() {
   }
 
   test_error_undefinedMethod_hasTarget_class_inSuperclass() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 class S {
   static void foo(int _) {}
 }
@@ -566,116 +922,108 @@ class C extends S {}
 main() {
   C.foo(0);
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticTypeWarningCode.UNDEFINED_METHOD,
+''', [
+      error(CompileTimeErrorCode.UNDEFINED_METHOD, 76, 3),
     ]);
     _assertUnresolvedMethodInvocation('foo(0);');
   }
 
   test_error_undefinedMethod_hasTarget_class_typeArguments() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 class C {}
 
 main() {
   C.foo<int>();
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticTypeWarningCode.UNDEFINED_METHOD,
+''', [
+      error(CompileTimeErrorCode.UNDEFINED_METHOD, 25, 3),
     ]);
 
-    _assertUnresolvedMethodInvocation('foo<int>();');
+    _assertUnresolvedMethodInvocation(
+      'foo<int>();',
+      expectedTypeArguments: ['int'],
+    );
     assertTypeName(findNode.typeName('int>'), intElement, 'int');
   }
 
   test_error_undefinedMethod_hasTarget_class_typeParameter() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 class C<T> {
   static main() => C.T();
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticTypeWarningCode.UNDEFINED_METHOD,
+''', [
+      error(CompileTimeErrorCode.UNDEFINED_METHOD, 34, 1),
     ]);
     _assertUnresolvedMethodInvocation('C.T();');
   }
 
   test_error_undefinedMethod_hasTarget_instance() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 main() {
   42.foo(0);
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticTypeWarningCode.UNDEFINED_METHOD,
+''', [
+      error(CompileTimeErrorCode.UNDEFINED_METHOD, 14, 3),
     ]);
     _assertUnresolvedMethodInvocation('foo(0);');
   }
 
   test_error_undefinedMethod_hasTarget_localVariable_function() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 main() {
   var v = () {};
   v.foo(0);
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticTypeWarningCode.UNDEFINED_METHOD,
+''', [
+      error(CompileTimeErrorCode.UNDEFINED_METHOD, 30, 3),
     ]);
     _assertUnresolvedMethodInvocation('foo(0);');
   }
 
   test_error_undefinedMethod_noTarget() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 class C {
   main() {
     foo(0);
   }
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticTypeWarningCode.UNDEFINED_METHOD,
+''', [
+      error(CompileTimeErrorCode.UNDEFINED_METHOD, 25, 3),
     ]);
     _assertUnresolvedMethodInvocation('foo(0);');
   }
 
-  test_error_undefinedMethod_object_call() async {
-    addTestFile(r'''
-main(Object o) {
-  o.call();
-}
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticTypeWarningCode.UNDEFINED_METHOD,
-    ]);
-  }
-
-  test_error_undefinedMethod_OK_null() async {
-    addTestFile(r'''
+  test_error_undefinedMethod_null() async {
+    await assertErrorsInCode(r'''
 main() {
   null.foo();
 }
-''');
-    await resolveTestFile();
-    assertNoTestErrors();
+''', [
+      if (typeToStringWithNullability)
+        error(CompileTimeErrorCode.INVALID_USE_OF_NULL_VALUE, 16, 3)
+      else
+        error(CompileTimeErrorCode.UNDEFINED_METHOD, 16, 3),
+    ]);
     _assertUnresolvedMethodInvocation('foo();');
   }
 
+  test_error_undefinedMethod_object_call() async {
+    await assertErrorsInCode(r'''
+main(Object o) {
+  o.call();
+}
+''', [
+      error(CompileTimeErrorCode.UNDEFINED_METHOD, 21, 4),
+    ]);
+  }
+
   test_error_undefinedMethod_private() async {
-    newFile('/test/lib/a.dart', content: r'''
+    newFile('$testPackageLibPath/a.dart', content: r'''
 class A {
   void _foo(int _) {}
 }
 ''');
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 import 'a.dart';
 
 class B extends A {
@@ -683,16 +1031,14 @@ class B extends A {
     _foo(0);
   }
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticTypeWarningCode.UNDEFINED_METHOD,
+''', [
+      error(CompileTimeErrorCode.UNDEFINED_METHOD, 53, 4),
     ]);
     _assertUnresolvedMethodInvocation('_foo(0);');
   }
 
   test_error_undefinedMethod_typeLiteral_cascadeTarget() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 class C {
   static void foo() {}
 }
@@ -700,30 +1046,26 @@ class C {
 main() {
   C..foo();
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticTypeWarningCode.UNDEFINED_METHOD,
+''', [
+      error(CompileTimeErrorCode.UNDEFINED_METHOD, 50, 3),
     ]);
   }
 
   test_error_undefinedMethod_typeLiteral_conditional() async {
     // When applied to a type literal, the conditional access operator '?.'
     // cannot be used to access instance methods of Type.
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 class A {}
 main() {
   A?.toString();
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticTypeWarningCode.UNDEFINED_METHOD,
+''', [
+      error(CompileTimeErrorCode.UNDEFINED_METHOD, 25, 8),
     ]);
   }
 
   test_error_undefinedSuperMethod() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 class A {}
 
 class B extends A {
@@ -731,17 +1073,15 @@ class B extends A {
     super.foo(0);
   }
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticTypeWarningCode.UNDEFINED_SUPER_METHOD,
+''', [
+      error(CompileTimeErrorCode.UNDEFINED_SUPER_METHOD, 62, 3),
     ]);
     _assertUnresolvedMethodInvocation('foo(0);');
     assertSuperExpression(findNode.super_('super.foo'));
   }
 
   test_error_unqualifiedReferenceToNonLocalStaticMember_method() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 class A {
   static void foo() {}
 }
@@ -751,16 +1091,20 @@ class B extends A {
     foo(0);
   }
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticTypeWarningCode.UNQUALIFIED_REFERENCE_TO_NON_LOCAL_STATIC_MEMBER,
+''', [
+      error(
+          CompileTimeErrorCode.UNQUALIFIED_REFERENCE_TO_NON_LOCAL_STATIC_MEMBER,
+          71,
+          3),
+      error(CompileTimeErrorCode.EXTRA_POSITIONAL_ARGUMENTS, 75, 1),
     ]);
 
-    _assertInvalidInvocation(
-      'foo(0)',
-      findElement.method('foo'),
-      expectedNameType: '(int) → void',
+    assertMethodInvocation2(
+      findNode.methodInvocation('foo(0)'),
+      element: findElement.method('foo'),
+      typeArgumentTypes: [],
+      invokeType: 'void Function()',
+      type: 'void',
     );
   }
 
@@ -768,17 +1112,15 @@ class B extends A {
   /// single error generated when the only problem is that an imported file
   /// does not exist.
   test_error_uriDoesNotExist_prefixed() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 import 'missing.dart' as p;
 
 main() {
   p.foo(1);
   p.bar(2);
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      CompileTimeErrorCode.URI_DOES_NOT_EXIST,
+''', [
+      error(CompileTimeErrorCode.URI_DOES_NOT_EXIST, 7, 14),
     ]);
     _assertUnresolvedMethodInvocation('foo(1);');
     _assertUnresolvedMethodInvocation('bar(2);');
@@ -788,220 +1130,219 @@ main() {
   /// single error generated when the only problem is that an imported file
   /// does not exist.
   test_error_uriDoesNotExist_show() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 import 'missing.dart' show foo, bar;
 
 main() {
   foo(1);
   bar(2);
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      CompileTimeErrorCode.URI_DOES_NOT_EXIST,
+''', [
+      error(CompileTimeErrorCode.URI_DOES_NOT_EXIST, 7, 14),
     ]);
     _assertUnresolvedMethodInvocation('foo(1);');
     _assertUnresolvedMethodInvocation('bar(2);');
   }
 
   test_error_useOfVoidResult_name_getter() async {
-    addTestFile(r'''
+    await assertErrorsInCode('''
 class C<T>{
   T foo;
+  C(this.foo);
 }
 
-main(C<void> c) {
+void f(C<void> c) {
   c.foo();
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticWarningCode.USE_OF_VOID_RESULT,
+''', [
+      error(CompileTimeErrorCode.USE_OF_VOID_RESULT, 61, 5),
     ]);
-    _assertInvalidInvocation(
-      'c.foo()',
-      findElement.getter('foo'),
-      expectedNameType: 'void',
-    );
+
+    var invocation = findNode.functionExpressionInvocation('foo();');
+    assertElementNull(invocation);
+    assertInvokeTypeDynamic(invocation);
+    assertTypeDynamic(invocation);
+
+    var foo = invocation.function as PropertyAccess;
+    assertType(foo, 'void');
+    assertMember(foo.propertyName, findElement.getter('foo'), {'T': 'void'});
+    assertType(foo.propertyName, 'void');
   }
 
   test_error_useOfVoidResult_name_localVariable() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 main() {
   void foo;
   foo();
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticWarningCode.USE_OF_VOID_RESULT,
+''', [
+      error(CompileTimeErrorCode.USE_OF_VOID_RESULT, 23, 3),
     ]);
-    _assertInvalidInvocation(
-      'foo()',
-      findElement.localVar('foo'),
-      expectedNameType: 'void',
-    );
+
+    var invocation = findNode.functionExpressionInvocation('foo();');
+    assertElementNull(invocation);
+    assertInvokeTypeDynamic(invocation);
+    assertTypeDynamic(invocation);
+
+    var foo = invocation.function as SimpleIdentifier;
+    assertElement(foo, findElement.localVar('foo'));
+    assertType(foo, 'void');
   }
 
   test_error_useOfVoidResult_name_topFunction() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 void foo() {}
 
 main() {
   foo()();
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticWarningCode.USE_OF_VOID_RESULT,
+''', [
+      error(CompileTimeErrorCode.USE_OF_VOID_RESULT, 26, 3),
     ]);
     assertMethodInvocation(
       findNode.methodInvocation('foo()()'),
       findElement.topFunction('foo'),
-      '() → void',
+      'void Function()',
     );
   }
 
   test_error_useOfVoidResult_name_topVariable() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 void foo;
 
 main() {
   foo();
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticWarningCode.USE_OF_VOID_RESULT,
+''', [
+      error(CompileTimeErrorCode.USE_OF_VOID_RESULT, 22, 3),
     ]);
-    _assertInvalidInvocation(
-      'foo()',
-      findElement.topGet('foo'),
-      expectedNameType: 'void',
-    );
+
+    var invocation = findNode.functionExpressionInvocation('foo();');
+    assertElementNull(invocation);
+    assertInvokeTypeDynamic(invocation);
+    assertTypeDynamic(invocation);
+
+    var foo = invocation.function as SimpleIdentifier;
+    assertElement(foo, findElement.topGet('foo'));
+    assertType(foo, 'void');
   }
 
   test_error_useOfVoidResult_receiver() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 main() {
   void foo;
   foo.toString();
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticWarningCode.USE_OF_VOID_RESULT,
+''', [
+      error(CompileTimeErrorCode.USE_OF_VOID_RESULT, 23, 3),
     ]);
-    // TODO(scheglov) Resolve fully, or don't resolve at all.
-    assertMethodInvocation(
+    assertMethodInvocation2(
       findNode.methodInvocation('toString()'),
-      null,
-      '() → String',
+      element: null,
+      typeArgumentTypes: [],
+      invokeType: 'dynamic',
+      type: 'dynamic',
     );
   }
 
   test_error_useOfVoidResult_receiver_cascade() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 main() {
   void foo;
   foo..toString();
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticWarningCode.USE_OF_VOID_RESULT,
+''', [
+      error(CompileTimeErrorCode.USE_OF_VOID_RESULT, 23, 3),
     ]);
-    // TODO(scheglov) Resolve fully, or don't resolve at all.
-    assertMethodInvocation(
+    assertMethodInvocation2(
       findNode.methodInvocation('toString()'),
-      null,
-      '() → String',
+      element: null,
+      typeArgumentTypes: [],
+      invokeType: 'dynamic',
+      type: 'dynamic',
     );
   }
 
   test_error_useOfVoidResult_receiver_withNull() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 main() {
   void foo;
   foo?.toString();
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticWarningCode.USE_OF_VOID_RESULT,
+''', [
+      error(CompileTimeErrorCode.USE_OF_VOID_RESULT, 23, 3),
     ]);
-    // TODO(scheglov) Resolve fully, or don't resolve at all.
-    assertMethodInvocation(
+    assertMethodInvocation2(
       findNode.methodInvocation('toString()'),
-      null,
-      '() → String',
+      element: null,
+      typeArgumentTypes: [],
+      invokeType: 'dynamic',
+      type: 'dynamic',
     );
   }
 
   test_error_wrongNumberOfTypeArgumentsMethod_01() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 void foo() {}
 
 main() {
   foo<int>();
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticTypeWarningCode.WRONG_NUMBER_OF_TYPE_ARGUMENTS_METHOD,
+''', [
+      error(CompileTimeErrorCode.WRONG_NUMBER_OF_TYPE_ARGUMENTS_METHOD, 29, 5),
     ]);
     assertMethodInvocation(
       findNode.methodInvocation('foo<int>()'),
       findElement.topFunction('foo'),
-      '() → void',
+      'void Function()',
     );
     assertTypeName(findNode.typeName('int>'), intElement, 'int');
   }
 
   test_error_wrongNumberOfTypeArgumentsMethod_21() async {
-    addTestFile(r'''
-Map<T, U> foo<T extends num, U>() => null;
+    await assertErrorsInCode(r'''
+Map<T, U> foo<T extends num, U>() => throw Error();
 
 main() {
   foo<int>();
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      StaticTypeWarningCode.WRONG_NUMBER_OF_TYPE_ARGUMENTS_METHOD,
+''', [
+      error(CompileTimeErrorCode.WRONG_NUMBER_OF_TYPE_ARGUMENTS_METHOD, 67, 5),
     ]);
     assertMethodInvocation(
       findNode.methodInvocation('foo<int>()'),
       findElement.topFunction('foo'),
-      '() → Map<num, dynamic>',
+      'Map<dynamic, dynamic> Function()',
+      expectedTypeArguments: ['dynamic', 'dynamic'],
     );
     assertTypeName(findNode.typeName('int>'), intElement, 'int');
   }
 
   test_hasReceiver_class_staticGetter() async {
-    addTestFile(r'''
+    await assertNoErrorsInCode(r'''
 class C {
-  static double Function(int) get foo => null;
+  static double Function(int) get foo => throw Error();
 }
 
 main() {
   C.foo(0);
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
 
-    var invocation = findNode.methodInvocation('foo(0);');
-    assertMethodInvocation(
-      invocation,
-      findElement.getter('foo'),
-      '(int) → double',
-    );
-    assertClassRef(invocation.target, findElement.class_('C'));
+    var invocation = findNode.functionExpressionInvocation('foo(0);');
+    assertElementNull(invocation);
+    assertInvokeType(invocation, 'double Function(int)');
+    assertType(invocation, 'double');
+
+    var foo = invocation.function as PropertyAccess;
+    assertClassRef(foo.target, findElement.class_('C'));
+    assertType(foo, 'double Function(int)');
+    assertElement(foo.propertyName, findElement.getter('foo'));
+    assertType(foo.propertyName, 'double Function(int)');
   }
 
   test_hasReceiver_class_staticMethod() async {
-    addTestFile(r'''
+    await assertNoErrorsInCode(r'''
 class C {
   static void foo(int _) {}
 }
@@ -1010,183 +1351,273 @@ main() {
   C.foo(0);
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
 
     var invocation = findNode.methodInvocation('foo(0);');
     assertMethodInvocation(
       invocation,
       findElement.method('foo'),
-      '(int) → void',
+      'void Function(int)',
     );
     assertClassRef(invocation.target, findElement.class_('C'));
   }
 
   test_hasReceiver_deferredImportPrefix_loadLibrary() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 import 'dart:math' deferred as math;
 
 main() {
   math.loadLibrary();
 }
-''');
-    await resolveTestFile();
-    assertNoTestErrors();
+''', [
+      error(HintCode.UNUSED_IMPORT, 7, 11),
+    ]);
 
-    var import = _importFinder('dart:math');
+    var import = findElement.importFind('dart:math');
 
     var invocation = findNode.methodInvocation('loadLibrary()');
+    assertImportPrefix(invocation.target, import.prefix);
+
     assertMethodInvocation(
       invocation,
       import.importedLibrary.loadLibraryFunction,
-      '() → Future<dynamic>',
+      'Future<dynamic> Function()',
     );
-    assertImportPrefix(invocation.target, import.prefix);
   }
 
-  test_hasReceiver_functionTyped_call() async {
-    addTestFile(r'''
+  test_hasReceiver_deferredImportPrefix_loadLibrary_extraArgument() async {
+    await assertErrorsInCode(r'''
+import 'dart:math' deferred as math;
+
+main() {
+  math.loadLibrary(1 + 2);
+}
+''', [
+      error(HintCode.UNUSED_IMPORT, 7, 11),
+      error(CompileTimeErrorCode.EXTRA_POSITIONAL_ARGUMENTS, 66, 5),
+    ]);
+
+    var import = findElement.importFind('dart:math');
+
+    var invocation = findNode.methodInvocation('loadLibrary(1 + 2)');
+    assertImportPrefix(invocation.target, import.prefix);
+
+    assertMethodInvocation(
+      invocation,
+      import.importedLibrary.loadLibraryFunction,
+      'Future<dynamic> Function()',
+    );
+
+    assertType(findNode.binary('1 + 2'), 'int');
+  }
+
+  test_hasReceiver_functionTyped() async {
+    await assertNoErrorsInCode(r'''
 void foo(int _) {}
 
 main() {
   foo.call(0);
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
 
     var invocation = findNode.methodInvocation('call(0)');
     assertMethodInvocation(
       invocation,
       null,
-      '(int) → void',
+      'void Function(int)',
     );
     assertElement(invocation.target, findElement.topFunction('foo'));
-    assertType(invocation.target, '(int) → void');
+    assertType(invocation.target, 'void Function(int)');
+  }
+
+  test_hasReceiver_functionTyped_generic() async {
+    await assertNoErrorsInCode(r'''
+void foo<T>(T _) {}
+
+main() {
+  foo.call(0);
+}
+''');
+
+    var invocation = findNode.methodInvocation('call(0)');
+    assertMethodInvocation(
+      invocation,
+      null,
+      'void Function(int)',
+      expectedTypeArguments: ['int'],
+    );
+    assertElement(invocation.target, findElement.topFunction('foo'));
+    assertType(invocation.target, 'void Function<T>(T)');
   }
 
   test_hasReceiver_importPrefix_topFunction() async {
-    newFile('/test/lib/a.dart', content: r'''
+    newFile('$testPackageLibPath/a.dart', content: r'''
 T foo<T extends num>(T a, T b) => a;
 ''');
 
-    addTestFile(r'''
+    await assertNoErrorsInCode(r'''
 import 'a.dart' as prefix;
 
 main() {
   prefix.foo(1, 2);
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
 
-    var import = _importFinder('package:test/a.dart');
+    var import = findElement.importFind('package:test/a.dart');
 
     var invocation = findNode.methodInvocation('foo(1, 2)');
     assertMethodInvocation(
       invocation,
       import.topFunction('foo'),
-      '(int, int) → int',
+      'int Function(int, int)',
+      expectedTypeArguments: ['int'],
     );
     assertImportPrefix(invocation.target, import.prefix);
   }
 
   test_hasReceiver_importPrefix_topGetter() async {
-    newFile('/test/lib/a.dart', content: r'''
+    newFile('$testPackageLibPath/a.dart', content: r'''
 T Function<T>(T a, T b) get foo => null;
 ''');
 
-    addTestFile(r'''
+    await assertNoErrorsInCode(r'''
 import 'a.dart' as prefix;
 
 main() {
   prefix.foo(1, 2);
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
 
-    var import = _importFinder('package:test/a.dart');
+    var import = findElement.importFind('package:test/a.dart');
 
-    var invocation = findNode.methodInvocation('foo(1, 2)');
-    assertMethodInvocation(
-      invocation,
-      import.topGetter('foo'),
-      '(int, int) → int',
-    );
-    assertImportPrefix(invocation.target, import.prefix);
+    var invocation = findNode.functionExpressionInvocation('foo(1, 2);');
+    assertElementNull(invocation);
+    assertInvokeType(invocation, 'int Function(int, int)');
+    assertType(invocation, 'int');
+
+    var foo = invocation.function as PrefixedIdentifier;
+    assertType(foo, 'T Function<T>(T, T)');
+    assertElement(foo.identifier, import.topGet('foo'));
+    assertType(foo.identifier, 'T Function<T>(T, T)');
+
+    assertImportPrefix(foo.prefix, import.prefix);
   }
 
   test_hasReceiver_instance_Function_call_localVariable() async {
-    addTestFile(r'''
-void main() {
-  Function foo;
+    await assertNoErrorsInCode(r'''
+void f(Function getFunction()) {
+  Function foo = getFunction();
 
   foo.call(0);
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
     _assertInvalidInvocation('call(0)', null);
   }
 
   test_hasReceiver_instance_Function_call_topVariable() async {
-    addTestFile(r'''
-Function foo;
+    await assertNoErrorsInCode(r'''
+Function foo = throw Error();
 
 void main() {
   foo.call(0);
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
     _assertInvalidInvocation('call(0)', null);
   }
 
   test_hasReceiver_instance_getter() async {
-    addTestFile(r'''
+    await assertNoErrorsInCode(r'''
 class C {
-  double Function(int) get foo => null;
+  double Function(int) get foo => throw Error();
 }
 
-main(C c) {
+void f(C c) {
   c.foo(0);
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
 
-    var invocation = findNode.methodInvocation('foo(0);');
-    assertMethodInvocation(
-      invocation,
-      findElement.getter('foo'),
-      '(int) → double',
-    );
+    var invocation = findNode.functionExpressionInvocation('foo(0);');
+    assertElementNull(invocation);
+    assertInvokeType(invocation, 'double Function(int)');
+    assertType(invocation, 'double');
+
+    var foo = invocation.function as PropertyAccess;
+    assertType(foo, 'double Function(int)');
+    assertElement(foo.propertyName, findElement.getter('foo'));
+    assertType(foo.propertyName, 'double Function(int)');
+  }
+
+  test_hasReceiver_instance_getter_switchStatementExpression() async {
+    await assertNoErrorsInCode(r'''
+class C {
+  int Function() get foo => throw Error();
+}
+
+void f(C c) {
+  switch ( c.foo() ) {
+    default:
+      break;
+  }
+}
+''');
+
+    var invocation = findNode.functionExpressionInvocation('foo()');
+    assertElementNull(invocation);
+    assertInvokeType(invocation, 'int Function()');
+    assertType(invocation, 'int');
+
+    var foo = invocation.function as PropertyAccess;
+    assertType(foo, 'int Function()');
+    assertElement(foo.propertyName, findElement.getter('foo'));
+    assertType(foo.propertyName, 'int Function()');
   }
 
   test_hasReceiver_instance_method() async {
-    addTestFile(r'''
+    await assertNoErrorsInCode(r'''
 class C {
   void foo(int _) {}
 }
 
-main(C c) {
+void f(C c) {
   c.foo(0);
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
 
     var invocation = findNode.methodInvocation('foo(0);');
     assertMethodInvocation(
       invocation,
       findElement.method('foo'),
-      '(int) → void',
+      'void Function(int)',
+      expectedMethodNameType: 'void Function(int)',
     );
+    assertTypeArgumentTypes(invocation, []);
+  }
+
+  test_hasReceiver_instance_method_generic() async {
+    await assertNoErrorsInCode(r'''
+class C {
+  T foo<T>(T a) {
+    return a;
+  }
+}
+
+void f(C c) {
+  c.foo(0);
+}
+''');
+
+    var invocation = findNode.methodInvocation('foo(0);');
+    assertMethodInvocation(
+      invocation,
+      findElement.method('foo'),
+      'int Function(int)',
+      expectedMethodNameType: 'int Function(int)',
+      expectedTypeArguments: ['int'],
+    );
+    assertTypeArgumentTypes(invocation, ['int']);
   }
 
   test_hasReceiver_instance_method_issue30552() async {
-    addTestFile(r'''
+    await assertNoErrorsInCode(r'''
 abstract class I1 {
   void foo(int i);
 }
@@ -1201,112 +1632,108 @@ class D extends C {
   void foo(Object o) {}
 }
 
-void main(C c) {
+void f(C c) {
   c.foo('hi');
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
 
     var invocation = findNode.methodInvocation("foo('hi')");
     assertMethodInvocation(
       invocation,
       findElement.method('foo', of: 'I2'),
-      '(Object) → void',
+      'void Function(Object)',
     );
   }
 
   test_hasReceiver_instance_typeParameter() async {
-    addTestFile(r'''
+    await assertNoErrorsInCode(r'''
 class A {
   void foo(int _) {}
 }
 
 class C<T extends A> {
   T a;
-  
+  C(this.a);
+
   main() {
     a.foo(0);
   }
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
 
     var invocation = findNode.methodInvocation('foo(0);');
     assertMethodInvocation(
       invocation,
       findElement.method('foo'),
-      '(int) → void',
+      'void Function(int)',
     );
   }
 
   test_hasReceiver_prefixed_class_staticGetter() async {
-    newFile('/test/lib/a.dart', content: r'''
+    newFile('$testPackageLibPath/a.dart', content: r'''
 class C {
   static double Function(int) get foo => null;
 }
 ''');
 
-    addTestFile(r'''
+    await assertNoErrorsInCode(r'''
 import 'a.dart' as prefix;
 
 main() {
   prefix.C.foo(0);
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
 
-    var import = _importFinder('package:test/a.dart');
+    var import = findElement.importFind('package:test/a.dart');
 
-    var invocation = findNode.methodInvocation('foo(0)');
-    assertMethodInvocation(
-      invocation,
-      import.class_('C').getGetter('foo'),
-      '(int) → double',
-    );
+    var invocation = findNode.functionExpressionInvocation('foo(0);');
+    assertElementNull(invocation);
+    assertInvokeType(invocation, 'double Function(int)');
+    assertType(invocation, 'double');
 
-    PrefixedIdentifier target = invocation.target;
+    var foo = invocation.function as PropertyAccess;
+    assertType(foo, 'double Function(int)');
+    assertElement(foo.propertyName, import.class_('C').getGetter('foo'));
+    assertType(foo.propertyName, 'double Function(int)');
+
+    var target = foo.target as PrefixedIdentifier;
     assertImportPrefix(target.prefix, import.prefix);
     assertClassRef(target.identifier, import.class_('C'));
   }
 
   test_hasReceiver_prefixed_class_staticMethod() async {
-    newFile('/test/lib/a.dart', content: r'''
+    newFile('$testPackageLibPath/a.dart', content: r'''
 class C {
   static void foo(int _) => null;
 }
 ''');
 
-    addTestFile(r'''
+    await assertNoErrorsInCode(r'''
 import 'a.dart' as prefix;
 
 main() {
   prefix.C.foo(0);
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
 
-    var import = _importFinder('package:test/a.dart');
+    var import = findElement.importFind('package:test/a.dart');
 
     var invocation = findNode.methodInvocation('foo(0)');
     assertMethodInvocation(
       invocation,
       import.class_('C').getMethod('foo'),
-      '(int) → void',
+      'void Function(int)',
     );
 
-    PrefixedIdentifier target = invocation.target;
+    var target = invocation.target as PrefixedIdentifier;
     assertImportPrefix(target.prefix, import.prefix);
     assertClassRef(target.identifier, import.class_('C'));
   }
 
   test_hasReceiver_super_getter() async {
-    addTestFile(r'''
+    await assertNoErrorsInCode(r'''
 class A {
-  double Function(int) get foo => null;
+  double Function(int) get foo => throw Error();
 }
 
 class B extends A {
@@ -1315,20 +1742,22 @@ class B extends A {
   }
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
 
-    var invocation = findNode.methodInvocation('foo(0);');
-    assertMethodInvocation(
-      invocation,
-      findElement.getter('foo', of: 'A'),
-      '(int) → double',
-    );
-    assertSuperExpression(invocation.target);
+    var invocation = findNode.functionExpressionInvocation('foo(0);');
+    assertElementNull(invocation);
+    assertInvokeType(invocation, 'double Function(int)');
+    assertType(invocation, 'double');
+
+    var foo = invocation.function as PropertyAccess;
+    assertType(foo, 'double Function(int)');
+    assertElement(foo.propertyName, findElement.getter('foo'));
+    assertType(foo.propertyName, 'double Function(int)');
+
+    assertSuperExpression(foo.target);
   }
 
   test_hasReceiver_super_method() async {
-    addTestFile(r'''
+    await assertNoErrorsInCode(r'''
 class A {
   void foo(int _) {}
 }
@@ -1339,43 +1768,68 @@ class B extends A {
   }
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
 
     var invocation = findNode.methodInvocation('foo(0);');
     assertMethodInvocation(
       invocation,
       findElement.method('foo', of: 'A'),
-      '(int) → void',
+      'void Function(int)',
     );
     assertSuperExpression(invocation.target);
   }
 
+  test_invalid_inDefaultValue_nullAware() async {
+    await assertInvalidTestCode('''
+void f({a = b?.foo()}) {}
+''');
+
+    assertMethodInvocation2(
+      findNode.methodInvocation('?.foo()'),
+      element: null,
+      typeArgumentTypes: [],
+      invokeType: 'dynamic',
+      type: 'dynamic',
+    );
+  }
+
+  test_invalid_inDefaultValue_nullAware2() async {
+    await assertInvalidTestCode('''
+typedef void F({a = b?.foo()});
+''');
+
+    assertMethodInvocation2(
+      findNode.methodInvocation('?.foo()'),
+      element: null,
+      typeArgumentTypes: [],
+      invokeType: 'dynamic',
+      type: 'dynamic',
+    );
+  }
+
   test_namedArgument() async {
-    addTestFile(r'''
-void foo({int a, bool b}) {}
+    var question = typeToStringWithNullability ? '?' : '';
+    await assertNoErrorsInCode('''
+void foo({int$question a, bool$question b}) {}
 
 main() {
   foo(b: false, a: 0);
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
 
     var invocation = findNode.methodInvocation('foo(b:');
     assertMethodInvocation(
       invocation,
       findElement.topFunction('foo'),
-      '({a: int, b: bool}) → void',
+      'void Function({int$question a, bool$question b})',
     );
     assertNamedParameterRef('b: false', 'b');
     assertNamedParameterRef('a: 0', 'a');
   }
 
   test_noReceiver_getter_superClass() async {
-    addTestFile(r'''
+    await assertNoErrorsInCode(r'''
 class A {
-  double Function(int) get foo => null;
+  double Function(int) get foo => throw Error();
 }
 
 class B extends A {
@@ -1384,114 +1838,91 @@ class B extends A {
   }
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
 
-    var invocation = findNode.methodInvocation('foo(0)');
-    assertMethodInvocation(
-      invocation,
-      findElement.getter('foo'),
-      '(int) → double',
-    );
+    var invocation = findNode.functionExpressionInvocation('foo(0);');
+    assertElementNull(invocation);
+    assertInvokeType(invocation, 'double Function(int)');
+    assertType(invocation, 'double');
+
+    var foo = invocation.function as SimpleIdentifier;
+    assertElement(foo, findElement.getter('foo'));
+    assertType(foo, 'double Function(int)');
   }
 
   test_noReceiver_getter_thisClass() async {
-    addTestFile(r'''
+    await assertNoErrorsInCode(r'''
 class C {
-  double Function(int) get foo => null;
+  double Function(int) get foo => throw Error();
 
   void bar() {
     foo(0);
   }
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
 
-    var invocation = findNode.methodInvocation('foo(0)');
-    assertMethodInvocation(
-      invocation,
-      findElement.getter('foo'),
-      '(int) → double',
-    );
+    var invocation = findNode.functionExpressionInvocation('foo(0);');
+    assertElementNull(invocation);
+    assertInvokeType(invocation, 'double Function(int)');
+    assertType(invocation, 'double');
+
+    var foo = invocation.function as SimpleIdentifier;
+    assertElement(foo, findElement.getter('foo'));
+    assertType(foo, 'double Function(int)');
   }
 
   test_noReceiver_importPrefix() async {
-    addTestFile(r'''
+    await assertErrorsInCode(r'''
 import 'dart:math' as math;
 
 main() {
   math();
 }
-''');
-    await resolveTestFile();
-    assertTestErrors([
-      CompileTimeErrorCode.PREFIX_IDENTIFIER_NOT_FOLLOWED_BY_DOT,
+''', [
+      error(CompileTimeErrorCode.PREFIX_IDENTIFIER_NOT_FOLLOWED_BY_DOT, 40, 4),
     ]);
     assertElement(findNode.simple('math()'), findElement.prefix('math'));
   }
 
   test_noReceiver_localFunction() async {
-    addTestFile(r'''
+    await assertNoErrorsInCode(r'''
 main() {
   void foo(int _) {}
 
   foo(0);
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
 
     var invocation = findNode.methodInvocation('foo(0)');
     assertMethodInvocation(
       invocation,
       findElement.localFunction('foo'),
-      '(int) → void',
-    );
-  }
-
-  test_noReceiver_localVariable() async {
-    addTestFile(r'''
-main() {
-  void Function(int) foo;
-
-  foo(0);
-}
-''');
-    await resolveTestFile();
-    assertNoTestErrors();
-
-    var invocation = findNode.methodInvocation('foo(0)');
-    assertMethodInvocation(
-      invocation,
-      findElement.localVar('foo'),
-      '(int) → void',
+      'void Function(int)',
     );
   }
 
   test_noReceiver_localVariable_call() async {
-    addTestFile(r'''
+    await assertNoErrorsInCode(r'''
 class C {
   void call(int _) {}
 }
 
-main(C c) {
+void f(C c) {
   c(0);
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
 
-    var invocation = findNode.methodInvocation('c(0);');
-    assertMethodInvocation(
-      invocation,
-      findElement.parameter('c'),
-      '(int) → void',
-    );
+    var invocation = findNode.functionExpressionInvocation('c(0);');
+    assertElement(invocation, findElement.method('call', of: 'C'));
+    assertInvokeType(invocation, 'void Function(int)');
+    assertType(invocation, 'void');
+
+    var cRef = invocation.function as SimpleIdentifier;
+    assertElement(cRef, findElement.parameter('c'));
+    assertType(cRef, 'C');
   }
 
   test_noReceiver_localVariable_promoted() async {
-    addTestFile(r'''
+    await assertNoErrorsInCode(r'''
 main() {
   var foo;
   if (foo is void Function(int)) {
@@ -1499,19 +1930,19 @@ main() {
   }
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
 
-    var invocation = findNode.methodInvocation('foo(0)');
-    assertMethodInvocation(
-      invocation,
-      findElement.localVar('foo'),
-      '(int) → void',
-    );
+    var invocation = findNode.functionExpressionInvocation('foo(0);');
+    assertElementNull(invocation);
+    assertInvokeType(invocation, 'void Function(int)');
+    assertType(invocation, 'void');
+
+    var foo = invocation.function as SimpleIdentifier;
+    assertElement(foo, findElement.localVar('foo'));
+    assertType(foo, 'void Function(int)');
   }
 
   test_noReceiver_method_superClass() async {
-    addTestFile(r'''
+    await assertNoErrorsInCode(r'''
 class A {
   void foo(int _) {}
 }
@@ -1522,19 +1953,17 @@ class B extends A {
   }
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
 
     var invocation = findNode.methodInvocation('foo(0)');
     assertMethodInvocation(
       invocation,
       findElement.method('foo'),
-      '(int) → void',
+      'void Function(int)',
     );
   }
 
   test_noReceiver_method_thisClass() async {
-    addTestFile(r'''
+    await assertNoErrorsInCode(r'''
 class C {
   void foo(int _) {}
 
@@ -1543,107 +1972,427 @@ class C {
   }
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
 
     var invocation = findNode.methodInvocation('foo(0)');
     assertMethodInvocation(
       invocation,
       findElement.method('foo'),
-      '(int) → void',
+      'void Function(int)',
     );
   }
 
+  test_noReceiver_parameter() async {
+    await assertNoErrorsInCode(r'''
+void f(void Function(int) foo) {
+  foo(0);
+}
+''');
+
+    var invocation = findNode.functionExpressionInvocation('foo(0);');
+    assertElementNull(invocation);
+    assertInvokeType(invocation, 'void Function(int)');
+    assertType(invocation, 'void');
+
+    var foo = invocation.function as SimpleIdentifier;
+    assertElement(foo, findElement.parameter('foo'));
+    assertType(foo, 'void Function(int)');
+  }
+
+  test_noReceiver_parameter_call_nullAware() async {
+    var question = typeToStringWithNullability ? '?' : '';
+    await assertNoErrorsInCode('''
+double Function(int)$question foo;
+
+main() {
+  foo?.call(1);
+}
+    ''');
+
+    var invocation = findNode.methodInvocation('call(1)');
+    if (typeToStringWithNullability) {
+      assertType(invocation.target, 'double Function(int)?');
+    } else {
+      assertTypeLegacy(invocation.target);
+    }
+  }
+
+  test_noReceiver_parameter_functionTyped_typedef() async {
+    await assertNoErrorsInCode(r'''
+typedef F = void Function();
+
+void f(F a) {
+  a();
+}
+''');
+
+    var invocation = findNode.functionExpressionInvocation('a();');
+    assertFunctionExpressionInvocation(
+      invocation,
+      element: null,
+      typeArgumentTypes: [],
+      invokeType: 'void Function()',
+      type: 'void',
+    );
+
+    var aRef = invocation.function as SimpleIdentifier;
+    assertElement(aRef, findElement.parameter('a'));
+    assertType(aRef, 'void Function()');
+  }
+
   test_noReceiver_topFunction() async {
-    addTestFile(r'''
+    await assertNoErrorsInCode(r'''
 void foo(int _) {}
 
 main() {
   foo(0);
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
 
     var invocation = findNode.methodInvocation('foo(0)');
     assertMethodInvocation(
       invocation,
       findElement.topFunction('foo'),
-      '(int) → void',
+      'void Function(int)',
+      expectedMethodNameType: 'void Function(int)',
     );
   }
 
   test_noReceiver_topGetter() async {
-    addTestFile(r'''
-double Function(int) get foo => null;
+    await assertNoErrorsInCode(r'''
+double Function(int) get foo => throw Error();
 
 main() {
   foo(0);
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
 
-    var invocation = findNode.methodInvocation('foo(0)');
-    assertMethodInvocation(
-      invocation,
-      findElement.topGet('foo'),
-      '(int) → double',
-    );
+    var invocation = findNode.functionExpressionInvocation('foo(0);');
+    assertElementNull(invocation);
+    assertInvokeType(invocation, 'double Function(int)');
+    assertType(invocation, 'double');
+
+    var foo = invocation.function as SimpleIdentifier;
+    assertElement(foo, findElement.topGet('foo'));
+    assertType(foo, 'double Function(int)');
   }
 
   test_noReceiver_topVariable() async {
-    addTestFile(r'''
-void Function(int) foo;
+    await assertNoErrorsInCode(r'''
+void Function(int) foo = throw Error();
 
 main() {
   foo(0);
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
 
-    var invocation = findNode.methodInvocation('foo(0)');
-    assertMethodInvocation(
-      invocation,
-      findElement.topGet('foo'),
-      '(int) → void',
+    var invocation = findNode.functionExpressionInvocation('foo(0);');
+    assertElementNull(invocation);
+    assertInvokeType(invocation, 'void Function(int)');
+    assertType(invocation, 'void');
+
+    var foo = invocation.function as SimpleIdentifier;
+    assertElement(foo, findElement.topGet('foo'));
+    assertType(foo, 'void Function(int)');
+  }
+
+  test_objectMethodOnDynamic_argumentsDontMatch() async {
+    await assertNoErrorsInCode(r'''
+void f(a, int b) {
+  a.toString(b);
+}
+''');
+    assertMethodInvocation2(
+      findNode.methodInvocation('toString(b)'),
+      element: null,
+      typeArgumentTypes: [],
+      invokeType: 'dynamic',
+      type: 'dynamic',
+    );
+
+    assertType(findNode.simple('b);'), 'int');
+  }
+
+  test_objectMethodOnDynamic_argumentsMatch() async {
+    await assertNoErrorsInCode(r'''
+void f(a) {
+  a.toString();
+}
+''');
+    assertMethodInvocation2(
+      findNode.methodInvocation('toString()'),
+      element: elementMatcher(
+        objectElement.getMethod('toString'),
+        isLegacy: isNullSafetySdkAndLegacyLibrary,
+      ),
+      typeArgumentTypes: [],
+      invokeType: 'String Function()',
+      type: 'String',
     );
   }
 
-  test_objectMethodOnDynamic() async {
-    addTestFile(r'''
-main() {
-  var v;
-  v.toString(42);
-}
-''');
-    await resolveTestFile();
-    assertNoTestErrors();
-    _assertUnresolvedMethodInvocation('toString(42);');
-  }
-
   test_objectMethodOnFunction() async {
-    addTestFile(r'''
+    await assertNoErrorsInCode(r'''
 void f() {}
 
 main() {
   f.toString();
 }
 ''');
-    await resolveTestFile();
-    assertNoTestErrors();
 
     var invocation = findNode.methodInvocation('toString();');
     assertMethodInvocation(
       invocation,
       typeProvider.objectType.getMethod('toString'),
-      '() → String',
+      'String Function()',
     );
   }
 
-  void _assertInvalidInvocation(String search, Element expectedElement,
-      {String expectedNameType, bool dynamicNameType: false}) {
+  test_remainder_int_context_cascaded() async {
+    await assertNoErrorsInCode('''
+T f<T>() => throw Error();
+g(int a) {
+  h(a..remainder(f()));
+}
+h(int x) {}
+''');
+
+    assertTypeArgumentTypes(findNode.methodInvocation('f()'), ['num']);
+  }
+
+  test_remainder_int_context_int() async {
+    await assertNoErrorsInCode('''
+T f<T>() => throw Error();
+g(int a) {
+  h(a.remainder(f()));
+}
+h(int x) {}
+''');
+
+    assertTypeArgumentTypes(findNode.methodInvocation('f()'),
+        [typeToStringWithNullability ? 'int' : 'num']);
+  }
+
+  test_remainder_int_context_int_target_rewritten() async {
+    await assertNoErrorsInCode('''
+T f<T>() => throw Error();
+g(int Function() a) {
+  h(a().remainder(f()));
+}
+h(int x) {}
+''');
+
+    assertTypeArgumentTypes(findNode.methodInvocation('f()'),
+        [typeToStringWithNullability ? 'int' : 'num']);
+  }
+
+  test_remainder_int_context_int_via_extension_explicit() async {
+    await assertErrorsInCode('''
+extension E on int {
+  String remainder(num x) => '';
+}
+T f<T>() => throw Error();
+g(int a) {
+  h(E(a).remainder(f()));
+}
+h(int x) {}
+''', [
+      error(CompileTimeErrorCode.ARGUMENT_TYPE_NOT_ASSIGNABLE, 98, 19),
+    ]);
+
+    assertTypeArgumentTypes(findNode.methodInvocation('f()'), ['num']);
+  }
+
+  test_remainder_int_context_none() async {
+    await assertNoErrorsInCode('''
+T f<T>() => throw Error();
+g(int a) {
+  a.remainder(f());
+}
+''');
+
+    assertTypeArgumentTypes(findNode.methodInvocation('f()'), ['num']);
+  }
+
+  test_remainder_int_double() async {
+    await assertNoErrorsInCode('''
+f(int a, double b) {
+  a.remainder(b);
+}
+''');
+
+    assertMethodInvocation(
+        findNode.methodInvocation('remainder'),
+        elementMatcher(numElement.getMethod('remainder'),
+            isLegacy: isNullSafetySdkAndLegacyLibrary),
+        'num Function(num)',
+        expectedType: typeToStringWithNullability ? 'double' : 'num');
+  }
+
+  test_remainder_int_int() async {
+    await assertNoErrorsInCode('''
+f(int a, int b) {
+  a.remainder(b);
+}
+''');
+
+    assertMethodInvocation(
+        findNode.methodInvocation('remainder'),
+        elementMatcher(numElement.getMethod('remainder'),
+            isLegacy: isNullSafetySdkAndLegacyLibrary),
+        'num Function(num)',
+        expectedType: typeToStringWithNullability ? 'int' : 'num');
+  }
+
+  test_remainder_int_int_target_rewritten() async {
+    await assertNoErrorsInCode('''
+f(int Function() a, int b) {
+  a().remainder(b);
+}
+''');
+
+    assertMethodInvocation(
+        findNode.methodInvocation('remainder'),
+        elementMatcher(numElement.getMethod('remainder'),
+            isLegacy: isNullSafetySdkAndLegacyLibrary),
+        'num Function(num)',
+        expectedType: typeToStringWithNullability ? 'int' : 'num');
+  }
+
+  test_remainder_other_context_int_via_extension_explicit() async {
+    await assertErrorsInCode('''
+class A {}
+extension E on A {
+  String remainder(num x) => '';
+}
+T f<T>() => throw Error();
+g(A a) {
+  h(E(a).remainder(f()));
+}
+h(int x) {}
+''', [
+      error(CompileTimeErrorCode.ARGUMENT_TYPE_NOT_ASSIGNABLE, 105, 19),
+    ]);
+
+    assertTypeArgumentTypes(findNode.methodInvocation('f()'), ['num']);
+  }
+
+  test_remainder_other_context_int_via_extension_implicit() async {
+    await assertErrorsInCode('''
+class A {}
+extension E on A {
+  String remainder(num x) => '';
+}
+T f<T>() => throw Error();
+g(A a) {
+  h(a.remainder(f()));
+}
+h(int x) {}
+''', [
+      error(CompileTimeErrorCode.ARGUMENT_TYPE_NOT_ASSIGNABLE, 105, 16),
+    ]);
+
+    assertTypeArgumentTypes(findNode.methodInvocation('f()'), ['num']);
+  }
+
+  test_syntheticName() async {
+    // This code is invalid, and the constructor initializer has a method
+    // invocation with a synthetic name. But we should still resolve the
+    // invocation, and resolve all its arguments.
+    await assertErrorsInCode(r'''
+class A {
+  A() : B(1 + 2, [0]);
+}
+''', [
+      error(ParserErrorCode.MISSING_ASSIGNMENT_IN_INITIALIZER, 18, 1),
+      error(CompileTimeErrorCode.INITIALIZER_FOR_NON_EXISTENT_FIELD, 18, 13),
+    ]);
+
+    assertMethodInvocation2(
+      findNode.methodInvocation(');'),
+      element: null,
+      typeArgumentTypes: [],
+      invokeType: 'dynamic',
+      type: 'dynamic',
+    );
+
+    assertType(findNode.binary('1 + 2'), 'int');
+    assertType(findNode.listLiteral('[0]'), 'List<int>');
+  }
+
+  test_typeArgumentTypes_generic_inferred() async {
+    await assertErrorsInCode(r'''
+U foo<T, U>(T a) => throw Error();
+
+main() {
+  bool v = foo(0);
+}
+''', [
+      error(HintCode.UNUSED_LOCAL_VARIABLE, 52, 1),
+    ]);
+
+    var invocation = findNode.methodInvocation('foo(0)');
+    assertTypeArgumentTypes(invocation, ['int', 'bool']);
+  }
+
+  test_typeArgumentTypes_generic_instantiateToBounds() async {
+    await assertNoErrorsInCode(r'''
+void foo<T extends num>() {}
+
+main() {
+  foo();
+}
+''');
+
+    var invocation = findNode.methodInvocation('foo();');
+    assertTypeArgumentTypes(invocation, ['num']);
+  }
+
+  test_typeArgumentTypes_generic_typeArguments_notBounds() async {
+    await assertErrorsInCode(r'''
+void foo<T extends num>() {}
+
+main() {
+  foo<bool>();
+}
+''', [
+      error(CompileTimeErrorCode.TYPE_ARGUMENT_NOT_MATCHING_BOUNDS, 45, 4),
+    ]);
+    var invocation = findNode.methodInvocation('foo<bool>();');
+    assertTypeArgumentTypes(invocation, ['bool']);
+  }
+
+  test_typeArgumentTypes_generic_typeArguments_wrongNumber() async {
+    await assertErrorsInCode(r'''
+void foo<T>() {}
+
+main() {
+  foo<int, double>();
+}
+''', [
+      error(CompileTimeErrorCode.WRONG_NUMBER_OF_TYPE_ARGUMENTS_METHOD, 32, 13),
+    ]);
+    var invocation = findNode.methodInvocation('foo<int, double>();');
+    assertTypeArgumentTypes(invocation, ['dynamic']);
+  }
+
+  test_typeArgumentTypes_notGeneric() async {
+    await assertNoErrorsInCode(r'''
+void foo(int a) {}
+
+main() {
+  foo(0);
+}
+''');
+
+    var invocation = findNode.methodInvocation('foo(0)');
+    assertTypeArgumentTypes(invocation, []);
+  }
+
+  void _assertInvalidInvocation(String search, Element? expectedElement,
+      {String? expectedMethodNameType,
+      String? expectedNameType,
+      List<String> expectedTypeArguments = const <String>[],
+      bool dynamicNameType = false}) {
     var invocation = findNode.methodInvocation(search);
     if (dynamicNameType) {
       assertTypeDynamic(invocation.methodName);
@@ -1653,14 +2402,24 @@ main() {
       invocation,
       expectedElement,
       'dynamic',
+      expectedMethodNameType: expectedMethodNameType,
       expectedNameType: expectedNameType,
       expectedType: 'dynamic',
+      expectedTypeArguments: expectedTypeArguments,
     );
+    assertTypeArgumentTypes(invocation, expectedTypeArguments);
   }
 
-  void _assertUnresolvedMethodInvocation(String search) {
+  void _assertUnresolvedMethodInvocation(
+    String search, {
+    List<String> expectedTypeArguments = const <String>[],
+  }) {
     // TODO(scheglov) clean up
-    _assertInvalidInvocation(search, null);
+    _assertInvalidInvocation(
+      search,
+      null,
+      expectedTypeArguments: expectedTypeArguments,
+    );
 //    var invocation = findNode.methodInvocation(search);
 //    assertTypeDynamic(invocation.methodName);
 //    // TODO(scheglov) I think `invokeType` should be `null`.
@@ -1671,50 +2430,478 @@ main() {
 //      expectedType: 'dynamic',
 //    );
   }
-
-  _ImportElementFinder _importFinder(String targetUri) {
-    var import = findElement.import(targetUri);
-    return _ImportElementFinder(import);
-  }
 }
 
-class _ImportElementFinder {
-  final ImportElement import;
+@reflectiveTest
+class MethodInvocationResolutionWithNullSafetyTest
+    extends PubPackageResolutionTest with MethodInvocationResolutionTestCases {
+  test_hasReceiver_deferredImportPrefix_loadLibrary_optIn_fromOptOut() async {
+    newFile('$testPackageLibPath/a.dart', content: r'''
+class A {}
+''');
 
-  _ImportElementFinder(this.import);
+    await assertErrorsInCode(r'''
+// @dart = 2.7
+import 'a.dart' deferred as a;
 
-  CompilationUnitElement get definingUnit {
-    return importedLibrary.definingCompilationUnit;
+main() {
+  a.loadLibrary();
+}
+''', [
+      error(HintCode.UNUSED_IMPORT, 22, 8),
+    ]);
+
+    var import = findElement.importFind('package:test/a.dart');
+
+    var invocation = findNode.methodInvocation('loadLibrary()');
+    assertImportPrefix(invocation.target, import.prefix);
+
+    assertMethodInvocation(
+      invocation,
+      import.importedLibrary.loadLibraryFunction,
+      'Future<dynamic>* Function()*',
+    );
   }
 
-  LibraryElement get importedLibrary => import.importedLibrary;
+  test_hasReceiver_interfaceQ_Function_call_checked() async {
+    await assertNoErrorsInCode(r'''
+void f(Function? foo) {
+  foo?.call();
+}
+''');
 
-  PrefixElement get prefix => import.prefix;
-
-  ClassElement class_(String name) {
-    for (var class_ in definingUnit.types) {
-      if (class_.name == name) {
-        return class_;
-      }
-    }
-    fail('Not found class: $name');
+    assertMethodInvocation2(
+      findNode.methodInvocation('foo?.call()'),
+      element: null,
+      typeArgumentTypes: [],
+      invokeType: 'dynamic',
+      type: 'dynamic',
+    );
   }
 
-  FunctionElement topFunction(String name) {
-    for (var function in definingUnit.functions) {
-      if (function.name == name) {
-        return function;
-      }
-    }
-    fail('Not found top-level function: $name');
+  test_hasReceiver_interfaceQ_Function_call_unchecked() async {
+    await assertErrorsInCode(r'''
+void f(Function? foo) {
+  foo.call();
+}
+''', [
+      error(CompileTimeErrorCode.UNCHECKED_METHOD_INVOCATION_OF_NULLABLE_VALUE,
+          30, 4),
+    ]);
+
+    assertMethodInvocation2(
+      findNode.methodInvocation('foo.call()'),
+      element: null,
+      typeArgumentTypes: [],
+      invokeType: 'dynamic',
+      type: 'dynamic',
+    );
   }
 
-  PropertyAccessorElement topGetter(String name) {
-    for (var accessor in definingUnit.accessors) {
-      if (accessor.name == name && accessor.isGetter) {
-        return accessor;
-      }
-    }
-    fail('Not found top-level getter: $name');
+  test_hasReceiver_interfaceQ_nullShorting() async {
+    await assertNoErrorsInCode(r'''
+class C {
+  C foo() => throw 0;
+  C bar() => throw 0;
+}
+
+void testShort(C? c) {
+  c?.foo().bar();
+}
+''');
+
+    assertMethodInvocation2(
+      findNode.methodInvocation('c?.foo()'),
+      element: findElement.method('foo'),
+      typeArgumentTypes: [],
+      invokeType: 'C Function()',
+      type: 'C',
+    );
+
+    assertMethodInvocation2(
+      findNode.methodInvocation('bar();'),
+      element: findElement.method('bar'),
+      typeArgumentTypes: [],
+      invokeType: 'C Function()',
+      type: 'C?',
+    );
+  }
+
+  test_hasReceiver_interfaceTypeQ_defined() async {
+    await assertErrorsInCode(r'''
+class A {
+  void foo() {}
+}
+
+void f(A? a) {
+  a.foo();
+}
+''', [
+      error(CompileTimeErrorCode.UNCHECKED_METHOD_INVOCATION_OF_NULLABLE_VALUE,
+          48, 3),
+    ]);
+
+    assertMethodInvocation2(
+      findNode.methodInvocation('a.foo()'),
+      element: findElement.method('foo', of: 'A'),
+      typeArgumentTypes: [],
+      invokeType: 'void Function()',
+      type: 'void',
+    );
+  }
+
+  test_hasReceiver_interfaceTypeQ_defined_extension() async {
+    await assertErrorsInCode(r'''
+class A {
+  void foo() {}
+}
+
+extension E on A {
+  void foo() {}
+}
+
+void f(A? a) {
+  a.foo();
+}
+''', [
+      error(CompileTimeErrorCode.UNCHECKED_METHOD_INVOCATION_OF_NULLABLE_VALUE,
+          86, 3),
+    ]);
+
+    assertMethodInvocation2(
+      findNode.methodInvocation('a.foo()'),
+      element: findElement.method('foo', of: 'A'),
+      typeArgumentTypes: [],
+      invokeType: 'void Function()',
+      type: 'void',
+    );
+  }
+
+  test_hasReceiver_interfaceTypeQ_defined_extensionQ() async {
+    await assertNoErrorsInCode(r'''
+class A {
+  void foo() {}
+}
+
+extension E on A? {
+  void foo() {}
+}
+
+void f(A? a) {
+  a.foo();
+}
+''');
+
+    assertMethodInvocation2(
+      findNode.methodInvocation('a.foo()'),
+      element: findElement.method('foo', of: 'E'),
+      typeArgumentTypes: [],
+      invokeType: 'void Function()',
+      type: 'void',
+    );
+  }
+
+  test_hasReceiver_interfaceTypeQ_defined_extensionQ2() async {
+    await assertNoErrorsInCode(r'''
+extension E<T> on T? {
+  T foo() => throw 0;
+}
+
+void f(int? a) {
+  a.foo();
+}
+''');
+
+    assertMethodInvocation2(
+      findNode.methodInvocation('a.foo()'),
+      element: elementMatcher(
+        findElement.method('foo', of: 'E'),
+        substitution: {'T': 'int'},
+      ),
+      typeArgumentTypes: [],
+      invokeType: 'int Function()',
+      type: 'int',
+    );
+  }
+
+  test_hasReceiver_interfaceTypeQ_notDefined() async {
+    await assertErrorsInCode(r'''
+class A {}
+
+void f(A? a) {
+  a.foo();
+}
+''', [
+      error(CompileTimeErrorCode.UNCHECKED_METHOD_INVOCATION_OF_NULLABLE_VALUE,
+          31, 3),
+    ]);
+
+    assertMethodInvocation2(
+      findNode.methodInvocation('a.foo()'),
+      element: null,
+      typeArgumentTypes: [],
+      invokeType: 'dynamic',
+      type: 'dynamic',
+    );
+  }
+
+  test_hasReceiver_interfaceTypeQ_notDefined_extension() async {
+    await assertErrorsInCode(r'''
+class A {}
+
+extension E on A {
+  void foo() {}
+}
+
+void f(A? a) {
+  a.foo();
+}
+''', [
+      error(CompileTimeErrorCode.UNCHECKED_METHOD_INVOCATION_OF_NULLABLE_VALUE,
+          69, 3),
+    ]);
+
+    assertMethodInvocation2(
+      findNode.methodInvocation('a.foo()'),
+      element: null,
+      typeArgumentTypes: [],
+      invokeType: 'dynamic',
+      type: 'dynamic',
+    );
+  }
+
+  test_hasReceiver_interfaceTypeQ_notDefined_extensionQ() async {
+    await assertNoErrorsInCode(r'''
+class A {}
+
+extension E on A? {
+  void foo() {}
+}
+
+void f(A? a) {
+  a.foo();
+}
+''');
+
+    assertMethodInvocation2(
+      findNode.methodInvocation('a.foo()'),
+      element: findElement.method('foo', of: 'E'),
+      typeArgumentTypes: [],
+      invokeType: 'void Function()',
+      type: 'void',
+    );
+  }
+
+  test_hasReceiver_typeAlias_staticMethod() async {
+    await assertNoErrorsInCode(r'''
+class A {
+  static void foo(int _) {}
+}
+
+typedef B = A;
+
+void f() {
+  B.foo(0);
+}
+''');
+
+    assertMethodInvocation(
+      findNode.methodInvocation('foo(0)'),
+      findElement.method('foo'),
+      'void Function(int)',
+    );
+
+    assertTypeAliasRef(
+      findNode.simple('B.foo'),
+      findElement.typeAlias('B'),
+    );
+  }
+
+  test_hasReceiver_typeAlias_staticMethod_generic() async {
+    await assertNoErrorsInCode(r'''
+class A<T> {
+  static void foo(int _) {}
+}
+
+typedef B<T> = A<T>;
+
+void f() {
+  B.foo(0);
+}
+''');
+
+    assertMethodInvocation(
+      findNode.methodInvocation('foo(0)'),
+      findElement.method('foo'),
+      'void Function(int)',
+    );
+
+    assertTypeAliasRef(
+      findNode.simple('B.foo'),
+      findElement.typeAlias('B'),
+    );
+  }
+
+  test_hasReceiver_typeParameter_promotedToNonNullable() async {
+    await assertNoErrorsInCode('''
+void f<T>(T? t) {
+  if (t is int) {
+    t.abs();
+  }
+}
+''');
+
+    assertMethodInvocation2(
+      findNode.methodInvocation('t.abs()'),
+      element: intElement.getMethod('abs'),
+      typeArgumentTypes: [],
+      invokeType: 'int Function()',
+      type: 'int',
+    );
+  }
+
+  test_hasReceiver_typeParameter_promotedToOtherTypeParameter() async {
+    await assertNoErrorsInCode('''
+abstract class A {}
+
+abstract class B extends A {
+  void foo();
+}
+
+void f<T extends A, U extends B>(T a) {
+  if (a is U) {
+    a.foo();
+  }
+}
+''');
+
+    assertMethodInvocation2(
+      findNode.methodInvocation('a.foo()'),
+      element: findElement.method('foo'),
+      typeArgumentTypes: [],
+      invokeType: 'void Function()',
+      type: 'void',
+    );
+  }
+
+  test_nullShorting_cascade_firstMethodInvocation() async {
+    await assertNoErrorsInCode(r'''
+class A {
+  int foo() => 0;
+  int bar() => 0;
+}
+
+void f(A? a) {
+  a?..foo()..bar();
+}
+''');
+
+    assertMethodInvocation2(
+      findNode.methodInvocation('..foo()'),
+      element: findElement.method('foo'),
+      typeArgumentTypes: [],
+      invokeType: 'int Function()',
+      type: 'int',
+    );
+
+    assertMethodInvocation2(
+      findNode.methodInvocation('..bar()'),
+      element: findElement.method('bar'),
+      typeArgumentTypes: [],
+      invokeType: 'int Function()',
+      type: 'int',
+    );
+
+    assertType(findNode.cascade('a?'), 'A?');
+  }
+
+  test_nullShorting_cascade_firstPropertyAccess() async {
+    await assertNoErrorsInCode(r'''
+class A {
+  int get foo => 0;
+  int bar() => 0;
+}
+
+void f(A? a) {
+  a?..foo..bar();
+}
+''');
+
+    assertPropertyAccess2(
+      findNode.propertyAccess('..foo'),
+      element: findElement.getter('foo'),
+      type: 'int',
+    );
+
+    assertMethodInvocation2(
+      findNode.methodInvocation('..bar()'),
+      element: findElement.method('bar'),
+      typeArgumentTypes: [],
+      invokeType: 'int Function()',
+      type: 'int',
+    );
+
+    assertType(findNode.cascade('a?'), 'A?');
+  }
+
+  test_nullShorting_cascade_nullAwareInside() async {
+    await assertNoErrorsInCode(r'''
+class A {
+  int? foo() => 0;
+}
+
+main() {
+  A a = A()..foo()?.abs();
+  a;
+}
+''');
+
+    assertMethodInvocation2(
+      findNode.methodInvocation('..foo()'),
+      element: findElement.method('foo'),
+      typeArgumentTypes: [],
+      invokeType: 'int? Function()',
+      type: 'int?',
+    );
+
+    assertMethodInvocation2(
+      findNode.methodInvocation('.abs()'),
+      element: intElement.getMethod('abs'),
+      typeArgumentTypes: [],
+      invokeType: 'int Function()',
+      type: 'int',
+    );
+
+    assertType(findNode.cascade('A()'), 'A');
+  }
+
+  test_typeArgumentTypes_generic_inferred_leftTop_dynamic() async {
+    await assertNoErrorsInCode('''
+void foo<T extends Object>(T? value) {}
+
+void f(dynamic o) {
+  foo(o);
+}
+''');
+
+    assertTypeArgumentTypes(
+      findNode.methodInvocation('foo(o)'),
+      ['Object'],
+    );
+  }
+
+  test_typeArgumentTypes_generic_inferred_leftTop_void() async {
+    await assertNoErrorsInCode('''
+void foo<T extends Object>(List<T?> value) {}
+
+void f(List<void> o) {
+  foo(o);
+}
+''');
+
+    assertTypeArgumentTypes(
+      findNode.methodInvocation('foo(o)'),
+      ['Object'],
+    );
   }
 }

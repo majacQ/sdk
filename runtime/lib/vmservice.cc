@@ -27,62 +27,30 @@ class RegisterRunningIsolatesVisitor : public IsolateVisitor {
  public:
   explicit RegisterRunningIsolatesVisitor(Thread* thread)
       : IsolateVisitor(),
+        zone_(thread->zone()),
         register_function_(Function::Handle(thread->zone())),
-        service_isolate_(thread->isolate()) {
-    ASSERT(ServiceIsolate::IsServiceIsolate(Isolate::Current()));
-    // Get library.
-    const String& library_url = Symbols::DartVMService();
-    ASSERT(!library_url.IsNull());
-    const Library& library =
-        Library::Handle(Library::LookupLibrary(thread, library_url));
-    ASSERT(!library.IsNull());
-    // Get function.
-    const String& function_name =
-        String::Handle(String::New("_registerIsolate"));
-    ASSERT(!function_name.IsNull());
-    register_function_ = library.LookupFunctionAllowPrivate(function_name);
-    ASSERT(!register_function_.IsNull());
-  }
+        service_isolate_(thread->isolate()) {}
 
   virtual void VisitIsolate(Isolate* isolate) {
-    ASSERT(ServiceIsolate::IsServiceIsolate(Isolate::Current()));
-    if (IsVMInternalIsolate(isolate)) {
-      // We do not register the service (and descendants), the vm-isolate, or
-      // the kernel isolate.
-      return;
-    }
-    // Setup arguments for call.
-    Dart_Port port_id = isolate->main_port();
-    const Integer& port_int = Integer::Handle(Integer::New(port_id));
-    ASSERT(!port_int.IsNull());
-    const SendPort& send_port = SendPort::Handle(SendPort::New(port_id));
-    const String& name = String::Handle(String::New(isolate->name()));
-    ASSERT(!name.IsNull());
-    const Array& args = Array::Handle(Array::New(3));
-    ASSERT(!args.IsNull());
-    args.SetAt(0, port_int);
-    args.SetAt(1, send_port);
-    args.SetAt(2, name);
-    const Object& r =
-        Object::Handle(DartEntry::InvokeFunction(register_function_, args));
-    if (FLAG_trace_service) {
-      OS::PrintErr("vm-service: Isolate %s %" Pd64 " registered.\n",
-                   name.ToCString(), port_id);
-    }
-    ASSERT(!r.IsError());
+    isolate_ports_.Add(isolate->main_port());
+    isolate_names_.Add(&String::Handle(zone_, String::New(isolate->name())));
+  }
+
+  void RegisterIsolates() {
+    ServiceIsolate::RegisterRunningIsolates(isolate_ports_, isolate_names_);
   }
 
  private:
+  Zone* zone_;
+  GrowableArray<Dart_Port> isolate_ports_;
+  GrowableArray<const String*> isolate_names_;
   Function& register_function_;
   Isolate* service_isolate_;
 };
 #endif  // !PRODUCT
 
-DEFINE_NATIVE_ENTRY(VMService_SendIsolateServiceMessage, 2) {
+DEFINE_NATIVE_ENTRY(VMService_SendIsolateServiceMessage, 0, 2) {
 #ifndef PRODUCT
-  if (!FLAG_support_service) {
-    return Bool::Get(false).raw();
-  }
   GET_NON_NULL_NATIVE_ARGUMENT(SendPort, sp, arguments->NativeArgAt(0));
   GET_NON_NULL_NATIVE_ARGUMENT(Array, message, arguments->NativeArgAt(1));
 
@@ -95,53 +63,47 @@ DEFINE_NATIVE_ENTRY(VMService_SendIsolateServiceMessage, 2) {
   // TODO(turnidge): Throw an exception when the return value is false?
   bool result = PortMap::PostMessage(
       writer.WriteMessage(message, sp.Id(), Message::kOOBPriority));
-  return Bool::Get(result).raw();
+  return Bool::Get(result).ptr();
 #else
   return Object::null();
 #endif
 }
 
-DEFINE_NATIVE_ENTRY(VMService_SendRootServiceMessage, 1) {
+DEFINE_NATIVE_ENTRY(VMService_SendRootServiceMessage, 0, 1) {
 #ifndef PRODUCT
   GET_NON_NULL_NATIVE_ARGUMENT(Array, message, arguments->NativeArgAt(0));
-  if (FLAG_support_service) {
-    return Service::HandleRootMessage(message);
-  }
+  return Service::HandleRootMessage(message);
 #endif
   return Object::null();
 }
 
-DEFINE_NATIVE_ENTRY(VMService_SendObjectRootServiceMessage, 1) {
+DEFINE_NATIVE_ENTRY(VMService_SendObjectRootServiceMessage, 0, 1) {
 #ifndef PRODUCT
   GET_NON_NULL_NATIVE_ARGUMENT(Array, message, arguments->NativeArgAt(0));
-  if (FLAG_support_service) {
-    return Service::HandleObjectRootMessage(message);
-  }
+  return Service::HandleObjectRootMessage(message);
 #endif
   return Object::null();
 }
 
-DEFINE_NATIVE_ENTRY(VMService_OnStart, 0) {
+DEFINE_NATIVE_ENTRY(VMService_OnStart, 0, 0) {
 #ifndef PRODUCT
   if (FLAG_trace_service) {
     OS::PrintErr("vm-service: Booting dart:vmservice library.\n");
   }
   // Boot the dart:vmservice library.
   ServiceIsolate::BootVmServiceLibrary();
-  if (!FLAG_support_service) {
-    return Object::null();
-  }
   // Register running isolates with service.
   RegisterRunningIsolatesVisitor register_isolates(thread);
   if (FLAG_trace_service) {
     OS::PrintErr("vm-service: Registering running isolates.\n");
   }
   Isolate::VisitIsolates(&register_isolates);
+  register_isolates.RegisterIsolates();
 #endif
   return Object::null();
 }
 
-DEFINE_NATIVE_ENTRY(VMService_OnExit, 0) {
+DEFINE_NATIVE_ENTRY(VMService_OnExit, 0, 0) {
 #ifndef PRODUCT
   if (FLAG_trace_service) {
     OS::PrintErr("vm-service: processed exit message.\n");
@@ -153,11 +115,8 @@ DEFINE_NATIVE_ENTRY(VMService_OnExit, 0) {
   return Object::null();
 }
 
-DEFINE_NATIVE_ENTRY(VMService_OnServerAddressChange, 1) {
+DEFINE_NATIVE_ENTRY(VMService_OnServerAddressChange, 0, 1) {
 #ifndef PRODUCT
-  if (!FLAG_support_service) {
-    return Object::null();
-  }
   GET_NATIVE_ARGUMENT(String, address, arguments->NativeArgAt(0));
   if (address.IsNull()) {
     ServiceIsolate::SetServerAddress(NULL);
@@ -168,34 +127,26 @@ DEFINE_NATIVE_ENTRY(VMService_OnServerAddressChange, 1) {
   return Object::null();
 }
 
-DEFINE_NATIVE_ENTRY(VMService_ListenStream, 1) {
+DEFINE_NATIVE_ENTRY(VMService_ListenStream, 0, 1) {
 #ifndef PRODUCT
   GET_NON_NULL_NATIVE_ARGUMENT(String, stream_id, arguments->NativeArgAt(0));
-  bool result = false;
-  if (FLAG_support_service) {
-    result = Service::ListenStream(stream_id.ToCString());
-  }
-  return Bool::Get(result).raw();
+  bool result = Service::ListenStream(stream_id.ToCString());
+  return Bool::Get(result).ptr();
 #else
   return Object::null();
 #endif
 }
 
-DEFINE_NATIVE_ENTRY(VMService_CancelStream, 1) {
+DEFINE_NATIVE_ENTRY(VMService_CancelStream, 0, 1) {
 #ifndef PRODUCT
   GET_NON_NULL_NATIVE_ARGUMENT(String, stream_id, arguments->NativeArgAt(0));
-  if (FLAG_support_service) {
-    Service::CancelStream(stream_id.ToCString());
-  }
+  Service::CancelStream(stream_id.ToCString());
 #endif
   return Object::null();
 }
 
-DEFINE_NATIVE_ENTRY(VMService_RequestAssets, 0) {
+DEFINE_NATIVE_ENTRY(VMService_RequestAssets, 0, 0) {
 #ifndef PRODUCT
-  if (!FLAG_support_service) {
-    return Object::null();
-  }
   return Service::RequestAssets();
 #else
   return Object::null();
@@ -365,30 +316,23 @@ class TarArchive {
   DISALLOW_COPY_AND_ASSIGN(TarArchive);
 };
 
-static void ContentsFinalizer(void* isolate_callback_data,
-                              Dart_WeakPersistentHandle handle,
-                              void* peer) {
+static void ContentsFinalizer(void* isolate_callback_data, void* peer) {
   uint8_t* data = reinterpret_cast<uint8_t*>(peer);
   delete[] data;
 }
 
-static void FilenameFinalizer(void* isolate_callback_data,
-                              Dart_WeakPersistentHandle handle,
-                              void* peer) {
+static void FilenameFinalizer(void* isolate_callback_data, void* peer) {
   char* filename = reinterpret_cast<char*>(peer);
   delete[] filename;
 }
 
 #endif
 
-DEFINE_NATIVE_ENTRY(VMService_DecodeAssets, 1) {
+DEFINE_NATIVE_ENTRY(VMService_DecodeAssets, 0, 1) {
 #ifndef PRODUCT
-  if (!FLAG_support_service) {
-    return Object::null();
-  }
   GET_NON_NULL_NATIVE_ARGUMENT(TypedData, data, arguments->NativeArgAt(0));
   Api::Scope scope(thread);
-  Dart_Handle data_handle = Api::NewHandle(thread, data.raw());
+  Dart_Handle data_handle = Api::NewHandle(thread, data.ptr());
   Dart_Handle result_list;
   {
     TransitionVMToNative transition(thread);
@@ -433,47 +377,10 @@ DEFINE_NATIVE_ENTRY(VMService_DecodeAssets, 1) {
       idx += 2;
     }
   }
-  return Api::UnwrapArrayHandle(thread->zone(), result_list).raw();
+  return Api::UnwrapArrayHandle(thread->zone(), result_list).ptr();
 #else
   return Object::null();
 #endif
-}
-
-DEFINE_NATIVE_ENTRY(VMService_spawnUriNotify, 2) {
-#ifndef PRODUCT
-  if (!FLAG_support_service) {
-    return Object::null();
-  }
-  GET_NON_NULL_NATIVE_ARGUMENT(Instance, result, arguments->NativeArgAt(0));
-  GET_NON_NULL_NATIVE_ARGUMENT(String, token, arguments->NativeArgAt(1));
-
-  if (result.IsSendPort()) {
-    Dart_Port id = SendPort::Cast(result).Id();
-    Isolate* isolate = PortMap::GetIsolate(id);
-    if (isolate != NULL) {
-      ServiceEvent spawn_event(isolate, ServiceEvent::kIsolateSpawn);
-      spawn_event.set_spawn_token(&token);
-      Service::HandleEvent(&spawn_event);
-    } else {
-      // There is no isolate at the control port anymore.  Must have
-      // died already.
-      ServiceEvent spawn_event(NULL, ServiceEvent::kIsolateSpawn);
-      const String& error = String::Handle(
-          String::New("spawned isolate exited before notification completed"));
-      spawn_event.set_spawn_token(&token);
-      spawn_event.set_spawn_error(&error);
-      Service::HandleEvent(&spawn_event);
-    }
-  } else {
-    // The isolate failed to spawn.
-    ASSERT(result.IsString());
-    ServiceEvent spawn_event(NULL, ServiceEvent::kIsolateSpawn);
-    spawn_event.set_spawn_token(&token);
-    spawn_event.set_spawn_error(&String::Cast(result));
-    Service::HandleEvent(&spawn_event);
-  }
-#endif  // PRODUCT
-  return Object::null();
 }
 
 }  // namespace dart

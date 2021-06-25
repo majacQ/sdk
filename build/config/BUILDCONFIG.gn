@@ -130,6 +130,12 @@ declare_args() {
 
   # Compile for Thread Sanitizer to find threading bugs.
   is_tsan = false
+
+  # Compile for Undefined Behavior Sanitizer to find reliance on undefined behavior.
+  is_ubsan = false
+
+  # Compile for execution in user-mode QEMU.
+  is_qemu = false
 }
 
 # =============================================================================
@@ -190,6 +196,16 @@ if (current_os == "win") {
   is_nacl = false
   is_posix = true
   is_win = false
+} else if (current_os == "fuchsia") {
+  is_android = false
+  is_chromeos = false
+  is_fuchsia = true
+  is_ios = false
+  is_linux = false
+  is_mac = false
+  is_nacl = false
+  is_posix = true
+  is_win = false
 }
 
 # =============================================================================
@@ -198,7 +214,7 @@ if (current_os == "win") {
 
 # These Sanitizers all imply using the Clang compiler. On Windows they either
 # don't work or work differently.
-if (!is_clang && (is_asan || is_lsan || is_tsan || is_msan)) {
+if (!is_clang && (is_asan || is_lsan || is_msan || is_tsan || is_ubsan)) {
   is_clang = true
 }
 
@@ -241,6 +257,12 @@ if (is_posix) {
     _native_compiler_configs +=
         [ "//build/config/gcc:symbol_visibility_hidden" ]
   }
+}
+if (is_fuchsia) {
+  _native_compiler_configs += [
+    "//third_party/fuchsia/sdk/linux/build/config:compiler",
+    "//third_party/fuchsia/sdk/linux/build/config:runtime_library",
+  ]
 }
 
 if (is_linux) {
@@ -348,7 +370,11 @@ set_defaults("component") {
 
 if (is_win) {
   # On windows we use the same toolchain for host and target by default.
-  host_toolchain = "//build/toolchain/win:$current_cpu"
+  if (is_clang) {
+    host_toolchain = "//build/toolchain/win:clang_$current_cpu"
+  } else {
+    host_toolchain = "//build/toolchain/win:$current_cpu"
+  }
   set_default_toolchain("$host_toolchain")
 } else if (is_android) {
   if (host_os == "linux") {
@@ -376,8 +402,13 @@ if (is_win) {
     set_default_toolchain("//build/toolchain/linux:$current_cpu")
   }
 } else if (is_mac) {
-  host_toolchain = "//build/toolchain/mac:clang_x64"
-  set_default_toolchain(host_toolchain)
+  host_toolchain = "//build/toolchain/mac:clang_$host_cpu"
+  set_default_toolchain("//build/toolchain/mac:clang_$current_cpu")
+} else if (is_fuchsia) {
+  assert(host_os == "linux")
+  assert(host_cpu == "x64")
+  host_toolchain = "//build/toolchain/linux:clang_$host_cpu"
+  set_default_toolchain("//build/toolchain/fuchsia")
 }
 
 # ==============================================================================
@@ -393,9 +424,6 @@ template("component") {
     # See above.
     configs = []  # Prevent list overwriting warning.
     configs = invoker.configs
-
-    # See above call.
-    set_sources_assignment_filter([])
 
     if (defined(invoker.all_dependent_configs)) {
       all_dependent_configs = invoker.all_dependent_configs

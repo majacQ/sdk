@@ -2,12 +2,13 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library custom_elements_test;
 
 import 'dart:async';
 import 'dart:html';
-import 'package:unittest/html_individual_config.dart';
-import 'package:unittest/unittest.dart';
+import 'package:async_helper/async_minitest.dart';
 import 'utils.dart';
 
 class CustomMixin {
@@ -39,10 +40,8 @@ String get nextTag => 'x-type${nextTagId++}';
 
 class NotAnElement {}
 
-main() {
-  useHtmlIndividualConfiguration();
-
-  setUp(() => customElementsReady);
+main() async {
+  await customElementsReady;
 
   group('register', () {
     test('register', () {

@@ -3,9 +3,7 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:kernel/ast.dart' as ir;
-import 'package:kernel/class_hierarchy.dart' as ir;
 import 'package:kernel/core_types.dart' as ir;
-import 'package:kernel/type_environment.dart' as ir;
 
 import '../common.dart';
 import '../common_elements.dart';
@@ -42,11 +40,8 @@ abstract class IrToElementMap {
   /// Returns the [FunctionType] of the [node].
   FunctionType getFunctionType(ir.FunctionNode node);
 
-  /// Returns the [TypedefType] corresponding to raw type of the typedef [node].
-  TypedefType getTypedefType(ir.Typedef node);
-
   /// Return the [InterfaceType] corresponding to the [cls] with the given
-  /// [typeArguments].
+  /// [typeArguments] and [nullability].
   InterfaceType createInterfaceType(
       ir.Class cls, List<ir.DartType> typeArguments);
 
@@ -59,13 +54,15 @@ abstract class IrToElementMap {
 
   CommonElements get commonElements;
   DiagnosticReporter get reporter;
+  ir.CoreTypes get coreTypes;
   InterfaceType getThisType(IndexedClass cls);
   InterfaceType getSuperType(IndexedClass cls);
   OrderedTypeSet getOrderedTypeSet(IndexedClass cls);
   Iterable<InterfaceType> getInterfaces(IndexedClass cls);
   InterfaceType asInstanceOf(InterfaceType type, ClassEntity cls);
   DartType substByContext(DartType type, InterfaceType context);
-  DartType getCallType(InterfaceType type);
+  FunctionType getCallType(InterfaceType type);
   int getHierarchyDepth(IndexedClass cls);
   DartType getTypeVariableBound(IndexedTypeVariable typeVariable);
+  List<Variance> getTypeVariableVariances(IndexedClass cls);
 }

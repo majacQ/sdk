@@ -12,7 +12,7 @@
 #include "vm/virtual_memory.h"
 
 namespace dart {
-
+namespace compiler {
 #define __ assembler->
 
 ASSEMBLER_TEST_GENERATE(Simple, assembler) {
@@ -339,12 +339,13 @@ ASSEMBLER_TEST_RUN(WordOverflow, test) {
 ASSEMBLER_TEST_GENERATE(SimpleLoadStore, assembler) {
   __ SetupDartSP();
 
-  __ sub(CSP, CSP, Operand(2 * kWordSize));  // Must not access beyond CSP.
+  __ sub(CSP, CSP,
+         Operand(2 * target::kWordSize));  // Must not access beyond CSP.
 
   __ movz(R0, Immediate(43), 0);
   __ movz(R1, Immediate(42), 0);
-  __ str(R1, Address(SP, -1 * kWordSize, Address::PreIndex));
-  __ ldr(R0, Address(SP, 1 * kWordSize, Address::PostIndex));
+  __ str(R1, Address(SP, -1 * target::kWordSize, Address::PreIndex));
+  __ ldr(R0, Address(SP, 1 * target::kWordSize, Address::PostIndex));
   __ RestoreCSP();
   __ ret();
 }
@@ -373,16 +374,17 @@ ASSEMBLER_TEST_RUN(SimpleLoadStoreHeapTag, test) {
 ASSEMBLER_TEST_GENERATE(LoadStoreLargeIndex, assembler) {
   __ SetupDartSP();
 
-  __ sub(CSP, CSP, Operand(32 * kWordSize));  // Must not access beyond CSP.
+  __ sub(CSP, CSP,
+         Operand(32 * target::kWordSize));  // Must not access beyond CSP.
 
   __ movz(R0, Immediate(43), 0);
   __ movz(R1, Immediate(42), 0);
   // Largest negative offset that can fit in the signed 9-bit immediate field.
-  __ str(R1, Address(SP, -32 * kWordSize, Address::PreIndex));
+  __ str(R1, Address(SP, -32 * target::kWordSize, Address::PreIndex));
   // Largest positive kWordSize aligned offset that we can fit.
-  __ ldr(R0, Address(SP, 31 * kWordSize, Address::PostIndex));
+  __ ldr(R0, Address(SP, 31 * target::kWordSize, Address::PostIndex));
   // Correction.
-  __ add(SP, SP, Operand(kWordSize));  // Restore SP.
+  __ add(SP, SP, Operand(target::kWordSize));  // Restore SP.
   __ RestoreCSP();
   __ ret();
 }
@@ -396,10 +398,10 @@ ASSEMBLER_TEST_GENERATE(LoadStoreLargeOffset, assembler) {
   __ SetupDartSP();
   __ movz(R0, Immediate(43), 0);
   __ movz(R1, Immediate(42), 0);
-  __ sub(SP, SP, Operand(512 * kWordSize));
+  __ sub(SP, SP, Operand(512 * target::kWordSize));
   __ andi(CSP, SP, Immediate(~15));  // Must not access beyond CSP.
-  __ str(R1, Address(SP, 512 * kWordSize, Address::Offset));
-  __ add(SP, SP, Operand(512 * kWordSize));
+  __ str(R1, Address(SP, 512 * target::kWordSize, Address::Offset));
+  __ add(SP, SP, Operand(512 * target::kWordSize));
   __ ldr(R0, Address(SP));
   __ RestoreCSP();
   __ ret();
@@ -419,10 +421,10 @@ ASSEMBLER_TEST_GENERATE(LoadStoreExtReg, assembler) {
   // This should sign extend R2, and add to SP to get address,
   // i.e. SP - kWordSize.
   __ str(R1, Address(SP, R2, SXTW));
-  __ sub(SP, SP, Operand(kWordSize));
+  __ sub(SP, SP, Operand(target::kWordSize));
   __ andi(CSP, SP, Immediate(~15));  // Must not access beyond CSP.
   __ ldr(R0, Address(SP));
-  __ add(SP, SP, Operand(kWordSize));
+  __ add(SP, SP, Operand(target::kWordSize));
   __ RestoreCSP();
   __ ret();
 }
@@ -437,12 +439,12 @@ ASSEMBLER_TEST_GENERATE(LoadStoreScaledReg, assembler) {
   __ movz(R0, Immediate(43), 0);
   __ movz(R1, Immediate(42), 0);
   __ movz(R2, Immediate(10), 0);
-  __ sub(SP, SP, Operand(10 * kWordSize));
+  __ sub(SP, SP, Operand(10 * target::kWordSize));
   __ andi(CSP, SP, Immediate(~15));  // Must not access beyond CSP.
   // Store R1 into SP + R2 * kWordSize.
   __ str(R1, Address(SP, R2, UXTX, Address::Scaled));
   __ ldr(R0, Address(SP, R2, UXTX, Address::Scaled));
-  __ add(SP, SP, Operand(10 * kWordSize));
+  __ add(SP, SP, Operand(10 * target::kWordSize));
   __ RestoreCSP();
   __ ret();
 }
@@ -455,12 +457,13 @@ ASSEMBLER_TEST_RUN(LoadStoreScaledReg, test) {
 ASSEMBLER_TEST_GENERATE(LoadSigned32Bit, assembler) {
   __ SetupDartSP();
 
-  __ sub(CSP, CSP, Operand(2 * kWordSize));  // Must not access beyond CSP.
+  __ sub(CSP, CSP,
+         Operand(2 * target::kWordSize));  // Must not access beyond CSP.
 
   __ LoadImmediate(R1, 0xffffffff);
-  __ str(R1, Address(SP, -4, Address::PreIndex, kWord), kWord);
-  __ ldr(R0, Address(SP), kWord);
-  __ ldr(R1, Address(SP, 4, Address::PostIndex, kWord), kWord);
+  __ str(R1, Address(SP, -4, Address::PreIndex, kFourBytes), kFourBytes);
+  __ ldr(R0, Address(SP), kFourBytes);
+  __ ldr(R1, Address(SP, 4, Address::PostIndex, kFourBytes), kFourBytes);
   __ RestoreCSP();
   __ ret();
 }
@@ -473,12 +476,13 @@ ASSEMBLER_TEST_RUN(LoadSigned32Bit, test) {
 ASSEMBLER_TEST_GENERATE(SimpleLoadStorePair, assembler) {
   __ SetupDartSP();
 
-  __ sub(CSP, CSP, Operand(2 * kWordSize));  // Must not access beyond CSP.
+  __ sub(CSP, CSP,
+         Operand(2 * target::kWordSize));  // Must not access beyond CSP.
 
   __ LoadImmediate(R2, 43);
   __ LoadImmediate(R3, 42);
-  __ stp(R2, R3, Address(SP, -2 * kWordSize, Address::PairPreIndex));
-  __ ldp(R0, R1, Address(SP, 2 * kWordSize, Address::PairPostIndex));
+  __ stp(R2, R3, Address(SP, -2 * target::kWordSize, Address::PairPreIndex));
+  __ ldp(R0, R1, Address(SP, 2 * target::kWordSize, Address::PairPostIndex));
   __ sub(R0, R0, Operand(R1));
   __ RestoreCSP();
   __ ret();
@@ -493,11 +497,11 @@ ASSEMBLER_TEST_GENERATE(LoadStorePairOffset, assembler) {
   __ SetupDartSP();
   __ LoadImmediate(R2, 43);
   __ LoadImmediate(R3, 42);
-  __ sub(SP, SP, Operand(4 * kWordSize));
+  __ sub(SP, SP, Operand(4 * target::kWordSize));
   __ andi(CSP, SP, Immediate(~15));  // Must not access beyond CSP.
-  __ stp(R2, R3, Address::Pair(SP, 2 * kWordSize));
-  __ ldp(R0, R1, Address::Pair(SP, 2 * kWordSize));
-  __ add(SP, SP, Operand(4 * kWordSize));
+  __ stp(R2, R3, Address::Pair(SP, 2 * target::kWordSize));
+  __ ldp(R0, R1, Address::Pair(SP, 2 * target::kWordSize));
+  __ add(SP, SP, Operand(4 * target::kWordSize));
   __ sub(R0, R0, Operand(R1));
   __ RestoreCSP();
   __ ret();
@@ -506,6 +510,76 @@ ASSEMBLER_TEST_GENERATE(LoadStorePairOffset, assembler) {
 ASSEMBLER_TEST_RUN(LoadStorePairOffset, test) {
   typedef int64_t (*Int64Return)() DART_UNUSED;
   EXPECT_EQ(1, EXECUTE_TEST_CODE_INT64(Int64Return, test->entry()));
+}
+
+ASSEMBLER_TEST_GENERATE(PushRegisterPair, assembler) {
+  __ SetupDartSP();
+  __ LoadImmediate(R2, 12);
+  __ LoadImmediate(R3, 21);
+  __ PushRegisterPair(R2, R3);
+  __ Pop(R0);
+  __ Pop(R1);
+  __ RestoreCSP();
+  __ ret();
+}
+
+ASSEMBLER_TEST_RUN(PushRegisterPair, test) {
+  EXPECT(test != NULL);
+  typedef int (*PushRegisterPair)() DART_UNUSED;
+  EXPECT_EQ(12, EXECUTE_TEST_CODE_INT64(PushRegisterPair, test->entry()));
+}
+
+ASSEMBLER_TEST_GENERATE(PushRegisterPairReversed, assembler) {
+  __ SetupDartSP();
+  __ LoadImmediate(R3, 12);
+  __ LoadImmediate(R2, 21);
+  __ PushRegisterPair(R3, R2);
+  __ Pop(R0);
+  __ Pop(R1);
+  __ RestoreCSP();
+  __ ret();
+}
+
+ASSEMBLER_TEST_RUN(PushRegisterPairReversed, test) {
+  EXPECT(test != NULL);
+  typedef int (*PushRegisterPairReversed)() DART_UNUSED;
+  EXPECT_EQ(12,
+            EXECUTE_TEST_CODE_INT64(PushRegisterPairReversed, test->entry()));
+}
+
+ASSEMBLER_TEST_GENERATE(PopRegisterPair, assembler) {
+  __ SetupDartSP();
+  __ LoadImmediate(R2, 12);
+  __ LoadImmediate(R3, 21);
+  __ Push(R3);
+  __ Push(R2);
+  __ PopRegisterPair(R0, R1);
+  __ RestoreCSP();
+  __ ret();
+}
+
+ASSEMBLER_TEST_RUN(PopRegisterPair, test) {
+  EXPECT(test != NULL);
+  typedef int (*PopRegisterPair)() DART_UNUSED;
+  EXPECT_EQ(12, EXECUTE_TEST_CODE_INT64(PopRegisterPair, test->entry()));
+}
+
+ASSEMBLER_TEST_GENERATE(PopRegisterPairReversed, assembler) {
+  __ SetupDartSP();
+  __ LoadImmediate(R3, 12);
+  __ LoadImmediate(R2, 21);
+  __ Push(R3);
+  __ Push(R2);
+  __ PopRegisterPair(R1, R0);
+  __ RestoreCSP();
+  __ ret();
+}
+
+ASSEMBLER_TEST_RUN(PopRegisterPairReversed, test) {
+  EXPECT(test != NULL);
+  typedef int (*PopRegisterPairReversed)() DART_UNUSED;
+  EXPECT_EQ(12,
+            EXECUTE_TEST_CODE_INT64(PopRegisterPairReversed, test->entry()));
 }
 
 ASSEMBLER_TEST_GENERATE(Semaphore, assembler) {
@@ -561,10 +635,10 @@ ASSEMBLER_TEST_GENERATE(Semaphore32, assembler) {
 
   Label retry;
   __ Bind(&retry);
-  __ ldxr(R0, SP, kWord);
+  __ ldxr(R0, SP, kFourBytes);
   // 32 bit operation should ignore the high word of R0 that was pushed on the
   // stack.
-  __ stxr(TMP, R1, SP, kWord);  // IP == 0, success
+  __ stxr(TMP, R1, SP, kFourBytes);  // IP == 0, success
   __ cmp(TMP, Operand(0));
   __ b(&retry, NE);  // NE if context switch occurred between ldrex and strex.
   __ Pop(R0);        // 42 + 42 * 2**32
@@ -590,9 +664,9 @@ ASSEMBLER_TEST_GENERATE(FailedSemaphore32, assembler) {
   __ movz(R0, Immediate(40), 0);
   __ movz(R1, Immediate(42), 0);
 
-  __ ldxr(R0, SP, kWord);
+  __ ldxr(R0, SP, kFourBytes);
   __ clrex();                   // Simulate a context switch.
-  __ stxr(TMP, R1, SP, kWord);  // IP == 1, failure
+  __ stxr(TMP, R1, SP, kFourBytes);  // IP == 1, failure
   __ Pop(R0);                   // 40
   __ add(R0, R0, Operand(TMP));
   __ RestoreCSP();
@@ -608,6 +682,62 @@ ASSEMBLER_TEST_RUN(FailedSemaphore32, test) {
             EXECUTE_TEST_CODE_INT64(FailedSemaphore32, test->entry()));
 }
 
+ASSEMBLER_TEST_GENERATE(LoadAcquireStoreRelease, assembler) {
+  // We cannot really test that ldar/stlr have the barrier behavior, but at
+  // least we can test that the load/store behavior is correct.
+  Label failed, done;
+
+  __ SetupDartSP();
+  __ EnterFrame(0);
+
+  // Test 64-bit ladr.
+  __ PushImmediate(0x1122334455667788);
+  __ ldar(R1, SP, kEightBytes);
+  __ CompareImmediate(R1, 0x1122334455667788);
+  __ BranchIf(NOT_EQUAL, &failed);
+  __ Drop(1);
+
+  // Test 32-bit ladr - must zero extend.
+  __ PushImmediate(0x1122334455667788);
+  __ ldar(R1, SP, kFourBytes);
+  __ CompareImmediate(R1, 0x55667788);
+  __ BranchIf(NOT_EQUAL, &failed);
+  __ Drop(1);
+
+  // Test 64-bit stlr.
+  __ PushImmediate(0);
+  __ LoadImmediate(R1, 0x1122334455667788);
+  __ stlr(R1, SP, kEightBytes);
+  __ Pop(R1);
+  __ CompareImmediate(R1, 0x1122334455667788);
+  __ BranchIf(NOT_EQUAL, &failed);
+
+  // Test 32-bit stlr.
+  __ PushImmediate(0);
+  __ LoadImmediate(R1, 0x1122334455667788);
+  __ stlr(R1, SP, kFourBytes);
+  __ Pop(R1);
+  __ CompareImmediate(R1, 0x55667788);
+  __ BranchIf(NOT_EQUAL, &failed);
+
+  __ LoadImmediate(R0, 0x42);
+  __ b(&done);
+
+  __ Bind(&failed);
+  __ LoadImmediate(R0, 0x84);
+
+  __ Bind(&done);
+  __ LeaveFrame();
+  __ RestoreCSP();
+  __ ret();
+}
+
+ASSEMBLER_TEST_RUN(LoadAcquireStoreRelease, test) {
+  typedef intptr_t (*LoadAcquireStoreRelease)() DART_UNUSED;
+  EXPECT_EQ(0x42,
+            EXECUTE_TEST_CODE_INT64(LoadAcquireStoreRelease, test->entry()));
+}
+
 // Logical register operations.
 ASSEMBLER_TEST_GENERATE(AndRegs, assembler) {
   __ movz(R1, Immediate(43), 0);
@@ -620,6 +750,363 @@ ASSEMBLER_TEST_RUN(AndRegs, test) {
   typedef int64_t (*Int64Return)() DART_UNUSED;
   EXPECT_EQ(42, EXECUTE_TEST_CODE_INT64(Int64Return, test->entry()));
 }
+
+constexpr uint64_t kU64MinusOne = 0xffffffffffffffffull;
+constexpr uint64_t kU64MinInt32 = 0xffffffff80000000ull;
+constexpr uint64_t kU64MaxInt32 = 0x000000007fffffffull;
+constexpr uint64_t kU64MinInt64 = 0x8000000000000000ull;
+constexpr uint64_t kU64MaxInt64 = 0x7fffffffffffffffull;
+
+#define FOR_EACH_ASR_64_TEST_CONFIG(M)                                         \
+  M(0ull, 0, 0ull)                                                             \
+  M(1ull, 0, 1ull)                                                             \
+  M(kU64MaxInt32, 0, kU64MaxInt32)                                             \
+  M(kU64MaxInt64, 0, kU64MaxInt64)                                             \
+  M(kU64MinInt32, 0, kU64MinInt32)                                             \
+  M(kU64MinInt64, 0, kU64MinInt64)                                             \
+  M(0ull, 1, 0ull)                                                             \
+  M(1ull, 1, 0ull)                                                             \
+  M(4ull, 1, 2ull)                                                             \
+  M(0xffffull, 1, 0x7fffull)                                                   \
+  M(0xffffffffull, 1, 0x7fffffffull)                                           \
+  M(kU64MaxInt32, 1, 0x3fffffffull)                                            \
+  M(kU64MaxInt64, 1, 0x3fffffffffffffffull)                                    \
+  M(kU64MinInt32, 1, 0xffffffffc0000000ull)                                    \
+  M(kU64MinInt64, 1, 0xc000000000000000ull)                                    \
+  M(kU64MinusOne, 1, kU64MinusOne)                                             \
+  M(1ull, 2, 0ull)                                                             \
+  M(4ull, 2, 1ull)                                                             \
+  M(0xffffull, 2, 0x3fffull)                                                   \
+  M(0xffffffffull, 2, 0x3fffffffull)                                           \
+  M(kU64MaxInt32, 2, 0x1fffffffull)                                            \
+  M(kU64MaxInt64, 2, 0x1fffffffffffffffull)                                    \
+  M(kU64MinInt32, 2, 0xffffffffe0000000ull)                                    \
+  M(kU64MinInt64, 2, 0xe000000000000000ull)                                    \
+  M(kU64MinusOne, 2, kU64MinusOne)                                             \
+  M(0ull, 31, 0ull)                                                            \
+  M(1ull, 31, 0ull)                                                            \
+  M(4ull, 31, 0ull)                                                            \
+  M(0xffffull, 31, 0ull)                                                       \
+  M(0xffffffffull, 31, 1ull)                                                   \
+  M(kU64MaxInt32, 31, 0ull)                                                    \
+  M(kU64MaxInt64, 31, 0xffffffffull)                                           \
+  M(kU64MinInt32, 31, kU64MinusOne)                                            \
+  M(kU64MinInt64, 31, 0xffffffff00000000ull)                                   \
+  M(kU64MinusOne, 31, kU64MinusOne)                                            \
+  M(0ull, 32, 0ull)                                                            \
+  M(1ull, 32, 0ull)                                                            \
+  M(4ull, 32, 0ull)                                                            \
+  M(0xffffull, 32, 0ull)                                                       \
+  M(0xffffffffull, 32, 0ull)                                                   \
+  M(kU64MaxInt64, 32, 0x7fffffffull)                                           \
+  M(kU64MinInt32, 32, kU64MinusOne)                                            \
+  M(kU64MinInt64, 32, 0xffffffff80000000ull)                                   \
+  M(kU64MinusOne, 32, kU64MinusOne)                                            \
+  M(0ull, 62, 0ull)                                                            \
+  M(1ull, 62, 0ull)                                                            \
+  M(4ull, 62, 0ull)                                                            \
+  M(0xffffull, 62, 0ull)                                                       \
+  M(0xffffffffull, 62, 0ull)                                                   \
+  M(kU64MaxInt64, 62, 1ull)                                                    \
+  M(kU64MinInt32, 62, kU64MinusOne)                                            \
+  M(kU64MinInt64, 62, 0xfffffffffffffffeull)                                   \
+  M(kU64MinusOne, 62, kU64MinusOne)                                            \
+  M(0ull, 63, 0ull)                                                            \
+  M(1ull, 63, 0ull)                                                            \
+  M(4ull, 63, 0ull)                                                            \
+  M(0xffffull, 63, 0ull)                                                       \
+  M(0xffffffffull, 63, 0ull)                                                   \
+  M(kU64MaxInt64, 63, 0ull)                                                    \
+  M(kU64MinInt32, 63, kU64MinusOne)                                            \
+  M(kU64MinInt64, 63, kU64MinusOne)                                            \
+  M(kU64MinusOne, 63, kU64MinusOne)
+
+#define FOR_EACH_LSR_64_TEST_CONFIG(M)                                         \
+  M(0ull, 0, 0ull)                                                             \
+  M(1ull, 0, 1ull)                                                             \
+  M(kU64MaxInt32, 0, kU64MaxInt32)                                             \
+  M(kU64MaxInt64, 0, kU64MaxInt64)                                             \
+  M(kU64MinInt32, 0, kU64MinInt32)                                             \
+  M(kU64MinInt64, 0, kU64MinInt64)                                             \
+  M(0ull, 1, 0ull)                                                             \
+  M(1ull, 1, 0ull)                                                             \
+  M(4ull, 1, 2ull)                                                             \
+  M(0xffffull, 1, 0x7fffull)                                                   \
+  M(0xffffffffull, 1, 0x7fffffffull)                                           \
+  M(kU64MaxInt32, 1, 0x3fffffffull)                                            \
+  M(kU64MaxInt64, 1, 0x3fffffffffffffffull)                                    \
+  M(kU64MinInt32, 1, 0x7fffffffc0000000ull)                                    \
+  M(kU64MinInt64, 1, 0x4000000000000000ull)                                    \
+  M(kU64MinusOne, 1, 0x7fffffffffffffffull)                                    \
+  M(1ull, 2, 0ull)                                                             \
+  M(4ull, 2, 1ull)                                                             \
+  M(0xffffull, 2, 0x3fffull)                                                   \
+  M(0xffffffffull, 2, 0x3fffffffull)                                           \
+  M(kU64MaxInt32, 2, 0x1fffffffull)                                            \
+  M(kU64MaxInt64, 2, 0x1fffffffffffffffull)                                    \
+  M(kU64MinInt32, 2, 0x3fffffffe0000000ull)                                    \
+  M(kU64MinInt64, 2, 0x2000000000000000ull)                                    \
+  M(kU64MinusOne, 2, 0x3fffffffffffffffull)                                    \
+  M(0ull, 31, 0ull)                                                            \
+  M(1ull, 31, 0ull)                                                            \
+  M(4ull, 31, 0ull)                                                            \
+  M(0xffffull, 31, 0ull)                                                       \
+  M(0xffffffffull, 31, 1ull)                                                   \
+  M(kU64MaxInt32, 31, 0ull)                                                    \
+  M(kU64MaxInt64, 31, 0xffffffffull)                                           \
+  M(kU64MinInt32, 31, 0x1ffffffffull)                                          \
+  M(kU64MinInt64, 31, 0x100000000ull)                                          \
+  M(kU64MinusOne, 31, 0x1ffffffffull)                                          \
+  M(0ull, 32, 0ull)                                                            \
+  M(1ull, 32, 0ull)                                                            \
+  M(4ull, 32, 0ull)                                                            \
+  M(0xffffull, 32, 0ull)                                                       \
+  M(0xffffffffull, 32, 0ull)                                                   \
+  M(kU64MaxInt64, 32, 0x7fffffffull)                                           \
+  M(kU64MinInt32, 32, 0xffffffffull)                                           \
+  M(kU64MinInt64, 32, 0x80000000ull)                                           \
+  M(kU64MinusOne, 32, 0xffffffffull)                                           \
+  M(0ull, 62, 0ull)                                                            \
+  M(1ull, 62, 0ull)                                                            \
+  M(4ull, 62, 0ull)                                                            \
+  M(0xffffull, 62, 0ull)                                                       \
+  M(0xffffffffull, 62, 0ull)                                                   \
+  M(kU64MaxInt64, 62, 1ull)                                                    \
+  M(kU64MinInt32, 62, 3ull)                                                    \
+  M(kU64MinInt64, 62, 2ull)                                                    \
+  M(kU64MinusOne, 62, 3ull)                                                    \
+  M(0ull, 63, 0ull)                                                            \
+  M(1ull, 63, 0ull)                                                            \
+  M(4ull, 63, 0ull)                                                            \
+  M(0xffffull, 63, 0ull)                                                       \
+  M(0xffffffffull, 63, 0ull)                                                   \
+  M(kU64MaxInt64, 63, 0ull)                                                    \
+  M(kU64MinInt32, 63, 1ull)                                                    \
+  M(kU64MinInt64, 63, 1ull)                                                    \
+  M(kU64MinusOne, 63, 1ull)
+
+#define FOR_EACH_LSL_64_TEST_CONFIG(M)                                         \
+  M(0ull, 0, 0ull)                                                             \
+  M(1ull, 0, 1ull)                                                             \
+  M(kU64MaxInt32, 0, kU64MaxInt32)                                             \
+  M(kU64MaxInt64, 0, kU64MaxInt64)                                             \
+  M(kU64MinInt32, 0, kU64MinInt32)                                             \
+  M(kU64MinInt64, 0, kU64MinInt64)                                             \
+  M(0ull, 1, 0ull)                                                             \
+  M(1ull, 1, 2ull)                                                             \
+  M(4ull, 1, 8ull)                                                             \
+  M(0xffffull, 1, 0x1fffeull)                                                  \
+  M(0xffffffffull, 1, 0x1fffffffeull)                                          \
+  M(kU64MaxInt32, 1, 0xfffffffeull)                                            \
+  M(kU64MaxInt64, 1, 0xfffffffffffffffeull)                                    \
+  M(kU64MinInt32, 1, 0xffffffff00000000ull)                                    \
+  M(kU64MinInt64, 1, 0ull)                                                     \
+  M(kU64MinusOne, 1, 0xfffffffffffffffeull)                                    \
+  M(1ull, 2, 4ull)                                                             \
+  M(4ull, 2, 16ull)                                                            \
+  M(0xffffull, 2, 0x3fffcull)                                                  \
+  M(0xffffffffull, 2, 0x3fffffffcull)                                          \
+  M(kU64MaxInt32, 2, 0x1fffffffcull)                                           \
+  M(kU64MaxInt64, 2, 0xfffffffffffffffcull)                                    \
+  M(kU64MinInt32, 2, 0xfffffffe00000000ull)                                    \
+  M(kU64MinInt64, 2, 0ull)                                                     \
+  M(kU64MinusOne, 2, 0xfffffffffffffffcull)                                    \
+  M(0ull, 31, 0ull)                                                            \
+  M(1ull, 31, 0x0000000080000000ull)                                           \
+  M(4ull, 31, 0x0000000200000000ull)                                           \
+  M(0xffffull, 31, 0x00007fff80000000ull)                                      \
+  M(0xffffffffull, 31, 0x7fffffff80000000ull)                                  \
+  M(kU64MaxInt32, 31, 0x3fffffff80000000ull)                                   \
+  M(kU64MaxInt64, 31, 0xffffffff80000000ull)                                   \
+  M(kU64MinInt32, 31, 0xc000000000000000ull)                                   \
+  M(kU64MinInt64, 31, 0ull)                                                    \
+  M(kU64MinusOne, 31, 0xffffffff80000000ull)                                   \
+  M(0ull, 32, 0ull)                                                            \
+  M(1ull, 32, 0x0000000100000000ull)                                           \
+  M(4ull, 32, 0x0000000400000000ull)                                           \
+  M(0xffffull, 32, 0x0000ffff00000000ull)                                      \
+  M(0xffffffffull, 32, 0xffffffff00000000ull)                                  \
+  M(kU64MaxInt64, 32, 0xffffffff00000000ull)                                   \
+  M(kU64MinInt32, 32, 0x8000000000000000ull)                                   \
+  M(kU64MinInt64, 32, 0ull)                                                    \
+  M(kU64MinusOne, 32, 0xffffffff00000000ull)                                   \
+  M(0ull, 62, 0ull)                                                            \
+  M(1ull, 62, 0x4000000000000000ull)                                           \
+  M(4ull, 62, 0ull)                                                            \
+  M(0xffffull, 62, 0xc000000000000000ull)                                      \
+  M(0xffffffffull, 62, 0xc000000000000000ull)                                  \
+  M(kU64MaxInt64, 62, 0xc000000000000000ull)                                   \
+  M(kU64MinInt32, 62, 0ull)                                                    \
+  M(kU64MinInt64, 62, 0ull)                                                    \
+  M(kU64MinusOne, 62, 0xc000000000000000ull)                                   \
+  M(0ull, 63, 0ull)                                                            \
+  M(1ull, 63, 0x8000000000000000ull)                                           \
+  M(4ull, 63, 0ull)                                                            \
+  M(0xffffull, 63, 0x8000000000000000ull)                                      \
+  M(0xffffffffull, 63, 0x8000000000000000ull)                                  \
+  M(kU64MaxInt64, 63, 0x8000000000000000ull)                                   \
+  M(kU64MinInt32, 63, 0ull)                                                    \
+  M(kU64MinInt64, 63, 0ull)                                                    \
+  M(kU64MinusOne, 63, 0x8000000000000000ull)
+
+#define SHIFT_64_IMMEDIATE_TEST(macro_op, val, shift, expected)                \
+  ASSEMBLER_TEST_GENERATE(macro_op##_##val##_##shift, assembler) {             \
+    __ LoadImmediate(R1, bit_cast<int64_t>(val));                              \
+    __ macro_op(R0, R1, (shift));                                              \
+    __ ret();                                                                  \
+  }                                                                            \
+                                                                               \
+  ASSEMBLER_TEST_RUN(macro_op##_##val##_##shift, test) {                       \
+    typedef int64_t (*Int64Return)() DART_UNUSED;                              \
+    EXPECT_EQ((expected), bit_cast<uint64_t>(EXECUTE_TEST_CODE_INT64(          \
+                              Int64Return, test->entry())));                   \
+  }
+
+#define ASR_64_IMMEDIATE_TEST(val, shift, expected)                            \
+  SHIFT_64_IMMEDIATE_TEST(AsrImmediate, val, shift, expected)
+
+#define LSR_64_IMMEDIATE_TEST(val, shift, expected)                            \
+  SHIFT_64_IMMEDIATE_TEST(LsrImmediate, val, shift, expected)
+
+#define LSL_64_IMMEDIATE_TEST(val, shift, expected)                            \
+  SHIFT_64_IMMEDIATE_TEST(LslImmediate, val, shift, expected)
+
+FOR_EACH_ASR_64_TEST_CONFIG(ASR_64_IMMEDIATE_TEST)
+FOR_EACH_LSR_64_TEST_CONFIG(LSR_64_IMMEDIATE_TEST)
+FOR_EACH_LSL_64_TEST_CONFIG(LSL_64_IMMEDIATE_TEST)
+
+#undef LSL_64_IMMEDIATE_TEST
+#undef LSR_64_IMMEDIATE_TEST
+#undef ASR_64_IMMEDIATE_TEST
+#undef SHIFT_64_IMMEDIATE_TEST
+#undef FOR_EACH_LSL_64_TESTS_LIST
+#undef FOR_EACH_LSR_64_TESTS_LIST
+#undef FOR_EACH_ASR_64_TESTS_LIST
+
+constexpr uint32_t kU32MinusOne = 0xffffffffu;
+constexpr uint32_t kU32MinInt32 = 0x80000000u;
+constexpr uint32_t kU32MaxInt32 = 0x7fffffffu;
+
+#define FOR_EACH_ASR_32_TEST_CONFIG(M)                                         \
+  M(0u, 0, 0u)                                                                 \
+  M(1u, 0, 1u)                                                                 \
+  M(kU32MaxInt32, 0, kU32MaxInt32)                                             \
+  M(kU32MinInt32, 0, kU32MinInt32)                                             \
+  M(0u, 1, 0u)                                                                 \
+  M(1u, 1, 0u)                                                                 \
+  M(4u, 1, 2u)                                                                 \
+  M(0xffffu, 1, 0x7fffu)                                                       \
+  M(0xffffffffu, 1, 0xffffffffu)                                               \
+  M(kU32MaxInt32, 1, 0x3fffffffu)                                              \
+  M(kU32MinInt32, 1, 0xc0000000u)                                              \
+  M(kU32MinusOne, 1, 0xffffffffu)                                              \
+  M(1u, 2, 0u)                                                                 \
+  M(4u, 2, 1u)                                                                 \
+  M(0xffffu, 2, 0x3fffu)                                                       \
+  M(0xffffffffu, 2, 0xffffffffu)                                               \
+  M(kU32MaxInt32, 2, 0x1fffffffu)                                              \
+  M(kU32MinInt32, 2, 0xe0000000u)                                              \
+  M(kU32MinusOne, 2, kU32MinusOne)                                             \
+  M(0u, 31, 0u)                                                                \
+  M(1u, 31, 0u)                                                                \
+  M(4u, 31, 0u)                                                                \
+  M(0xffffu, 31, 0u)                                                           \
+  M(0xffffffffu, 31, 0xffffffffu)                                              \
+  M(kU32MaxInt32, 31, 0u)                                                      \
+  M(kU32MinInt32, 31, kU32MinusOne)                                            \
+  M(kU32MinusOne, 31, kU32MinusOne)
+
+#define FOR_EACH_LSR_32_TEST_CONFIG(M)                                         \
+  M(0u, 0, 0u)                                                                 \
+  M(1u, 0, 1u)                                                                 \
+  M(kU32MaxInt32, 0, kU32MaxInt32)                                             \
+  M(kU32MinInt32, 0, kU32MinInt32)                                             \
+  M(0u, 1, 0u)                                                                 \
+  M(1u, 1, 0u)                                                                 \
+  M(4u, 1, 2u)                                                                 \
+  M(0xffffu, 1, 0x7fffu)                                                       \
+  M(0xffffffffu, 1, 0x7fffffffu)                                               \
+  M(kU32MaxInt32, 1, 0x3fffffffu)                                              \
+  M(kU32MinInt32, 1, 0x40000000u)                                              \
+  M(kU32MinusOne, 1, 0x7fffffffu)                                              \
+  M(1u, 2, 0u)                                                                 \
+  M(4u, 2, 1u)                                                                 \
+  M(0xffffu, 2, 0x3fffu)                                                       \
+  M(0xffffffffu, 2, 0x3fffffffu)                                               \
+  M(kU32MaxInt32, 2, 0x1fffffffu)                                              \
+  M(kU32MinInt32, 2, 0x20000000u)                                              \
+  M(kU32MinusOne, 2, 0x3fffffffu)                                              \
+  M(0u, 31, 0u)                                                                \
+  M(1u, 31, 0u)                                                                \
+  M(4u, 31, 0u)                                                                \
+  M(0xffffu, 31, 0u)                                                           \
+  M(0xffffffffu, 31, 1u)                                                       \
+  M(kU32MaxInt32, 31, 0u)                                                      \
+  M(kU32MinInt32, 31, 1u)                                                      \
+  M(kU32MinusOne, 31, 1u)
+
+#define FOR_EACH_LSL_32_TEST_CONFIG(M)                                         \
+  M(0u, 0, 0u)                                                                 \
+  M(1u, 0, 1u)                                                                 \
+  M(kU32MaxInt32, 0, kU32MaxInt32)                                             \
+  M(kU32MinInt32, 0, kU32MinInt32)                                             \
+  M(0u, 1, 0u)                                                                 \
+  M(1u, 1, 2u)                                                                 \
+  M(4u, 1, 8u)                                                                 \
+  M(0xffffu, 1, 0x1fffeu)                                                      \
+  M(0xffffffffu, 1, 0xfffffffeu)                                               \
+  M(kU32MaxInt32, 1, 0xfffffffeu)                                              \
+  M(kU32MinInt32, 1, 0x00000000u)                                              \
+  M(kU32MinusOne, 1, 0xfffffffeu)                                              \
+  M(1u, 2, 4u)                                                                 \
+  M(4u, 2, 16u)                                                                \
+  M(0xffffu, 2, 0x3fffcu)                                                      \
+  M(0xffffffffu, 2, 0xfffffffcu)                                               \
+  M(kU32MaxInt32, 2, 0xfffffffcu)                                              \
+  M(kU32MinInt32, 2, 0x00000000u)                                              \
+  M(kU32MinusOne, 2, 0xfffffffcu)                                              \
+  M(0u, 31, 0u)                                                                \
+  M(1u, 31, 0x80000000u)                                                       \
+  M(4u, 31, 0x00000000u)                                                       \
+  M(0xffffu, 31, 0x80000000u)                                                  \
+  M(0xffffffffu, 31, 0x80000000u)                                              \
+  M(kU32MaxInt32, 31, 0x80000000u)                                             \
+  M(kU32MinInt32, 31, 0x00000000u)                                             \
+  M(kU32MinusOne, 31, 0x80000000u)
+
+#define SHIFT_32_IMMEDIATE_TEST(macro_op, val, shift, expected)                \
+  ASSEMBLER_TEST_GENERATE(macro_op##a_##val##_##shift, assembler) {            \
+    __ LoadImmediate(R1, bit_cast<int32_t>(val));                              \
+    __ macro_op(R0, R1, (shift), kFourBytes);                                  \
+    __ ret();                                                                  \
+  }                                                                            \
+                                                                               \
+  ASSEMBLER_TEST_RUN(macro_op##a_##val##_##shift, test) {                      \
+    typedef int32_t (*Int32Return)() DART_UNUSED;                              \
+    EXPECT_EQ((expected), bit_cast<uint32_t>((int32_t)EXECUTE_TEST_CODE_INT64( \
+                              Int32Return, test->entry())));                   \
+  }
+
+#define ASR_32_IMMEDIATE_TEST(val, shift, expected)                            \
+  SHIFT_32_IMMEDIATE_TEST(AsrImmediate, val, shift, expected)
+
+#define LSR_32_IMMEDIATE_TEST(val, shift, expected)                            \
+  SHIFT_32_IMMEDIATE_TEST(LsrImmediate, val, shift, expected)
+
+#define LSL_32_IMMEDIATE_TEST(val, shift, expected)                            \
+  SHIFT_32_IMMEDIATE_TEST(LslImmediate, val, shift, expected)
+
+FOR_EACH_ASR_32_TEST_CONFIG(ASR_32_IMMEDIATE_TEST)
+FOR_EACH_LSR_32_TEST_CONFIG(LSR_32_IMMEDIATE_TEST)
+FOR_EACH_LSL_32_TEST_CONFIG(LSL_32_IMMEDIATE_TEST)
+
+#undef LSL_32_IMMEDIATE_TEST
+#undef LSR_32_IMMEDIATE_TEST
+#undef ASR_32_IMMEDIATE_TEST
+#undef SHIFT_32_IMMEDIATE_TEST
+#undef FOR_EACH_LSL_32_TESTS_LIST
+#undef FOR_EACH_LSR_32_TESTS_LIST
+#undef FOR_EACH_ASR_32_TESTS_LIST
 
 ASSEMBLER_TEST_GENERATE(AndShiftRegs, assembler) {
   __ movz(R1, Immediate(42), 0);
@@ -790,6 +1277,57 @@ ASSEMBLER_TEST_GENERATE(Clz, assembler) {
 ASSEMBLER_TEST_RUN(Clz, test) {
   typedef int64_t (*Int64Return)() DART_UNUSED;
   EXPECT_EQ(0, EXECUTE_TEST_CODE_INT64(Int64Return, test->entry()));
+}
+
+ASSEMBLER_TEST_GENERATE(Clzw, assembler) {
+  Label error;
+
+  __ clzw(R1, ZR);
+  __ cmp(R1, Operand(32));
+  __ b(&error, NE);
+  __ LoadImmediate(R2, 42);
+  __ clzw(R2, R2);
+  __ cmp(R2, Operand(26));
+  __ b(&error, NE);
+  __ LoadImmediate(R0, -1);
+  __ clzw(R1, R0);
+  __ cmp(R1, Operand(0));
+  __ b(&error, NE);
+  __ add(R0, ZR, Operand(R0, LSR, 35));
+  __ clzw(R1, R0);
+  __ cmp(R1, Operand(3));
+  __ b(&error, NE);
+  __ LoadImmediate(R0, 0xFFFFFFFF0FFFFFFF);
+  __ clzw(R1, R0);
+  __ cmp(R1, Operand(4));
+  __ b(&error, NE);
+  __ LoadImmediate(R0, 0xFFFFFFFF);
+  __ clzw(R1, R0);
+  __ cmp(R1, Operand(0));
+  __ b(&error, NE);
+  __ mov(R0, ZR);
+  __ ret();
+  __ Bind(&error);
+  __ LoadImmediate(R0, 1);
+  __ ret();
+}
+
+ASSEMBLER_TEST_RUN(Clzw, test) {
+  typedef int64_t (*Int64Return)() DART_UNUSED;
+  EXPECT_EQ(0, EXECUTE_TEST_CODE_INT64(Int64Return, test->entry()));
+}
+
+ASSEMBLER_TEST_GENERATE(Rbit, assembler) {
+  const int64_t immediate = 0x0000000000000015;
+  __ LoadImmediate(R0, immediate);
+  __ rbit(R0, R0);
+  __ ret();
+}
+
+ASSEMBLER_TEST_RUN(Rbit, test) {
+  typedef int64_t (*Int64Return)() DART_UNUSED;
+  const int64_t expected = 0xa800000000000000;
+  EXPECT_EQ(expected, EXECUTE_TEST_CODE_INT64(Int64Return, test->entry()));
 }
 
 // Comparisons, branching.
@@ -1436,11 +1974,12 @@ ASSEMBLER_TEST_RUN(AdrBr, test) {
 
 ASSEMBLER_TEST_GENERATE(AdrBlr, assembler) {
   __ movz(R0, Immediate(123), 0);
-  __ add(R3, ZR, Operand(LR));  // Save LR.
+  SPILLS_RETURN_ADDRESS_FROM_LR_TO_REGISTER(
+      __ add(R3, ZR, Operand(LR)));  // Save LR.
   // R1 <- PC + 4*Instr::kInstrSize
   __ adr(R1, Immediate(4 * Instr::kInstrSize));
   __ blr(R1);
-  __ add(LR, ZR, Operand(R3));
+  RESTORES_RETURN_ADDRESS_FROM_REGISTER_TO_LR(__ add(LR, ZR, Operand(R3)));
   __ ret();
 
   // blr goes here.
@@ -1908,7 +2447,7 @@ ASSEMBLER_TEST_RUN(LoadImmediateMedNeg4, test) {
 }
 
 ASSEMBLER_TEST_GENERATE(LoadHalfWordUnaligned, assembler) {
-  __ LoadUnaligned(R1, R0, TMP, kHalfword);
+  __ ldr(R1, R0, kTwoBytes);
   __ mov(R0, R1);
   __ ret();
 }
@@ -1931,7 +2470,7 @@ ASSEMBLER_TEST_RUN(LoadHalfWordUnaligned, test) {
 }
 
 ASSEMBLER_TEST_GENERATE(LoadHalfWordUnsignedUnaligned, assembler) {
-  __ LoadUnaligned(R1, R0, TMP, kUnsignedHalfword);
+  __ ldr(R1, R0, kUnsignedTwoBytes);
   __ mov(R0, R1);
   __ ret();
 }
@@ -1953,7 +2492,7 @@ ASSEMBLER_TEST_RUN(LoadHalfWordUnsignedUnaligned, test) {
 
 ASSEMBLER_TEST_GENERATE(StoreHalfWordUnaligned, assembler) {
   __ LoadImmediate(R1, 0xABCD);
-  __ StoreUnaligned(R1, R0, TMP, kHalfword);
+  __ str(R1, R0, kTwoBytes);
   __ mov(R0, R1);
   __ ret();
 }
@@ -1981,7 +2520,7 @@ ASSEMBLER_TEST_RUN(StoreHalfWordUnaligned, test) {
 }
 
 ASSEMBLER_TEST_GENERATE(LoadWordUnaligned, assembler) {
-  __ LoadUnaligned(R1, R0, TMP, kUnsignedWord);
+  __ ldr(R1, R0, kUnsignedFourBytes);
   __ mov(R0, R1);
   __ ret();
 }
@@ -2011,7 +2550,7 @@ ASSEMBLER_TEST_RUN(LoadWordUnaligned, test) {
 
 ASSEMBLER_TEST_GENERATE(StoreWordUnaligned, assembler) {
   __ LoadImmediate(R1, 0x12345678);
-  __ StoreUnaligned(R1, R0, TMP, kUnsignedWord);
+  __ str(R1, R0, kUnsignedFourBytes);
   __ mov(R0, R1);
   __ ret();
 }
@@ -2058,17 +2597,19 @@ static void EnterTestFrame(Assembler* assembler) {
   __ EnterFrame(0);
   __ Push(CODE_REG);
   __ Push(THR);
-  __ Push(BARRIER_MASK);
+  __ Push(HEAP_BITS);
+  __ Push(NULL_REG);
   __ TagAndPushPP();
   __ ldr(CODE_REG, Address(R0, VMHandles::kOffsetOfRawPtrInHandle));
   __ mov(THR, R1);
-  __ ldr(BARRIER_MASK, Address(THR, Thread::write_barrier_mask_offset()));
+  __ RestorePinnedRegisters();
   __ LoadPoolPointer(PP);
 }
 
 static void LeaveTestFrame(Assembler* assembler) {
   __ PopAndUntagPP();
-  __ Pop(BARRIER_MASK);
+  __ Pop(NULL_REG);
+  __ Pop(HEAP_BITS);
   __ Pop(THR);
   __ Pop(CODE_REG);
   __ LeaveFrame();
@@ -2139,7 +2680,43 @@ ASSEMBLER_TEST_GENERATE(LoadObjectNull, assembler) {
 }
 
 ASSEMBLER_TEST_RUN(LoadObjectNull, test) {
-  EXPECT_EQ(Object::null(), test->InvokeWithCodeAndThread<RawObject*>());
+  EXPECT_EQ(static_cast<uword>(Object::null()),
+            test->InvokeWithCodeAndThread<uword>());
+}
+
+// PushObject null.
+ASSEMBLER_TEST_GENERATE(PushObjectNull, assembler) {
+  __ SetupDartSP();
+  EnterTestFrame(assembler);
+  __ PushObject(Object::null_object());
+  __ Pop(R0);
+  LeaveTestFrame(assembler);
+  __ RestoreCSP();
+  __ ret();
+}
+
+ASSEMBLER_TEST_RUN(PushObjectNull, test) {
+  EXPECT_EQ(static_cast<uword>(Object::null()),
+            test->InvokeWithCodeAndThread<uword>());
+}
+
+// CompareObject null.
+ASSEMBLER_TEST_GENERATE(CompareObjectNull, assembler) {
+  __ SetupDartSP();
+  EnterTestFrame(assembler);
+  __ LoadObject(R0, Object::bool_true());
+  __ LoadObject(R1, Object::bool_false());
+  __ ldr(R2, Address(THR, Thread::object_null_offset()));
+  __ CompareObject(R2, Object::null_object());
+  __ csel(R0, R0, R1, EQ);
+  LeaveTestFrame(assembler);
+  __ RestoreCSP();
+  __ ret();
+}
+
+ASSEMBLER_TEST_RUN(CompareObjectNull, test) {
+  EXPECT_EQ(static_cast<uword>(Bool::True().ptr()),
+            test->InvokeWithCodeAndThread<uword>());
 }
 
 ASSEMBLER_TEST_GENERATE(LoadObjectTrue, assembler) {
@@ -2152,7 +2729,8 @@ ASSEMBLER_TEST_GENERATE(LoadObjectTrue, assembler) {
 }
 
 ASSEMBLER_TEST_RUN(LoadObjectTrue, test) {
-  EXPECT_EQ(Bool::True().raw(), test->InvokeWithCodeAndThread<RawObject*>());
+  EXPECT_EQ(static_cast<uword>(Bool::True().ptr()),
+            test->InvokeWithCodeAndThread<uword>());
 }
 
 ASSEMBLER_TEST_GENERATE(LoadObjectFalse, assembler) {
@@ -2165,7 +2743,8 @@ ASSEMBLER_TEST_GENERATE(LoadObjectFalse, assembler) {
 }
 
 ASSEMBLER_TEST_RUN(LoadObjectFalse, test) {
-  EXPECT_EQ(Bool::False().raw(), test->InvokeWithCodeAndThread<RawObject*>());
+  EXPECT_EQ(static_cast<uword>(Bool::False().ptr()),
+            test->InvokeWithCodeAndThread<uword>());
 }
 
 ASSEMBLER_TEST_GENERATE(CSelTrue, assembler) {
@@ -2520,11 +3099,12 @@ ASSEMBLER_TEST_RUN(Fmovsr, test) {
 ASSEMBLER_TEST_GENERATE(FldrdFstrdPrePostIndex, assembler) {
   __ SetupDartSP();
 
-  __ sub(CSP, CSP, Operand(2 * kWordSize));  // Must not access beyond CSP.
+  __ sub(CSP, CSP,
+         Operand(2 * target::kWordSize));  // Must not access beyond CSP.
 
   __ LoadDImmediate(V1, 42.0);
-  __ fstrd(V1, Address(SP, -1 * kWordSize, Address::PreIndex));
-  __ fldrd(V0, Address(SP, 1 * kWordSize, Address::PostIndex));
+  __ fstrd(V1, Address(SP, -1 * target::kWordSize, Address::PreIndex));
+  __ fldrd(V0, Address(SP, 1 * target::kWordSize, Address::PostIndex));
   __ RestoreCSP();
   __ ret();
 }
@@ -2537,12 +3117,13 @@ ASSEMBLER_TEST_RUN(FldrdFstrdPrePostIndex, test) {
 ASSEMBLER_TEST_GENERATE(FldrsFstrsPrePostIndex, assembler) {
   __ SetupDartSP();
 
-  __ sub(CSP, CSP, Operand(2 * kWordSize));  // Must not access beyond CSP.
+  __ sub(CSP, CSP,
+         Operand(2 * target::kWordSize));  // Must not access beyond CSP.
 
   __ LoadDImmediate(V1, 42.0);
   __ fcvtsd(V2, V1);
-  __ fstrs(V2, Address(SP, -1 * kWordSize, Address::PreIndex));
-  __ fldrs(V3, Address(SP, 1 * kWordSize, Address::PostIndex));
+  __ fstrs(V2, Address(SP, -1 * target::kWordSize, Address::PreIndex));
+  __ fldrs(V3, Address(SP, 1 * target::kWordSize, Address::PostIndex));
   __ fcvtds(V0, V3);
   __ RestoreCSP();
   __ ret();
@@ -2556,7 +3137,8 @@ ASSEMBLER_TEST_RUN(FldrsFstrsPrePostIndex, test) {
 ASSEMBLER_TEST_GENERATE(FldrqFstrqPrePostIndex, assembler) {
   __ SetupDartSP();
 
-  __ sub(CSP, CSP, Operand(2 * kWordSize));  // Must not access beyond CSP.
+  __ sub(CSP, CSP,
+         Operand(2 * target::kWordSize));  // Must not access beyond CSP.
 
   __ LoadDImmediate(V1, 21.0);
   __ LoadDImmediate(V2, 21.0);
@@ -2564,9 +3146,9 @@ ASSEMBLER_TEST_GENERATE(FldrqFstrqPrePostIndex, assembler) {
   __ Push(R1);
   __ PushDouble(V1);
   __ PushDouble(V2);
-  __ fldrq(V3, Address(SP, 2 * kWordSize, Address::PostIndex));
+  __ fldrq(V3, Address(SP, 2 * target::kWordSize, Address::PostIndex));
   __ Pop(R0);
-  __ fstrq(V3, Address(SP, -2 * kWordSize, Address::PreIndex));
+  __ fstrq(V3, Address(SP, -2 * target::kWordSize, Address::PreIndex));
   __ PopDouble(V0);
   __ PopDouble(V1);
   __ faddd(V0, V0, V1);
@@ -2579,15 +3161,71 @@ ASSEMBLER_TEST_RUN(FldrqFstrqPrePostIndex, test) {
   EXPECT_EQ(42.0, EXECUTE_TEST_CODE_DOUBLE(DoubleReturn, test->entry()));
 }
 
-ASSEMBLER_TEST_GENERATE(Fcvtzds, assembler) {
+ASSEMBLER_TEST_GENERATE(Fcvtzdsx, assembler) {
   __ LoadDImmediate(V0, 42.0);
-  __ fcvtzds(R0, V0);
+  __ fcvtzdsx(R0, V0);
   __ ret();
 }
 
-ASSEMBLER_TEST_RUN(Fcvtzds, test) {
+ASSEMBLER_TEST_RUN(Fcvtzdsx, test) {
   typedef int64_t (*Int64Return)() DART_UNUSED;
   EXPECT_EQ(42, EXECUTE_TEST_CODE_INT64(Int64Return, test->entry()));
+}
+
+ASSEMBLER_TEST_GENERATE(Fcvtzdsw, assembler) {
+  __ LoadDImmediate(V0, 42.0);
+  __ fcvtzdsw(R0, V0);
+  __ ret();
+}
+
+ASSEMBLER_TEST_RUN(Fcvtzdsw, test) {
+  typedef int64_t (*Int64Return)() DART_UNUSED;
+  EXPECT_EQ(42, EXECUTE_TEST_CODE_INT64(Int64Return, test->entry()));
+}
+
+ASSEMBLER_TEST_GENERATE(Fcvtzdsx_overflow, assembler) {
+  __ LoadDImmediate(V0, 1e20);
+  __ fcvtzdsx(R0, V0);
+  __ ret();
+}
+
+ASSEMBLER_TEST_RUN(Fcvtzdsx_overflow, test) {
+  typedef int64_t (*Int64Return)() DART_UNUSED;
+  EXPECT_EQ(kMaxInt64, EXECUTE_TEST_CODE_INT64(Int64Return, test->entry()));
+}
+
+ASSEMBLER_TEST_GENERATE(Fcvtzdsx_overflow_negative, assembler) {
+  __ LoadDImmediate(V0, -1e20);
+  __ fcvtzdsx(R0, V0);
+  __ ret();
+}
+
+ASSEMBLER_TEST_RUN(Fcvtzdsx_overflow_negative, test) {
+  typedef int64_t (*Int64Return)() DART_UNUSED;
+  EXPECT_EQ(kMinInt64, EXECUTE_TEST_CODE_INT64(Int64Return, test->entry()));
+}
+
+ASSEMBLER_TEST_GENERATE(Fcvtzdsw_overflow, assembler) {
+  __ LoadDImmediate(V0, 1e10);
+  __ fcvtzdsw(R0, V0);
+  __ ret();
+}
+
+ASSEMBLER_TEST_RUN(Fcvtzdsw_overflow, test) {
+  typedef int64_t (*Int64Return)() DART_UNUSED;
+  EXPECT_EQ(kMaxInt32, EXECUTE_TEST_CODE_INT64(Int64Return, test->entry()));
+}
+
+ASSEMBLER_TEST_GENERATE(Fcvtzdsw_overflow_negative, assembler) {
+  __ LoadDImmediate(V0, -1e10);
+  __ fcvtzdsw(R0, V0);
+  __ sxtw(R0, R0);
+  __ ret();
+}
+
+ASSEMBLER_TEST_RUN(Fcvtzdsw_overflow_negative, test) {
+  typedef int64_t (*Int64Return)() DART_UNUSED;
+  EXPECT_EQ(kMinInt32, EXECUTE_TEST_CODE_INT64(Int64Return, test->entry()));
 }
 
 ASSEMBLER_TEST_GENERATE(Scvtfdx, assembler) {
@@ -2720,11 +3358,11 @@ ASSEMBLER_TEST_GENERATE(FldrdFstrdHeapTag, assembler) {
   __ SetupDartSP();
   __ LoadDImmediate(V0, 43.0);
   __ LoadDImmediate(V1, 42.0);
-  __ AddImmediate(SP, SP, -1 * kWordSize);
+  __ AddImmediate(SP, SP, -1 * target::kWordSize);
   __ add(R2, SP, Operand(1));
   __ fstrd(V1, Address(R2, -1));
   __ fldrd(V0, Address(R2, -1));
-  __ AddImmediate(SP, 1 * kWordSize);
+  __ AddImmediate(SP, 1 * target::kWordSize);
   __ RestoreCSP();
   __ ret();
 }
@@ -2737,16 +3375,17 @@ ASSEMBLER_TEST_RUN(FldrdFstrdHeapTag, test) {
 ASSEMBLER_TEST_GENERATE(FldrdFstrdLargeIndex, assembler) {
   __ SetupDartSP();
 
-  __ sub(CSP, CSP, Operand(32 * kWordSize));  // Must not access beyond CSP.
+  __ sub(CSP, CSP,
+         Operand(32 * target::kWordSize));  // Must not access beyond CSP.
 
   __ LoadDImmediate(V0, 43.0);
   __ LoadDImmediate(V1, 42.0);
   // Largest negative offset that can fit in the signed 9-bit immediate field.
-  __ fstrd(V1, Address(SP, -32 * kWordSize, Address::PreIndex));
+  __ fstrd(V1, Address(SP, -32 * target::kWordSize, Address::PreIndex));
   // Largest positive kWordSize aligned offset that we can fit.
-  __ fldrd(V0, Address(SP, 31 * kWordSize, Address::PostIndex));
+  __ fldrd(V0, Address(SP, 31 * target::kWordSize, Address::PostIndex));
   // Correction.
-  __ add(SP, SP, Operand(kWordSize));  // Restore SP.
+  __ add(SP, SP, Operand(target::kWordSize));  // Restore SP.
   __ RestoreCSP();
   __ ret();
 }
@@ -2760,10 +3399,10 @@ ASSEMBLER_TEST_GENERATE(FldrdFstrdLargeOffset, assembler) {
   __ SetupDartSP();
   __ LoadDImmediate(V0, 43.0);
   __ LoadDImmediate(V1, 42.0);
-  __ sub(SP, SP, Operand(512 * kWordSize));
+  __ sub(SP, SP, Operand(512 * target::kWordSize));
   __ andi(CSP, SP, Immediate(~15));  // Must not access beyond CSP.
-  __ fstrd(V1, Address(SP, 512 * kWordSize, Address::Offset));
-  __ add(SP, SP, Operand(512 * kWordSize));
+  __ fstrd(V1, Address(SP, 512 * target::kWordSize, Address::Offset));
+  __ add(SP, SP, Operand(512 * target::kWordSize));
   __ fldrd(V0, Address(SP));
   __ RestoreCSP();
   __ ret();
@@ -2783,10 +3422,10 @@ ASSEMBLER_TEST_GENERATE(FldrdFstrdExtReg, assembler) {
   // This should sign extend R2, and add to SP to get address,
   // i.e. SP - kWordSize.
   __ fstrd(V1, Address(SP, R2, SXTW));
-  __ sub(SP, SP, Operand(kWordSize));
+  __ sub(SP, SP, Operand(target::kWordSize));
   __ andi(CSP, SP, Immediate(~15));  // Must not access beyond CSP.
   __ fldrd(V0, Address(SP));
-  __ add(SP, SP, Operand(kWordSize));
+  __ add(SP, SP, Operand(target::kWordSize));
   __ RestoreCSP();
   __ ret();
 }
@@ -2801,12 +3440,12 @@ ASSEMBLER_TEST_GENERATE(FldrdFstrdScaledReg, assembler) {
   __ LoadDImmediate(V0, 43.0);
   __ LoadDImmediate(V1, 42.0);
   __ movz(R2, Immediate(10), 0);
-  __ sub(SP, SP, Operand(10 * kWordSize));
+  __ sub(SP, SP, Operand(10 * target::kWordSize));
   __ andi(CSP, SP, Immediate(~15));  // Must not access beyond CSP.
   // Store V1 into SP + R2 * kWordSize.
   __ fstrd(V1, Address(SP, R2, UXTX, Address::Scaled));
   __ fldrd(V0, Address(SP, R2, UXTX, Address::Scaled));
-  __ add(SP, SP, Operand(10 * kWordSize));
+  __ add(SP, SP, Operand(10 * target::kWordSize));
   __ RestoreCSP();
   __ ret();
 }
@@ -4093,20 +4732,130 @@ ASSEMBLER_TEST_GENERATE(StoreIntoObject, assembler) {
   __ SetupDartSP();
   __ Push(CODE_REG);
   __ Push(THR);
-  __ Push(BARRIER_MASK);
-  __ Push(LR);
+  __ Push(HEAP_BITS);
+  SPILLS_LR_TO_FRAME(__ Push(LR));
   __ mov(THR, R2);
-  __ ldr(BARRIER_MASK, Address(THR, Thread::write_barrier_mask_offset()));
+  __ ldr(HEAP_BITS, Address(THR, Thread::write_barrier_mask_offset()));
+  __ LslImmediate(HEAP_BITS, HEAP_BITS, 32);
   __ StoreIntoObject(R1, FieldAddress(R1, GrowableObjectArray::data_offset()),
                      R0);
-  __ Pop(LR);
-  __ Pop(BARRIER_MASK);
+  RESTORES_LR_FROM_FRAME(__ Pop(LR));
+  __ Pop(HEAP_BITS);
   __ Pop(THR);
   __ Pop(CODE_REG);
   __ RestoreCSP();
   __ ret();
 }
 
+// Push numbers from kMaxPushedNumber to 0 to the stack then drop top
+// kMaxPushedNumber elements. This should leave just kMaxPushedNumber on the
+// stack.
+const intptr_t kMaxPushedNumber = 913;
+
+ASSEMBLER_TEST_GENERATE(Drop, assembler) {
+  __ SetupDartSP((kMaxPushedNumber + 1) * target::kWordSize);
+  for (intptr_t i = kMaxPushedNumber; i >= 0; i--) {
+    __ PushImmediate(i);
+  }
+  __ Drop(kMaxPushedNumber);
+  __ PopRegister(R0);
+  __ RestoreCSP();
+  __ ret();
+}
+
+ASSEMBLER_TEST_RUN(Drop, test) {
+  EXPECT(test != NULL);
+  typedef int64_t (*Int64Return)() DART_UNUSED;
+  EXPECT_EQ(kMaxPushedNumber,
+            EXECUTE_TEST_CODE_INT64(Int64Return, test->entry()));
+}
+
+ASSEMBLER_TEST_GENERATE(AndImmediate32Negative, assembler) {
+  __ AndImmediate(R0, R0, -512, kFourBytes);
+  __ ret();
+}
+
+ASSEMBLER_TEST_RUN(AndImmediate32Negative, test) {
+  typedef intptr_t (*IntPtrReturn)(intptr_t) DART_UNUSED;
+  EXPECT_EQ(0xfffffe00,
+            EXECUTE_TEST_CODE_INTPTR_INTPTR(IntPtrReturn, test->entry(), -42));
+  EXPECT_EQ(0, EXECUTE_TEST_CODE_INTPTR_INTPTR(IntPtrReturn, test->entry(), 0));
+  EXPECT_EQ(0,
+            EXECUTE_TEST_CODE_INTPTR_INTPTR(IntPtrReturn, test->entry(), 42));
+}
+
+ASSEMBLER_TEST_GENERATE(OrImmediate32Negative, assembler) {
+  __ OrImmediate(R0, R0, -512, kFourBytes);
+  __ ret();
+}
+
+ASSEMBLER_TEST_RUN(OrImmediate32Negative, test) {
+  typedef intptr_t (*IntPtrReturn)(intptr_t) DART_UNUSED;
+  EXPECT_EQ(0xffffffd6,
+            EXECUTE_TEST_CODE_INTPTR_INTPTR(IntPtrReturn, test->entry(), -42));
+  EXPECT_EQ(0xfffffe00,
+            EXECUTE_TEST_CODE_INTPTR_INTPTR(IntPtrReturn, test->entry(), 0));
+  EXPECT_EQ(0xfffffe2a,
+            EXECUTE_TEST_CODE_INTPTR_INTPTR(IntPtrReturn, test->entry(), 42));
+}
+
+ASSEMBLER_TEST_GENERATE(XorImmediate32Negative, assembler) {
+  __ XorImmediate(R0, R0, -512, kFourBytes);
+  __ ret();
+}
+
+ASSEMBLER_TEST_RUN(XorImmediate32Negative, test) {
+  typedef intptr_t (*IntPtrReturn)(intptr_t) DART_UNUSED;
+  EXPECT_EQ(0x1d6,
+            EXECUTE_TEST_CODE_INTPTR_INTPTR(IntPtrReturn, test->entry(), -42));
+  EXPECT_EQ(0xfffffe00,
+            EXECUTE_TEST_CODE_INTPTR_INTPTR(IntPtrReturn, test->entry(), 0));
+  EXPECT_EQ(0xfffffe2a,
+            EXECUTE_TEST_CODE_INTPTR_INTPTR(IntPtrReturn, test->entry(), 42));
+}
+
+ASSEMBLER_TEST_GENERATE(TestImmediate32Negative, assembler) {
+  Label on_zero;
+  __ TestImmediate(R0, -512, kFourBytes);
+  __ b(&on_zero, EQ);
+  __ LoadImmediate(R0, 1);
+  __ ret();
+  __ Bind(&on_zero);
+  __ LoadImmediate(R0, 0);
+  __ ret();
+}
+
+ASSEMBLER_TEST_RUN(TestImmediate32Negative, test) {
+  typedef intptr_t (*IntPtrReturn)(intptr_t) DART_UNUSED;
+  EXPECT_EQ(1,
+            EXECUTE_TEST_CODE_INTPTR_INTPTR(IntPtrReturn, test->entry(), -42));
+  EXPECT_EQ(0, EXECUTE_TEST_CODE_INTPTR_INTPTR(IntPtrReturn, test->entry(), 0));
+  EXPECT_EQ(0,
+            EXECUTE_TEST_CODE_INTPTR_INTPTR(IntPtrReturn, test->entry(), 42));
+}
+
+ASSEMBLER_TEST_GENERATE(CompareImmediate32Negative, assembler) {
+  Label on_zero;
+  __ CompareImmediate(R0, -512, kFourBytes);
+  __ b(&on_zero, LT);
+  __ LoadImmediate(R0, 0);
+  __ ret();
+  __ Bind(&on_zero);
+  __ LoadImmediate(R0, 1);
+  __ ret();
+}
+
+ASSEMBLER_TEST_RUN(CompareImmediate32Negative, test) {
+  typedef intptr_t (*IntPtrReturn)(intptr_t) DART_UNUSED;
+  EXPECT_EQ(1,
+            EXECUTE_TEST_CODE_INTPTR_INTPTR(IntPtrReturn, test->entry(), -513));
+  EXPECT_EQ(0,
+            EXECUTE_TEST_CODE_INTPTR_INTPTR(IntPtrReturn, test->entry(), -512));
+  EXPECT_EQ(0,
+            EXECUTE_TEST_CODE_INTPTR_INTPTR(IntPtrReturn, test->entry(), -511));
+}
+
+}  // namespace compiler
 }  // namespace dart
 
 #endif  // defined(TARGET_ARCH_ARM64)

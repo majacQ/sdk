@@ -2,8 +2,6 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-#if !defined(DART_PRECOMPILED_RUNTIME)
-
 #include "vm/compiler/backend/flow_graph.h"
 
 #include "vm/bit_vector.h"
@@ -14,6 +12,7 @@
 #include "vm/compiler/backend/range_analysis.h"
 #include "vm/compiler/cha.h"
 #include "vm/compiler/compiler_state.h"
+#include "vm/compiler/compiler_timings.h"
 #include "vm/compiler/frontend/flow_graph_builder.h"
 #include "vm/growable_array.h"
 #include "vm/object_store.h"
@@ -27,7 +26,6 @@ DEFINE_FLAG(bool, use_smi_widening, false, "Enable Smi->Int32 widening pass.");
 DEFINE_FLAG(bool, trace_smi_widening, false, "Trace Smi->Int32 widening pass.");
 #endif
 DEFINE_FLAG(bool, prune_dead_locals, true, "optimize dead locals away");
-DECLARE_FLAG(bool, verify_compiler);
 
 // Quick access to the current zone.
 #define Z (zone())
@@ -44,6 +42,7 @@ FlowGraph::FlowGraph(const ParsedFunction& parsed_function,
       num_direct_parameters_(parsed_function.function().HasOptionalParameters()
                                  ? 0
                                  : parsed_function.function().NumParameters()),
+      direct_parameters_size_(0),
       graph_entry_(graph_entry),
       preorder_(),
       postorder_(),
@@ -55,17 +54,92 @@ FlowGraph::FlowGraph(const ParsedFunction& parsed_function,
       prologue_info_(prologue_info),
       loop_hierarchy_(nullptr),
       loop_invariant_loads_(nullptr),
-      deferred_prefixes_(parsed_function.deferred_prefixes()),
-      await_token_positions_(nullptr),
       captured_parameters_(new (zone()) BitVector(zone(), variable_count())),
       inlining_id_(-1),
       should_print_(FlowGraphPrinter::ShouldPrint(parsed_function.function())) {
+  direct_parameters_size_ = ParameterOffsetAt(
+      function(), num_direct_parameters_, /*last_slot*/ false);
   DiscoverBlocks();
 }
 
 void FlowGraph::EnsureSSATempIndex(Definition* defn, Definition* replacement) {
   if ((replacement->ssa_temp_index() == -1) && (defn->ssa_temp_index() != -1)) {
     AllocateSSAIndexes(replacement);
+  }
+}
+
+intptr_t FlowGraph::ParameterOffsetAt(const Function& function,
+                                      intptr_t index,
+                                      bool last_slot /*=true*/) {
+  ASSERT(index <= function.NumParameters());
+  intptr_t param_offset = 0;
+  for (intptr_t i = 0; i < index; i++) {
+    if (function.is_unboxed_integer_parameter_at(i)) {
+      param_offset += compiler::target::kIntSpillFactor;
+    } else if (function.is_unboxed_double_parameter_at(i)) {
+      param_offset += compiler::target::kDoubleSpillFactor;
+    } else {
+      ASSERT(!function.is_unboxed_parameter_at(i));
+      // Unboxed parameters always occupy one word
+      param_offset++;
+    }
+  }
+  if (last_slot) {
+    ASSERT(index < function.NumParameters());
+    if (function.is_unboxed_double_parameter_at(index) &&
+        compiler::target::kDoubleSpillFactor > 1) {
+      ASSERT(compiler::target::kDoubleSpillFactor == 2);
+      param_offset++;
+    } else if (function.is_unboxed_integer_parameter_at(index) &&
+               compiler::target::kIntSpillFactor > 1) {
+      ASSERT(compiler::target::kIntSpillFactor == 2);
+      param_offset++;
+    }
+  }
+  return param_offset;
+}
+
+Representation FlowGraph::ParameterRepresentationAt(const Function& function,
+                                                    intptr_t index) {
+  if (function.IsNull()) {
+    return kTagged;
+  }
+  ASSERT(index < function.NumParameters());
+  if (function.is_unboxed_integer_parameter_at(index)) {
+    return kUnboxedInt64;
+  } else if (function.is_unboxed_double_parameter_at(index)) {
+    return kUnboxedDouble;
+  } else {
+    ASSERT(!function.is_unboxed_parameter_at(index));
+    return kTagged;
+  }
+}
+
+Representation FlowGraph::ReturnRepresentationOf(const Function& function) {
+  if (function.IsNull()) {
+    return kTagged;
+  }
+  if (function.has_unboxed_integer_return()) {
+    return kUnboxedInt64;
+  } else if (function.has_unboxed_double_return()) {
+    return kUnboxedDouble;
+  } else {
+    ASSERT(!function.has_unboxed_return());
+    return kTagged;
+  }
+}
+
+Representation FlowGraph::UnboxedFieldRepresentationOf(const Field& field) {
+  switch (field.UnboxedFieldCid()) {
+    case kDoubleCid:
+      return kUnboxedDouble;
+    case kFloat32x4Cid:
+      return kUnboxedFloat32x4;
+    case kFloat64x2Cid:
+      return kUnboxedFloat64x2;
+    default:
+      RELEASE_ASSERT(field.is_non_nullable_integer());
+      return kUnboxedInt64;
   }
 }
 
@@ -93,37 +167,15 @@ void FlowGraph::ReplaceCurrentInstruction(ForwardInstructionIterator* iterator,
     }
   }
   if (current->ArgumentCount() != 0) {
-    // Replacing a call instruction with something else.  Must remove
-    // superfluous push arguments.
-    for (intptr_t i = 0; i < current->ArgumentCount(); ++i) {
-      PushArgumentInstr* push = current->PushArgumentAt(i);
-      if (replacement == NULL || i >= replacement->ArgumentCount() ||
-          replacement->PushArgumentAt(i) != push) {
-        push->ReplaceUsesWith(push->value()->definition());
-        push->RemoveFromGraph();
-      }
-    }
+    ASSERT(!current->HasPushArguments());
   }
   iterator->RemoveCurrentFromGraph();
 }
 
-void FlowGraph::AddToDeferredPrefixes(
-    ZoneGrowableArray<const LibraryPrefix*>* from) {
-  ZoneGrowableArray<const LibraryPrefix*>* to = deferred_prefixes();
-  for (intptr_t i = 0; i < from->length(); i++) {
-    const LibraryPrefix* prefix = (*from)[i];
-    for (intptr_t j = 0; j < to->length(); j++) {
-      if ((*to)[j]->raw() == prefix->raw()) {
-        return;
-      }
-    }
-    to->Add(prefix);
-  }
-}
-
 bool FlowGraph::ShouldReorderBlocks(const Function& function,
                                     bool is_optimized) {
-  return is_optimized && FLAG_reorder_basic_blocks && !function.is_intrinsic();
+  return is_optimized && FLAG_reorder_basic_blocks &&
+         !function.is_intrinsic() && !function.IsFfiTrampoline();
 }
 
 GrowableArray<BlockEntryInstr*>* FlowGraph::CodegenBlockOrder(
@@ -132,17 +184,82 @@ GrowableArray<BlockEntryInstr*>* FlowGraph::CodegenBlockOrder(
                                                        : &reverse_postorder_;
 }
 
-ConstantInstr* FlowGraph::GetConstant(const Object& object) {
-  ConstantInstr* constant = constant_instr_pool_.LookupValue(object);
-  if (constant == NULL) {
+ConstantInstr* FlowGraph::GetExistingConstant(
+    const Object& object,
+    Representation representation) const {
+  return constant_instr_pool_.LookupValue(
+      ConstantAndRepresentation{object, representation});
+}
+
+ConstantInstr* FlowGraph::GetConstant(const Object& object,
+                                      Representation representation) {
+  ConstantInstr* constant = GetExistingConstant(object, representation);
+  if (constant == nullptr) {
     // Otherwise, allocate and add it to the pool.
-    constant =
-        new (zone()) ConstantInstr(Object::ZoneHandle(zone(), object.raw()));
+    const Object& zone_object = Object::ZoneHandle(zone(), object.ptr());
+    if (representation == kTagged) {
+      constant = new (zone()) ConstantInstr(zone_object);
+    } else {
+      constant = new (zone()) UnboxedConstantInstr(zone_object, representation);
+    }
     constant->set_ssa_temp_index(alloc_ssa_temp_index());
+    if (NeedsPairLocation(constant->representation())) {
+      alloc_ssa_temp_index();
+    }
     AddToGraphInitialDefinitions(constant);
     constant_instr_pool_.Insert(constant);
   }
   return constant;
+}
+
+bool FlowGraph::IsConstantRepresentable(const Object& value,
+                                        Representation target_rep,
+                                        bool tagged_value_must_be_smi) {
+  switch (target_rep) {
+    case kTagged:
+      return !tagged_value_must_be_smi || value.IsSmi();
+
+    case kUnboxedInt32:
+      if (value.IsInteger()) {
+        return Utils::IsInt(32, Integer::Cast(value).AsInt64Value());
+      }
+      return false;
+
+    case kUnboxedUint32:
+      if (value.IsInteger()) {
+        return Utils::IsUint(32, Integer::Cast(value).AsInt64Value());
+      }
+      return false;
+
+    case kUnboxedInt64:
+      return value.IsInteger();
+
+    case kUnboxedDouble:
+      return value.IsInteger() || value.IsDouble();
+
+    default:
+      return false;
+  }
+}
+
+Definition* FlowGraph::TryCreateConstantReplacementFor(Definition* op,
+                                                       const Object& value) {
+  // Check that representation of the constant matches expected representation.
+  const auto representation = op->representation();
+  if (!IsConstantRepresentable(
+          value, representation,
+          /*tagged_value_must_be_smi=*/op->Type()->IsNullableSmi())) {
+    return op;
+  }
+
+  if (representation == kUnboxedDouble && value.IsInteger()) {
+    // Convert the boxed constant from int to double.
+    return GetConstant(Double::Handle(Double::NewCanonical(
+                           Integer::Cast(value).AsDoubleValue())),
+                       kUnboxedDouble);
+  }
+
+  return GetConstant(value, representation);
 }
 
 void FlowGraph::AddToGraphInitialDefinitions(Definition* defn) {
@@ -153,14 +270,10 @@ void FlowGraph::AddToGraphInitialDefinitions(Definition* defn) {
 void FlowGraph::AddToInitialDefinitions(BlockEntryWithInitialDefs* entry,
                                         Definition* defn) {
   defn->set_previous(entry);
+  if (auto par = defn->AsParameter()) {
+    par->set_block(entry);  // set cached block
+  }
   entry->initial_definitions()->Add(defn);
-}
-
-void FlowGraph::InsertBefore(Instruction* next,
-                             Instruction* instr,
-                             Environment* env,
-                             UseKind use_kind) {
-  InsertAfter(next->previous(), instr, env, use_kind);
 }
 
 void FlowGraph::InsertAfter(Instruction* prev,
@@ -178,6 +291,16 @@ void FlowGraph::InsertAfter(Instruction* prev,
   }
 }
 
+void FlowGraph::InsertSpeculativeAfter(Instruction* prev,
+                                       Instruction* instr,
+                                       Environment* env,
+                                       UseKind use_kind) {
+  InsertAfter(prev, instr, env, use_kind);
+  if (instr->env() != nullptr) {
+    instr->env()->MarkAsLazyDeoptToBeforeDeoptId();
+  }
+}
+
 Instruction* FlowGraph::AppendTo(Instruction* prev,
                                  Instruction* instr,
                                  Environment* env,
@@ -191,6 +314,16 @@ Instruction* FlowGraph::AppendTo(Instruction* prev,
     env->DeepCopyTo(zone(), instr);
   }
   return prev->AppendInstruction(instr);
+}
+Instruction* FlowGraph::AppendSpeculativeTo(Instruction* prev,
+                                            Instruction* instr,
+                                            Environment* env,
+                                            UseKind use_kind) {
+  auto result = AppendTo(prev, instr, env, use_kind);
+  if (instr->env() != nullptr) {
+    instr->env()->MarkAsLazyDeoptToBeforeDeoptId();
+  }
+  return result;
 }
 
 // A wrapper around block entries including an index of the next successor to
@@ -217,6 +350,8 @@ class BlockTraversalState {
 };
 
 void FlowGraph::DiscoverBlocks() {
+  COMPILER_TIMINGS_TIMER_SCOPE(thread(), DiscoverBlocks);
+
   StackZone zone(thread());
 
   // Initialize state.
@@ -267,13 +402,19 @@ void FlowGraph::MergeBlocks() {
     if (merged->Contains(block->postorder_number())) continue;
 
     Instruction* last = block->last_instruction();
-    BlockEntryInstr* successor = NULL;
-    while ((!last->IsIndirectGoto()) && (last->SuccessorCount() == 1) &&
-           (!last->SuccessorAt(0)->IsIndirectEntry()) &&
-           (last->SuccessorAt(0)->PredecessorCount() == 1) &&
-           (block->try_index() == last->SuccessorAt(0)->try_index())) {
-      successor = last->SuccessorAt(0);
-      ASSERT(last->IsGoto());
+    BlockEntryInstr* last_merged_block = nullptr;
+    while (auto goto_instr = last->AsGoto()) {
+      JoinEntryInstr* successor = goto_instr->successor();
+      if (successor->PredecessorCount() > 1) break;
+      if (block->try_index() != successor->try_index()) break;
+
+      // Replace all phis with their arguments prior to removing successor.
+      for (PhiIterator it(successor); !it.Done(); it.Advance()) {
+        PhiInstr* phi = it.Current();
+        Value* input = phi->InputAt(0);
+        phi->ReplaceUsesWith(input->definition());
+        input->RemoveFromUseList();
+      }
 
       // Remove environment uses and unlink goto and block entry.
       successor->UnuseAllInputs();
@@ -282,94 +423,21 @@ void FlowGraph::MergeBlocks() {
 
       last = successor->last_instruction();
       merged->Add(successor->postorder_number());
+      last_merged_block = successor;
       changed = true;
       if (FLAG_trace_optimization) {
-        OS::PrintErr("Merged blocks B%" Pd " and B%" Pd "\n", block->block_id(),
-                     successor->block_id());
+        THR_Print("Merged blocks B%" Pd " and B%" Pd "\n", block->block_id(),
+                  successor->block_id());
       }
     }
     // The new block inherits the block id of the last successor to maintain
     // the order of phi inputs at its successors consistent with block ids.
-    if (successor != NULL) {
-      block->set_block_id(successor->block_id());
+    if (last_merged_block != nullptr) {
+      block->set_block_id(last_merged_block->block_id());
     }
   }
   // Recompute block order after changes were made.
   if (changed) DiscoverBlocks();
-}
-
-// Debugging code to verify the construction of use lists.
-static intptr_t MembershipCount(Value* use, Value* list) {
-  intptr_t count = 0;
-  while (list != NULL) {
-    if (list == use) ++count;
-    list = list->next_use();
-  }
-  return count;
-}
-
-static void VerifyUseListsInInstruction(Instruction* instr) {
-  ASSERT(instr != NULL);
-  ASSERT(!instr->IsJoinEntry());
-  for (intptr_t i = 0; i < instr->InputCount(); ++i) {
-    Value* use = instr->InputAt(i);
-    ASSERT(use->definition() != NULL);
-    ASSERT((use->definition() != instr) || use->definition()->IsPhi() ||
-           use->definition()->IsMaterializeObject());
-    ASSERT(use->instruction() == instr);
-    ASSERT(use->use_index() == i);
-    ASSERT(!FLAG_verify_compiler ||
-           (1 == MembershipCount(use, use->definition()->input_use_list())));
-  }
-  if (instr->env() != NULL) {
-    intptr_t use_index = 0;
-    for (Environment::DeepIterator it(instr->env()); !it.Done(); it.Advance()) {
-      Value* use = it.CurrentValue();
-      ASSERT(use->definition() != NULL);
-      ASSERT((use->definition() != instr) || use->definition()->IsPhi());
-      ASSERT(use->instruction() == instr);
-      ASSERT(use->use_index() == use_index++);
-      ASSERT(!FLAG_verify_compiler ||
-             (1 == MembershipCount(use, use->definition()->env_use_list())));
-    }
-  }
-  Definition* defn = instr->AsDefinition();
-  if (defn != NULL) {
-    // Used definitions must have an SSA name.  We use the name to index
-    // into bit vectors during analyses.  Some definitions without SSA names
-    // (e.g., PushArgument) have environment uses.
-    ASSERT((defn->input_use_list() == NULL) || defn->HasSSATemp());
-    Value* prev = NULL;
-    Value* curr = defn->input_use_list();
-    while (curr != NULL) {
-      ASSERT(prev == curr->previous_use());
-      ASSERT(defn == curr->definition());
-      Instruction* instr = curr->instruction();
-      // The instruction should not be removed from the graph.
-      ASSERT((instr->IsPhi() && instr->AsPhi()->is_alive()) ||
-             (instr->previous() != NULL));
-      ASSERT(curr == instr->InputAt(curr->use_index()));
-      prev = curr;
-      curr = curr->next_use();
-    }
-
-    prev = NULL;
-    curr = defn->env_use_list();
-    while (curr != NULL) {
-      ASSERT(prev == curr->previous_use());
-      ASSERT(defn == curr->definition());
-      Instruction* instr = curr->instruction();
-      ASSERT(curr == instr->env()->ValueAtUseIndex(curr->use_index()));
-      // BlockEntry instructions have environments attached to them but
-      // have no reliable way to verify if they are still in the graph.
-      // Thus we just assume they are.
-      ASSERT(instr->IsBlockEntry() ||
-             (instr->IsPhi() && instr->AsPhi()->is_alive()) ||
-             (instr->previous() != NULL));
-      prev = curr;
-      curr = curr->next_use();
-    }
-  }
 }
 
 void FlowGraph::ComputeIsReceiverRecursive(
@@ -430,8 +498,8 @@ bool FlowGraph::IsReceiver(Definition* def) const {
 
 FlowGraph::ToCheck FlowGraph::CheckForInstanceCall(
     InstanceCallInstr* call,
-    RawFunction::Kind kind) const {
-  if (!FLAG_use_cha_deopt && !isolate()->all_classes_finalized()) {
+    UntaggedFunction::Kind kind) const {
+  if (!FLAG_use_cha_deopt && !isolate_group()->all_classes_finalized()) {
     // Even if class or function are private, lazy class finalization
     // may later add overriding methods.
     return ToCheck::kCheckCid;
@@ -444,8 +512,8 @@ FlowGraph::ToCheck FlowGraph::CheckForInstanceCall(
   if (function().IsDynamicFunction() && IsReceiver(receiver->definition())) {
     // Call receiver is callee receiver: calling "this.g()" in f().
     receiver_class = function().Owner();
-  } else if (isolate()->can_use_strong_mode_types()) {
-    // In strong mode, get the receiver's compile type. Note that
+  } else {
+    // Get the receiver's compile type. Note that
     // we allow nullable types, which may result in just generating
     // a null check rather than the more elaborate class check
     CompileType* type = receiver->Type();
@@ -476,6 +544,9 @@ FlowGraph::ToCheck FlowGraph::CheckForInstanceCall(
     Class& cls = Class::Handle(zone());
     Function& fun = Function::Handle(zone());
     for (intptr_t i = 0, len = data->NumberOfChecks(); i < len; i++) {
+      if (!data->IsUsedAt(i)) {
+        continue;  // do not consider
+      }
       fun = data->GetTargetAt(i);
       cls = fun.Owner();
       if (data->GetReceiverClassIdAt(i) == cid || cls.id() == cid) {
@@ -489,26 +560,22 @@ FlowGraph::ToCheck FlowGraph::CheckForInstanceCall(
   }
 
   const String& method_name =
-      (kind == RawFunction::kMethodExtractor)
+      (kind == UntaggedFunction::kMethodExtractor)
           ? String::Handle(zone(), Field::NameFromGetter(call->function_name()))
           : call->function_name();
 
   // If the receiver can have the null value, exclude any method
   // that is actually valid on a null receiver.
   if (receiver_maybe_null) {
-#ifdef TARGET_ARCH_DBC
-    // TODO(ajcbik): DBC does not support null check at all yet.
-    return ToCheck::kCheckCid;
-#else
     const Class& null_class =
-        Class::Handle(zone(), isolate()->object_store()->null_class());
-    const Function& target = Function::Handle(
-        zone(),
-        Resolver::ResolveDynamicAnyArgs(zone(), null_class, method_name));
+        Class::Handle(zone(), isolate_group()->object_store()->null_class());
+    Function& target = Function::Handle(zone());
+    if (null_class.EnsureIsFinalized(thread()) == Error::null()) {
+      target = Resolver::ResolveDynamicAnyArgs(zone(), null_class, method_name);
+    }
     if (!target.IsNull()) {
       return ToCheck::kCheckCid;
     }
-#endif
   }
 
   // Use CHA to determine if the method is not overridden by any subclass
@@ -535,13 +602,13 @@ FlowGraph::ToCheck FlowGraph::CheckForInstanceCall(
 Instruction* FlowGraph::CreateCheckClass(Definition* to_check,
                                          const Cids& cids,
                                          intptr_t deopt_id,
-                                         TokenPosition token_pos) {
+                                         const InstructionSource& source) {
   if (cids.IsMonomorphic() && cids.MonomorphicReceiverCid() == kSmiCid) {
     return new (zone())
-        CheckSmiInstr(new (zone()) Value(to_check), deopt_id, token_pos);
+        CheckSmiInstr(new (zone()) Value(to_check), deopt_id, source);
   }
   return new (zone())
-      CheckClassInstr(new (zone()) Value(to_check), deopt_id, cids, token_pos);
+      CheckClassInstr(new (zone()) Value(to_check), deopt_id, cids, source);
 }
 
 Definition* FlowGraph::CreateCheckBound(Definition* length,
@@ -549,7 +616,7 @@ Definition* FlowGraph::CreateCheckBound(Definition* length,
                                         intptr_t deopt_id) {
   Value* val1 = new (zone()) Value(length);
   Value* val2 = new (zone()) Value(index);
-  if (FLAG_precompiled_mode) {
+  if (CompilerState::Current().is_aot()) {
     return new (zone()) GenericCheckBoundInstr(val1, val2, deopt_id);
   }
   return new (zone()) CheckArrayBoundInstr(val1, val2, deopt_id);
@@ -557,50 +624,25 @@ Definition* FlowGraph::CreateCheckBound(Definition* length,
 
 void FlowGraph::AddExactnessGuard(InstanceCallInstr* call,
                                   intptr_t receiver_cid) {
-  const Class& cls = Class::Handle(
-      zone(), Isolate::Current()->class_table()->At(receiver_cid));
+  const Class& cls =
+      Class::Handle(zone(), isolate_group()->class_table()->At(receiver_cid));
 
   Definition* load_type_args = new (zone()) LoadFieldInstr(
       call->Receiver()->CopyWithType(),
-      Slot::GetTypeArgumentsSlotFor(thread(), cls), call->token_pos());
+      Slot::GetTypeArgumentsSlotFor(thread(), cls), call->source());
   InsertBefore(call, load_type_args, call->env(), FlowGraph::kValue);
 
   const AbstractType& type =
-      AbstractType::Handle(zone(), call->ic_data()->StaticReceiverType());
+      AbstractType::Handle(zone(), call->ic_data()->receivers_static_type());
   ASSERT(!type.IsNull());
   const TypeArguments& args = TypeArguments::Handle(zone(), type.arguments());
   Instruction* guard = new (zone()) CheckConditionInstr(
-      new StrictCompareInstr(call->token_pos(), Token::kEQ_STRICT,
+      new StrictCompareInstr(call->source(), Token::kEQ_STRICT,
                              new (zone()) Value(load_type_args),
                              new (zone()) Value(GetConstant(args)),
                              /*needs_number_check=*/false, call->deopt_id()),
       call->deopt_id());
   InsertBefore(call, guard, call->env(), FlowGraph::kEffect);
-}
-
-bool FlowGraph::VerifyUseLists() {
-  // Verify the initial definitions.
-  for (intptr_t i = 0; i < graph_entry_->initial_definitions()->length(); ++i) {
-    VerifyUseListsInInstruction((*graph_entry_->initial_definitions())[i]);
-  }
-
-  // Verify phis in join entries and the instructions in each block.
-  for (intptr_t i = 0; i < preorder_.length(); ++i) {
-    BlockEntryInstr* entry = preorder_[i];
-    JoinEntryInstr* join = entry->AsJoinEntry();
-    if (join != NULL) {
-      for (PhiIterator it(join); !it.Done(); it.Advance()) {
-        PhiInstr* phi = it.Current();
-        ASSERT(phi != NULL);
-        VerifyUseListsInInstruction(phi);
-      }
-    }
-    for (ForwardInstructionIterator it(entry); !it.Done(); it.Advance()) {
-      VerifyUseListsInInstruction(it.Current());
-    }
-  }
-
-  return true;  // Return true so we can ASSERT validation.
 }
 
 // Verify that a redefinition dominates all uses of the redefined value.
@@ -696,25 +738,25 @@ void LivenessAnalysis::Analyze() {
 }
 
 static void PrintBitVector(const char* tag, BitVector* v) {
-  OS::PrintErr("%s:", tag);
+  THR_Print("%s:", tag);
   for (BitVector::Iterator it(v); !it.Done(); it.Advance()) {
-    OS::PrintErr(" %" Pd "", it.Current());
+    THR_Print(" %" Pd "", it.Current());
   }
-  OS::PrintErr("\n");
+  THR_Print("\n");
 }
 
 void LivenessAnalysis::Dump() {
   const intptr_t block_count = postorder_.length();
   for (intptr_t i = 0; i < block_count; i++) {
     BlockEntryInstr* block = postorder_[i];
-    OS::PrintErr("block @%" Pd " -> ", block->block_id());
+    THR_Print("block @%" Pd " -> ", block->block_id());
 
     Instruction* last = block->last_instruction();
     for (intptr_t j = 0; j < last->SuccessorCount(); j++) {
       BlockEntryInstr* succ = last->SuccessorAt(j);
-      OS::PrintErr(" @%" Pd "", succ->block_id());
+      THR_Print(" @%" Pd "", succ->block_id());
     }
-    OS::PrintErr("\n");
+    THR_Print("\n");
 
     PrintBitVector("  live out", live_out_[i]);
     PrintBitVector("  kill", kill_[i]);
@@ -857,10 +899,12 @@ void VariableLivenessAnalysis::ComputeInitialSets() {
     // to the kill set.
     const bool is_function_entry = block->IsFunctionEntry();
     const bool is_osr_entry = block->IsOsrEntry();
-    if (is_function_entry || is_osr_entry || block->IsCatchBlockEntry()) {
+    const bool is_catch_block_entry = block->IsCatchBlockEntry();
+    if (is_function_entry || is_osr_entry || is_catch_block_entry) {
       const intptr_t parameter_count =
-          is_osr_entry ? flow_graph_->variable_count()
-                       : flow_graph_->num_direct_parameters();
+          (is_osr_entry || is_catch_block_entry)
+              ? flow_graph_->variable_count()
+              : flow_graph_->num_direct_parameters();
       for (intptr_t i = 0; i < parameter_count; ++i) {
         live_in->Remove(i);
         kill->Add(i);
@@ -920,7 +964,7 @@ void FlowGraph::ComputeDominators(
   //
   // The algorithm is described in Georgiadis, Tarjan, and Werneck's
   // "Finding Dominators in Practice".
-  // See http://www.cs.princeton.edu/~rwerneck/dominators/ .
+  // https://renatowerneck.files.wordpress.com/2016/06/gtw06-dominators.pdf
 
   // All arrays are maps between preorder basic-block numbers.
   intptr_t size = parent_.length();
@@ -1059,10 +1103,10 @@ void FlowGraph::InsertPhis(const GrowableArray<BlockEntryInstr*>& preorder,
            !it.Done(); it.Advance()) {
         int index = it.Current();
         if (has_already[index] < var_index) {
-          BlockEntryInstr* block = preorder[index];
-          ASSERT(block->IsJoinEntry());
-          PhiInstr* phi =
-              block->AsJoinEntry()->InsertPhi(var_index, variable_count());
+          JoinEntryInstr* join = preorder[index]->AsJoinEntry();
+          ASSERT(join != nullptr);
+          PhiInstr* phi = join->InsertPhi(
+              var_index, variable_count() + join->stack_depth());
           if (always_live) {
             phi->mark_alive();
             live_phis->Add(phi);
@@ -1070,9 +1114,29 @@ void FlowGraph::InsertPhis(const GrowableArray<BlockEntryInstr*>& preorder,
           has_already[index] = var_index;
           if (work[index] < var_index) {
             work[index] = var_index;
-            worklist.Add(block);
+            worklist.Add(join);
           }
         }
+      }
+    }
+  }
+}
+
+void FlowGraph::CreateCommonConstants() {
+  constant_null_ = GetConstant(Object::ZoneHandle());
+  constant_dead_ = GetConstant(Symbols::OptimizedOut());
+}
+
+void FlowGraph::AddSyntheticPhis(BlockEntryInstr* block) {
+  ASSERT(IsCompiledForOsr());
+  if (auto join = block->AsJoinEntry()) {
+    const intptr_t local_phi_count = variable_count() + join->stack_depth();
+    // Never insert more phi's than that we had osr variables.
+    const intptr_t osr_phi_count =
+        Utils::Minimum(local_phi_count, osr_variable_count());
+    for (intptr_t i = variable_count(); i < osr_phi_count; ++i) {
+      if (join->phis() == nullptr || (*join->phis())[i] == nullptr) {
+        join->InsertPhi(i, local_phi_count)->mark_alive();
       }
     }
   }
@@ -1084,18 +1148,12 @@ void FlowGraph::Rename(GrowableArray<PhiInstr*>* live_phis,
   GraphEntryInstr* entry = graph_entry();
 
   // Add global constants to the initial definitions.
-  constant_null_ = GetConstant(Object::ZoneHandle());
-  constant_dead_ = GetConstant(Symbols::OptimizedOut());
-
-  const intptr_t parameter_count =
-      IsCompiledForOsr() ? variable_count() : num_direct_parameters_;
+  CreateCommonConstants();
 
   // Initial renaming environment.
-  GrowableArray<Definition*> env(parameter_count + num_stack_locals());
-  env.FillWith(constant_dead(), 0, parameter_count);
-  if (!IsCompiledForOsr()) {
-    env.FillWith(constant_null(), parameter_count, num_stack_locals());
-  }
+  GrowableArray<Definition*> env(variable_count());
+  env.FillWith(constant_dead(), 0, num_direct_parameters());
+  env.FillWith(constant_null(), num_direct_parameters(), num_stack_locals());
 
   if (entry->catch_entries().length() > 0) {
     // Functions with try-catch have a fixed area of stack slots reserved
@@ -1107,8 +1165,27 @@ void FlowGraph::Rename(GrowableArray<PhiInstr*>* live_phis,
                                                : entry->SuccessorCount() == 1);
   }
 
+  // For OSR on a non-empty stack, insert synthetic phis on every joining entry.
+  // These phis are synthetic since they are not driven by live variable
+  // analysis, but merely serve the purpose of merging stack slots from
+  // parameters and other predecessors at the block in which OSR occurred.
+  // The original definition could flow into a join via multiple predecessors
+  // but with the same definition, not requiring a phi. However, with an OSR
+  // entry in a different block, phis are required to merge the OSR variable
+  // and original definition where there was no phi. Therefore, we need
+  // synthetic phis in all (reachable) blocks, not just in the first join.
+  if (IsCompiledForOsr()) {
+    for (intptr_t i = 0, n = preorder().length(); i < n; ++i) {
+      AddSyntheticPhis(preorder()[i]);
+    }
+  }
+
   RenameRecursive(entry, &env, live_phis, variable_liveness,
                   inlining_parameters);
+
+#if defined(DEBUG)
+  ValidatePhis();
+#endif  // defined(DEBUG)
 }
 
 void FlowGraph::PopulateEnvironmentFromFunctionEntry(
@@ -1118,15 +1195,39 @@ void FlowGraph::PopulateEnvironmentFromFunctionEntry(
     VariableLivenessAnalysis* variable_liveness,
     ZoneGrowableArray<Definition*>* inlining_parameters) {
   ASSERT(!IsCompiledForOsr());
-  const intptr_t parameter_count = num_direct_parameters_;
+  const intptr_t direct_parameter_count = num_direct_parameters_;
 
   // Check if inlining_parameters include a type argument vector parameter.
   const intptr_t inlined_type_args_param =
       ((inlining_parameters != NULL) && function().IsGeneric()) ? 1 : 0;
 
-  for (intptr_t i = 0; i < parameter_count; i++) {
-    ParameterInstr* param = new (zone()) ParameterInstr(i, function_entry);
+  ASSERT(variable_count() == env->length());
+  ASSERT(direct_parameter_count <= env->length());
+  intptr_t param_offset = 0;
+  for (intptr_t i = 0; i < direct_parameter_count; i++) {
+    ASSERT(FLAG_precompiled_mode || !function().is_unboxed_parameter_at(i));
+    ParameterInstr* param;
+
+    const intptr_t index = (function().IsFactory() ? (i - 1) : i);
+
+    if (index >= 0 && function().is_unboxed_integer_parameter_at(index)) {
+      constexpr intptr_t kCorrection = compiler::target::kIntSpillFactor - 1;
+      param = new (zone()) ParameterInstr(i, param_offset + kCorrection,
+                                          function_entry, kUnboxedInt64);
+      param_offset += compiler::target::kIntSpillFactor;
+    } else if (index >= 0 && function().is_unboxed_double_parameter_at(index)) {
+      constexpr intptr_t kCorrection = compiler::target::kDoubleSpillFactor - 1;
+      param = new (zone()) ParameterInstr(i, param_offset + kCorrection,
+                                          function_entry, kUnboxedDouble);
+      param_offset += compiler::target::kDoubleSpillFactor;
+    } else {
+      ASSERT(index < 0 || !function().is_unboxed_parameter_at(index));
+      param =
+          new (zone()) ParameterInstr(i, param_offset, function_entry, kTagged);
+      param_offset++;
+    }
     param->set_ssa_temp_index(alloc_ssa_temp_index());
+    if (NeedsPairLocation(param->representation())) alloc_ssa_temp_index();
     AddToInitialDefinitions(function_entry, param);
     (*env)[i] = param;
   }
@@ -1181,9 +1282,14 @@ void FlowGraph::PopulateEnvironmentFromOsrEntry(
     OsrEntryInstr* osr_entry,
     GrowableArray<Definition*>* env) {
   ASSERT(IsCompiledForOsr());
-  const intptr_t parameter_count = variable_count();
+  // During OSR, all variables and possibly a non-empty stack are
+  // passed as parameters. The latter mimics the incoming expression
+  // stack that was set up prior to triggering OSR.
+  const intptr_t parameter_count = osr_variable_count();
+  ASSERT(parameter_count == env->length());
   for (intptr_t i = 0; i < parameter_count; i++) {
-    ParameterInstr* param = new (zone()) ParameterInstr(i, osr_entry);
+    ParameterInstr* param =
+        new (zone()) ParameterInstr(i, i, osr_entry, kTagged);
     param->set_ssa_temp_index(alloc_ssa_temp_index());
     AddToInitialDefinitions(osr_entry, param);
     (*env)[i] = param;
@@ -1203,7 +1309,8 @@ void FlowGraph::PopulateEnvironmentFromCatchEntry(
           : -1;
 
   // Add real definitions for all locals and parameters.
-  for (intptr_t i = 0; i < variable_count(); ++i) {
+  ASSERT(variable_count() == env->length());
+  for (intptr_t i = 0, n = variable_count(); i < n; ++i) {
     // Replace usages of the raw exception/stacktrace variables with
     // [SpecialParameterInstr]s.
     Definition* param = nullptr;
@@ -1214,30 +1321,24 @@ void FlowGraph::PopulateEnvironmentFromCatchEntry(
       param = new (Z) SpecialParameterInstr(SpecialParameterInstr::kStackTrace,
                                             DeoptId::kNone, catch_entry);
     } else {
-      param = new (Z) ParameterInstr(i, catch_entry);
+      param = new (Z) ParameterInstr(i, i, catch_entry, kTagged);
     }
 
     param->set_ssa_temp_index(alloc_ssa_temp_index());  // New SSA temp.
     (*env)[i] = param;
-    catch_entry->initial_definitions()->Add(param);
+    AddToInitialDefinitions(catch_entry, param);
   }
 }
 
 void FlowGraph::AttachEnvironment(Instruction* instr,
                                   GrowableArray<Definition*>* env) {
-  Environment* deopt_env =
-      Environment::From(zone(), *env, num_direct_parameters_, parsed_function_);
-  if (instr->IsClosureCall()) {
-    deopt_env =
-        deopt_env->DeepCopy(zone(), deopt_env->Length() - instr->InputCount());
-  }
+  auto deopt_env = Environment::From(zone(), *env, num_direct_parameters_,
+                                     instr->NumberOfInputsConsumedBeforeCall(),
+                                     parsed_function_);
   instr->SetEnvironment(deopt_env);
   for (Environment::DeepIterator it(deopt_env); !it.Done(); it.Advance()) {
     Value* use = it.CurrentValue();
     use->definition()->AddEnvUse(use);
-  }
-  if (instr->ComputeCanDeoptimize()) {
-    instr->env()->set_deopt_id(instr->deopt_id());
   }
 }
 
@@ -1249,10 +1350,12 @@ void FlowGraph::RenameRecursive(
     ZoneGrowableArray<Definition*>* inlining_parameters) {
   // 1. Process phis first.
   if (auto join = block_entry->AsJoinEntry()) {
-    if (join->phis() != NULL) {
-      for (intptr_t i = 0; i < join->phis()->length(); ++i) {
+    if (join->phis() != nullptr) {
+      const intptr_t local_phi_count = variable_count() + join->stack_depth();
+      ASSERT(join->phis()->length() == local_phi_count);
+      for (intptr_t i = 0; i < local_phi_count; ++i) {
         PhiInstr* phi = (*join->phis())[i];
-        if (phi != NULL) {
+        if (phi != nullptr) {
           (*env)[i] = phi;
           AllocateSSAIndexes(phi);  // New SSA temp.
           if (block_entry->InsideTryBlock() && !phi->is_alive()) {
@@ -1292,31 +1395,8 @@ void FlowGraph::RenameRecursive(
     }
   }
 
-
   // Attach environment to the block entry.
   AttachEnvironment(block_entry, env);
-
-#if defined(TARGET_ARCH_DBC)
-  // On DBC the exception/stacktrace variables are in special registers when
-  // entering the catch block.  The only usage of those special registers is
-  // within the catch block.  A possible lazy-deopt at the beginning of the
-  // catch does not need to move those around, since the registers will be
-  // up-to-date when arriving in the unoptimized code and unoptimized code will
-  // take care of moving them to appropriate slots.
-  if (CatchBlockEntryInstr* catch_entry = block_entry->AsCatchBlockEntry()) {
-    Environment* deopt_env = catch_entry->env();
-    const LocalVariable* raw_exception_var = catch_entry->raw_exception_var();
-    const LocalVariable* raw_stacktrace_var = catch_entry->raw_stacktrace_var();
-    if (raw_exception_var != nullptr) {
-      Value* value = deopt_env->ValueAt(EnvIndex(raw_exception_var));
-      value->BindToEnvironment(constant_null());
-    }
-    if (raw_stacktrace_var != nullptr) {
-      Value* value = deopt_env->ValueAt(EnvIndex(raw_stacktrace_var));
-      value->BindToEnvironment(constant_null());
-    }
-  }
-#endif  // defined(TARGET_ARCH_DBC)
 
   // 2. Process normal instructions.
   for (ForwardInstructionIterator it(block_entry); !it.Done(); it.Advance()) {
@@ -1329,37 +1409,43 @@ void FlowGraph::RenameRecursive(
 
     // 2a. Handle uses:
     // Update the expression stack renaming environment for each use by
-    // removing the renamed value.
-    // For each use of a LoadLocal, StoreLocal, MakeTemp, DropTemps or Constant:
+    // removing the renamed value. For each use of a LoadLocal, StoreLocal,
+    // MakeTemp, DropTemps or Constant (or any expression under OSR),
     // replace it with the renamed value.
     for (intptr_t i = current->InputCount() - 1; i >= 0; --i) {
       Value* v = current->InputAt(i);
       // Update expression stack.
       ASSERT(env->length() > variable_count());
-
       Definition* reaching_defn = env->RemoveLast();
       Definition* input_defn = v->definition();
       if (input_defn != reaching_defn) {
-        // Note: constants can only be replaced with other constants.
-        ASSERT(input_defn->IsLoadLocal() || input_defn->IsStoreLocal() ||
-               input_defn->IsDropTemps() || input_defn->IsMakeTemp() ||
-               (input_defn->IsConstant() && reaching_defn->IsConstant()));
+        // Inspect the replacing definition before making the change.
+        if (IsCompiledForOsr()) {
+          // Under OSR, constants can reside on the expression stack. Just
+          // generate the constant rather than going through a synthetic phi.
+          if (input_defn->IsConstant() && reaching_defn->IsPhi()) {
+            ASSERT(env->length() < osr_variable_count());
+            auto constant = GetConstant(input_defn->AsConstant()->value());
+            current->ReplaceInEnvironment(reaching_defn, constant);
+            reaching_defn = constant;
+          }
+        } else {
+          // Note: constants can only be replaced with other constants.
+          ASSERT(input_defn->IsLoadLocal() || input_defn->IsStoreLocal() ||
+                 input_defn->IsDropTemps() || input_defn->IsMakeTemp() ||
+                 (input_defn->IsConstant() && reaching_defn->IsConstant()));
+        }
         // Assert we are not referencing nulls in the initial environment.
         ASSERT(reaching_defn->ssa_temp_index() != -1);
+        // Replace the definition.
         v->set_definition(reaching_defn);
         input_defn = reaching_defn;
       }
       input_defn->AddInputUse(v);
     }
 
-    // Drop pushed arguments for calls.
-    for (intptr_t j = 0; j < current->ArgumentCount(); j++) {
-      env->RemoveLast();
-    }
-
-    // 2b. Handle LoadLocal/StoreLocal/MakeTemp/DropTemps/Constant and
-    // PushArgument specially. Other definitions are just pushed
-    // to the environment directly.
+    // 2b. Handle LoadLocal/StoreLocal/MakeTemp/DropTemps/Constant specially.
+    // Other definitions are just pushed to the environment directly.
     Definition* result = NULL;
     switch (current->tag()) {
       case Instruction::kLoadLocal: {
@@ -1388,19 +1474,30 @@ void FlowGraph::RenameRecursive(
           captured_parameters_->Add(index);
         }
 
-        if ((phi != NULL) && isolate()->can_use_strong_mode_types()) {
+        if (phi != nullptr) {
           // Assign type to Phi if it doesn't have a type yet.
           // For a Phi to appear in the local variable it either was placed
           // there as incoming value by renaming or it was stored there by
           // StoreLocal which took this Phi from another local via LoadLocal,
           // to which this reasoning applies recursively.
+          //
           // This means that we are guaranteed to process LoadLocal for a
-          // matching variable first.
+          // matching variable first, unless there was an OSR with a non-empty
+          // expression stack. In the latter case, Phi inserted by
+          // FlowGraph::AddSyntheticPhis for expression temp will not have an
+          // assigned type and may be accessed by StoreLocal and subsequent
+          // LoadLocal.
+          //
           if (!phi->HasType()) {
-            ASSERT((index < phi->block()->phis()->length()) &&
-                   ((*phi->block()->phis())[index] == phi));
-            phi->UpdateType(
-                CompileType::FromAbstractType(load->local().type()));
+            // Check if phi corresponds to the same slot.
+            auto* phis = phi->block()->phis();
+            if ((index < phis->length()) && (*phis)[index] == phi) {
+              phi->UpdateType(CompileType::FromAbstractType(
+                  load->local().type(), CompileType::kCanBeNull,
+                  /*can_be_sentinel=*/load->local().is_late()));
+            } else {
+              ASSERT(IsCompiledForOsr() && (phi->block()->stack_depth() > 0));
+            }
           }
         }
         break;
@@ -1448,7 +1545,14 @@ void FlowGraph::RenameRecursive(
       }
 
       case Instruction::kPushArgument:
-        env->Add(current->Cast<PushArgumentInstr>());
+        UNREACHABLE();
+        break;
+
+      case Instruction::kCheckStackOverflow:
+        // Assert environment integrity at checkpoints.
+        ASSERT((variable_count() +
+                current->AsCheckStackOverflow()->stack_depth()) ==
+               env->length());
         continue;
 
       default:
@@ -1466,17 +1570,31 @@ void FlowGraph::RenameRecursive(
     // Update expression stack and remove current instruction from the graph.
     Definition* definition = current->Cast<Definition>();
     if (definition->HasTemp()) {
-      ASSERT(result != NULL);
+      ASSERT(result != nullptr);
       env->Add(result);
     }
     it.RemoveCurrentFromGraph();
   }
 
   // 3. Process dominated blocks.
+  const bool set_stack = (block_entry == graph_entry()) && IsCompiledForOsr();
   for (intptr_t i = 0; i < block_entry->dominated_blocks().length(); ++i) {
     BlockEntryInstr* block = block_entry->dominated_blocks()[i];
     GrowableArray<Definition*> new_env(env->length());
     new_env.AddArray(*env);
+    // During OSR, when traversing from the graph entry directly any block
+    // (which may be a non-entry), we must adjust the environment to mimic
+    // a non-empty incoming expression stack to ensure temporaries refer to
+    // the right stack items.
+    const intptr_t stack_depth = block->stack_depth();
+    ASSERT(stack_depth >= 0);
+    if (set_stack) {
+      ASSERT(variable_count() == new_env.length());
+      new_env.FillWith(constant_dead(), variable_count(), stack_depth);
+    } else if (!block->last_instruction()->IsTailCall()) {
+      // Assert environment integrity otherwise.
+      ASSERT((variable_count() + stack_depth) == new_env.length());
+    }
     RenameRecursive(block, &new_env, live_phis, variable_liveness,
                     inlining_parameters);
   }
@@ -1492,15 +1610,62 @@ void FlowGraph::RenameRecursive(
     if (successor->phis() != NULL) {
       for (intptr_t i = 0; i < successor->phis()->length(); ++i) {
         PhiInstr* phi = (*successor->phis())[i];
-        if (phi != NULL) {
+        if (phi != nullptr) {
           // Rename input operand.
-          Value* use = new (zone()) Value((*env)[i]);
+          Definition* input = (*env)[i];
+          ASSERT(input != nullptr);
+          ASSERT(!input->IsPushArgument());
+          Value* use = new (zone()) Value(input);
           phi->SetInputAt(pred_index, use);
         }
       }
     }
   }
 }
+
+#if defined(DEBUG)
+void FlowGraph::ValidatePhis() {
+  if (!FLAG_prune_dead_locals) {
+    // We can only check if dead locals are pruned.
+    return;
+  }
+
+  // Current_context_var is never pruned, it is artificially kept alive, so
+  // it should not be checked here.
+  const intptr_t current_context_var_index = CurrentContextEnvIndex();
+
+  for (intptr_t i = 0, n = preorder().length(); i < n; ++i) {
+    BlockEntryInstr* block_entry = preorder()[i];
+    Instruction* last_instruction = block_entry->last_instruction();
+
+    if ((last_instruction->SuccessorCount() == 1) &&
+        last_instruction->SuccessorAt(0)->IsJoinEntry()) {
+      JoinEntryInstr* successor =
+          last_instruction->SuccessorAt(0)->AsJoinEntry();
+      if (successor->phis() != NULL) {
+        for (intptr_t j = 0; j < successor->phis()->length(); ++j) {
+          PhiInstr* phi = (*successor->phis())[j];
+          if (phi == nullptr && j != current_context_var_index) {
+            // We have no phi node for the this variable.
+            // Double check we do not have a different value in our env.
+            // If we do, we would have needed a phi-node in the successsor.
+            ASSERT(last_instruction->env() != nullptr);
+            Definition* current_definition =
+                last_instruction->env()->ValueAt(j)->definition();
+            ASSERT(successor->env() != nullptr);
+            Definition* successor_definition =
+                successor->env()->ValueAt(j)->definition();
+            if (!current_definition->IsConstant() &&
+                !successor_definition->IsConstant()) {
+              ASSERT(current_definition == successor_definition);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+#endif  // defined(DEBUG)
 
 void FlowGraph::RemoveDeadPhis(GrowableArray<PhiInstr*>* live_phis) {
   // Augment live_phis with those that have implicit real used at
@@ -1551,17 +1716,32 @@ RedefinitionInstr* FlowGraph::EnsureRedefinition(Instruction* prev,
                                                  Definition* original,
                                                  CompileType compile_type) {
   RedefinitionInstr* first = prev->next()->AsRedefinition();
-  if (first != NULL && (first->constrained_type() != NULL)) {
+  if (first != nullptr && (first->constrained_type() != nullptr)) {
     if ((first->value()->definition() == original) &&
         first->constrained_type()->IsEqualTo(&compile_type)) {
       // Already redefined. Do nothing.
-      return NULL;
+      return nullptr;
     }
   }
   RedefinitionInstr* redef = new RedefinitionInstr(new Value(original));
-  redef->set_constrained_type(new CompileType(compile_type));
-  InsertAfter(prev, redef, NULL, FlowGraph::kValue);
+
+  // Don't set the constrained type when the type is None(), which denotes an
+  // unreachable value (e.g. using value null after some form of null check).
+  if (!compile_type.IsNone()) {
+    redef->set_constrained_type(new CompileType(compile_type));
+  }
+
+  InsertAfter(prev, redef, nullptr, FlowGraph::kValue);
   RenameDominatedUses(original, redef, redef);
+
+  if (redef->input_use_list() == nullptr) {
+    // There are no dominated uses, so the newly added Redefinition is useless.
+    // Remove Redefinition to avoid interfering with
+    // BranchSimplifier::Simplify which needs empty blocks.
+    redef->RemoveFromGraph();
+    return nullptr;
+  }
+
   return redef;
 }
 
@@ -1575,20 +1755,17 @@ void FlowGraph::RemoveRedefinitions(bool keep_checks) {
     for (ForwardInstructionIterator instr_it(block_it.Current());
          !instr_it.Done(); instr_it.Advance()) {
       Instruction* instruction = instr_it.Current();
-      if (instruction->IsRedefinition()) {
-        RedefinitionInstr* redef = instruction->AsRedefinition();
+      if (auto redef = instruction->AsRedefinition()) {
         redef->ReplaceUsesWith(redef->value()->definition());
         instr_it.RemoveCurrentFromGraph();
       } else if (keep_checks) {
         continue;
-      } else if (instruction->IsCheckArrayBound()) {
-        CheckArrayBoundInstr* check = instruction->AsCheckArrayBound();
-        check->ReplaceUsesWith(check->index()->definition());
-        check->ClearSSATempIndex();
-      } else if (instruction->IsGenericCheckBound()) {
-        GenericCheckBoundInstr* check = instruction->AsGenericCheckBound();
-        check->ReplaceUsesWith(check->index()->definition());
-        check->ClearSSATempIndex();
+      } else if (auto def = instruction->AsDefinition()) {
+        Value* value = def->RedefinedValue();
+        if (value != nullptr) {
+          def->ReplaceUsesWith(value->definition());
+          def->ClearSSATempIndex();
+        }
       }
     }
   }
@@ -1704,8 +1881,8 @@ void FlowGraph::InsertConversion(Representation from,
                                  Representation to,
                                  Value* use,
                                  bool is_environment_use) {
+  ASSERT(from != to);
   Instruction* insert_before;
-  Instruction* deopt_target;
   PhiInstr* phi = use->instruction()->AsPhi();
   if (phi != NULL) {
     ASSERT(phi->is_alive());
@@ -1713,33 +1890,38 @@ void FlowGraph::InsertConversion(Representation from,
     auto predecessor = phi->block()->PredecessorAt(use->use_index());
     insert_before = predecessor->last_instruction();
     ASSERT(insert_before->GetBlock() == predecessor);
-    deopt_target = NULL;
   } else {
-    deopt_target = insert_before = use->instruction();
+    insert_before = use->instruction();
+  }
+  const Instruction::SpeculativeMode speculative_mode =
+      use->instruction()->SpeculativeModeOfInput(use->use_index());
+  Instruction* deopt_target = nullptr;
+  if (speculative_mode == Instruction::kGuardInputs || to == kUnboxedInt32) {
+    deopt_target = insert_before;
   }
 
   Definition* converted = NULL;
   if (IsUnboxedInteger(from) && IsUnboxedInteger(to)) {
-    const intptr_t deopt_id = (to == kUnboxedInt32) && (deopt_target != NULL)
+    const intptr_t deopt_id = (to == kUnboxedInt32) && (deopt_target != nullptr)
                                   ? deopt_target->DeoptimizationTarget()
                                   : DeoptId::kNone;
-    converted = new (Z)
-        UnboxedIntConverterInstr(from, to, use->CopyWithType(), deopt_id);
+    converted =
+        new (Z) IntConverterInstr(from, to, use->CopyWithType(), deopt_id);
   } else if ((from == kUnboxedInt32) && (to == kUnboxedDouble)) {
     converted = new Int32ToDoubleInstr(use->CopyWithType());
   } else if ((from == kUnboxedInt64) && (to == kUnboxedDouble) &&
              CanConvertInt64ToDouble()) {
-    const intptr_t deopt_id = (deopt_target != NULL)
+    const intptr_t deopt_id = (deopt_target != nullptr)
                                   ? deopt_target->DeoptimizationTarget()
                                   : DeoptId::kNone;
     ASSERT(CanUnboxDouble());
     converted = new Int64ToDoubleInstr(use->CopyWithType(), deopt_id);
   } else if ((from == kTagged) && Boxing::Supports(to)) {
-    const intptr_t deopt_id = (deopt_target != NULL)
+    const intptr_t deopt_id = (deopt_target != nullptr)
                                   ? deopt_target->DeoptimizationTarget()
                                   : DeoptId::kNone;
-    converted = UnboxInstr::Create(to, use->CopyWithType(), deopt_id,
-                                   use->instruction()->speculative_mode());
+    converted =
+        UnboxInstr::Create(to, use->CopyWithType(), deopt_id, speculative_mode);
   } else if ((to == kTagged) && Boxing::Supports(from)) {
     converted = BoxInstr::Create(from, use->CopyWithType());
   } else {
@@ -1747,29 +1929,31 @@ void FlowGraph::InsertConversion(Representation from,
     // Insert two "dummy" conversion instructions with the correct
     // "from" and "to" representation. The inserted instructions will
     // trigger a deoptimization if executed. See #12417 for a discussion.
-    const intptr_t deopt_id = (deopt_target != NULL)
+    // If the use is not speculative, then this code should be unreachable.
+    // Insert Stop for a graceful error and aid unreachable code elimination.
+    if (speculative_mode == Instruction::kNotSpeculative) {
+      StopInstr* stop = new (Z) StopInstr("Incompatible conversion.");
+      InsertBefore(insert_before, stop, nullptr, FlowGraph::kEffect);
+    }
+    const intptr_t deopt_id = (deopt_target != nullptr)
                                   ? deopt_target->DeoptimizationTarget()
                                   : DeoptId::kNone;
     ASSERT(Boxing::Supports(from));
     ASSERT(Boxing::Supports(to));
     Definition* boxed = BoxInstr::Create(from, use->CopyWithType());
     use->BindTo(boxed);
-    InsertBefore(insert_before, boxed, NULL, FlowGraph::kValue);
-    converted = UnboxInstr::Create(to, new (Z) Value(boxed), deopt_id);
+    InsertBefore(insert_before, boxed, nullptr, FlowGraph::kValue);
+    converted = UnboxInstr::Create(to, new (Z) Value(boxed), deopt_id,
+                                   speculative_mode);
   }
-  ASSERT(converted != NULL);
-  InsertBefore(insert_before, converted, use->instruction()->env(),
+  ASSERT(converted != nullptr);
+  InsertBefore(insert_before, converted,
+               (deopt_target != nullptr) ? deopt_target->env() : nullptr,
                FlowGraph::kValue);
   if (is_environment_use) {
     use->BindToEnvironment(converted);
   } else {
     use->BindTo(converted);
-  }
-
-  if ((to == kUnboxedInt32) && (phi != NULL)) {
-    // Int32 phis are unboxed optimistically. Ensure that unboxing
-    // has deoptimization target attached from the goto instruction.
-    CopyDeoptTarget(converted, insert_before);
   }
 }
 
@@ -1781,7 +1965,7 @@ void FlowGraph::InsertConversionsFor(Definition* def) {
   }
 }
 
-static void UnboxPhi(PhiInstr* phi) {
+static void UnboxPhi(PhiInstr* phi, bool is_aot) {
   Representation unboxed = phi->representation();
 
   switch (phi->Type()->ToCid()) {
@@ -1807,8 +1991,37 @@ static void UnboxPhi(PhiInstr* phi) {
       break;
   }
 
+  // If all the inputs are unboxed, leave the Phi unboxed.
+  if ((unboxed == kTagged) && phi->Type()->IsInt()) {
+    bool should_unbox = true;
+    Representation new_representation = kTagged;
+    for (intptr_t i = 0; i < phi->InputCount(); i++) {
+      Definition* input = phi->InputAt(i)->definition();
+      if (input->representation() != kUnboxedInt64 &&
+          input->representation() != kUnboxedInt32 &&
+          input->representation() != kUnboxedUint32 && !(input == phi)) {
+        should_unbox = false;
+        break;
+      }
+
+      if (new_representation == kTagged) {
+        new_representation = input->representation();
+      } else if (new_representation != input->representation()) {
+        new_representation = kNoRepresentation;
+      }
+    }
+    if (should_unbox) {
+      unboxed = new_representation != kNoRepresentation
+                    ? new_representation
+                    : RangeUtils::Fits(phi->range(),
+                                       RangeBoundary::kRangeBoundaryInt32)
+                          ? kUnboxedInt32
+                          : kUnboxedInt64;
+    }
+  }
+
   if ((unboxed == kTagged) && phi->Type()->IsInt() &&
-      RangeUtils::Fits(phi->range(), RangeBoundary::kRangeBoundaryInt64)) {
+      !phi->Type()->can_be_sentinel()) {
     // Conservatively unbox phis that:
     //   - are proven to be of type Int;
     //   - fit into 64bits range;
@@ -1818,9 +2031,7 @@ static void UnboxPhi(PhiInstr* phi) {
     bool should_unbox = false;
     for (intptr_t i = 0; i < phi->InputCount(); i++) {
       Definition* input = phi->InputAt(i)->definition();
-      if (input->IsBox() &&
-          RangeUtils::Fits(input->range(),
-                           RangeBoundary::kRangeBoundaryInt64)) {
+      if (input->IsBox()) {
         should_unbox = true;
       } else if (!input->IsConstant()) {
         should_unbox = false;
@@ -1858,10 +2069,23 @@ static void UnboxPhi(PhiInstr* phi) {
     }
   }
 
+#if defined(TARGET_ARCH_IS_64_BIT)
+  // In AOT mode on 64-bit platforms always unbox integer typed phis (similar
+  // to how we treat doubles and other boxed numeric types).
+  // In JIT mode only unbox phis which are not fully known to be Smi.
+  if ((unboxed == kTagged) && phi->Type()->IsInt() &&
+      !phi->Type()->can_be_sentinel() &&
+      (is_aot || phi->Type()->ToCid() != kSmiCid)) {
+    unboxed = kUnboxedInt64;
+  }
+#endif
+
   phi->set_representation(unboxed);
 }
 
 void FlowGraph::SelectRepresentations() {
+  const auto is_aot = CompilerState::Current().is_aot();
+
   // First we decide for each phi if it is beneficial to unbox it. If so, we
   // change it's `phi->representation()`
   for (BlockIterator block_it = reverse_postorder_iterator(); !block_it.Done();
@@ -1870,7 +2094,7 @@ void FlowGraph::SelectRepresentations() {
     if (join_entry != NULL) {
       for (PhiIterator it(join_entry); !it.Done(); it.Advance()) {
         PhiInstr* phi = it.Current();
-        UnboxPhi(phi);
+        UnboxPhi(phi, is_aot);
       }
     }
   }
@@ -1927,8 +2151,9 @@ static bool BenefitsFromWidening(BinarySmiOpInstr* smi_op) {
   switch (smi_op->op_kind()) {
     case Token::kMUL:
     case Token::kSHR:
-      // For kMUL we save untagging of the argument for kSHR
-      // we save tagging of the result.
+    case Token::kUSHR:
+      // For kMUL we save untagging of the argument.
+      // For kSHR/kUSHR we save tagging of the result.
       return true;
 
     default:
@@ -2056,7 +2281,9 @@ void FlowGraph::WidenSmiToInt32() {
         if (use_defn == NULL) {
           // We assume that tagging before returning or pushing argument costs
           // very little compared to the cost of the return/call itself.
-          if (!instr->IsReturn() && !instr->IsPushArgument()) {
+          ASSERT(!instr->IsPushArgument());
+          if (!instr->IsReturn() &&
+              (use->use_index() >= instr->ArgumentCount())) {
             gain--;
             if (FLAG_support_il_printer && FLAG_trace_smi_widening) {
               THR_Print("v [%" Pd "] (u) %s\n", gain,
@@ -2106,7 +2333,7 @@ void FlowGraph::WidenSmiToInt32() {
         // propagation information (e.g. it might no longer be a _Smi).
         for (Value::Iterator it(defn->input_use_list()); !it.Done();
              it.Advance()) {
-          it.Current()->SetReachingType(NULL);
+          it.Current()->SetReachingType(nullptr);
         }
 
         if (defn->IsBinarySmiOp()) {
@@ -2147,6 +2374,7 @@ void FlowGraph::EliminateEnvironments() {
     for (ForwardInstructionIterator it(block); !it.Done(); it.Advance()) {
       Instruction* current = it.Current();
       if (!current->ComputeCanDeoptimize() &&
+          !current->ComputeCanDeoptimizeAfterCall() &&
           (!current->MayThrow() || !current->GetBlock()->InsideTryBlock())) {
         // Instructions that can throw need an environment for optimized
         // try-catch.
@@ -2164,8 +2392,26 @@ bool FlowGraph::Canonicalize() {
 
   for (BlockIterator block_it = reverse_postorder_iterator(); !block_it.Done();
        block_it.Advance()) {
-    for (ForwardInstructionIterator it(block_it.Current()); !it.Done();
-         it.Advance()) {
+    BlockEntryInstr* const block = block_it.Current();
+    if (auto join = block->AsJoinEntry()) {
+      for (PhiIterator it(join); !it.Done(); it.Advance()) {
+        PhiInstr* current = it.Current();
+        if (current->HasUnmatchedInputRepresentations()) {
+          // Can't canonicalize this instruction until all conversions for its
+          // inputs are inserted.
+          continue;
+        }
+
+        Definition* replacement = current->Canonicalize(this);
+        ASSERT(replacement != nullptr);
+        if (replacement != current) {
+          current->ReplaceUsesWith(replacement);
+          it.RemoveCurrentFromGraph();
+          changed = true;
+        }
+      }
+    }
+    for (ForwardInstructionIterator it(block); !it.Done(); it.Advance()) {
       Instruction* current = it.Current();
       if (current->HasUnmatchedInputRepresentations()) {
         // Can't canonicalize this instruction until all conversions for its
@@ -2216,10 +2462,9 @@ void FlowGraph::PopulateWithICData(const Function& function) {
           int num_args_checked =
               MethodRecognizer::NumArgsCheckedForStaticCall(target);
           const ICData& ic_data = ICData::ZoneHandle(
-              zone, ICData::New(function, String::Handle(zone, target.name()),
-                                arguments_descriptor, call->deopt_id(),
-                                num_args_checked, ICData::kStatic));
-          ic_data.AddTarget(target);
+              zone, ICData::NewForStaticCall(
+                        function, target, arguments_descriptor,
+                        call->deopt_id(), num_args_checked, ICData::kStatic));
           call->set_ic_data(&ic_data);
         }
       }
@@ -2317,10 +2562,18 @@ void FlowGraph::RenameUsesDominatedByRedefinitions() {
        block_it.Advance()) {
     for (ForwardInstructionIterator instr_it(block_it.Current());
          !instr_it.Done(); instr_it.Advance()) {
-      RedefinitionInstr* redefinition = instr_it.Current()->AsRedefinition();
-      if (redefinition != NULL) {
-        Definition* original = redefinition->value()->definition();
-        RenameDominatedUses(original, redefinition, redefinition);
+      Definition* definition = instr_it.Current()->AsDefinition();
+      // CheckArrayBound instructions have their own mechanism for ensuring
+      // proper dependencies, so we don't rewrite those here.
+      if (definition != nullptr && !definition->IsCheckArrayBound()) {
+        Value* redefined = definition->RedefinedValue();
+        if (redefined != nullptr) {
+          if (!definition->HasSSATemp()) {
+            AllocateSSAIndexes(definition);
+          }
+          Definition* original = redefined->definition();
+          RenameDominatedUses(original, definition, definition);
+        }
       }
     }
   }
@@ -2569,7 +2822,7 @@ JoinEntryInstr* FlowGraph::NewDiamond(Instruction* instruction,
   PhiInstr* phi =
       AddPhi(mid_point, condition.oper2, GetConstant(Bool::False()));
   StrictCompareInstr* circuit = new (zone()) StrictCompareInstr(
-      inherit->token_pos(), Token::kEQ_STRICT, new (zone()) Value(phi),
+      inherit->source(), Token::kEQ_STRICT, new (zone()) Value(phi),
       new (zone()) Value(GetConstant(Bool::True())), false,
       DeoptId::kNone);  // don't inherit
 
@@ -2596,6 +2849,35 @@ PhiInstr* FlowGraph::AddPhi(JoinEntryInstr* join,
   return phi;
 }
 
-}  // namespace dart
+void FlowGraph::InsertPushArguments() {
+  for (BlockIterator block_it = reverse_postorder_iterator(); !block_it.Done();
+       block_it.Advance()) {
+    thread()->CheckForSafepoint();
+    for (ForwardInstructionIterator instr_it(block_it.Current());
+         !instr_it.Done(); instr_it.Advance()) {
+      Instruction* instruction = instr_it.Current();
+      const intptr_t arg_count = instruction->ArgumentCount();
+      if (arg_count == 0) {
+        continue;
+      }
+      PushArgumentsArray* arguments =
+          new (Z) PushArgumentsArray(zone(), arg_count);
+      for (intptr_t i = 0; i < arg_count; ++i) {
+        Value* arg = instruction->ArgumentValueAt(i);
+        PushArgumentInstr* push_arg = new (Z) PushArgumentInstr(
+            arg->CopyWithType(Z), instruction->RequiredInputRepresentation(i));
+        arguments->Add(push_arg);
+        // Insert all PushArgument instructions immediately before call.
+        // PushArgumentInstr::EmitNativeCode may generate more efficient
+        // code for subsequent PushArgument instructions (ARM, ARM64).
+        InsertBefore(instruction, push_arg, /*env=*/nullptr, kEffect);
+      }
+      instruction->ReplaceInputsWithPushArguments(arguments);
+      if (instruction->env() != nullptr) {
+        instruction->RepairPushArgsInEnvironment();
+      }
+    }
+  }
+}
 
-#endif  // !defined(DART_PRECOMPILED_RUNTIME)
+}  // namespace dart

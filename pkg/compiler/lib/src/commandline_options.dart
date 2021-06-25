@@ -13,19 +13,23 @@ class Flags {
   static const String disableDiagnosticColors = '--disable-diagnostic-colors';
   static const String disableNativeLiveTypeAnalysis =
       '--disable-native-live-type-analysis';
+  static const String useTrivialAbstractValueDomain =
+      '--use-trivial-abstract-value-domain';
   static const String disableTypeInference = '--disable-type-inference';
   static const String disableRtiOptimization = '--disable-rti-optimization';
   static const String dumpInfo = '--dump-info';
+  static const String dumpDeferredGraph = '--dump-deferred-graph';
+  static const String dumpSsa = '--dump-ssa';
   static const String enableAssertMessage = '--assert-message';
   static const String enableCheckedMode = '--enable-checked-mode';
   static const String enableAsserts = '--enable-asserts';
+  static const String enableNullAssertions = '--null-assertions';
   static const String enableDiagnosticColors = '--enable-diagnostic-colors';
-  static const String enableExperimentalMirrors =
-      '--enable-experimental-mirrors';
   static const String experimentalTrackAllocations =
       '--experimental-track-allocations';
-  static const String experimentalAllocationsPath =
-      '--experimental-allocations-path';
+
+  static const String experimentalWrapped = '--experimental-wrapped';
+  static const String experimentalPowersets = '--experimental-powersets';
 
   // Temporary experiment for code generation of locals for frequently used
   // 'this' and constants.
@@ -34,9 +38,26 @@ class Flags {
   // Experimentally try to force part-file functions to be seen as IIFEs.
   static const String experimentStartupFunctions = '--experiment-code-2';
 
+  // Experimentally rely on JavaScript ToBoolean conversions.
+  static const String experimentToBoolean = '--experiment-code-3';
+
+  // Experiment to make methods that are inferred as unreachable throw an
+  // exception rather than generate suspect code.
+  static const String experimentUnreachableMethodsThrow =
+      '--experiment-unreachable-throw';
+
   // Add instrumentation to log every method call.
   static const String experimentCallInstrumentation =
       '--experiment-call-instrumentation';
+
+  static const String experimentNewRti = '--experiment-new-rti';
+
+  /// Use the dart2js lowering of late instance variables rather than the CFE
+  /// lowering.
+  static const String experimentLateInstanceVariables =
+      '--experiment-late-instance-variables';
+
+  static const String enableLanguageExperiments = '--enable-experiment';
 
   static const String fastStartup = '--fast-startup';
   static const String fatalWarnings = '--fatal-warnings';
@@ -54,8 +75,19 @@ class Flags {
   static const String minify = '--minify';
   static const String noFrequencyBasedMinification =
       '--no-frequency-based-minification';
+  // Disables minification even if enabled by other options, e.g. '-O2'.
+  static const String noMinify = '--no-minify';
+
+  static const String nativeNullAssertions = '--native-null-assertions';
+  static const String noNativeNullAssertions = '--no-native-null-assertions';
+
   static const String noSourceMaps = '--no-source-maps';
+
+  static const String omitLateNames = '--omit-late-names';
+  static const String noOmitLateNames = '--no-omit-late-names';
+
   static const String preserveUris = '--preserve-uris';
+  static const String printLegacyStars = '--debug-print-legacy-stars';
   static const String showPackageWarnings = '--show-package-warnings';
   static const String suppressHints = '--suppress-hints';
   static const String suppressWarnings = '--suppress-warnings';
@@ -68,20 +100,43 @@ class Flags {
   static const String useContentSecurityPolicy = '--csp';
   static const String useMultiSourceInfo = '--use-multi-source-info';
   static const String useNewSourceInfo = '--use-new-source-info';
+  static const String useOldRti = '--use-old-rti';
+  static const String useSimpleLoadIds = '--simple-load-ids';
   static const String verbose = '--verbose';
+  static const String verbosity = '--verbosity';
   static const String progress = '--show-internal-progress';
   static const String version = '--version';
+  static const String reportMetrics = '--report-metrics';
+  static const String reportAllMetrics = '--report-all-metrics';
 
+  static const String dillDependencies = '--dill-dependencies';
   static const String readData = '--read-data';
   static const String writeData = '--write-data';
+  static const String noClosedWorldInData = '--no-closed-world-in-data';
+  static const String writeClosedWorld = '--write-closed-world';
+  static const String readClosedWorld = '--read-closed-world';
+  static const String readCodegen = '--read-codegen';
+  static const String writeCodegen = '--write-codegen';
+  static const String codegenShard = '--codegen-shard';
+  static const String codegenShards = '--codegen-shards';
   static const String cfeOnly = '--cfe-only';
+  static const String debugGlobalInference = '--debug-global-inference';
 
   static const String serverMode = '--server-mode';
+
+  static const String soundNullSafety = '--sound-null-safety';
+  static const String noSoundNullSafety = '--no-sound-null-safety';
+  static const String mergeFragmentsThreshold = '--merge-fragments-threshold';
 
   /// Flag for a combination of flags for 'production' mode.
   static const String benchmarkingProduction = '--benchmarking-production';
 
+  /// Flag for a combination of flags for benchmarking 'experiment' mode.
+  static const String benchmarkingExperiment = '--benchmarking-x';
+
   static const String conditionalDirectives = '--conditional-directives';
+
+  static const String cfeInvocationModes = '--cfe-invocation-modes';
 
   // The syntax-only level of support for generic methods is included in the
   // 1.50 milestone for Dart. It is not experimental, but also not permanent:
@@ -106,30 +161,34 @@ class Flags {
   // https://gist.github.com/eernstg/4353d7b4f669745bed3a5423e04a453c.
   static const String genericMethodSyntax = '--generic-method-syntax';
 
-  // Deprecated. This flag is no longer in use for dart2js, but we are keeping
-  // it around for a while longer until all other tools deprecate the same flag.
-  //
-  // It was used to start `async` functions synchronously, but now dart2js
-  // switched on this behavior by default.
-  // TODO(sigmund): delete once this is on by default on all of our tools.
-  static const String syncAsync = '--sync-async';
-
-  // Starts `async` functions asynchronously.
-  //
-  // This is the old Dart 1.0 behavior. Only used during the migration.
-  static const String noSyncAsync = '--no-sync-async';
-
   // Initializing-formal access is enabled by default and cannot be disabled.
   // For backward compatibility the option is still accepted, but it is ignored.
   static const String initializingFormalAccess = '--initializing-formal-access';
 
   // Experimental flags.
   static const String resolveOnly = '--resolve-only';
+
+  // `--no-shipping` and `--canary` control sets of flags. For simplicity, these
+  // flags live in options.dart.
+  // Shipping features default to on, but can be disabled individually. All
+  // shipping features can be disabled with the the [noShipping] flag.
+  static const String noShipping = '--no-shipping';
+
+  // Canary features default to off, but can still be enabled individually. All
+  // canary features can be enabled with the [canary] flag.
+  static const String canary = '--canary';
 }
 
 class Option {
   static const String showPackageWarnings =
       '${Flags.showPackageWarnings}|${Flags.showPackageWarnings}=.*';
+
+  static const String enableLanguageExperiments =
+      '${Flags.enableLanguageExperiments}|'
+      '${Flags.enableLanguageExperiments}=.*';
+
+  static const String multiRoots = '--multi-root=.+';
+  static const String multiRootScheme = '--multi-root-scheme=.+';
 
   // Experimental options.
   static const String resolutionInput = '--resolution-input=.+';

@@ -8,36 +8,19 @@
 #include "platform/memory_sanitizer.h"
 
 #include "vm/allocation.h"
-#include "vm/compiler/assembler/assembler.h"
 #include "vm/exceptions.h"
 #include "vm/heap/verifier.h"
 #include "vm/log.h"
 #include "vm/native_arguments.h"
+#include "vm/native_function.h"
 #include "vm/runtime_entry.h"
 
-#include "include/dart_api.h"
 
 namespace dart {
 
 // Forward declarations.
 class Class;
 class String;
-
-// We have three variants of native functions:
-//  - bootstrap natives, which are called directly from stub code. The callee is
-//    responsible for safepoint transitions and setting up handle scopes as
-//    needed. Only VM-defined natives are bootstrap natives; they cannot be
-//    defined by embedders or native extensions.
-//  - no scope natives, which are called through a wrapper function. The wrapper
-//    function handles the safepoint transition. The callee is responsible for
-//    setting up API scopes as needed.
-//  - auto scope natives, which are called through a wrapper function. The
-//    wrapper function handles the safepoint transition and sets up an API
-//    scope.
-
-typedef void (*NativeFunction)(NativeArguments* arguments);
-typedef void (*NativeFunctionWrapper)(Dart_NativeArguments args,
-                                      Dart_NativeFunction func);
 
 #ifdef DEBUG
 #define TRACE_NATIVE_CALL(format, name)                                        \
@@ -50,46 +33,39 @@ typedef void (*NativeFunctionWrapper)(Dart_NativeArguments args,
   } while (0)
 #endif
 
-#define NATIVE_ENTRY_FUNCTION(name) BootstrapNatives::DN_##name
+typedef ObjectPtr (*BootstrapNativeFunction)(Thread* thread,
+                                             Zone* zone,
+                                             NativeArguments* arguments);
 
-#ifdef DEBUG
-#define SET_NATIVE_RETVAL(args, value)                                         \
-  RawObject* retval = value;                                                   \
-  ASSERT(retval->IsDartInstance());                                            \
-  arguments->SetReturnUnsafe(retval);
-#else
-#define SET_NATIVE_RETVAL(arguments, value) arguments->SetReturnUnsafe(value);
-#endif
-
-#define DEFINE_NATIVE_ENTRY(name, argument_count)                              \
-  static RawObject* DN_Helper##name(Isolate* isolate, Thread* thread,          \
-                                    Zone* zone, NativeArguments* arguments);   \
-  void NATIVE_ENTRY_FUNCTION(name)(Dart_NativeArguments args) {                \
-    CHECK_STACK_ALIGNMENT;                                                     \
-    VERIFY_ON_TRANSITION;                                                      \
-    NativeArguments* arguments = reinterpret_cast<NativeArguments*>(args);     \
-    /* Tell MemorySanitizer 'arguments' is initialized by generated code. */   \
-    MSAN_UNPOISON(arguments, sizeof(*arguments));                              \
-    ASSERT(arguments->NativeArgCount() == argument_count);                     \
+#define DEFINE_NATIVE_ENTRY(name, type_argument_count, argument_count)         \
+  static ObjectPtr DN_Helper##name(Isolate* isolate, Thread* thread,           \
+                                   Zone* zone, NativeArguments* arguments);    \
+  ObjectPtr BootstrapNatives::DN_##name(Thread* thread, Zone* zone,            \
+                                        NativeArguments* arguments) {          \
     TRACE_NATIVE_CALL("%s", "" #name);                                         \
-    {                                                                          \
-      Thread* thread = arguments->thread();                                    \
-      ASSERT(thread == Thread::Current());                                     \
-      Isolate* isolate = thread->isolate();                                    \
-      TransitionGeneratedToVM transition(thread);                              \
-      StackZone zone(thread);                                                  \
-      SET_NATIVE_RETVAL(                                                       \
-          arguments,                                                           \
-          DN_Helper##name(isolate, thread, zone.GetZone(), arguments));        \
-      DEOPTIMIZE_ALOT;                                                         \
-    }                                                                          \
-    VERIFY_ON_TRANSITION;                                                      \
+    ASSERT(arguments->NativeArgCount() == argument_count);                     \
+    /* Note: a longer type arguments vector may be passed */                   \
+    ASSERT(arguments->NativeTypeArgCount() >= type_argument_count);            \
+    return DN_Helper##name(thread->isolate(), thread, zone, arguments);        \
   }                                                                            \
-  static RawObject* DN_Helper##name(Isolate* isolate, Thread* thread,          \
-                                    Zone* zone, NativeArguments* arguments)
+  static ObjectPtr DN_Helper##name(Isolate* isolate, Thread* thread,           \
+                                   Zone* zone, NativeArguments* arguments)
 
-// Helper that throws an argument exception.
+// Helpers that throw an argument exception.
+void DartNativeThrowTypeArgumentCountException(int num_type_args,
+                                               int num_type_args_expected);
 void DartNativeThrowArgumentException(const Instance& instance);
+
+// Native should throw an exception if the wrong number of type arguments is
+// passed.
+#define NATIVE_TYPE_ARGUMENT_COUNT(expected)                                   \
+  int __num_type_arguments = arguments->NativeTypeArgCount();                  \
+  if (__num_type_arguments != expected) {                                      \
+    DartNativeThrowTypeArgumentCountException(__num_type_arguments, expected); \
+  }
+
+#define GET_NATIVE_TYPE_ARGUMENT(name, value)                                  \
+  AbstractType& name = AbstractType::Handle(value);
 
 // Natives should throw an exception if an illegal argument or null is passed.
 // type name = value.
@@ -162,24 +138,24 @@ class NativeEntryData : public ValueObject {
 
   MethodRecognizer::Kind kind() const;
   void set_kind(MethodRecognizer::Kind value) const;
-  static MethodRecognizer::Kind GetKind(RawTypedData* data);
+  static MethodRecognizer::Kind GetKind(TypedDataPtr data);
 
   NativeFunctionWrapper trampoline() const;
   void set_trampoline(NativeFunctionWrapper value) const;
-  static NativeFunctionWrapper GetTrampoline(RawTypedData* data);
+  static NativeFunctionWrapper GetTrampoline(TypedDataPtr data);
 
   NativeFunction native_function() const;
   void set_native_function(NativeFunction value) const;
-  static NativeFunction GetNativeFunction(RawTypedData* data);
+  static NativeFunction GetNativeFunction(TypedDataPtr data);
 
   intptr_t argc_tag() const;
   void set_argc_tag(intptr_t value) const;
-  static intptr_t GetArgcTag(RawTypedData* data);
+  static intptr_t GetArgcTag(TypedDataPtr data);
 
-  static RawTypedData* New(MethodRecognizer::Kind kind,
-                           NativeFunctionWrapper trampoline,
-                           NativeFunction native_function,
-                           intptr_t argc_tag);
+  static TypedDataPtr New(MethodRecognizer::Kind kind,
+                          NativeFunctionWrapper trampoline,
+                          NativeFunction native_function,
+                          intptr_t argc_tag);
 
  private:
   struct Payload {
@@ -189,11 +165,10 @@ class NativeEntryData : public ValueObject {
     MethodRecognizer::Kind kind;
   };
 
-  static Payload* FromTypedArray(RawTypedData* data);
+  static Payload* FromTypedArray(TypedDataPtr data);
 
   const TypedData& data_;
 
-  friend class Interpreter;
   friend class ObjectPoolSerializationCluster;
   DISALLOW_COPY_AND_ASSIGN(NativeEntryData);
 };

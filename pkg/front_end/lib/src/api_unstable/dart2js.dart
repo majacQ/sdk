@@ -2,60 +2,71 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'dart:async' show Future;
+// @dart = 2.9
 
-import 'package:kernel/kernel.dart' show Component;
+import 'package:_fe_analyzer_shared/src/messages/codes.dart'
+    show messageMissingMain;
+
+import 'package:_fe_analyzer_shared/src/messages/diagnostic_message.dart'
+    show DiagnosticMessageHandler;
+
+import 'package:_fe_analyzer_shared/src/messages/severity.dart' show Severity;
+
+import 'package:_fe_analyzer_shared/src/scanner/scanner.dart' show StringToken;
+
+import 'package:kernel/kernel.dart' show Component, Statement;
+
+import 'package:kernel/ast.dart' as ir;
 
 import 'package:kernel/target/targets.dart' show Target;
 
-import '../api_prototype/compiler_options.dart' show CompilerOptions;
+import '../api_prototype/compiler_options.dart'
+    show CompilerOptions, InvocationMode, Verbosity;
 
-import '../api_prototype/diagnostic_message.dart' show DiagnosticMessageHandler;
+import '../api_prototype/experimental_flags.dart' show ExperimentalFlag;
 
 import '../api_prototype/file_system.dart' show FileSystem;
+
+import '../api_prototype/kernel_generator.dart' show CompilerResult;
 
 import '../base/processed_options.dart' show ProcessedOptions;
 
 import '../base/libraries_specification.dart' show LibrariesSpecification;
 
+import '../base/nnbd_mode.dart' show NnbdMode;
+
 import '../fasta/compiler_context.dart' show CompilerContext;
-
-import '../fasta/fasta_codes.dart' show messageMissingMain;
-
-import '../fasta/severity.dart' show Severity;
 
 import '../kernel_generator_impl.dart' show generateKernelInternal;
 
-import '../fasta/scanner.dart' show ErrorToken, StringToken, Token;
+import '../fasta/kernel/redirecting_factory_body.dart' as redirecting;
 
 import 'compiler_state.dart' show InitializedCompilerState;
 
-export '../api_prototype/compiler_options.dart' show CompilerOptions;
+import 'util.dart' show equalLists, equalMaps, equalSets;
 
-export '../api_prototype/diagnostic_message.dart' show DiagnosticMessage;
+export 'package:_fe_analyzer_shared/src/messages/codes.dart'
+    show LocatedMessage;
 
-export '../api_prototype/file_system.dart'
-    show FileSystem, FileSystemEntity, FileSystemException;
+export 'package:_fe_analyzer_shared/src/messages/diagnostic_message.dart'
+    show
+        DiagnosticMessage,
+        DiagnosticMessageHandler,
+        getMessageCharOffset,
+        getMessageHeaderText,
+        getMessageLength,
+        getMessageRelatedInformation,
+        getMessageUri;
 
-export '../api_prototype/kernel_generator.dart' show kernelForProgram;
+export 'package:_fe_analyzer_shared/src/messages/severity.dart' show Severity;
 
-export '../api_prototype/standard_file_system.dart' show DataFileSystemEntity;
+export 'package:_fe_analyzer_shared/src/parser/async_modifier.dart'
+    show AsyncModifier;
 
-export '../compute_platform_binaries_location.dart'
-    show computePlatformBinariesLocation;
+export 'package:_fe_analyzer_shared/src/scanner/scanner.dart'
+    show isUserDefinableOperator, isMinusOperator;
 
-export '../fasta/fasta_codes.dart' show FormattedMessage;
-
-export '../fasta/kernel/redirecting_factory_body.dart'
-    show RedirectingFactoryBody;
-
-export '../fasta/operator.dart' show operatorFromString;
-
-export '../fasta/parser/async_modifier.dart' show AsyncModifier;
-
-export '../fasta/scanner.dart' show isUserDefinableOperator, isMinusOperator;
-
-export '../fasta/scanner/characters.dart'
+export 'package:_fe_analyzer_shared/src/scanner/characters.dart'
     show
         $$,
         $0,
@@ -77,13 +88,47 @@ export '../fasta/scanner/characters.dart'
         $s,
         $z;
 
-export '../fasta/severity.dart' show Severity;
+export 'package:_fe_analyzer_shared/src/util/filenames.dart'
+    show nativeToUri, nativeToUriPath, uriPathToNative;
 
-export '../fasta/util/link.dart' show Link, LinkBuilder;
+export 'package:_fe_analyzer_shared/src/util/link.dart' show Link, LinkBuilder;
 
-export '../fasta/util/link_implementation.dart' show LinkEntry;
+export 'package:_fe_analyzer_shared/src/util/link_implementation.dart'
+    show LinkEntry;
 
-export '../fasta/util/relativize.dart' show relativizeUri;
+export 'package:_fe_analyzer_shared/src/util/relativize.dart'
+    show relativizeUri;
+
+export '../api_prototype/compiler_options.dart'
+    show
+        CompilerOptions,
+        InvocationMode,
+        Verbosity,
+        parseExperimentalFlags,
+        parseExperimentalArguments;
+
+export '../api_prototype/experimental_flags.dart'
+    show defaultExperimentalFlags, ExperimentalFlag, isExperimentEnabled;
+
+export '../api_prototype/file_system.dart'
+    show FileSystem, FileSystemEntity, FileSystemException;
+
+export '../api_prototype/kernel_generator.dart' show kernelForProgram;
+
+export '../api_prototype/language_version.dart'
+    show uriUsesLegacyLanguageVersion;
+
+export '../api_prototype/standard_file_system.dart' show DataFileSystemEntity;
+
+export '../base/nnbd_mode.dart' show NnbdMode;
+
+export '../compute_platform_binaries_location.dart'
+    show computePlatformBinariesLocation;
+
+export '../fasta/kernel/redirecting_factory_body.dart'
+    show isRedirectingFactoryField;
+
+export '../fasta/operator.dart' show operatorFromString;
 
 export 'compiler_state.dart' show InitializedCompilerState;
 
@@ -97,21 +142,41 @@ InitializedCompilerState initializeCompiler(
     InitializedCompilerState oldState,
     Target target,
     Uri librariesSpecificationUri,
-    Uri sdkPlatformUri,
-    Uri packagesFileUri) {
+    List<Uri> additionalDills,
+    Uri packagesFileUri,
+    {Map<ExperimentalFlag, bool> explicitExperimentalFlags,
+    bool verify: false,
+    NnbdMode nnbdMode,
+    Set<InvocationMode> invocationModes: const <InvocationMode>{},
+    Verbosity verbosity: Verbosity.all}) {
+  additionalDills.sort((a, b) => a.toString().compareTo(b.toString()));
+
+  // We don't check `target` because it doesn't support '==' and each
+  // compilation passes a fresh target. However, we pass a logically identical
+  // target each time, so it is safe to assume that it never changes.
   if (oldState != null &&
       oldState.options.packagesFileUri == packagesFileUri &&
       oldState.options.librariesSpecificationUri == librariesSpecificationUri &&
-      oldState.options.linkedDependencies[0] == sdkPlatformUri) {
+      equalLists(oldState.options.additionalDills, additionalDills) &&
+      equalMaps(oldState.options.explicitExperimentalFlags,
+          explicitExperimentalFlags) &&
+      oldState.options.verify == verify &&
+      oldState.options.nnbdMode == nnbdMode &&
+      equalSets(oldState.options.invocationModes, invocationModes) &&
+      oldState.options.verbosity == verbosity) {
     return oldState;
   }
 
   CompilerOptions options = new CompilerOptions()
     ..target = target
-    ..legacyMode = target.legacyMode
-    ..linkedDependencies = [sdkPlatformUri]
+    ..additionalDills = additionalDills
     ..librariesSpecificationUri = librariesSpecificationUri
-    ..packagesFileUri = packagesFileUri;
+    ..packagesFileUri = packagesFileUri
+    ..explicitExperimentalFlags = explicitExperimentalFlags
+    ..verify = verify
+    ..invocationModes = invocationModes
+    ..verbosity = verbosity;
+  if (nnbdMode != null) options.nnbdMode = nnbdMode;
 
   ProcessedOptions processedOpts = new ProcessedOptions(options: options);
 
@@ -135,9 +200,9 @@ Future<Component> compile(
   processedOpts.inputs.add(input);
   processedOpts.clearFileSystemCache();
 
-  var compilerResult = await CompilerContext.runWithOptions(processedOpts,
-      (CompilerContext context) async {
-    var compilerResult = await generateKernelInternal();
+  CompilerResult compilerResult = await CompilerContext.runWithOptions(
+      processedOpts, (CompilerContext context) async {
+    CompilerResult compilerResult = await generateKernelInternal();
     Component component = compilerResult?.component;
     if (component == null) return null;
     if (component.mainMethod == null) {
@@ -153,19 +218,6 @@ Future<Component> compile(
   options.onDiagnostic = null;
   options.fileSystem = null;
   return compilerResult?.component;
-}
-
-Object tokenToString(Object value) {
-  // TODO(ahe): This method is most likely unnecessary. Dart2js doesn't see
-  // tokens anymore.
-  if (value is ErrorToken) {
-    // Shouldn't happen.
-    return value.assertionMessage.message;
-  } else if (value is Token) {
-    return value.lexeme;
-  } else {
-    return value;
-  }
 }
 
 /// Retrieve the name of the libraries that are supported by [target] according
@@ -186,4 +238,24 @@ Iterable<String> getSupportedLibraryNames(
       .allLibraries
       .where((l) => l.isSupported)
       .map((l) => l.name);
+}
+
+/// Desugar API to determine whether [member] is a redirecting factory
+/// constructor.
+// TODO(sigmund): Delete this API once `member.isRedirectingFactoryConstructor`
+// is implemented correctly for patch files (Issue #33495).
+bool isRedirectingFactory(ir.Procedure member) {
+  if (member.kind == ir.ProcedureKind.Factory) {
+    Statement body = member.function.body;
+    if (body is redirecting.RedirectingFactoryBody) return true;
+    if (body is ir.ExpressionStatement) {
+      ir.Expression expression = body.expression;
+      if (expression is ir.Let) {
+        if (expression.variable.name == redirecting.letName) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }

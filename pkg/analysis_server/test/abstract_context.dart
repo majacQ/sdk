@@ -2,30 +2,31 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'dart:async';
-
+import 'package:analyzer/dart/analysis/analysis_context.dart';
+import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/dart/analysis/session.dart';
-import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/element/element.dart';
 import 'package:analyzer/dart/element/visitor.dart';
 import 'package:analyzer/file_system/file_system.dart';
 import 'package:analyzer/src/dart/analysis/analysis_context_collection.dart';
+import 'package:analyzer/src/dart/analysis/byte_store.dart';
 import 'package:analyzer/src/dart/analysis/driver.dart';
 import 'package:analyzer/src/dart/analysis/driver_based_analysis_context.dart';
-import 'package:analyzer/src/dart/analysis/file_state.dart';
-import 'package:analyzer/src/generated/engine.dart';
-import 'package:analyzer/src/generated/source_io.dart';
+import 'package:analyzer/src/dart/analysis/experiments.dart';
+import 'package:analyzer/src/generated/engine.dart' show AnalysisEngine;
 import 'package:analyzer/src/test_utilities/mock_sdk.dart';
+import 'package:analyzer/src/test_utilities/package_config_file_builder.dart';
 import 'package:analyzer/src/test_utilities/resource_provider_mixin.dart';
+import 'package:analyzer/src/util/file_paths.dart' as file_paths;
+import 'package:linter/src/rules.dart';
+import 'package:meta/meta.dart';
 
-import 'src/utilities/flutter_util.dart';
+import 'src/utilities/mock_packages.dart';
 
-/**
- * Finds an [Element] with the given [name].
- */
-Element findChildElement(Element root, String name, [ElementKind kind]) {
-  Element result = null;
-  root.accept(new _ElementVisitorFunctionWrapper((Element element) {
+/// Finds an [Element] with the given [name].
+Element? findChildElement(Element root, String name, [ElementKind? kind]) {
+  Element? result;
+  root.accept(_ElementVisitorFunctionWrapper((Element element) {
     if (element.name != name) {
       return;
     }
@@ -37,142 +38,295 @@ Element findChildElement(Element root, String name, [ElementKind kind]) {
   return result;
 }
 
-/**
- * A function to be called for every [Element].
- */
-typedef void _ElementVisitorFunction(Element element);
+/// A function to be called for every [Element].
+typedef _ElementVisitorFunction = void Function(Element element);
 
 class AbstractContextTest with ResourceProviderMixin {
-  FileContentOverlay fileContentOverlay = new FileContentOverlay();
-  AnalysisDriver _driver;
+  static bool _lintRulesAreRegistered = false;
 
-  AnalysisDriver get driver => _driver;
+  final ByteStore _byteStore = MemoryByteStore();
 
-  AnalysisSession get session => driver.currentSession;
+  final Map<String, String> _declaredVariables = {};
+  AnalysisContextCollectionImpl? _analysisContextCollection;
+
+  List<AnalysisDriver> get allDrivers {
+    _createAnalysisContexts();
+    return _analysisContextCollection!.contexts.map((e) => e.driver).toList();
+  }
+
+  /// The file system specific `/home/test/analysis_options.yaml` path.
+  String get analysisOptionsPath =>
+      convertPath('/home/test/analysis_options.yaml');
+
+  List<String> get collectionIncludedPaths => [workspaceRootPath];
+
+  @deprecated
+  AnalysisDriver get driver {
+    throw 0;
+  }
+
+  String get latestLanguageVersion =>
+      '${ExperimentStatus.currentVersion.major}.'
+      '${ExperimentStatus.currentVersion.minor}';
+
+  AnalysisSession get session => contextFor('/home/test').currentSession;
+
+  String? get testPackageLanguageVersion => latestLanguageVersion;
+
+  String get testPackageLibPath => '$testPackageRootPath/lib';
+
+  String get testPackageRootPath => '$workspaceRootPath/test';
 
   /// The file system specific `/home/test/pubspec.yaml` path.
   String get testPubspecPath => convertPath('/home/test/pubspec.yaml');
 
-  void addFlutterPackage() {
-    addMetaPackage();
-    Folder libFolder = configureFlutterPackage(resourceProvider);
-    _addTestPackageDependency('flutter', libFolder.parent.path);
+  String get workspaceRootPath => '/home';
+
+  void addSource(String path, String content) {
+    newFile(path, content: content);
   }
 
-  void addMetaPackage() {
-    addPackageFile('meta', 'meta.dart', r'''
-library meta;
-
-const _IsTest isTest = const _IsTest();
-
-const _IsTestGroup isTestGroup = const _IsTestGroup();
-
-const Required required = const Required();
-
-class Required {
-  final String reason;
-  const Required([this.reason]);
-}
-
-class _IsTest {
-  const _IsTest();
-}
-
-class _IsTestGroup {
-  const _IsTestGroup();
-}
-''');
+  Future<void> analyzeTestPackageFiles() async {
+    var analysisContext = contextFor(testPackageRootPath);
+    var files = analysisContext.contextRoot.analyzedFiles().toList();
+    for (var path in files) {
+      await analysisContext.currentSession.getResolvedUnit2(path);
+    }
   }
 
-  /// Add a new file with the given [pathInLib] to the package with the
-  /// given [packageName].  Then ensure that the test package depends on the
-  /// [packageName].
-  File addPackageFile(String packageName, String pathInLib, String content) {
-    var packagePath = '/.pub-cache/$packageName';
-    _addTestPackageDependency(packageName, packagePath);
-    return newFile('$packagePath/lib/$pathInLib', content: content);
+  void changeFile(String path) {
+    path = convertPath(path);
+    driverFor(path).changeFile(path);
   }
 
-  Source addSource(String path, String content, [Uri uri]) {
-    File file = newFile(path, content: content);
-    Source source = file.createSource(uri);
-    driver.addFile(file.path);
-    driver.changeFile(file.path);
-    fileContentOverlay[file.path] = content;
-    return source;
+  AnalysisContext contextFor(String path) {
+    return _contextFor(path);
   }
 
-  Future<CompilationUnit> resolveLibraryUnit(Source source) async {
-    var resolveResult = await session.getResolvedUnit(source.fullName);
-    return resolveResult.unit;
+  /// Create an analysis options file based on the given arguments.
+  void createAnalysisOptionsFile({
+    List<String>? experiments,
+    bool? implicitCasts,
+    List<String>? lints,
+  }) {
+    var buffer = StringBuffer();
+
+    if (experiments != null || implicitCasts != null) {
+      buffer.writeln('analyzer:');
+    }
+
+    if (experiments != null) {
+      buffer.writeln('  enable-experiment:');
+      for (var experiment in experiments) {
+        buffer.writeln('    - $experiment');
+      }
+    }
+
+    if (implicitCasts != null) {
+      buffer.writeln('  strong-mode:');
+      buffer.writeln('    implicit-casts: $implicitCasts');
+    }
+
+    if (lints != null) {
+      buffer.writeln('linter:');
+      buffer.writeln('  rules:');
+      for (var lint in lints) {
+        buffer.writeln('    - $lint');
+      }
+    }
+
+    newFile(analysisOptionsPath, content: buffer.toString());
   }
 
+  AnalysisDriver driverFor(String path) {
+    return _contextFor(path).driver;
+  }
+
+  /// Return the existing analysis context that should be used to analyze the
+  /// given [path], or throw [StateError] if the [path] is not analyzed in any
+  /// of the created analysis contexts.
+  DriverBasedAnalysisContext getContext(String path) {
+    path = convertPath(path);
+    return _analysisContextCollection!.contextFor(path);
+  }
+
+  /// Return the existing analysis driver that should be used to analyze the
+  /// given [path], or throw [StateError] if the [path] is not analyzed in any
+  /// of the created analysis contexts.
+  AnalysisDriver getDriver(String path) {
+    var context = getContext(path);
+    return context.driver;
+  }
+
+  @override
+  File newFile(String path, {String content = ''}) {
+    if (_analysisContextCollection != null && !path.endsWith('.dart')) {
+      throw StateError('Only dart files can be changed after analysis.');
+    }
+
+    path = convertPath(path);
+    _addAnalyzedFileToDrivers(path);
+    return super.newFile(path, content: content);
+  }
+
+  Future<ResolvedUnitResult> resolveFile(String path) async {
+    path = convertPath(path);
+    var session = contextFor(path).currentSession;
+    return await session.getResolvedUnit2(path) as ResolvedUnitResult;
+  }
+
+  @mustCallSuper
   void setUp() {
+    if (!_lintRulesAreRegistered) {
+      registerLintRules();
+      _lintRulesAreRegistered = true;
+    }
+
     setupResourceProvider();
 
-    new MockSdk(resourceProvider: resourceProvider);
+    MockSdk(
+      resourceProvider: resourceProvider,
+    );
 
-    newFolder('/home/test');
-    newFile('/home/test/.packages', content: r'''
-test:file:///home/test/lib
-''');
-
-    _createDriver();
+    writeTestPackageConfig();
   }
 
   void setupResourceProvider() {}
 
   void tearDown() {
     AnalysisEngine.instance.clearCaches();
-    AnalysisEngine.instance.logger = null;
   }
 
   /// Update `/home/test/pubspec.yaml` and create the driver.
   void updateTestPubspecFile(String content) {
     newFile(testPubspecPath, content: content);
-    _createDriver();
   }
 
-  void _addTestPackageDependency(String name, String rootPath) {
-    var packagesFile = getFile('/home/test/.packages');
-    var packagesContent = packagesFile.readAsStringSync();
+  void verifyCreatedCollection() {}
 
-    // Ignore if there is already the same package dependency.
-    if (packagesContent.contains('$name:file://')) {
+  void writePackageConfig(String path, PackageConfigFileBuilder config) {
+    newFile(path, content: config.toContent(toUriStr: toUriStr));
+  }
+
+  void writeTestPackageConfig({
+    PackageConfigFileBuilder? config,
+    String? languageVersion,
+    bool flutter = false,
+    bool meta = false,
+    bool vector_math = false,
+  }) {
+    if (config == null) {
+      config = PackageConfigFileBuilder();
+    } else {
+      config = config.copy();
+    }
+
+    config.add(
+      name: 'test',
+      rootPath: testPackageRootPath,
+      languageVersion: languageVersion ?? testPackageLanguageVersion,
+    );
+
+    if (meta || flutter) {
+      var libFolder = MockPackages.instance.addMeta(resourceProvider);
+      config.add(name: 'meta', rootPath: libFolder.parent2.path);
+    }
+
+    if (flutter) {
+      {
+        var libFolder = MockPackages.instance.addUI(resourceProvider);
+        config.add(name: 'ui', rootPath: libFolder.parent2.path);
+      }
+      {
+        var libFolder = MockPackages.instance.addFlutter(resourceProvider);
+        config.add(name: 'flutter', rootPath: libFolder.parent2.path);
+      }
+    }
+
+    if (vector_math) {
+      var libFolder = MockPackages.instance.addVectorMath(resourceProvider);
+      config.add(name: 'vector_math', rootPath: libFolder.parent2.path);
+    }
+
+    var path = '$testPackageRootPath/.dart_tool/package_config.json';
+    writePackageConfig(path, config);
+  }
+
+  void _addAnalyzedFilesToDrivers() {
+    for (var analysisContext in _analysisContextCollection!.contexts) {
+      for (var path in analysisContext.contextRoot.analyzedFiles()) {
+        if (file_paths.isDart(resourceProvider.pathContext, path)) {
+          analysisContext.driver.addFile(path);
+        }
+      }
+    }
+  }
+
+  void _addAnalyzedFileToDrivers(String path) {
+    var collection = _analysisContextCollection;
+    if (collection != null) {
+      for (var analysisContext in collection.contexts) {
+        if (analysisContext.contextRoot.isAnalyzed(path)) {
+          analysisContext.driver.addFile(path);
+        }
+      }
+    }
+  }
+
+  DriverBasedAnalysisContext _contextFor(String path) {
+    _createAnalysisContexts();
+
+    path = convertPath(path);
+    return _analysisContextCollection!.contextFor(path);
+  }
+
+  /// Create all analysis contexts in [collectionIncludedPaths].
+  void _createAnalysisContexts() {
+    if (_analysisContextCollection != null) {
       return;
     }
 
-    packagesContent += '$name:${toUri('$rootPath/lib')}\n';
-
-    packagesFile.writeAsStringSync(packagesContent);
-
-    _createDriver();
-  }
-
-  void _createDriver() {
-    var collection = AnalysisContextCollectionImpl(
-      includedPaths: [convertPath('/home')],
+    _analysisContextCollection = AnalysisContextCollectionImpl(
+      byteStore: _byteStore,
+      declaredVariables: _declaredVariables,
       enableIndex: true,
-      fileContentOverlay: fileContentOverlay,
+      includedPaths: collectionIncludedPaths.map(convertPath).toList(),
       resourceProvider: resourceProvider,
-      sdkPath: convertPath('/sdk'),
+      sdkPath: convertPath(sdkRoot),
     );
 
-    var testPath = convertPath('/home/test');
-    DriverBasedAnalysisContext context = collection.contextFor(testPath);
-
-    _driver = context.driver;
+    _addAnalyzedFilesToDrivers();
+    verifyCreatedCollection();
   }
 }
 
-/**
- * Wraps the given [_ElementVisitorFunction] into an instance of
- * [engine.GeneralizingElementVisitor].
- */
-class _ElementVisitorFunctionWrapper extends GeneralizingElementVisitor {
+mixin WithNonFunctionTypeAliasesMixin on AbstractContextTest {
+  @override
+  String? get testPackageLanguageVersion => null;
+
+  @override
+  void setUp() {
+    super.setUp();
+
+    createAnalysisOptionsFile(
+      experiments: [EnableString.nonfunction_type_aliases],
+    );
+  }
+}
+
+mixin WithNullSafetyMixin on AbstractContextTest {
+  @override
+  String get testPackageLanguageVersion => '2.12';
+}
+
+/// Wraps the given [_ElementVisitorFunction] into an instance of
+/// [engine.GeneralizingElementVisitor].
+class _ElementVisitorFunctionWrapper extends GeneralizingElementVisitor<void> {
   final _ElementVisitorFunction function;
   _ElementVisitorFunctionWrapper(this.function);
-  visitElement(Element element) {
+
+  @override
+  void visitElement(Element element) {
     function(element);
     super.visitElement(element);
   }

@@ -1,4 +1,4 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -36,6 +36,8 @@ dependencies:
       url: git://github.com/munificent/kittens.git
       ref: some-branch
   foo: any
+  relative_path:
+    path: ../somewhere
 dev_dependencies:
   markdown: '>=0.7.1+2 <0.8.0'
   unittest: '>=0.11.0 <0.12.0'
@@ -43,7 +45,7 @@ dependency_overrides:
   foo: 1.2.0
 """;
 
-  Pubspec ps = new Pubspec.parse(src);
+  Pubspec ps = Pubspec.parse(src);
 
   group('pubspec', () {
     group('basic', () {
@@ -58,7 +60,7 @@ dependency_overrides:
       testValueSpan('name', ps.name, startOffset: 6, endOffset: 12);
       group('documentation', () {
         test('no value', () {
-          expect(ps.documentation.value.text, isNull);
+          expect(ps.documentation!.value.text, isNull);
         });
       });
       testValue('homepage', ps.homepage,
@@ -69,7 +71,7 @@ dependency_overrides:
       testValue('author', ps.author, equals('Dart Team <misc@dartlang.org>'));
 
       group('authors', () {
-        PSNodeList authors = ps.authors;
+        PSNodeList authors = ps.authors!;
         test('contents', () {
           expect(authors, isNotNull);
           expect(authors.any((PSNode n) => n.text == 'Bill'), isTrue);
@@ -89,10 +91,17 @@ dependency_overrides:
         {'foo': '1.2.0'}
       ]);
 
+      group('path', () {
+        PSDependency dep =
+            findDependency(ps.dependencies, name: 'relative_path');
+        PSEntry depPath = dep.path!;
+        testValue('path', depPath, equals('../somewhere'));
+      });
+
       group('hosted', () {
         PSDependency dep =
             findDependency(ps.dependencies, name: 'transmogrify');
-        PSHost host = dep.host;
+        PSHost host = dep.host!;
         testValue('name', host.name, equals('transmogrify'));
         testValue('url', host.url, equals('http://your-package-server.com'));
         testKeySpan('name', host.name, startOffset: 237, endOffset: 241);
@@ -101,7 +110,7 @@ dependency_overrides:
 
       group('git', () {
         PSDependency dep = findDependency(ps.dependencies, name: 'kittens');
-        PSGitRepo git = dep.git;
+        PSGitRepo git = dep.git!;
         testValue('ref', git.ref, equals('some-branch'));
         testValue(
             'url', git.url, equals('git://github.com/munificent/kittens.git'));
@@ -146,17 +155,17 @@ dependency_overrides:
   });
 }
 
-PSDependency findDependency(PSDependencyList deps, {String name}) =>
-    deps.firstWhere((dep) => dep.name.text == name, orElse: () => null);
+PSDependency findDependency(PSDependencyList? deps, {String? name}) =>
+    deps!.firstWhere((dep) => dep.name!.text == name);
 
 testDepListContains(
-    String label, PSDependencyList list, List<Map<String, String>> exp) {
+    String label, PSDependencyList? list, List<Map<String, String>> exp) {
   test(label, () {
     exp.forEach((Map<String, String> entry) {
       entry.forEach((k, v) {
         PSDependency dep = findDependency(list, name: k);
         expect(dep, isNotNull);
-        expect(dep.version.value.text, equals(v));
+        expect(dep.version!.value.text, equals(v));
       });
     });
   });
@@ -170,15 +179,15 @@ testEntry(String label, PSEntry node, Matcher m) {
   });
 }
 
-testKeySpan(String label, PSEntry node, {int startOffset, int endOffset}) {
+testKeySpan(String label, PSEntry? node, {int? startOffset, int? endOffset}) {
   group(label, () {
     group('key', () {
-      testSpan(node.key.span, startOffset: startOffset, endOffset: endOffset);
+      testSpan(node!.key!.span, startOffset: startOffset, endOffset: endOffset);
     });
   });
 }
 
-testSpan(SourceSpan span, {int startOffset, int endOffset}) {
+testSpan(SourceSpan span, {int? startOffset, int? endOffset}) {
   test('span', () {
     var start = span.start;
     expect(start, isNotNull);
@@ -189,18 +198,19 @@ testSpan(SourceSpan span, {int startOffset, int endOffset}) {
   });
 }
 
-testValue(String label, PSEntry node, Matcher m) {
+testValue(String label, PSEntry? node, Matcher m) {
   group(label, () {
     test('value', () {
-      expect(node.value.text, m);
+      expect(node!.value.text, m);
     });
   });
 }
 
-testValueSpan(String label, PSEntry node, {int startOffset, int endOffset}) {
+testValueSpan(String label, PSEntry? node, {int? startOffset, int? endOffset}) {
   group(label, () {
     group('value', () {
-      testSpan(node.value.span, startOffset: startOffset, endOffset: endOffset);
+      testSpan(node!.value.span,
+          startOffset: startOffset, endOffset: endOffset);
     });
   });
 }

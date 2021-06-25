@@ -1,21 +1,41 @@
 name: analysis_server
+# This package is not intended for consumption on pub.dev. DO NOT publish.
 publish_to: none
-description: A server that performs analysis of Dart code over character streams using JSON-RPC encoded information.
+
+environment:
+  sdk: '>=2.12.0 <3.0.0'
+
 dependencies:
-  analyzer: ^0.33.0
-  args: '>=0.13.0 <2.0.0'
-  dart_style: '^1.0.6'
-  intl: ^0.15.0
-  linter: ^0.1.16
-  logging: any
-  package_config: '>=0.1.5 <2.0.0'
+  _fe_analyzer_shared:
+    path: ../_fe_analyzer_shared
+  analyzer:
+    path: ../analyzer
+  analyzer_plugin:
+    path: ../analyzer_plugin
+  args: any
+  cli_util: any
+  collection: any
+  convert: any
+  crypto: any
+  dart_style: any
+  http: any
+  html: any
+  intl: any
+  linter: any
+  meta:
+    path: ../meta
+  stream_channel: any
+  telemetry:
+    path: ../telemetry
+  test: any
   path: any
-  plugin: ^0.2.0
-  telemetry: ^0.0.1
-  usage: ^3.2.0+1
   watcher: any
   yaml: any
+
 dev_dependencies:
-  html: any
-  test_reflective_loader: ^0.1.8
-  test: ^1.0.0
+  analyzer_utilities:
+    path: ../analyzer_utilities
+  logging: any
+  matcher: any
+  pedantic: ^1.9.0
+  test_reflective_loader: any

@@ -1,8 +1,6 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-
-library analyzer_cli.test.strong_mode;
 
 import 'dart:io';
 
@@ -12,7 +10,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'driver_test.dart';
 
-main() {
+void main() {
   defineReflectiveTests(StrongModeTest);
 }
 
@@ -25,7 +23,7 @@ main() {
 /// full analysis context.
 @reflectiveTest
 class StrongModeTest extends BaseTest {
-  test_producesStricterErrors() async {
+  Future<void> test_producesStricterErrors() async {
     await drive('data/strong_example.dart');
 
     expect(exitCode, 3);

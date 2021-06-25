@@ -8,6 +8,8 @@ import "dart:_internal" as _symbol_dev;
 import 'dart:_interceptors';
 import 'dart:_js_helper'
     show
+        assertUnreachable,
+        boolConversionCheck,
         checkInt,
         Closure,
         ConstantMap,
@@ -20,21 +22,20 @@ import 'dart:_js_helper'
         patch,
         Primitives,
         quoteStringForRegExp,
-        stringJoinUnchecked,
         getTraceFromException,
         RuntimeError;
 
-import 'dart:_foreign_helper' show JS, JS_GET_FLAG;
-
+import 'dart:_foreign_helper' show JS;
 import 'dart:_native_typed_data' show NativeUint8List;
+import 'dart:_rti' show getRuntimeType;
 
 import "dart:convert" show Encoding, utf8;
-
 import 'dart:typed_data' show Endian, Uint8List, Uint16List;
 
-String _symbolToString(Symbol symbol) => _symbol_dev.Symbol.getName(symbol);
+String _symbolToString(Symbol symbol) =>
+    _symbol_dev.Symbol.getName(symbol as _symbol_dev.Symbol);
 
-Map<String, dynamic> _symbolMapToStringMap(Map<Symbol, dynamic> map) {
+Map<String, dynamic>? _symbolMapToStringMap(Map<Symbol, dynamic>? map) {
   if (map == null) return null;
   var result = new Map<String, dynamic>();
   map.forEach((Symbol key, value) {
@@ -44,13 +45,13 @@ Map<String, dynamic> _symbolMapToStringMap(Map<Symbol, dynamic> map) {
 }
 
 @patch
-int identityHashCode(Object object) => objectHashCode(object);
+int identityHashCode(Object? object) => objectHashCode(object);
 
 // Patch for Object implementation.
 @patch
 class Object {
   @patch
-  bool operator ==(other) => identical(this, other);
+  bool operator ==(Object other) => identical(this, other);
 
   @patch
   int get hashCode => Primitives.objectHashCode(this);
@@ -78,26 +79,9 @@ class Null {
 @patch
 class Function {
   @patch
-  static apply(Function function, List positionalArguments,
-      [Map<Symbol, dynamic> namedArguments]) {
-    // The lazy and startup emitter use a different implementation. To keep the
-    // method small and inlinable, just select the method.
-    return JS_GET_FLAG("IS_FULL_EMITTER")
-        ? _apply1(function, positionalArguments, namedArguments)
-        : _apply2(function, positionalArguments, namedArguments);
-  }
-
-  static _apply1(function, positionalArguments, namedArguments) {
+  static apply(Function function, List<dynamic>? positionalArguments,
+      [Map<Symbol, dynamic>? namedArguments]) {
     return Primitives.applyFunction(
-        function,
-        positionalArguments,
-        // Use this form so that if namedArguments is always null, we can
-        // tree-shake _symbolMapToStringMap.
-        namedArguments == null ? null : _symbolMapToStringMap(namedArguments));
-  }
-
-  static _apply2(function, positionalArguments, namedArguments) {
-    return Primitives.applyFunction2(
         function,
         positionalArguments,
         // Use this form so that if namedArguments is always null, we can
@@ -108,55 +92,22 @@ class Function {
 
 // Patch for Expando implementation.
 @patch
-class Expando<T> {
-  static const String _EXPANDO_PROPERTY_NAME = 'expando\$values';
-
-  // Incremented to make unique keys.
-  static int _keyCount = 0;
-
-  // Stores either a JS WeakMap or a "unique" string key.
-  final Object _jsWeakMapOrKey;
+class Expando<T extends Object> {
+  final Object _jsWeakMap = JS('=Object', 'new WeakMap()');
 
   @patch
-  Expando([String name])
-      : this.name = name,
-        _jsWeakMapOrKey = JS('bool', 'typeof WeakMap == "function"')
-            ? JS('=Object|Null', 'new WeakMap()')
-            : _createKey();
+  Expando([this.name]);
 
   @patch
-  T operator [](Object object) {
-    if (_jsWeakMapOrKey is! String) {
-      _checkType(object); // WeakMap doesn't check on reading, only writing.
-      return JS('', '#.get(#)', _jsWeakMapOrKey, object);
-    }
-    return _getFromObject(_jsWeakMapOrKey, object);
+  T? operator [](Object object) {
+    _checkType(object); // WeakMap doesn't check on reading, only writing.
+    return JS('', '#.get(#)', _jsWeakMap, object);
   }
 
   @patch
-  void operator []=(Object object, T value) {
-    if (_jsWeakMapOrKey is! String) {
-      JS('void', '#.set(#, #)', _jsWeakMapOrKey, object, value);
-    } else {
-      _setOnObject(_jsWeakMapOrKey, object, value);
-    }
+  void operator []=(Object object, T? value) {
+    JS('void', '#.set(#, #)', _jsWeakMap, object, value);
   }
-
-  static Object _getFromObject(String key, Object object) {
-    var values = Primitives.getProperty(object, _EXPANDO_PROPERTY_NAME);
-    return (values == null) ? null : Primitives.getProperty(values, key);
-  }
-
-  static void _setOnObject(String key, Object object, Object value) {
-    var values = Primitives.getProperty(object, _EXPANDO_PROPERTY_NAME);
-    if (values == null) {
-      values = new Object();
-      Primitives.setProperty(object, _EXPANDO_PROPERTY_NAME, values);
-    }
-    Primitives.setProperty(values, key, value);
-  }
-
-  static String _createKey() => "expando\$key\$${_keyCount++}";
 
   static _checkType(object) {
     if (object == null || object is bool || object is num || object is String) {
@@ -170,15 +121,15 @@ class Expando<T> {
 class int {
   @patch
   static int parse(String source,
-      {int radix, @deprecated int onError(String source)}) {
-    int value = tryParse(source, radix: radix);
+      {int? radix, @deprecated int onError(String source)?}) {
+    int? value = tryParse(source, radix: radix);
     if (value != null) return value;
     if (onError != null) return onError(source);
     throw new FormatException(source);
   }
 
   @patch
-  static int tryParse(String source, {int radix}) {
+  static int? tryParse(String source, {int? radix}) {
     return Primitives.parseInt(source, radix);
   }
 }
@@ -187,15 +138,15 @@ class int {
 class double {
   @patch
   static double parse(String source,
-      [@deprecated double onError(String source)]) {
-    double value = tryParse(source);
+      [@deprecated double onError(String source)?]) {
+    double? value = tryParse(source);
     if (value != null) return value;
     if (onError != null) return onError(source);
     throw new FormatException('Invalid double', source);
   }
 
   @patch
-  static double tryParse(String source) {
+  static double? tryParse(String source) {
     return Primitives.parseDouble(source);
   }
 }
@@ -210,11 +161,11 @@ class BigInt implements Comparable<BigInt> {
   static BigInt get two => _BigIntImpl.two;
 
   @patch
-  static BigInt parse(String source, {int radix}) =>
+  static BigInt parse(String source, {int? radix}) =>
       _BigIntImpl.parse(source, radix: radix);
 
   @patch
-  static BigInt tryParse(String source, {int radix}) =>
+  static BigInt? tryParse(String source, {int? radix}) =>
       _BigIntImpl._tryParse(source, radix: radix);
 
   @patch
@@ -236,7 +187,7 @@ class Error {
   }
 
   @patch
-  StackTrace get stackTrace => Primitives.extractStackTrace(this);
+  StackTrace? get stackTrace => Primitives.extractStackTrace(this);
 }
 
 @patch
@@ -301,7 +252,7 @@ class DateTime {
   }
 
   @patch
-  static int _brokenDownDateToValue(int year, int month, int day, int hour,
+  static int? _brokenDownDateToValue(int year, int month, int day, int hour,
       int minute, int second, int millisecond, int microsecond, bool isUtc) {
     return Primitives.valueFromDecomposedDate(
         year,
@@ -377,7 +328,7 @@ class DateTime {
   int get weekday => Primitives.getWeekday(this);
 
   @patch
-  bool operator ==(dynamic other) =>
+  bool operator ==(Object other) =>
       other is DateTime &&
       _value == other.millisecondsSinceEpoch &&
       isUtc == other.isUtc;
@@ -401,32 +352,56 @@ class DateTime {
 @patch
 class Stopwatch {
   @patch
-  static void _initTicker() {
+  static int _initTicker() {
     Primitives.initTicker();
-    _frequency = Primitives.timerFrequency;
+    return Primitives.timerFrequency;
   }
 
   @patch
   static int _now() => Primitives.timerTicks();
+
+  @patch
+  int get elapsedMicroseconds {
+    int ticks = elapsedTicks;
+    if (_frequency == 1000000) return ticks;
+    assert(_frequency == 1000);
+    return ticks * 1000;
+  }
+
+  @patch
+  int get elapsedMilliseconds {
+    int ticks = elapsedTicks;
+    if (_frequency == 1000) return ticks;
+    assert(_frequency == 1000000);
+    return ticks ~/ 1000;
+  }
 }
 
 // Patch for List implementation.
 @patch
 class List<E> {
   @patch
-  factory List([int length]) = JSArray<E>.list;
+  factory List([int? length]) = JSArray<E>.list;
 
   @patch
   factory List.filled(int length, E fill, {bool growable: false}) {
-    List result = growable
+    var result = growable
         ? new JSArray<E>.growable(length)
         : new JSArray<E>.fixed(length);
     if (length != 0 && fill != null) {
+      // TODO(sra): Consider using `Array.fill`.
       for (int i = 0; i < result.length; i++) {
-        result[i] = fill;
+        // Unchecked assignment equivalent to `result[i] = fill`;
+        // `fill` is checked statically at call site.
+        JS('', '#[#] = #', result, i, fill);
       }
     }
     return result;
+  }
+
+  @patch
+  factory List.empty({bool growable: false}) {
+    return growable ? new JSArray<E>.growable(0) : new JSArray<E>.fixed(0);
   }
 
   @patch
@@ -440,8 +415,51 @@ class List<E> {
   }
 
   @patch
+  factory List.of(Iterable<E> elements, {bool growable: true}) {
+    if (growable == true) return List._of(elements);
+    if (growable == false) return List._fixedOf(elements);
+
+    // [growable] may be `null` in legacy mode. Fail with the same error as if
+    // [growable] was used in a condition position in spec mode.
+    boolConversionCheck(growable);
+    assertUnreachable();
+  }
+
+  factory List._ofArray(Iterable<E> elements) {
+    return JSArray<E>.markGrowable(
+        JS('effects:none;depends:no-static', '#.slice(0)', elements));
+  }
+
+  factory List._of(Iterable<E> elements) {
+    if (elements is JSArray) return List._ofArray(elements);
+    // This is essentially `<E>[]..addAll(elements)`, but without a check for
+    // modifiability or ConcurrentModificationError on the receiver.
+    List<E> list = <E>[];
+    for (final e in elements) {
+      list.add(e);
+    }
+    return list;
+  }
+
+  factory List._fixedOf(Iterable<E> elements) {
+    return makeListFixedLength(List._of(elements));
+  }
+
+  @patch
+  factory List.generate(int length, E generator(int index),
+      {bool growable = true}) {
+    final result = growable
+        ? new JSArray<E>.growable(length)
+        : new JSArray<E>.fixed(length);
+    for (int i = 0; i < length; i++) {
+      result[i] = generator(i);
+    }
+    return result;
+  }
+
+  @patch
   factory List.unmodifiable(Iterable elements) {
-    List result = new List<E>.from(elements, growable: false);
+    var result = List<E>.from(elements, growable: false);
     return makeFixedListUnmodifiable(result);
   }
 }
@@ -459,9 +477,12 @@ class Map<K, V> {
 class String {
   @patch
   factory String.fromCharCodes(Iterable<int> charCodes,
-      [int start = 0, int end]) {
+      [int start = 0, int? end]) {
     if (charCodes is JSArray) {
-      JSArray<int> array = charCodes;
+      // Type promotion doesn't work unless the check is `is JSArray<int>`,
+      // which is more expensive.
+      // TODO(41383): Optimize `is JSArray<int>` rather than do weird 'casts'.
+      JSArray array = JS('JSArray', '#', charCodes);
       return _stringFromJSArray(array, start, end);
     }
     if (charCodes is NativeUint8List) {
@@ -475,24 +496,24 @@ class String {
     return Primitives.stringFromCharCode(charCode);
   }
 
-  static String _stringFromJSArray(List list, int start, int endOrNull) {
+  static String _stringFromJSArray(JSArray list, int start, int? endOrNull) {
     int len = list.length;
     int end = RangeError.checkValidRange(start, endOrNull, len);
     if (start > 0 || end < len) {
-      list = list.sublist(start, end);
+      list = JS('JSArray', '#.slice(#, #)', list, start, end);
     }
     return Primitives.stringFromCharCodes(list);
   }
 
   static String _stringFromUint8List(
-      NativeUint8List charCodes, int start, int endOrNull) {
+      NativeUint8List charCodes, int start, int? endOrNull) {
     int len = charCodes.length;
     int end = RangeError.checkValidRange(start, endOrNull, len);
     return Primitives.stringFromNativeUint8List(charCodes, start, end);
   }
 
   static String _stringFromIterable(
-      Iterable<int> charCodes, int start, int end) {
+      Iterable<int> charCodes, int start, int? end) {
     if (start < 0) throw new RangeError.range(start, 0, charCodes.length);
     if (end != null && end < start) {
       throw new RangeError.range(end, start, charCodes.length);
@@ -526,21 +547,28 @@ class bool {
 
 @patch
 class RegExp {
-  @NoInline()
+  @pragma('dart2js:noInline')
   @patch
   factory RegExp(String source,
-          {bool multiLine: false, bool caseSensitive: true}) =>
+          {bool multiLine: false,
+          bool caseSensitive: true,
+          bool unicode: false,
+          bool dotAll: false}) =>
       new JSSyntaxRegExp(source,
-          multiLine: multiLine, caseSensitive: caseSensitive);
+          multiLine: multiLine,
+          caseSensitive: caseSensitive,
+          unicode: unicode,
+          dotAll: dotAll);
 
   @patch
   static String escape(String text) => quoteStringForRegExp(text);
 }
 
 // Patch for 'identical' function.
-@NoInline() // No inlining since we recognize the call in optimizer.
+@pragma(
+    'dart2js:noInline') // No inlining since we recognize the call in optimizer.
 @patch
-bool identical(Object a, Object b) {
+bool identical(Object? a, Object? b) {
   return JS('bool', '(# == null ? # == null : # === #)', a, b, a, b);
 }
 
@@ -555,7 +583,7 @@ class StringBuffer {
   int get length => _contents.length;
 
   @patch
-  void write(Object obj) {
+  void write(Object? obj) {
     _writeString('$obj');
   }
 
@@ -565,12 +593,12 @@ class StringBuffer {
   }
 
   @patch
-  void writeAll(Iterable objects, [String separator = ""]) {
+  void writeAll(Iterable<dynamic> objects, [String separator = ""]) {
     _contents = _writeAll(_contents, objects, separator);
   }
 
   @patch
-  void writeln([Object obj = ""]) {
+  void writeln([Object? obj = ""]) {
     _writeString('$obj\n');
   }
 
@@ -582,7 +610,7 @@ class StringBuffer {
   @patch
   String toString() => Primitives.flattenString(_contents);
 
-  void _writeString(str) {
+  void _writeString(String str) {
     _contents = Primitives.stringConcatUnchecked(_contents, str);
   }
 
@@ -603,28 +631,29 @@ class StringBuffer {
     return string;
   }
 
-  static String _writeOne(String string, Object obj) {
+  static String _writeOne(String string, Object? obj) {
     return Primitives.stringConcatUnchecked(string, '$obj');
   }
 }
 
 @patch
 class NoSuchMethodError {
-  final Object _receiver;
+  final Object? _receiver;
   final Symbol _memberName;
-  final List _arguments;
-  final Map<Symbol, dynamic> _namedArguments;
-  final List _existingArgumentNames;
+  final List? _arguments;
+  final Map<Symbol, dynamic>? _namedArguments;
+  final List? _existingArgumentNames;
 
   @patch
-  NoSuchMethodError.withInvocation(Object receiver, Invocation invocation)
-      : this(receiver, invocation.memberName, invocation.positionalArguments,
-            invocation.namedArguments);
+  factory NoSuchMethodError.withInvocation(
+          Object? receiver, Invocation invocation) =>
+      NoSuchMethodError(receiver, invocation.memberName,
+          invocation.positionalArguments, invocation.namedArguments);
 
   @patch
-  NoSuchMethodError(Object receiver, Symbol memberName,
-      List positionalArguments, Map<Symbol, dynamic> namedArguments,
-      [List existingArgumentNames = null])
+  NoSuchMethodError(Object? receiver, Symbol memberName,
+      List? positionalArguments, Map<Symbol, dynamic>? namedArguments,
+      [List? existingArgumentNames = null])
       : _receiver = receiver,
         _memberName = memberName,
         _arguments = positionalArguments,
@@ -633,17 +662,19 @@ class NoSuchMethodError {
 
   @patch
   String toString() {
-    StringBuffer sb = new StringBuffer('');
+    StringBuffer sb = StringBuffer('');
     String comma = '';
-    if (_arguments != null) {
-      for (var argument in _arguments) {
+    var arguments = _arguments;
+    if (arguments != null) {
+      for (var argument in arguments) {
         sb.write(comma);
         sb.write(Error.safeToString(argument));
         comma = ', ';
       }
     }
-    if (_namedArguments != null) {
-      _namedArguments.forEach((Symbol key, var value) {
+    var namedArguments = _namedArguments;
+    if (namedArguments != null) {
+      namedArguments.forEach((Symbol key, var value) {
         sb.write(comma);
         sb.write(_symbolToString(key));
         sb.write(": ");
@@ -654,12 +685,13 @@ class NoSuchMethodError {
     String memberName = _symbolToString(_memberName);
     String receiverText = Error.safeToString(_receiver);
     String actualParameters = '$sb';
-    if (_existingArgumentNames == null) {
+    var existingArgumentNames = _existingArgumentNames;
+    if (existingArgumentNames == null) {
       return "NoSuchMethodError: method not found: '$memberName'\n"
           "Receiver: ${receiverText}\n"
           "Arguments: [$actualParameters]";
     } else {
-      String formalParameters = _existingArgumentNames.join(', ');
+      String formalParameters = existingArgumentNames.join(', ');
       return "NoSuchMethodError: incorrect number of arguments passed to "
           "method named '$memberName'\n"
           "Receiver: ${receiverText}\n"
@@ -680,7 +712,7 @@ class _CompileTimeError extends Error {
 class Uri {
   @patch
   static Uri get base {
-    String uri = Primitives.currentUri();
+    String? uri = Primitives.currentUri();
     if (uri != null) return Uri.parse(uri);
     throw new UnsupportedError("'Uri.base' is not supported");
   }
@@ -694,19 +726,17 @@ class _Uri {
   static final bool _isWindowsCached = JS(
       'bool',
       'typeof process != "undefined" && '
-      'Object.prototype.toString.call(process) == "[object process]" && '
-      'process.platform == "win32"');
+          'Object.prototype.toString.call(process) == "[object process]" && '
+          'process.platform == "win32"');
 
   // Matches a String that _uriEncodes to itself regardless of the kind of
   // component.  This corresponds to [_unreservedTable], i.e. characters that
   // are not encoded by any encoding table.
   static final RegExp _needsNoEncoding = new RegExp(r'^[\-\.0-9A-Z_a-z~]*$');
 
-  /**
-   * This is the internal implementation of JavaScript's encodeURI function.
-   * It encodes all characters in the string [text] except for those
-   * that appear in [canonicalTable], and returns the escaped string.
-   */
+  /// This is the internal implementation of JavaScript's encodeURI function.
+  /// It encodes all characters in the string [text] except for those
+  /// that appear in [canonicalTable], and returns the escaped string.
   @patch
   static String _uriEncode(List<int> canonicalTable, String text,
       Encoding encoding, bool spaceToPlus) {
@@ -736,21 +766,12 @@ class _Uri {
   }
 }
 
-Uri _resolvePackageUri(Uri packageUri) {
-  assert(packageUri.scheme == "package");
-  if (packageUri.hasAuthority) {
-    throw new ArgumentError("Package-URI must not have a host: $packageUri");
-  }
-  var resolved = Uri.base.resolve("packages/${packageUri.path}");
-  return resolved;
-}
-
 bool _hasErrorStackProperty = JS('bool', 'new Error().stack != void 0');
 
 @patch
 class StackTrace {
   @patch
-  @NoInline()
+  @pragma('dart2js:noInline')
   static StackTrace get current {
     if (_hasErrorStackProperty) {
       return getTraceFromException(JS('', 'new Error()'));
@@ -860,6 +881,9 @@ class _DuplicatedFieldInitializerError extends Error {
 int _max(int a, int b) => a > b ? a : b;
 int _min(int a, int b) => a < b ? a : b;
 
+/// Empty list used as an initializer for local variables in the `_BigIntImpl`.
+final _dummyList = new Uint16List(0);
+
 // Copyright 2009 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
@@ -896,12 +920,10 @@ int _min(int a, int b) => a < b ? a : b;
  * and disclaimer.
  */
 
-/**
- * An implementation for the arbitrarily large integer.
- *
- * The integer number is represented by a sign, an array of 16-bit unsigned
- * integers in little endian format, and a number of used digits in that array.
- */
+/// An implementation for the arbitrarily large integer.
+///
+/// The integer number is represented by a sign, an array of 16-bit unsigned
+/// integers in little endian format, and a number of used digits in that array.
 class _BigIntImpl implements BigInt {
   // Bits per digit.
   static const int _digitBits = 16;
@@ -917,14 +939,14 @@ class _BigIntImpl implements BigInt {
 
   // Result cache for last _divRem call.
   // Result cache for last _divRem call.
-  static Uint16List _lastDividendDigits;
-  static int _lastDividendUsed;
-  static Uint16List _lastDivisorDigits;
-  static int _lastDivisorUsed;
-  static Uint16List _lastQuoRemDigits;
-  static int _lastQuoRemUsed;
-  static int _lastRemUsed;
-  static int _lastRem_nsh;
+  static Uint16List? _lastDividendDigits;
+  static int? _lastDividendUsed;
+  static Uint16List? _lastDivisorDigits;
+  static int? _lastDivisorUsed;
+  static late Uint16List _lastQuoRemDigits;
+  static late int _lastQuoRemUsed;
+  static late int _lastRemUsed;
+  static late int _lastRem_nsh;
 
   /// Whether this bigint is negative.
   final bool _isNegative;
@@ -942,30 +964,28 @@ class _BigIntImpl implements BigInt {
   /// replaced.
   final int _used;
 
-  /**
-   * Parses [source] as a, possibly signed, integer literal and returns its
-   * value.
-   *
-   * The [source] must be a non-empty sequence of base-[radix] digits,
-   * optionally prefixed with a minus or plus sign ('-' or '+').
-   *
-   * The [radix] must be in the range 2..36. The digits used are
-   * first the decimal digits 0..9, and then the letters 'a'..'z' with
-   * values 10 through 35. Also accepts upper-case letters with the same
-   * values as the lower-case ones.
-   *
-   * If no [radix] is given then it defaults to 10. In this case, the [source]
-   * digits may also start with `0x`, in which case the number is interpreted
-   * as a hexadecimal literal, which effectively means that the `0x` is ignored
-   * and the radix is instead set to 16.
-   *
-   * For any int `n` and radix `r`, it is guaranteed that
-   * `n == int.parse(n.toRadixString(r), radix: r)`.
-   *
-   * Throws a [FormatException] if the [source] is not a valid integer literal,
-   * optionally prefixed by a sign.
-   */
-  static _BigIntImpl parse(String source, {int radix}) {
+  /// Parses [source] as a, possibly signed, integer literal and returns its
+  /// value.
+  ///
+  /// The [source] must be a non-empty sequence of base-[radix] digits,
+  /// optionally prefixed with a minus or plus sign ('-' or '+').
+  ///
+  /// The [radix] must be in the range 2..36. The digits used are
+  /// first the decimal digits 0..9, and then the letters 'a'..'z' with
+  /// values 10 through 35. Also accepts upper-case letters with the same
+  /// values as the lower-case ones.
+  ///
+  /// If no [radix] is given then it defaults to 10. In this case, the [source]
+  /// digits may also start with `0x`, in which case the number is interpreted
+  /// as a hexadecimal literal, which effectively means that the `0x` is ignored
+  /// and the radix is instead set to 16.
+  ///
+  /// For any int `n` and radix `r`, it is guaranteed that
+  /// `n == int.parse(n.toRadixString(r), radix: r)`.
+  ///
+  /// Throws a [FormatException] if the [source] is not a valid integer literal,
+  /// optionally prefixed by a sign.
+  static _BigIntImpl parse(String source, {int? radix}) {
     var result = _tryParse(source, radix: radix);
     if (result == null) {
       throw new FormatException("Could not parse BigInt", source);
@@ -984,7 +1004,7 @@ class _BigIntImpl implements BigInt {
     // Read in the source 4 digits at a time.
     // The first part may have a few leading virtual '0's to make the remaining
     // parts all have exactly 4 digits.
-    int digitInPartCount = 4 - source.length.remainder(4);
+    var digitInPartCount = 4 - source.length.remainder(4);
     if (digitInPartCount == 4) digitInPartCount = 0;
     for (int i = 0; i < source.length; i++) {
       part = part * 10 + source.codeUnitAt(i) - _0;
@@ -1026,7 +1046,7 @@ class _BigIntImpl implements BigInt {
   /// If [isNegative] is true, negates the result before returning it.
   ///
   /// The [source] (substring) must be a valid hex literal.
-  static _BigIntImpl _parseHex(String source, int startPos, bool isNegative) {
+  static _BigIntImpl? _parseHex(String source, int startPos, bool isNegative) {
     int hexDigitsPerChunk = _digitBits ~/ 4;
     int sourceLength = source.length - startPos;
     int chunkCount = (sourceLength / hexDigitsPerChunk).ceil();
@@ -1060,7 +1080,7 @@ class _BigIntImpl implements BigInt {
   ///
   /// The [source] will be checked for invalid characters. If it is invalid,
   /// this function returns `null`.
-  static _BigIntImpl _parseRadix(String source, int radix, bool isNegative) {
+  static _BigIntImpl? _parseRadix(String source, int radix, bool isNegative) {
     var result = zero;
     var base = new _BigIntImpl._fromInt(radix);
     for (int i = 0; i < source.length; i++) {
@@ -1077,12 +1097,10 @@ class _BigIntImpl implements BigInt {
   /// Returns the parsed big integer, or `null` if it failed.
   ///
   /// If the [radix] is `null` accepts decimal literals or `0x` hex literals.
-  static _BigIntImpl _tryParse(String source, {int radix}) {
+  static _BigIntImpl? _tryParse(String source, {int? radix}) {
     if (source == "") return null;
 
-    var re = new RegExp(r'^\s*([+-]?)((0x[a-f0-9]+)|(\d+)|([a-z0-9]+))\s*$',
-        caseSensitive: false);
-    var match = re.firstMatch(source);
+    var match = _parseRE.firstMatch(source);
     int signIndex = 1;
     int hexIndex = 3;
     int decimalIndex = 4;
@@ -1091,9 +1109,9 @@ class _BigIntImpl implements BigInt {
 
     bool isNegative = match[signIndex] == "-";
 
-    String decimalMatch = match[decimalIndex];
-    String hexMatch = match[hexIndex];
-    String nonDecimalMatch = match[nonDecimalHexIndex];
+    String? decimalMatch = match[decimalIndex];
+    String? hexMatch = match[hexIndex];
+    String? nonDecimalMatch = match[nonDecimalHexIndex];
 
     if (radix == null) {
       if (decimalMatch != null) {
@@ -1117,12 +1135,16 @@ class _BigIntImpl implements BigInt {
       return _parseDecimal(decimalMatch, isNegative);
     }
     if (radix == 16 && (decimalMatch != null || nonDecimalMatch != null)) {
-      return _parseHex(decimalMatch ?? nonDecimalMatch, 0, isNegative);
+      return _parseHex(decimalMatch ?? nonDecimalMatch!, 0, isNegative);
     }
 
     return _parseRadix(
-        decimalMatch ?? nonDecimalMatch ?? hexMatch, radix, isNegative);
+        decimalMatch ?? nonDecimalMatch ?? hexMatch!, radix, isNegative);
   }
+
+  static RegExp _parseRE = RegExp(
+      r'^\s*([+-]?)((0x[a-f0-9]+)|(\d+)|([a-z0-9]+))\s*$',
+      caseSensitive: false);
 
   /// Finds the amount significant digits in the provided [digits] array.
   static int _normalize(int used, Uint16List digits) {
@@ -1166,7 +1188,7 @@ class _BigIntImpl implements BigInt {
     if (value.abs() < 0x100000000)
       return new _BigIntImpl._fromInt(value.toInt());
     if (value is double) return new _BigIntImpl._fromDouble(value);
-    return new _BigIntImpl._fromInt(value);
+    return new _BigIntImpl._fromInt(value as int);
   }
 
   factory _BigIntImpl._fromInt(int value) {
@@ -1250,22 +1272,18 @@ class _BigIntImpl implements BigInt {
     return absResult;
   }
 
-  /**
-   * Return the negative value of this integer.
-   *
-   * The result of negating an integer always has the opposite sign, except
-   * for zero, which is its own negation.
-   */
+  /// Return the negative value of this integer.
+  ///
+  /// The result of negating an integer always has the opposite sign, except
+  /// for zero, which is its own negation.
   _BigIntImpl operator -() {
     if (_used == 0) return this;
     return new _BigIntImpl._(!_isNegative, _used, _digits);
   }
 
-  /**
-   * Returns the absolute value of this integer.
-   *
-   * For any integer `x`, the result is the same as `x < 0 ? -x : x`.
-   */
+  /// Returns the absolute value of this integer.
+  ///
+  /// For any integer `x`, the result is the same as `x < 0 ? -x : x`.
   _BigIntImpl abs() => _isNegative ? -this : this;
 
   /// Returns this << n *_DIGIT_BITS.
@@ -1336,7 +1354,7 @@ class _BigIntImpl implements BigInt {
   /// Shifts the digits of [xDigits] into the right place in [resultDigits].
   ///
   /// `resultDigits[ds..xUsed+ds] = xDigits[0..xUsed-1] << (n % _DIGIT_BITS)`
-  ///   where `ds = ceil(n / _DIGIT_BITS)`
+  ///   where `ds = n ~/ _DIGIT_BITS`
   ///
   /// Does *not* clear digits below ds.
   static void _lsh(
@@ -1355,18 +1373,16 @@ class _BigIntImpl implements BigInt {
     resultDigits[digitShift] = carry;
   }
 
-  /**
-   * Shift the bits of this integer to the left by [shiftAmount].
-   *
-   * Shifting to the left makes the number larger, effectively multiplying
-   * the number by `pow(2, shiftIndex)`.
-   *
-   * There is no limit on the size of the result. It may be relevant to
-   * limit intermediate values by using the "and" operator with a suitable
-   * mask.
-   *
-   * It is an error if [shiftAmount] is negative.
-   */
+  /// Shift the bits of this integer to the left by [shiftAmount].
+  ///
+  /// Shifting to the left makes the number larger, effectively multiplying
+  /// the number by `pow(2, shiftIndex)`.
+  ///
+  /// There is no limit on the size of the result. It may be relevant to
+  /// limit intermediate values by using the "and" operator with a suitable
+  /// mask.
+  ///
+  /// It is an error if [shiftAmount] is negative.
   _BigIntImpl operator <<(int shiftAmount) {
     if (shiftAmount < 0) {
       throw new ArgumentError("shift-amount must be posititve $shiftAmount");
@@ -1422,15 +1438,13 @@ class _BigIntImpl implements BigInt {
     resultDigits[last] = carry;
   }
 
-  /**
-   * Shift the bits of this integer to the right by [shiftAmount].
-   *
-   * Shifting to the right makes the number smaller and drops the least
-   * significant bits, effectively doing an integer division by
-   *`pow(2, shiftIndex)`.
-   *
-   * It is an error if [shiftAmount] is negative.
-   */
+  /// Shift the bits of this integer to the right by [shiftAmount].
+  ///
+  /// Shifting to the right makes the number smaller and drops the least
+  /// significant bits, effectively doing an integer division by
+  /// `pow(2, shiftIndex)`.
+  ///
+  /// It is an error if [shiftAmount] is negative.
   _BigIntImpl operator >>(int shiftAmount) {
     if (shiftAmount < 0) {
       throw new ArgumentError("shift-amount must be posititve $shiftAmount");
@@ -1468,19 +1482,15 @@ class _BigIntImpl implements BigInt {
   ///
   /// Returns 0 if abs(this) == abs(other); a positive number if
   /// abs(this) > abs(other); and a negative number if abs(this) < abs(other).
-  int _absCompare(BigInt bigInt) {
-    _BigIntImpl other = bigInt;
+  int _absCompare(_BigIntImpl other) {
     return _compareDigits(_digits, _used, other._digits, other._used);
   }
 
-  /**
-   * Compares this to `other`.
-   *
-   * Returns a negative number if `this` is less than `other`, zero if they are
-   * equal, and a positive number if `this` is greater than `other`.
-   */
-  int compareTo(BigInt bigInt) {
-    _BigIntImpl other = bigInt;
+  /// Compares this to `other`.
+  ///
+  /// Returns a negative number if `this` is less than `other`, zero if they are
+  /// equal, and a positive number if `this` is greater than `other`.
+  int compareTo(covariant _BigIntImpl other) {
     if (_isNegative == other._isNegative) {
       var result = _absCompare(other);
       // Use 0 - result to avoid negative zero in JavaScript.
@@ -1622,7 +1632,8 @@ class _BigIntImpl implements BigInt {
     var digits = _digits;
     var otherDigits = other._digits;
     var resultDigits = new Uint16List(resultUsed);
-    var l, m;
+    _BigIntImpl l;
+    int m;
     if (used < otherUsed) {
       l = other;
       m = used;
@@ -1648,7 +1659,8 @@ class _BigIntImpl implements BigInt {
     var digits = _digits;
     var otherDigits = other._digits;
     var resultDigits = new Uint16List(resultUsed);
-    var l, m;
+    _BigIntImpl l;
+    int m;
     if (used < otherUsed) {
       l = other;
       m = used;
@@ -1666,18 +1678,15 @@ class _BigIntImpl implements BigInt {
     return new _BigIntImpl._(isNegative, resultUsed, resultDigits);
   }
 
-  /**
-   * Bit-wise and operator.
-   *
-   * Treating both `this` and [other] as sufficiently large two's component
-   * integers, the result is a number with only the bits set that are set in
-   * both `this` and [other]
-   *
-   * Of both operands are negative, the result is negative, otherwise
-   * the result is non-negative.
-   */
-  _BigIntImpl operator &(BigInt bigInt) {
-    _BigIntImpl other = bigInt;
+  /// Bit-wise and operator.
+  ///
+  /// Treating both `this` and [other] as sufficiently large two's component
+  /// integers, the result is a number with only the bits set that are set in
+  /// both `this` and [other]
+  ///
+  /// Of both operands are negative, the result is negative, otherwise
+  /// the result is non-negative.
+  _BigIntImpl operator &(covariant _BigIntImpl other) {
     if (_isZero || other._isZero) return zero;
     if (_isNegative == other._isNegative) {
       if (_isNegative) {
@@ -1692,7 +1701,7 @@ class _BigIntImpl implements BigInt {
       return _absAndSetSign(other, false);
     }
     // _isNegative != other._isNegative
-    var p, n;
+    _BigIntImpl p, n;
     if (_isNegative) {
       p = other;
       n = this;
@@ -1706,18 +1715,15 @@ class _BigIntImpl implements BigInt {
     return p._absAndNotSetSign(n1, false);
   }
 
-  /**
-   * Bit-wise or operator.
-   *
-   * Treating both `this` and [other] as sufficiently large two's component
-   * integers, the result is a number with the bits set that are set in either
-   * of `this` and [other]
-   *
-   * If both operands are non-negative, the result is non-negative,
-   * otherwise the result us negative.
-   */
-  _BigIntImpl operator |(BigInt bigInt) {
-    _BigIntImpl other = bigInt;
+  /// Bit-wise or operator.
+  ///
+  /// Treating both `this` and [other] as sufficiently large two's component
+  /// integers, the result is a number with the bits set that are set in either
+  /// of `this` and [other]
+  ///
+  /// If both operands are non-negative, the result is non-negative,
+  /// otherwise the result us negative.
+  _BigIntImpl operator |(covariant _BigIntImpl other) {
     if (_isZero) return other;
     if (other._isZero) return this;
     if (_isNegative == other._isNegative) {
@@ -1733,7 +1739,7 @@ class _BigIntImpl implements BigInt {
       return _absOrSetSign(other, false);
     }
     // _neg != a._neg
-    var p, n;
+    _BigIntImpl p, n;
     if (_isNegative) {
       p = other;
       n = this;
@@ -1748,18 +1754,15 @@ class _BigIntImpl implements BigInt {
     return n1._absAndNotSetSign(p, true)._absAddSetSign(one, true);
   }
 
-  /**
-   * Bit-wise exclusive-or operator.
-   *
-   * Treating both `this` and [other] as sufficiently large two's component
-   * integers, the result is a number with the bits set that are set in one,
-   * but not both, of `this` and [other]
-   *
-   * If the operands have the same sign, the result is non-negative,
-   * otherwise the result is negative.
-   */
-  _BigIntImpl operator ^(BigInt bigInt) {
-    _BigIntImpl other = bigInt;
+  /// Bit-wise exclusive-or operator.
+  ///
+  /// Treating both `this` and [other] as sufficiently large two's component
+  /// integers, the result is a number with the bits set that are set in one,
+  /// but not both, of `this` and [other]
+  ///
+  /// If the operands have the same sign, the result is non-negative,
+  /// otherwise the result is negative.
+  _BigIntImpl operator ^(covariant _BigIntImpl other) {
     if (_isZero) return other;
     if (other._isZero) return this;
     if (_isNegative == other._isNegative) {
@@ -1772,7 +1775,7 @@ class _BigIntImpl implements BigInt {
       return _absXorSetSign(other, false);
     }
     // _isNegative != a._isNegative
-    var p, n;
+    _BigIntImpl p, n;
     if (_isNegative) {
       p = other;
       n = this;
@@ -1787,14 +1790,12 @@ class _BigIntImpl implements BigInt {
     return p._absXorSetSign(n1, true)._absAddSetSign(one, true);
   }
 
-  /**
-   * The bit-wise negate operator.
-   *
-   * Treating `this` as a sufficiently large two's component integer,
-   * the result is a number with the opposite bits set.
-   *
-   * This maps any integer `x` to `-x - 1`.
-   */
+  /// The bit-wise negate operator.
+  ///
+  /// Treating `this` as a sufficiently large two's component integer,
+  /// the result is a number with the opposite bits set.
+  ///
+  /// This maps any integer `x` to `-x - 1`.
   _BigIntImpl operator ~() {
     if (_isZero) return _minusOne;
     if (_isNegative) {
@@ -1807,8 +1808,7 @@ class _BigIntImpl implements BigInt {
   }
 
   /// Addition operator.
-  _BigIntImpl operator +(BigInt bigInt) {
-    _BigIntImpl other = bigInt;
+  _BigIntImpl operator +(covariant _BigIntImpl other) {
     if (_isZero) return other;
     if (other._isZero) return this;
     var isNegative = _isNegative;
@@ -1826,8 +1826,7 @@ class _BigIntImpl implements BigInt {
   }
 
   /// Subtraction operator.
-  _BigIntImpl operator -(BigInt bigInt) {
-    _BigIntImpl other = bigInt;
+  _BigIntImpl operator -(covariant _BigIntImpl other) {
     if (_isZero) return -other;
     if (other._isZero) return this;
     var isNegative = _isNegative;
@@ -1879,8 +1878,7 @@ class _BigIntImpl implements BigInt {
   }
 
   /// Multiplication operator.
-  _BigIntImpl operator *(BigInt bigInt) {
-    _BigIntImpl other = bigInt;
+  _BigIntImpl operator *(covariant _BigIntImpl other) {
     var used = _used;
     var otherUsed = other._used;
     if (used == 0 || otherUsed == 0) {
@@ -1928,8 +1926,7 @@ class _BigIntImpl implements BigInt {
   }
 
   /// Returns `trunc(this / other)`, with `other != 0`.
-  _BigIntImpl _div(BigInt bigInt) {
-    _BigIntImpl other = bigInt;
+  _BigIntImpl _div(_BigIntImpl other) {
     assert(other._used > 0);
     if (_used < other._used) {
       return zero;
@@ -1948,8 +1945,7 @@ class _BigIntImpl implements BigInt {
   }
 
   /// Returns `this - other * trunc(this / other)`, with `other != 0`.
-  _BigIntImpl _rem(BigInt bigInt) {
-    _BigIntImpl other = bigInt;
+  _BigIntImpl _rem(_BigIntImpl other) {
     assert(other._used > 0);
     if (_used < other._used) {
       return this;
@@ -2090,82 +2086,73 @@ class _BigIntImpl implements BigInt {
     return finish(hash);
   }
 
-  /**
-   * Test whether this value is numerically equal to `other`.
-   *
-   * If [other] is a [_BigIntImpl] returns whether the two operands have the same
-   * value.
-   *
-   * Returns false if `other` is not a [_BigIntImpl].
-   */
+  /// Test whether this value is numerically equal to `other`.
+  ///
+  /// If [other] is a [_BigIntImpl] returns whether the two operands have the
+  /// same value.
+  ///
+  /// Returns false if `other` is not a [_BigIntImpl].
   bool operator ==(Object other) =>
       other is _BigIntImpl && compareTo(other) == 0;
 
-  /**
-   * Returns the minimum number of bits required to store this big integer.
-   *
-   * The number of bits excludes the sign bit, which gives the natural length
-   * for non-negative (unsigned) values.  Negative values are complemented to
-   * return the bit position of the first bit that differs from the sign bit.
-   *
-   * To find the number of bits needed to store the value as a signed value,
-   * add one, i.e. use `x.bitLength + 1`.
-   *
-   * ```
-   * x.bitLength == (-x-1).bitLength
-   *
-   * new BigInt.from(3).bitLength == 2;   // 00000011
-   * new BigInt.from(2).bitLength == 2;   // 00000010
-   * new BigInt.from(1).bitLength == 1;   // 00000001
-   * new BigInt.from(0).bitLength == 0;   // 00000000
-   * new BigInt.from(-1).bitLength == 0;  // 11111111
-   * new BigInt.from(-2).bitLength == 1;  // 11111110
-   * new BigInt.from(-3).bitLength == 2;  // 11111101
-   * new BigInt.from(-4).bitLength == 2;  // 11111100
-   * ```
-   */
+  /// Returns the minimum number of bits required to store this big integer.
+  ///
+  /// The number of bits excludes the sign bit, which gives the natural length
+  /// for non-negative (unsigned) values.  Negative values are complemented to
+  /// return the bit position of the first bit that differs from the sign bit.
+  ///
+  /// To find the number of bits needed to store the value as a signed value,
+  /// add one, i.e. use `x.bitLength + 1`.
+  ///
+  /// ```
+  /// x.bitLength == (-x-1).bitLength
+  ///
+  /// new BigInt.from(3).bitLength == 2;   // 00000011
+  /// new BigInt.from(2).bitLength == 2;   // 00000010
+  /// new BigInt.from(1).bitLength == 1;   // 00000001
+  /// new BigInt.from(0).bitLength == 0;   // 00000000
+  /// new BigInt.from(-1).bitLength == 0;  // 11111111
+  /// new BigInt.from(-2).bitLength == 1;  // 11111110
+  /// new BigInt.from(-3).bitLength == 2;  // 11111101
+  /// new BigInt.from(-4).bitLength == 2;  // 11111100
+  /// ```
   int get bitLength {
     if (_used == 0) return 0;
     if (_isNegative) return (~this).bitLength;
     return _digitBits * (_used - 1) + _digits[_used - 1].bitLength;
   }
 
-  /**
-   * Truncating division operator.
-   *
-   * Performs a truncating integer division, where the remainder is discarded.
-   *
-   * The remainder can be computed using the [remainder] method.
-   *
-   * Examples:
-   * ```
-   * var seven = new BigInt.from(7);
-   * var three = new BigInt.from(3);
-   * seven ~/ three;    // => 2
-   * (-seven) ~/ three; // => -2
-   * seven ~/ -three;   // => -2
-   * seven.remainder(three);    // => 1
-   * (-seven).remainder(three); // => -1
-   * seven.remainder(-three);   // => 1
-   * ```
-   */
-  _BigIntImpl operator ~/(BigInt bigInt) {
-    _BigIntImpl other = bigInt;
+  /// Truncating division operator.
+  ///
+  /// Performs a truncating integer division, where the remainder is discarded.
+  ///
+  /// The remainder can be computed using the [remainder] method.
+  ///
+  /// Examples:
+  /// ```
+  /// var seven = new BigInt.from(7);
+  /// var three = new BigInt.from(3);
+  /// seven ~/ three;    // => 2
+  /// (-seven) ~/ three; // => -2
+  /// seven ~/ -three;   // => -2
+  /// seven.remainder(three);    // => 1
+  /// (-seven).remainder(three); // => -1
+  /// seven.remainder(-three);   // => 1
+  /// ```
+  _BigIntImpl operator ~/(covariant _BigIntImpl other) {
     if (other._used == 0) {
       throw const IntegerDivisionByZeroException();
     }
     return _div(other);
   }
 
-  /**
-   * Returns the remainder of the truncating division of `this` by [other].
-   *
-   * The result `r` of this operation satisfies:
-   * `this == (this ~/ other) * other + r`.
-   * As a consequence the remainder `r` has the same sign as the divider `this`.
-   */
-  _BigIntImpl remainder(BigInt bigInt) {
-    _BigIntImpl other = bigInt;
+  /// Returns the remainder of the truncating division of `this` by [other].
+  ///
+  /// The result `r` of this operation satisfies:
+  /// `this == (this ~/ other) * other + r`.
+  /// As a consequence the remainder `r` has the same sign as the divider
+  /// `this`.
+  _BigIntImpl remainder(covariant _BigIntImpl other) {
     if (other._used == 0) {
       throw const IntegerDivisionByZeroException();
     }
@@ -2175,31 +2162,28 @@ class _BigIntImpl implements BigInt {
   /// Division operator.
   double operator /(BigInt other) => this.toDouble() / other.toDouble();
 
-  /** Relational less than operator. */
-  bool operator <(BigInt other) => compareTo(other) < 0;
+  /// Relational less than operator.
+  bool operator <(covariant _BigIntImpl other) => compareTo(other) < 0;
 
-  /** Relational less than or equal operator. */
-  bool operator <=(BigInt other) => compareTo(other) <= 0;
+  /// Relational less than or equal operator.
+  bool operator <=(covariant _BigIntImpl other) => compareTo(other) <= 0;
 
-  /** Relational greater than operator. */
-  bool operator >(BigInt other) => compareTo(other) > 0;
+  /// Relational greater than operator.
+  bool operator >(covariant _BigIntImpl other) => compareTo(other) > 0;
 
-  /** Relational greater than or equal operator. */
-  bool operator >=(BigInt other) => compareTo(other) >= 0;
+  /// Relational greater than or equal operator.
+  bool operator >=(covariant _BigIntImpl other) => compareTo(other) >= 0;
 
-  /**
-   * Euclidean modulo operator.
-   *
-   * Returns the remainder of the Euclidean division. The Euclidean division of
-   * two integers `a` and `b` yields two integers `q` and `r` such that
-   * `a == b * q + r` and `0 <= r < b.abs()`.
-   *
-   * The sign of the returned value `r` is always positive.
-   *
-   * See [remainder] for the remainder of the truncating division.
-   */
-  _BigIntImpl operator %(BigInt bigInt) {
-    _BigIntImpl other = bigInt;
+  /// Euclidean modulo operator.
+  ///
+  /// Returns the remainder of the Euclidean division. The Euclidean division of
+  /// two integers `a` and `b` yields two integers `q` and `r` such that
+  /// `a == b * q + r` and `0 <= r < b.abs()`.
+  ///
+  /// The sign of the returned value `r` is always positive.
+  ///
+  /// See [remainder] for the remainder of the truncating division.
+  _BigIntImpl operator %(covariant _BigIntImpl other) {
     if (other._used == 0) {
       throw const IntegerDivisionByZeroException();
     }
@@ -2214,12 +2198,10 @@ class _BigIntImpl implements BigInt {
     return result;
   }
 
-  /**
-   * Returns the sign of this big integer.
-   *
-   * Returns 0 for zero, -1 for values less than zero and
-   * +1 for values greater than zero.
-   */
+  /// Returns the sign of this big integer.
+  ///
+  /// Returns 0 for zero, -1 for values less than zero and
+  /// +1 for values greater than zero.
   int get sign {
     if (_used == 0) return 0;
     return _isNegative ? -1 : 1;
@@ -2256,15 +2238,12 @@ class _BigIntImpl implements BigInt {
     return result;
   }
 
-  /**
-   * Returns this integer to the power of [exponent] modulo [modulus].
-   *
-   * The [exponent] must be non-negative and [modulus] must be
-   * positive.
-   */
-  _BigIntImpl modPow(BigInt bigExponent, BigInt bigModulus) {
-    _BigIntImpl exponent = bigExponent;
-    _BigIntImpl modulus = bigModulus;
+  /// Returns this integer to the power of [exponent] modulo [modulus].
+  ///
+  /// The [exponent] must be non-negative and [modulus] must be
+  /// positive.
+  _BigIntImpl modPow(
+      covariant _BigIntImpl exponent, covariant _BigIntImpl modulus) {
     if (exponent._isNegative) {
       throw new ArgumentError("exponent must be positive: $exponent");
     }
@@ -2288,7 +2267,7 @@ class _BigIntImpl implements BigInt {
       resultDigits[j] = gDigits[j];
     }
     var resultUsed = gUsed;
-    var result2Used;
+    int result2Used;
     for (int i = exponentBitlen - 2; i >= 0; i--) {
       result2Used = z.sqr(resultDigits, resultUsed, result2Digits);
       if (!(exponent & (one << i))._isZero) {
@@ -2363,19 +2342,19 @@ class _BigIntImpl implements BigInt {
     // Variables a, b, c, and d require one more digit.
     final abcdUsed = maxUsed + 1;
     final abcdLen = abcdUsed + 2; // +2 to satisfy _absAdd.
-    var aDigits, bDigits, cDigits, dDigits;
-    bool aIsNegative, bIsNegative, cIsNegative, dIsNegative;
+    var aDigits = _dummyList;
+    var aIsNegative = false;
+    var cDigits = _dummyList;
+    var cIsNegative = false;
     if (ac) {
       aDigits = new Uint16List(abcdLen);
-      aIsNegative = false;
       aDigits[0] = 1;
       cDigits = new Uint16List(abcdLen);
-      cIsNegative = false;
     }
-    bDigits = new Uint16List(abcdLen);
-    bIsNegative = false;
-    dDigits = new Uint16List(abcdLen);
-    dIsNegative = false;
+    var bDigits = new Uint16List(abcdLen);
+    var bIsNegative = false;
+    var dDigits = new Uint16List(abcdLen);
+    var dIsNegative = false;
     dDigits[0] = 1;
 
     while (true) {
@@ -2383,6 +2362,7 @@ class _BigIntImpl implements BigInt {
         _rsh(uDigits, maxUsed, 1, uDigits);
         if (ac) {
           if (((aDigits[0] & 1) == 1) || ((bDigits[0] & 1) == 1)) {
+            // a += y
             if (aIsNegative) {
               if ((aDigits[maxUsed] != 0) ||
                   (_compareDigits(aDigits, maxUsed, yDigits, maxUsed)) > 0) {
@@ -2394,6 +2374,7 @@ class _BigIntImpl implements BigInt {
             } else {
               _absAdd(aDigits, abcdUsed, yDigits, maxUsed, aDigits);
             }
+            // b -= x
             if (bIsNegative) {
               _absAdd(bDigits, abcdUsed, xDigits, maxUsed, bDigits);
             } else if ((bDigits[maxUsed] != 0) ||
@@ -2406,6 +2387,7 @@ class _BigIntImpl implements BigInt {
           }
           _rsh(aDigits, abcdUsed, 1, aDigits);
         } else if ((bDigits[0] & 1) == 1) {
+          // b -= x
           if (bIsNegative) {
             _absAdd(bDigits, abcdUsed, xDigits, maxUsed, bDigits);
           } else if ((bDigits[maxUsed] != 0) ||
@@ -2422,6 +2404,7 @@ class _BigIntImpl implements BigInt {
         _rsh(vDigits, maxUsed, 1, vDigits);
         if (ac) {
           if (((cDigits[0] & 1) == 1) || ((dDigits[0] & 1) == 1)) {
+            // c += y
             if (cIsNegative) {
               if ((cDigits[maxUsed] != 0) ||
                   (_compareDigits(cDigits, maxUsed, yDigits, maxUsed) > 0)) {
@@ -2433,6 +2416,7 @@ class _BigIntImpl implements BigInt {
             } else {
               _absAdd(cDigits, abcdUsed, yDigits, maxUsed, cDigits);
             }
+            // d -= x
             if (dIsNegative) {
               _absAdd(dDigits, abcdUsed, xDigits, maxUsed, dDigits);
             } else if ((dDigits[maxUsed] != 0) ||
@@ -2445,6 +2429,7 @@ class _BigIntImpl implements BigInt {
           }
           _rsh(cDigits, abcdUsed, 1, cDigits);
         } else if ((dDigits[0] & 1) == 1) {
+          // d -= x
           if (dIsNegative) {
             _absAdd(dDigits, abcdUsed, xDigits, maxUsed, dDigits);
           } else if ((dDigits[maxUsed] != 0) ||
@@ -2458,8 +2443,10 @@ class _BigIntImpl implements BigInt {
         _rsh(dDigits, abcdUsed, 1, dDigits);
       }
       if (_compareDigits(uDigits, maxUsed, vDigits, maxUsed) >= 0) {
+        // u -= v
         _absSub(uDigits, maxUsed, vDigits, maxUsed, uDigits);
         if (ac) {
+          // a -= c
           if (aIsNegative == cIsNegative) {
             var a_cmp_c = _compareDigits(aDigits, abcdUsed, cDigits, abcdUsed);
             if (a_cmp_c > 0) {
@@ -2472,6 +2459,7 @@ class _BigIntImpl implements BigInt {
             _absAdd(aDigits, abcdUsed, cDigits, abcdUsed, aDigits);
           }
         }
+        // b -= d
         if (bIsNegative == dIsNegative) {
           var b_cmp_d = _compareDigits(bDigits, abcdUsed, dDigits, abcdUsed);
           if (b_cmp_d > 0) {
@@ -2484,8 +2472,10 @@ class _BigIntImpl implements BigInt {
           _absAdd(bDigits, abcdUsed, dDigits, abcdUsed, bDigits);
         }
       } else {
+        // v -= u
         _absSub(vDigits, maxUsed, uDigits, maxUsed, vDigits);
         if (ac) {
+          // c -= a
           if (cIsNegative == aIsNegative) {
             var c_cmp_a = _compareDigits(cDigits, abcdUsed, aDigits, abcdUsed);
             if (c_cmp_a > 0) {
@@ -2498,6 +2488,7 @@ class _BigIntImpl implements BigInt {
             _absAdd(cDigits, abcdUsed, aDigits, abcdUsed, cDigits);
           }
         }
+        // d -= b
         if (dIsNegative == bIsNegative) {
           var d_cmp_b = _compareDigits(dDigits, abcdUsed, bDigits, abcdUsed);
           if (d_cmp_b > 0) {
@@ -2529,42 +2520,32 @@ class _BigIntImpl implements BigInt {
     }
 
     if (dIsNegative) {
-      if ((dDigits[maxUsed] != 0) ||
+      while ((dDigits[maxUsed] != 0) ||
           (_compareDigits(dDigits, maxUsed, xDigits, maxUsed) > 0)) {
+        // d += x, d still negative
         _absSub(dDigits, abcdUsed, xDigits, maxUsed, dDigits);
-        if ((dDigits[maxUsed] != 0) ||
-            (_compareDigits(dDigits, maxUsed, xDigits, maxUsed) > 0)) {
-          _absSub(dDigits, abcdUsed, xDigits, maxUsed, dDigits);
-        } else {
-          _absSub(xDigits, maxUsed, dDigits, maxUsed, dDigits);
-          dIsNegative = false;
-        }
-      } else {
-        _absSub(xDigits, maxUsed, dDigits, maxUsed, dDigits);
-        dIsNegative = false;
       }
-    } else if ((dDigits[maxUsed] != 0) ||
-        (_compareDigits(dDigits, maxUsed, xDigits, maxUsed) > 0)) {
-      _absSub(dDigits, abcdUsed, xDigits, maxUsed, dDigits);
-      if ((dDigits[maxUsed] != 0) ||
-          (_compareDigits(dDigits, maxUsed, xDigits, maxUsed) > 0)) {
+      // d += x
+      _absSub(xDigits, maxUsed, dDigits, maxUsed, dDigits);
+      dIsNegative = false;
+    } else {
+      while ((dDigits[maxUsed] != 0) ||
+          (_compareDigits(dDigits, maxUsed, xDigits, maxUsed) >= 0)) {
+        // d -= x
         _absSub(dDigits, abcdUsed, xDigits, maxUsed, dDigits);
       }
     }
     return new _BigIntImpl._(false, maxUsed, dDigits);
   }
 
-  /**
-   * Returns the modular multiplicative inverse of this big integer
-   * modulo [modulus].
-   *
-   * The [modulus] must be positive.
-   *
-   * It is an error if no modular inverse exists.
-   */
+  /// Returns the modular multiplicative inverse of this big integer
+  /// modulo [modulus].
+  ///
+  /// The [modulus] must be positive.
+  ///
+  /// It is an error if no modular inverse exists.
   // Returns 1/this % modulus, with modulus > 0.
-  _BigIntImpl modInverse(BigInt bigInt) {
-    _BigIntImpl modulus = bigInt;
+  _BigIntImpl modInverse(covariant _BigIntImpl modulus) {
     if (modulus <= zero) {
       throw new ArgumentError("Modulus must be strictly positive: $modulus");
     }
@@ -2576,90 +2557,84 @@ class _BigIntImpl implements BigInt {
     return _binaryGcd(modulus, tmp, true);
   }
 
-  /**
-   * Returns the greatest common divisor of this big integer and [other].
-   *
-   * If either number is non-zero, the result is the numerically greatest
-   * integer dividing both `this` and `other`.
-   *
-   * The greatest common divisor is independent of the order,
-   * so `x.gcd(y)` is  always the same as `y.gcd(x)`.
-   *
-   * For any integer `x`, `x.gcd(x)` is `x.abs()`.
-   *
-   * If both `this` and `other` is zero, the result is also zero.
-   */
-  _BigIntImpl gcd(BigInt bigInt) {
-    _BigIntImpl other = bigInt;
+  /// Returns the greatest common divisor of this big integer and [other].
+  ///
+  /// If either number is non-zero, the result is the numerically greatest
+  /// integer dividing both `this` and `other`.
+  ///
+  /// The greatest common divisor is independent of the order,
+  /// so `x.gcd(y)` is  always the same as `y.gcd(x)`.
+  ///
+  /// For any integer `x`, `x.gcd(x)` is `x.abs()`.
+  ///
+  /// If both `this` and `other` is zero, the result is also zero.
+  _BigIntImpl gcd(covariant _BigIntImpl other) {
     if (_isZero) return other.abs();
     if (other._isZero) return this.abs();
     return _binaryGcd(this, other, false);
   }
 
-  /**
-   * Returns the least significant [width] bits of this big integer as a
-   * non-negative number (i.e. unsigned representation).  The returned value has
-   * zeros in all bit positions higher than [width].
-   *
-   * ```
-   * new BigInt.from(-1).toUnsigned(5) == 31   // 11111111  ->  00011111
-   * ```
-   *
-   * This operation can be used to simulate arithmetic from low level languages.
-   * For example, to increment an 8 bit quantity:
-   *
-   * ```
-   * q = (q + 1).toUnsigned(8);
-   * ```
-   *
-   * `q` will count from `0` up to `255` and then wrap around to `0`.
-   *
-   * If the input fits in [width] bits without truncation, the result is the
-   * same as the input.  The minimum width needed to avoid truncation of `x` is
-   * given by `x.bitLength`, i.e.
-   *
-   * ```
-   * x == x.toUnsigned(x.bitLength);
-   * ```
-   */
+  /// Returns the least significant [width] bits of this big integer as a
+  /// non-negative number (i.e. unsigned representation).  The returned value
+  /// has zeros in all bit positions higher than [width].
+  ///
+  /// ```
+  /// new BigInt.from(-1).toUnsigned(5) == 31   // 11111111  ->  00011111
+  /// ```
+  ///
+  /// This operation can be used to simulate arithmetic from low level
+  /// languages.  For example, to increment an 8 bit quantity:
+  ///
+  /// ```
+  /// q = (q + 1).toUnsigned(8);
+  /// ```
+  ///
+  /// `q` will count from `0` up to `255` and then wrap around to `0`.
+  ///
+  /// If the input fits in [width] bits without truncation, the result is the
+  /// same as the input.  The minimum width needed to avoid truncation of `x` is
+  /// given by `x.bitLength`, i.e.
+  ///
+  /// ```
+  /// x == x.toUnsigned(x.bitLength);
+  /// ```
   _BigIntImpl toUnsigned(int width) {
     return this & ((one << width) - one);
   }
 
-  /**
-   * Returns the least significant [width] bits of this integer, extending the
-   * highest retained bit to the sign.  This is the same as truncating the value
-   * to fit in [width] bits using an signed 2-s complement representation.  The
-   * returned value has the same bit value in all positions higher than [width].
-   *
-   * ```
-   * var big15 = new BigInt.from(15);
-   * var big16 = new BigInt.from(16);
-   * var big239 = new BigInt.from(239);
-   *                                      V--sign bit-V
-   * big16.toSigned(5) == -big16   //  00010000 -> 11110000
-   * big239.toSigned(5) == big15   //  11101111 -> 00001111
-   *                                      ^           ^
-   * ```
-   *
-   * This operation can be used to simulate arithmetic from low level languages.
-   * For example, to increment an 8 bit signed quantity:
-   *
-   * ```
-   * q = (q + 1).toSigned(8);
-   * ```
-   *
-   * `q` will count from `0` up to `127`, wrap to `-128` and count back up to
-   * `127`.
-   *
-   * If the input value fits in [width] bits without truncation, the result is
-   * the same as the input.  The minimum width needed to avoid truncation of `x`
-   * is `x.bitLength + 1`, i.e.
-   *
-   * ```
-   * x == x.toSigned(x.bitLength + 1);
-   * ```
-   */
+  /// Returns the least significant [width] bits of this integer, extending the
+  /// highest retained bit to the sign.  This is the same as truncating the
+  /// value to fit in [width] bits using an signed 2-s complement
+  /// representation.  The returned value has the same bit value in all
+  /// positions higher than [width].
+  ///
+  /// ```
+  /// var big15 = new BigInt.from(15);
+  /// var big16 = new BigInt.from(16);
+  /// var big239 = new BigInt.from(239);
+  ///                                      V--sign bit-V
+  /// big16.toSigned(5) == -big16   //  00010000 -> 11110000
+  /// big239.toSigned(5) == big15   //  11101111 -> 00001111
+  ///                                      ^           ^
+  /// ```
+  ///
+  /// This operation can be used to simulate arithmetic from low level
+  /// languages.  For example, to increment an 8 bit signed quantity:
+  ///
+  /// ```
+  /// q = (q + 1).toSigned(8);
+  /// ```
+  ///
+  /// `q` will count from `0` up to `127`, wrap to `-128` and count back up to
+  /// `127`.
+  ///
+  /// If the input value fits in [width] bits without truncation, the result is
+  /// the same as the input.  The minimum width needed to avoid truncation of
+  /// `x` is `x.bitLength + 1`, i.e.
+  ///
+  /// ```
+  /// x == x.toSigned(x.bitLength + 1);
+  /// ```
   _BigIntImpl toSigned(int width) {
     // The value of binary number weights each bit by a power of two.  The
     // twos-complement value weights the sign bit negatively.  We compute the
@@ -2688,13 +2663,11 @@ class _BigIntImpl implements BigInt {
     return _isNegative ? -result : result;
   }
 
-  /**
-   * Returns this [_BigIntImpl] as a [double].
-   *
-   * If the number is not representable as a [double], an
-   * approximation is returned. For numerically large integers, the
-   * approximation may be infinite.
-   */
+  /// Returns this [_BigIntImpl] as a [double].
+  ///
+  /// If the number is not representable as a [double], an
+  /// approximation is returned. For numerically large integers, the
+  /// approximation may be infinite.
   double toDouble() {
     const int exponentBias = 1075;
     // There are 11 bits for the exponent.
@@ -2708,7 +2681,9 @@ class _BigIntImpl implements BigInt {
     var resultBits = new Uint8List(8);
 
     var length = _digitBits * (_used - 1) + _digits[_used - 1].bitLength;
-    if (length - 53 > maxDoubleExponent) return double.infinity;
+    if (length > maxDoubleExponent + 53) {
+      return _isNegative ? double.negativeInfinity : double.infinity;
+    }
 
     // The most significant bit is for the sign.
     if (_isNegative) resultBits[7] = 0x80;
@@ -2778,7 +2753,7 @@ class _BigIntImpl implements BigInt {
           // There is already one in the cachedBits.
           roundUp();
         } else {
-          for (int i = digitIndex; digitIndex >= 0; i--) {
+          for (int i = digitIndex; i >= 0; i--) {
             if (_digits[i] != 0) {
               roundUp();
               break;
@@ -2790,13 +2765,11 @@ class _BigIntImpl implements BigInt {
     return resultBits.buffer.asByteData().getFloat64(0, Endian.little);
   }
 
-  /**
-   * Returns a String-representation of this integer.
-   *
-   * The returned string is parsable by [parse].
-   * For any `_BigIntImpl` `i`, it is guaranteed that
-   * `i == _BigIntImpl.parse(i.toString())`.
-   */
+  /// Returns a String-representation of this integer.
+  ///
+  /// The returned string is parsable by [parse].
+  /// For any `_BigIntImpl` `i`, it is guaranteed that
+  /// `i == _BigIntImpl.parse(i.toString())`.
   String toString() {
     if (_used == 0) return "0";
     if (_used == 1) {
@@ -2828,14 +2801,12 @@ class _BigIntImpl implements BigInt {
     return _a + digit - 10;
   }
 
-  /**
-   * Converts [this] to a string representation in the given [radix].
-   *
-   * In the string representation, lower-case letters are used for digits above
-   * '9', with 'a' being 10 an 'z' being 35.
-   *
-   * The [radix] argument must be an integer in the range 2 to 36.
-   */
+  /// Converts [this] to a string representation in the given [radix].
+  ///
+  /// In the string representation, lower-case letters are used for digits above
+  /// '9', with 'a' being 10 an 'z' being 35.
+  ///
+  /// The [radix] argument must be an integer in the range 2 to 36.
   String toRadixString(int radix) {
     if (radix > 36) throw new RangeError.range(radix, 2, 36);
 
@@ -2907,8 +2878,8 @@ class _BigIntClassic implements _BigIntReduction {
                 _modulus._digits[_modulus._used - 1].bitLength);
 
   int convert(_BigIntImpl x, Uint16List resultDigits) {
-    var digits;
-    var used;
+    Uint16List digits;
+    int used;
     if (x._isNegative || x._absCompare(_modulus) >= 0) {
       var remainder = x._rem(_modulus);
       if (x._isNegative && remainder._used > 0) {

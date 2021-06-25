@@ -6,7 +6,7 @@ import 'dart:async';
 import 'dart:html';
 import 'package:observatory/models.dart' as M;
 import 'package:observatory/src/elements/helpers/rendering_scheduler.dart';
-import 'package:observatory/src/elements/helpers/tag.dart';
+import 'package:observatory/src/elements/helpers/custom_element.dart';
 import 'package:observatory/utils.dart';
 
 class SampleBufferControlChangedElement {
@@ -14,11 +14,8 @@ class SampleBufferControlChangedElement {
   SampleBufferControlChangedElement(this.element);
 }
 
-class SampleBufferControlElement extends HtmlElement implements Renderable {
-  static const tag =
-      const Tag<SampleBufferControlElement>('sample-buffer-control');
-
-  RenderingScheduler<SampleBufferControlElement> _r;
+class SampleBufferControlElement extends CustomElement implements Renderable {
+  late RenderingScheduler<SampleBufferControlElement> _r;
 
   Stream<RenderedEvent<SampleBufferControlElement>> get onRendered =>
       _r.onRendered;
@@ -28,13 +25,13 @@ class SampleBufferControlElement extends HtmlElement implements Renderable {
   Stream<SampleBufferControlChangedElement> get onTagChange =>
       _onTagChange.stream;
 
-  M.VM _vm;
-  Stream<M.SampleProfileLoadingProgressEvent> _progressStream;
-  M.SampleProfileLoadingProgress _progress;
-  M.SampleProfileTag _tag;
+  late M.VM _vm;
+  late Stream<M.SampleProfileLoadingProgressEvent> _progressStream;
+  late M.SampleProfileLoadingProgress _progress;
+  late M.SampleProfileTag _tag;
   bool _showTag = false;
   bool _profileVM = false;
-  StreamSubscription _subscription;
+  late StreamSubscription _subscription;
 
   M.SampleProfileLoadingProgress get progress => _progress;
   M.SampleProfileTag get selectedTag => _tag;
@@ -52,12 +49,12 @@ class SampleBufferControlElement extends HtmlElement implements Renderable {
       Stream<M.SampleProfileLoadingProgressEvent> progressStream,
       {M.SampleProfileTag selectedTag: M.SampleProfileTag.none,
       bool showTag: true,
-      RenderingQueue queue}) {
+      RenderingQueue? queue}) {
     assert(progress != null);
     assert(progressStream != null);
     assert(selectedTag != null);
     assert(showTag != null);
-    SampleBufferControlElement e = document.createElement(tag.name);
+    SampleBufferControlElement e = new SampleBufferControlElement.created();
     e._r = new RenderingScheduler<SampleBufferControlElement>(e, queue: queue);
     e._vm = vm;
     e._progress = progress;
@@ -67,7 +64,7 @@ class SampleBufferControlElement extends HtmlElement implements Renderable {
     return e;
   }
 
-  SampleBufferControlElement.created() : super.created();
+  SampleBufferControlElement.created() : super.created('sample-buffer-control');
 
   @override
   void attached() {
@@ -160,7 +157,7 @@ class SampleBufferControlElement extends HtmlElement implements Renderable {
     final loadT = Utils.formatDurationInSeconds(_progress.loadingTime);
     final sampleCount = _progress.profile.sampleCount;
     final refreshT = new DateTime.now();
-    final stackDepth = _progress.profile.stackDepth;
+    final maxStackDepth = _progress.profile.maxStackDepth;
     final sampleRate = _progress.profile.sampleRate.toStringAsFixed(0);
     final timeSpan = _progress.profile.sampleCount == 0
         ? '0s'
@@ -195,7 +192,7 @@ class SampleBufferControlElement extends HtmlElement implements Renderable {
             ..text = 'Sampling',
           new DivElement()
             ..classes = ['memberValue']
-            ..text = '$stackDepth stack frames @ ${sampleRate}Hz'
+            ..text = '$maxStackDepth stack frames @ ${sampleRate}Hz'
         ],
     ];
     if (_showTag) {
@@ -220,7 +217,11 @@ class SampleBufferControlElement extends HtmlElement implements Renderable {
   List<Element> _createTagSelect() {
     var values = M.SampleProfileTag.values;
     if (!_profileVM) {
-      values = const [M.SampleProfileTag.userOnly, M.SampleProfileTag.vmOnly, M.SampleProfileTag.none];
+      values = const [
+        M.SampleProfileTag.userOnly,
+        M.SampleProfileTag.vmOnly,
+        M.SampleProfileTag.none
+      ];
     }
     var s;
     return [

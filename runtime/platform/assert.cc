@@ -6,13 +6,19 @@
 
 #include "include/dart_api.h"
 #include "platform/globals.h"
-#include "vm/os.h"
+#include "platform/syslog.h"
+
+#if defined(HOST_OS_ANDROID)
+extern "C" __attribute__((weak)) void android_set_abort_message(const char*);
+#endif  // defined(HOST_OS_ANDROID)
 
 namespace dart {
 
 bool Expect::failed_ = false;
 
-void DynamicAssertionHelper::Print(const char* format, va_list arguments) {
+void DynamicAssertionHelper::Print(const char* format,
+                                   va_list arguments,
+                                   bool will_abort /* = false */) {
   // Take only the last 1KB of the file name if it is longer.
   const intptr_t file_len = strlen(file_);
   const intptr_t file_offset = (file_len > (1 * KB)) ? file_len - (1 * KB) : 0;
@@ -29,18 +35,24 @@ void DynamicAssertionHelper::Print(const char* format, va_list arguments) {
             sizeof(buffer) - file_and_line_length, format, arguments);
 
   // Print the buffer on stderr and/or syslog.
-  OS::PrintErr("%s\n", buffer);
+  Syslog::PrintErr("%s\n", buffer);
+#if defined(HOST_OS_ANDROID)
+  if (will_abort && (&android_set_abort_message != nullptr)) {
+    android_set_abort_message(buffer);
+  }
+#endif  // defined(HOST_OS_ANDROID)
 }
 
 void Assert::Fail(const char* format, ...) {
   va_list arguments;
   va_start(arguments, format);
-  Print(format, arguments);
+  Print(format, arguments, /*will_abort=*/true);
   va_end(arguments);
 
   // Abort right away.
   Dart_DumpNativeStackTrace(NULL);
-  OS::Abort();
+  Dart_PrepareToAbort();
+  abort();
 }
 
 void Expect::Fail(const char* format, ...) {

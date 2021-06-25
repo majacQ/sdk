@@ -1,7 +1,7 @@
 // Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-
+// @dart=2.9
 /*@testedFeatures=inference*/
 library test;
 
@@ -15,7 +15,7 @@ abstract class A {
 // So B.x doesn't inherit A.x's type.
 
 class B extends A {
-  static var /*@topType=dynamic*/ x = f();
+  static var x = f();
 }
 
 // Similar with C.x.  It is not even eligible for inference since it's static

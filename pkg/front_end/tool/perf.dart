@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart=2.9
+
 /// An entrypoint used to run portions of analyzer and measure its performance.
 ///
 /// TODO(sigmund): rename to 'analyzer_perf.dart' in sync with changes to the
@@ -15,23 +17,21 @@
 /// outlines).
 library front_end.tool.perf;
 
-import 'dart:async';
 import 'dart:io' show Directory, File, Platform, exit;
 
+import 'package:_fe_analyzer_shared/src/scanner/scanner.dart';
+import 'package:analyzer/dart/analysis/features.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/error/listener.dart';
-import 'package:analyzer/file_system/physical_file_system.dart'
-    show PhysicalResourceProvider;
-import 'package:analyzer/source/package_map_resolver.dart';
-import 'package:analyzer/src/context/builder.dart';
+import 'package:analyzer/file_system/file_system.dart' show Folder;
+import 'package:analyzer/file_system/physical_file_system.dart';
+import 'package:analyzer/src/context/packages.dart';
 import 'package:analyzer/src/dart/sdk/sdk.dart' show FolderBasedDartSdk;
 import 'package:analyzer/src/file_system/file_system.dart';
 import 'package:analyzer/src/generated/parser.dart';
 import 'package:analyzer/src/generated/source.dart';
 import 'package:analyzer/src/generated/source_io.dart';
-import 'package:front_end/src/fasta/scanner.dart';
-import 'package:front_end/src/scanner/token.dart';
-import 'package:package_config/discovery.dart';
+import 'package:analyzer/src/source/package_map_resolver.dart';
 import 'package:path/path.dart' as path;
 
 main(List<String> args) async {
@@ -44,7 +44,7 @@ main(List<String> args) async {
   var bench = args[0];
   var entryUri = Uri.base.resolve(args[1]);
 
-  await setup(entryUri);
+  await setup(path.fromUri(entryUri));
 
   Set<Source> files = scanReachableFiles(entryUri);
   var handlers = {
@@ -100,9 +100,11 @@ void collectSources(Source start, Set<Source> files) {
 /// Uses the diet-parser to parse only directives in [source].
 CompilationUnit parseDirectives(Source source) {
   var token = tokenize(source);
-  // TODO(jcollins-g): Make parser work with Fasta
-  var parser =
-      new Parser(source, AnalysisErrorListener.NULL_LISTENER, useFasta: false);
+  var parser = new Parser(
+    source,
+    AnalysisErrorListener.NULL_LISTENER,
+    featureSet: FeatureSet.latestLanguageVersion(),
+  );
   return parser.parseDirectives(token);
 }
 
@@ -122,7 +124,11 @@ void parseFiles(Set<Source> files) {
 CompilationUnit parseFull(Source source) {
   var token = tokenize(source);
   parseTimer.start();
-  var parser = new Parser(source, AnalysisErrorListener.NULL_LISTENER);
+  var parser = new Parser(
+    source,
+    AnalysisErrorListener.NULL_LISTENER,
+    featureSet: FeatureSet.latestLanguageVersion(),
+  );
   var unit = parser.parseCompilationUnit(token);
   parseTimer.stop();
   return unit;
@@ -131,10 +137,10 @@ CompilationUnit parseFull(Source source) {
 /// Report that metric [name] took [time] micro-seconds to process
 /// [inputSize] characters.
 void report(String name, int time) {
-  var sb = new StringBuffer();
-  var padding = ' ' * (20 - name.length);
+  StringBuffer sb = new StringBuffer();
+  String padding = ' ' * (20 - name.length);
   sb.write('$name:$padding $time us, ${time ~/ 1000} ms');
-  var invSpeed = (time * 1000 / inputSize).toStringAsFixed(2);
+  String invSpeed = (time * 1000 / inputSize).toStringAsFixed(2);
   sb.write(', $invSpeed ns/char');
   print('$sb');
 }
@@ -181,7 +187,9 @@ Set<Source> scanReachableFiles(Uri entryUri) {
   loadTimer.stop();
 
   inputSize = 0;
-  for (var s in files) inputSize += s.contents.data.length;
+  for (var s in files) {
+    inputSize += s.contents.data.length;
+  }
   print('input size: ${inputSize} chars');
   var loadTime = loadTimer.elapsedMicroseconds - scanTimer.elapsedMicroseconds;
   report('load', loadTime);
@@ -191,10 +199,19 @@ Set<Source> scanReachableFiles(Uri entryUri) {
 
 /// Sets up analyzer to be able to load and resolve app, packages, and sdk
 /// sources.
-Future setup(Uri entryUri) async {
+Future setup(String path) async {
   var provider = PhysicalResourceProvider.INSTANCE;
-  var packageMap = new ContextBuilder(provider, null, null)
-      .convertPackagesToMap(await findPackages(entryUri));
+
+  var packages = findPackagesFrom(
+    provider,
+    provider.getResource(path),
+  );
+
+  var packageMap = <String, List<Folder>>{};
+  for (var package in packages.packages) {
+    packageMap[package.name] = [package.libFolder];
+  }
+
   sources = new SourceFactory([
     new ResourceUriResolver(provider),
     new PackageMapUriResolver(provider, packageMap),

@@ -2,10 +2,9 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-// Test that a coin toss with Random.nextBool() is fair.
+// @dart = 2.9
 
-// Library tag to allow Dartium to run the test.
-library coin_test;
+// Test that a coin toss with Random.nextBool() is fair.
 
 import "package:expect/expect.dart";
 import 'dart:math';

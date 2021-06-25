@@ -3,12 +3,13 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:analysis_server/src/services/correction/fix.dart';
+import 'package:analyzer/src/error/codes.dart';
 import 'package:analyzer_plugin/utilities/fixes/fixes.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'fix_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(CreateGetterTest);
     defineReflectiveTests(CreateGetterMixinTest);
@@ -20,12 +21,12 @@ class CreateGetterMixinTest extends FixProcessorTest {
   @override
   FixKind get kind => DartFixKind.CREATE_GETTER;
 
-  test_qualified_instance() async {
-    await resolveTestUnit('''
+  Future<void> test_qualified_instance() async {
+    await resolveTestCode('''
 mixin M {
 }
 
-main(M m) {
+void f(M m) {
   int v = m.test;
   print(v);
 }
@@ -35,15 +36,15 @@ mixin M {
   int get test => null;
 }
 
-main(M m) {
+void f(M m) {
   int v = m.test;
   print(v);
 }
 ''');
   }
 
-  test_unqualified_instance_assignmentLhs() async {
-    await resolveTestUnit('''
+  Future<void> test_unqualified_instance_assignmentLhs() async {
+    await resolveTestCode('''
 mixin M {
   main() {
     test = 42;
@@ -53,8 +54,8 @@ mixin M {
     await assertNoFix();
   }
 
-  test_unqualified_instance_assignmentRhs() async {
-    await resolveTestUnit('''
+  Future<void> test_unqualified_instance_assignmentRhs() async {
+    await resolveTestCode('''
 mixin M {
   main() {
     int v = test;
@@ -80,11 +81,11 @@ class CreateGetterTest extends FixProcessorTest {
   @override
   FixKind get kind => DartFixKind.CREATE_GETTER;
 
-  test_hint_getter() async {
-    await resolveTestUnit('''
+  Future<void> test_hint_getter() async {
+    await resolveTestCode('''
 class A {
 }
-main(A a) {
+void f(A a) {
   var x = a;
   int v = x.test;
   print(v);
@@ -94,7 +95,7 @@ main(A a) {
 class A {
   int get test => null;
 }
-main(A a) {
+void f(A a) {
   var x = a;
   int v = x.test;
   print(v);
@@ -102,8 +103,8 @@ main(A a) {
 ''');
   }
 
-  test_inSDK() async {
-    await resolveTestUnit('''
+  Future<void> test_inSDK() async {
+    await resolveTestCode('''
 main(List p) {
   int v = p.foo;
   print(v);
@@ -112,48 +113,78 @@ main(List p) {
     await assertNoFix();
   }
 
-  test_location_afterLastGetter() async {
-    await resolveTestUnit('''
-class A {
-  int existingField;
+  Future<void> test_internal_instance() async {
+    await resolveTestCode('''
+extension E on String {
+  int m()  => g;
+}
+''');
+    await assertHasFix('''
+extension E on String {
+  get g => null;
 
-  int get existingGetter => null;
+  int m()  => g;
+}
+''');
+  }
+
+  Future<void> test_internal_static() async {
+    await resolveTestCode('''
+extension E on String {
+  static int m()  => g;
+}
+''');
+    await assertHasFix('''
+extension E on String {
+  static get g => null;
+
+  static int m()  => g;
+}
+''');
+  }
+
+  Future<void> test_location_afterLastGetter() async {
+    await resolveTestCode('''
+class A {
+  int existingField = 0;
+
+  int get existingGetter => 0;
 
   existingMethod() {}
 }
-main(A a) {
+void f(A a) {
   int v = a.test;
   print(v);
 }
 ''');
     await assertHasFix('''
 class A {
-  int existingField;
+  int existingField = 0;
 
-  int get existingGetter => null;
+  int get existingGetter => 0;
 
   int get test => null;
 
   existingMethod() {}
 }
-main(A a) {
+void f(A a) {
   int v = a.test;
   print(v);
 }
 ''');
   }
 
-  test_multiLevel() async {
-    await resolveTestUnit('''
+  Future<void> test_multiLevel() async {
+    await resolveTestCode('''
 class A {
 }
 class B {
-  A a;
+  A a = A();
 }
 class C {
-  B b;
+  B b = B();
 }
-main(C c) {
+void f(C c) {
   int v = c.b.a.test;
   print(v);
 }
@@ -163,23 +194,45 @@ class A {
   int get test => null;
 }
 class B {
-  A a;
+  A a = A();
 }
 class C {
-  B b;
+  B b = B();
 }
-main(C c) {
+void f(C c) {
   int v = c.b.a.test;
   print(v);
 }
 ''');
   }
 
-  test_qualified_instance() async {
-    await resolveTestUnit('''
+  Future<void> test_override() async {
+    await resolveTestCode('''
+extension E on String {
+}
+
+void f(String s) {
+  int v = E(s).test;
+  print(v);
+}
+''');
+    await assertHasFix('''
+extension E on String {
+  int get test => null;
+}
+
+void f(String s) {
+  int v = E(s).test;
+  print(v);
+}
+''');
+  }
+
+  Future<void> test_qualified_instance() async {
+    await resolveTestCode('''
 class A {
 }
-main(A a) {
+void f(A a) {
   int v = a.test;
   print(v);
 }
@@ -188,14 +241,14 @@ main(A a) {
 class A {
   int get test => null;
 }
-main(A a) {
+void f(A a) {
   int v = a.test;
   print(v);
 }
 ''');
   }
 
-  test_qualified_instance_differentLibrary() async {
+  Future<void> test_qualified_instance_differentLibrary() async {
     addSource('/home/test/lib/other.dart', '''
 /**
  * A comment to push the offset of the braces for the following class
@@ -207,10 +260,10 @@ class A {
 }
 ''');
 
-    await resolveTestUnit('''
+    await resolveTestCode('''
 import 'package:test/other.dart';
 
-main(A a) {
+void f(A a) {
   int v = a.test;
   print(v);
 }
@@ -229,12 +282,12 @@ class A {
 ''', target: '/home/test/lib/other.dart');
   }
 
-  test_qualified_instance_dynamicType() async {
-    await resolveTestUnit('''
+  Future<void> test_qualified_instance_dynamicType() async {
+    await resolveTestCode('''
 class A {
-  B b;
-  void f(Object p) {
-    p == b.test;
+  B b = B();
+  void f(dynamic context) {
+    context + b.test;
   }
 }
 class B {
@@ -242,9 +295,9 @@ class B {
 ''');
     await assertHasFix('''
 class A {
-  B b;
-  void f(Object p) {
-    p == b.test;
+  B b = B();
+  void f(dynamic context) {
+    context + b.test;
   }
 }
 class B {
@@ -253,8 +306,43 @@ class B {
 ''');
   }
 
-  test_qualified_propagatedType() async {
-    await resolveTestUnit('''
+  Future<void> test_qualified_instance_inPart_imported() async {
+    addSource('/home/test/lib/a.dart', '''
+part of lib;
+
+class A {}
+''');
+
+    await resolveTestCode('''
+import 'package:test/a.dart';
+
+main(A a) {
+  int v = a.test;
+  print(v);
+}
+''');
+    await assertNoFix(errorFilter: (e) {
+      return e.errorCode == CompileTimeErrorCode.UNDEFINED_GETTER;
+    });
+  }
+
+  Future<void> test_qualified_instance_inPart_self() async {
+    await resolveTestCode('''
+part of lib;
+
+class A {
+}
+
+void f(A a) {
+  int v = a.test;
+  print(v);
+}
+''');
+    await assertNoFix();
+  }
+
+  Future<void> test_qualified_propagatedType() async {
+    await resolveTestCode('''
 class A {
   A get self => this;
 }
@@ -278,19 +366,41 @@ main() {
 ''');
   }
 
-  test_setterContext() async {
-    await resolveTestUnit('''
+  Future<void> test_setterContext() async {
+    await resolveTestCode('''
 class A {
 }
-main(A a) {
+void f(A a) {
   a.test = 42;
 }
 ''');
     await assertNoFix();
   }
 
-  test_unqualified_instance_asInvocationArgument() async {
-    await resolveTestUnit('''
+  Future<void> test_static() async {
+    await resolveTestCode('''
+extension E on String {
+}
+
+void f(String s) {
+  int v = E.test;
+  print(v);
+}
+''');
+    await assertHasFix('''
+extension E on String {
+  static int get test => null;
+}
+
+void f(String s) {
+  int v = E.test;
+  print(v);
+}
+''');
+  }
+
+  Future<void> test_unqualified_instance_asInvocationArgument() async {
+    await resolveTestCode('''
 class A {
   main() {
     f(test);
@@ -310,8 +420,8 @@ f(String s) {}
 ''');
   }
 
-  test_unqualified_instance_assignmentLhs() async {
-    await resolveTestUnit('''
+  Future<void> test_unqualified_instance_assignmentLhs() async {
+    await resolveTestCode('''
 class A {
   main() {
     test = 42;
@@ -321,8 +431,8 @@ class A {
     await assertNoFix();
   }
 
-  test_unqualified_instance_assignmentRhs() async {
-    await resolveTestUnit('''
+  Future<void> test_unqualified_instance_assignmentRhs() async {
+    await resolveTestCode('''
 class A {
   main() {
     int v = test;
@@ -342,8 +452,8 @@ class A {
 ''');
   }
 
-  test_unqualified_instance_asStatement() async {
-    await resolveTestUnit('''
+  Future<void> test_unqualified_instance_asStatement() async {
+    await resolveTestCode('''
 class A {
   main() {
     test;

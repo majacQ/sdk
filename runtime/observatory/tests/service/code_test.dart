@@ -3,7 +3,7 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:observatory/service_io.dart';
-import 'package:unittest/unittest.dart';
+import 'package:test/test.dart';
 import 'test_helper.dart';
 import 'dart:async';
 
@@ -66,15 +66,15 @@ var tests = <IsolateTest>[
 
     List tests = <IsolateTest>[];
     // Load code from frame 0.
-    Code code = await isolate.getObject(codeId0);
+    Code code = await isolate.getObject(codeId0) as Code;
     expect(code.type, equals('Code'));
-    expect(code.function.name, equals('funcB'));
+    expect(code.function!.name, equals('funcB'));
     expect(code.hasDisassembly, equals(true));
 
     // Load code from frame 0.
-    code = await isolate.getObject(codeId1);
+    code = await isolate.getObject(codeId1) as Code;
     expect(code.type, equals('Code'));
-    expect(code.function.name, equals('funcA'));
+    expect(code.function!.name, equals('funcA'));
     expect(code.hasDisassembly, equals(true));
   },
 ];

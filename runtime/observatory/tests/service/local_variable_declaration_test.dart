@@ -4,17 +4,17 @@
 // VMOptions=--verbose_debug
 
 import 'package:observatory/service_io.dart';
-import 'package:unittest/unittest.dart';
+import 'package:test/test.dart';
 import 'service_test_common.dart';
 import 'test_helper.dart';
 import 'dart:developer';
 
-testParameters(int jjjj, int oooo, [int hhhh, int nnnn]) {
+testParameters(int jjjj, int oooo, [int? hhhh, int? nnnn]) {
   debugger();
 }
 
 testMain() {
-  int xxx, yyyy, zzzzz;
+  int? xxx, yyyy, zzzzz;
   for (int i = 0; i < 1; i++) {
     var foo = () {};
     debugger();
@@ -38,7 +38,7 @@ var tests = <IsolateTest>[
     // Grab the top frame.
     Frame frame = stack['frames'][0];
     // Grab the script.
-    Script script = frame.location.script;
+    Script script = frame.location!.script;
     await script.load();
 
     // Ensure that the token at each declaration position is the name of the
@@ -46,8 +46,12 @@ var tests = <IsolateTest>[
     for (var variable in frame.variables) {
       final int declarationTokenPos = variable['declarationTokenPos'];
       final String name = variable['name'];
-      final String token = script.getToken(declarationTokenPos);
-      expect(name, token);
+      final String? token = script.getToken(declarationTokenPos);
+      // When running from an appjit snapshot, sources aren't available so the returned token will
+      // be null.
+      if (token != null) {
+        expect(name, token);
+      }
     }
   },
   resumeIsolate,
@@ -61,15 +65,19 @@ var tests = <IsolateTest>[
     // Grab the top frame.
     Frame frame = stack['frames'][0];
     // Grab the script.
-    Script script = frame.location.script;
+    Script script = frame.location!.script;
     await script.load();
     print(frame);
     expect(frame.variables.length, greaterThanOrEqualTo(1));
     for (var variable in frame.variables) {
       final int declarationTokenPos = variable['declarationTokenPos'];
       final String name = variable['name'];
-      final String token = script.getToken(declarationTokenPos);
-      expect(name, token);
+      final String? token = script.getToken(declarationTokenPos);
+      // When running from an appjit snapshot, sources aren't available so the returned token will
+      // be null.
+      if (token != null) {
+        expect(name, token);
+      }
     }
   },
   resumeIsolate,
@@ -82,7 +90,7 @@ var tests = <IsolateTest>[
     // Grab the top frame.
     Frame frame = stack['frames'][0];
     // Grab the script.
-    Script script = frame.location.script;
+    Script script = frame.location!.script;
     await script.load();
 
     // Ensure that the token at each declaration position is the name of the
@@ -91,8 +99,12 @@ var tests = <IsolateTest>[
     for (var variable in frame.variables) {
       final int declarationTokenPos = variable['declarationTokenPos'];
       final String name = variable['name'];
-      final String token = script.getToken(declarationTokenPos);
-      expect(name, token);
+      final String? token = script.getToken(declarationTokenPos);
+      // When running from an appjit snapshot, sources aren't available so the returned token will
+      // be null.
+      if (token != null) {
+        expect(name, token);
+      }
     }
   }
 ];

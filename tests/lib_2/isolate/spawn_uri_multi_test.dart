@@ -2,14 +2,16 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
+// VMOptions=--enable-isolate-groups --experimental-enable-isolate-groups-jit
+// VMOptions=--no-enable-isolate-groups
+
 // Negative test to make sure that we are reaching all assertions.
-// Note: the following comment is used by test.dart to additionally compile the
-// other isolate's code.
-// OtherScripts=spawn_uri_child_isolate.dart
 library spawn_tests;
 
 import 'dart:isolate';
-import 'package:expect/async_minitest.dart';
+import 'package:async_helper/async_minitest.dart';
 
 /* Dummy import so multi-test copies the file.
 import 'spawn_uri_child_isolate.dart';

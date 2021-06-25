@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 /// This library exports all API from Kernel's ast.dart that can be used
 /// throughout fasta.
 library fasta.kernel_ast_api;
@@ -13,11 +15,11 @@ export 'package:kernel/ast.dart'
         AssertStatement,
         AsyncMarker,
         Block,
-        BottomType,
         BreakStatement,
         Catch,
         CheckLibraryIsLoaded,
         Class,
+        Component,
         Constructor,
         ConstructorInvocation,
         ContinueSwitchStatement,
@@ -27,6 +29,7 @@ export 'package:kernel/ast.dart'
         Expression,
         ExpressionStatement,
         Field,
+        ForInStatement,
         FunctionDeclaration,
         FunctionExpression,
         FunctionNode,
@@ -44,7 +47,7 @@ export 'package:kernel/ast.dart'
         ListLiteral,
         LocalInitializer,
         Location,
-        MapEntry,
+        MapLiteralEntry,
         MapLiteral,
         Member,
         MethodInvocation,
@@ -52,6 +55,7 @@ export 'package:kernel/ast.dart'
         NamedExpression,
         NamedType,
         Node,
+        NullLiteral,
         Procedure,
         ProcedureKind,
         PropertyGet,
@@ -79,41 +83,21 @@ export 'package:kernel/ast.dart'
         VoidType,
         setParents;
 
-export 'kernel_shadow_ast.dart'
+export 'internal_ast.dart'
     show
-        ArgumentsJudgment,
-        AssertInitializerJudgment,
-        AssertStatementJudgment,
-        BreakJudgment,
-        CascadeJudgment,
-        ComplexAssignmentJudgment,
-        ContinueSwitchJudgment,
-        DeferredCheckJudgment,
-        ExpressionStatementJudgment,
+        ArgumentsImpl,
+        Cascade,
+        DeferredCheck,
         FactoryConstructorInvocationJudgment,
-        ForInJudgment,
-        FunctionDeclarationJudgment,
-        FunctionNodeJudgment,
-        IfJudgment,
-        IfNullJudgment,
+        FunctionDeclarationImpl,
         InvalidSuperInitializerJudgment,
-        LabeledStatementJudgment,
-        LoadLibraryTearOffJudgment,
-        MethodInvocationJudgment,
+        LoadLibraryTearOff,
         NamedFunctionExpressionJudgment,
-        NullAwareMethodInvocationJudgment,
-        NullAwarePropertyGetJudgment,
-        RedirectingInitializerJudgment,
-        ReturnJudgment,
-        ShadowFieldInitializer,
+        NullAwareMethodInvocation,
+        NullAwarePropertyGet,
+        ReturnStatementImpl,
         ShadowInvalidFieldInitializer,
         ShadowInvalidInitializer,
         ShadowLargeIntLiteral,
-        SuperInitializerJudgment,
-        SuperMethodInvocationJudgment,
-        SuperPropertyGetJudgment,
-        SwitchCaseJudgment,
-        SwitchStatementJudgment,
-        VariableDeclarationJudgment,
-        VariableGetJudgment,
-        YieldJudgment;
+        VariableDeclarationImpl,
+        VariableGetImpl;

@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'assist_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(FlutterWrapColumnTest);
   });
@@ -19,15 +19,55 @@ class FlutterWrapColumnTest extends AssistProcessorTest {
   @override
   AssistKind get kind => DartAssistKind.FLUTTER_WRAP_COLUMN;
 
-  test_coveredByWidget() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  @override
+  void setUp() {
+    super.setUp();
+    writeTestPackageConfig(
+      flutter: true,
+    );
+  }
+
+  Future<void> test_controlFlowCollections_if() async {
+    await resolveTestCode('''
+import 'package:flutter/widgets.dart';
+
+Widget build(bool b) {
+  return Row(
+    children: [
+      Text('aaa'),
+      if (b) /*caret*/Text('bbb'),
+      Text('ccc'),
+    ],
+  );
+}
+''');
+    await assertHasAssist('''
+import 'package:flutter/widgets.dart';
+
+Widget build(bool b) {
+  return Row(
+    children: [
+      Text('aaa'),
+      if (b) Column(
+        children: [
+          Text('bbb'),
+        ],
+      ),
+      Text('ccc'),
+    ],
+  );
+}
+''');
+  }
+
+  Future<void> test_coveredByWidget() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 
 class FakeFlutter {
   main() {
-    return new Container(
-      child: new /*caret*/Text('aaa'),
+    return Container(
+      child: /*caret*/Text('aaa'),
     );
   }
 }
@@ -37,10 +77,10 @@ import 'package:flutter/widgets.dart';
 
 class FakeFlutter {
   main() {
-    return new Container(
+    return Container(
       child: Column(
-        children: <Widget>[
-          new /*caret*/Text('aaa'),
+        children: [
+          Text('aaa'),
         ],
       ),
     );
@@ -49,20 +89,19 @@ class FakeFlutter {
 ''');
   }
 
-  test_coversWidgets() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  Future<void> test_coversWidgets() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 
 class FakeFlutter {
   main() {
-    return new Row(children: [
-      new Text('aaa'),
+    return Row(children: [
+      Text('aaa'),
 // start
-      new Text('bbb'),
-      new Text('ccc'),
+      Text('bbb'),
+      Text('ccc'),
 // end
-      new Text('ddd'),
+      Text('ddd'),
     ]);
   }
 }
@@ -72,18 +111,45 @@ import 'package:flutter/widgets.dart';
 
 class FakeFlutter {
   main() {
-    return new Row(children: [
-      new Text('aaa'),
-// start
+    return Row(children: [
+      Text('aaa'),
       Column(
-        children: <Widget>[
-          new Text('bbb'),
-          new Text('ccc'),
+        children: [
+          Text('bbb'),
+          Text('ccc'),
         ],
       ),
-// end
-      new Text('ddd'),
+      Text('ddd'),
     ]);
+  }
+}
+''');
+  }
+
+  Future<void> test_endOfWidgetName() async {
+    await resolveTestCode('''
+import 'package:flutter/widgets.dart';
+
+class FakeFlutter {
+  main() {
+    return Container(
+      child: Text/*caret*/('aaa'),
+    );
+  }
+}
+''');
+    await assertHasAssist('''
+import 'package:flutter/widgets.dart';
+
+class FakeFlutter {
+  main() {
+    return Container(
+      child: Column(
+        children: [
+          Text('aaa'),
+        ],
+      ),
+    );
   }
 }
 ''');

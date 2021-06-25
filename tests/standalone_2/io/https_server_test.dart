@@ -6,6 +6,8 @@
 // OtherResources=certificates/server_key.pem
 // OtherResources=certificates/trusted_certs.pem
 
+// @dart = 2.9
+
 import "dart:async";
 import "dart:io";
 import "dart:isolate";
@@ -69,6 +71,7 @@ void testEarlyClientClose() {
       String name = Platform.script.toFilePath();
       new File(name)
           .openRead()
+          .cast<List<int>>()
           .pipe(request.response)
           .catchError((e) {/* ignore */});
     });

@@ -4,11 +4,50 @@
 
 import java.io.*;
 import java.util.*;
-import org.antlr.runtime.*;
+import org.antlr.v4.runtime.*;
+import org.antlr.v4.runtime.dfa.*;
+import org.antlr.v4.runtime.atn.*;
 
 class ParsingResult {
   public int numberOfFileArguments;
   public int numberOfFailures;
+}
+
+class DartErrorListener implements ANTLRErrorListener {
+  public void reportAmbiguity(
+      Parser recognizer,
+      DFA dfa,
+      int startIndex,
+      int stopIndex,
+      boolean exact,
+      BitSet ambigAlts,
+      ATNConfigSet configs) {}
+
+  public void reportAttemptingFullContext(
+      Parser recognizer,
+      DFA dfa,
+      int startIndex,
+      int stopIndex,
+      BitSet conflictingAlts,
+      ATNConfigSet configs) {}
+
+  public void reportContextSensitivity(
+      Parser recognizer,
+      DFA dfa,
+      int startIndex,
+      int stopIndex,
+      int prediction,
+      ATNConfigSet configs) {}
+
+  public void syntaxError(
+      Recognizer<?,?> recognizer,
+      Object offendingSymbol,
+      int line,
+      int charPositionInLine,
+      String msg,
+      RecognitionException e) {
+    if (!DartParser.errorHasOccurred) DartParser.prepareForErrors();
+  }
 }
 
 /// Class for `main` which will parse files given as command line arguments.
@@ -62,8 +101,8 @@ public class SpecParser {
     }
   }
 
-  /// From [arguments], obey the flags ("--<flag_name>") if known and ignore
-  /// them if unknown; treat the remaining [arguments] as file paths and
+  /// From [arguments], obey the flags ("--<flag_name>", "-<any>") if known and
+  /// ignore them if unknown; treat the remaining [arguments] as file paths and
   /// parse each of them. Return a [ParsingResult] specifying how many files
   /// were parsed, and how many of them failed to parse.
   private static ParsingResult parseFiles(String[] arguments)
@@ -74,17 +113,20 @@ public class SpecParser {
     result.numberOfFileArguments = arguments.length;
     for (int i = 0; i < arguments.length; i++) {
       String filePath = arguments[i];
-      if (filePath.substring(0, 2).equals("--")) {
-        result.numberOfFileArguments--;
-        if (result.numberOfFileArguments == 0) return result;
-        if (filePath.equals("--verbose")) verbose = true;
-        if (filePath.equals("--batch")) runAsBatch();
-        // Ignore all other flags.
-        continue;
+      if (filePath.startsWith("-")) {
+          result.numberOfFileArguments--;
+          if (result.numberOfFileArguments == 0) return result;
+          if (filePath.equals("--verbose")) verbose = true;
+          if (filePath.equals("--batch")) runAsBatch();
+          // Ignore all other flags.
+          continue;
       }
       if (verbose) System.err.println("Parsing file: " + filePath);
-      DartParser parser = new DartParser(new CommonTokenStream(
-          new DartLexer(new ANTLRFileStream(filePath))));
+      DartLexer lexer = new DartLexer(new ANTLRFileStream(filePath));
+      DartParser parser = new DartParser(new CommonTokenStream(lexer));
+      ANTLRErrorListener errorListener = new DartErrorListener();
+      lexer.addErrorListener(errorListener);
+      parser.addErrorListener(errorListener);
       if (!parser.parseLibrary(filePath)) result.numberOfFailures++;
     }
     return result;

@@ -3,7 +3,9 @@
 // BSD-style license that can be found in the LICENSE file.
 // Test that safepoints associated with slowpaths don't mark non-existing values
 // alive.
-// VMOptions=--optimization-counter-threshold=5 --no-inline_alloc --gc_at_instance_allocation=_Double --no-background-compilation
+// VMOptions=--optimization-counter-threshold=5 --no-inline_alloc --no-background-compilation
+
+// @dart = 2.9
 
 class C {
   final next;

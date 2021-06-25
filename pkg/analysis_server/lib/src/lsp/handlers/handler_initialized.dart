@@ -10,19 +10,30 @@ import 'package:analysis_server/src/lsp/lsp_analysis_server.dart';
 
 class IntializedMessageHandler extends MessageHandler<InitializedParams, void> {
   final List<String> openWorkspacePaths;
-  IntializedMessageHandler(LspAnalysisServer server, this.openWorkspacePaths)
-      : super(server);
+  IntializedMessageHandler(
+    LspAnalysisServer server,
+    this.openWorkspacePaths,
+  ) : super(server);
+  @override
   Method get handlesMessage => Method.initialized;
 
   @override
-  InitializedParams convertParams(Map<String, dynamic> json) =>
-      InitializedParams.fromJson(json);
+  LspJsonHandler<InitializedParams> get jsonHandler =>
+      InitializedParams.jsonHandler;
 
-  ErrorOr<void> handle(InitializedParams params) {
-    server.messageHandler = new InitializedStateMessageHandler(server);
+  @override
+  Future<ErrorOr<void>> handle(
+      InitializedParams params, CancellationToken token) async {
+    server.messageHandler = InitializedStateMessageHandler(
+      server,
+    );
 
-    server.setAnalysisRoots(openWorkspacePaths, [], {});
+    await server.fetchClientConfigurationAndPerformDynamicRegistration();
 
-    return success();
+    if (!server.initializationOptions.onlyAnalyzeProjectsWithOpenFiles) {
+      server.updateWorkspaceFolders(openWorkspacePaths, const []);
+    }
+
+    return success(null);
   }
 }

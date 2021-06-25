@@ -2,29 +2,26 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/src/dart/analysis/dependency/library_builder.dart';
 import 'package:analyzer/src/dart/analysis/dependency/node.dart';
-import 'package:meta/meta.dart';
 import 'package:test/test.dart';
 
-import '../../resolution/driver_resolution.dart';
+import '../../resolution/context_collection_resolution.dart';
 
-class BaseDependencyTest extends DriverResolutionTest {
-//  DependencyTracker tracker;
-  String a;
-  String b;
-  String c;
-  Uri aUri;
-  Uri bUri;
-  Uri cUri;
+class BaseDependencyTest extends PubPackageResolutionTest {
+  late final String a;
+  late final String b;
+  late final String c;
+  late final Uri aUri;
+  late final Uri bUri;
+  late final Uri cUri;
 
   bool hasDartCore = false;
 
-  void assertNodes(
-    List<DependencyNode> actualNodes,
-    List<ExpectedNode> expectedNodes,
-  ) {
+  void assertNodes(List<Node> actualNodes, List<ExpectedNode> expectedNodes,
+      {Node? expectedEnclosingClass}) {
     expect(actualNodes, hasLength(expectedNodes.length));
     for (var expectedNode in expectedNodes) {
       var topNode = _getNode(
@@ -33,17 +30,20 @@ class BaseDependencyTest extends DriverResolutionTest {
         name: expectedNode.name,
         kind: expectedNode.kind,
       );
+      expect(topNode.enclosingClass, expectedEnclosingClass);
 
       if (expectedNode.classMembers != null) {
-        assertNodes(topNode.classMembers, expectedNode.classMembers);
+        assertNodes(topNode.classMembers!, expectedNode.classMembers!,
+            expectedEnclosingClass: topNode);
       } else {
         expect(topNode.classMembers, isNull);
       }
 
       if (expectedNode.classTypeParameters != null) {
         assertNodes(
-          topNode.classTypeParameters,
-          expectedNode.classTypeParameters,
+          topNode.classTypeParameters!,
+          expectedNode.classTypeParameters!,
+          expectedEnclosingClass: topNode,
         );
       } else {
         expect(topNode.classTypeParameters, isNull);
@@ -61,12 +61,12 @@ class BaseDependencyTest extends DriverResolutionTest {
 //    }
 
     newFile(path, content: content);
-    driver.changeFile(path);
+    driverFor(path).changeFile(path);
 
     var units = await _resolveLibrary(path);
-    var uri = units.first.declaredElement.source.uri;
+    var uri = units.first.declaredElement!.source.uri;
 
-    return buildLibrary(uri, units, _ReferenceCollector());
+    return buildLibrary(uri, units);
 
 //    tracker.addLibrary(uri, units);
 //
@@ -76,25 +76,26 @@ class BaseDependencyTest extends DriverResolutionTest {
 //    return library;
   }
 
-  DependencyNode getNode(Library library,
-      {@required Uri uri,
-      @required String name,
-      DependencyNodeKind kind,
-      String memberOf,
-      String typeParameterOf}) {
+  Node getNode(Library library,
+      {required String name,
+      NodeKind? kind,
+      String? memberOf,
+      String? typeParameterOf}) {
+    var uri = library.uri;
     var nodes = library.declaredNodes;
     if (memberOf != null) {
-      var class_ = _getNode(nodes, uri: aUri, name: memberOf);
-      expect(class_.kind,
-          anyOf(DependencyNodeKind.CLASS, DependencyNodeKind.MIXIN));
-      nodes = class_.classMembers;
+      var class_ = _getNode(nodes, uri: uri, name: memberOf);
+      expect(
+        class_.kind,
+        anyOf(NodeKind.CLASS, NodeKind.ENUM, NodeKind.MIXIN),
+      );
+      nodes = class_.classMembers!;
     } else if (typeParameterOf != null) {
-      var class_ = _getNode(nodes, uri: aUri, name: typeParameterOf);
-      expect(class_.kind,
-          anyOf(DependencyNodeKind.CLASS, DependencyNodeKind.MIXIN));
-      nodes = class_.classTypeParameters;
+      var class_ = _getNode(nodes, uri: uri, name: typeParameterOf);
+      expect(class_.kind, anyOf(NodeKind.CLASS, NodeKind.MIXIN));
+      nodes = class_.classTypeParameters!;
     }
-    return _getNode(nodes, uri: aUri, name: name, kind: kind);
+    return _getNode(nodes, uri: uri, name: name, kind: kind);
   }
 
   @override
@@ -102,9 +103,9 @@ class BaseDependencyTest extends DriverResolutionTest {
     super.setUp();
 //    var logger = PerformanceLog(null);
 //    tracker = DependencyTracker(logger);
-    a = convertPath('/test/lib/a.dart');
-    b = convertPath('/test/lib/b.dart');
-    c = convertPath('/test/lib/c.dart');
+    a = convertPath('$testPackageLibPath/a.dart');
+    b = convertPath('$testPackageLibPath/b.dart');
+    c = convertPath('$testPackageLibPath/c.dart');
     aUri = Uri.parse('package:test/a.dart');
     bUri = Uri.parse('package:test/b.dart');
     cUri = Uri.parse('package:test/c.dart');
@@ -121,9 +122,9 @@ class BaseDependencyTest extends DriverResolutionTest {
 //    tracker.addLibraryElement(unitResult.element.library, signatureBytes);
 //  }
 
-  DependencyNode _getNode(List<DependencyNode> nodes,
-      {@required Uri uri, @required String name, DependencyNodeKind kind}) {
-    var nameObj = DependencyName(uri, name);
+  Node _getNode(List<Node> nodes,
+      {required Uri uri, required String name, NodeKind? kind}) {
+    var nameObj = LibraryQualifiedName(uri, name);
     for (var node in nodes) {
       if (node.name == nameObj) {
         if (kind != null && node.kind != kind) {
@@ -136,17 +137,19 @@ class BaseDependencyTest extends DriverResolutionTest {
   }
 
   Future<List<CompilationUnit>> _resolveLibrary(String libraryPath) async {
-    var resolvedLibrary = await driver.getResolvedLibrary(libraryPath);
-    return resolvedLibrary.units.map((ru) => ru.unit).toList();
+    var session = contextFor(libraryPath).currentSession;
+    var resolvedLibrary = await session.getResolvedLibrary2(libraryPath);
+    resolvedLibrary as ResolvedLibraryResult;
+    return resolvedLibrary.units!.map((ru) => ru.unit!).toList();
   }
 }
 
 class ExpectedNode {
   final Uri uri;
   final String name;
-  final DependencyNodeKind kind;
-  final List<ExpectedNode> classMembers;
-  final List<ExpectedNode> classTypeParameters;
+  final NodeKind kind;
+  final List<ExpectedNode>? classMembers;
+  final List<ExpectedNode>? classTypeParameters;
 
   ExpectedNode(
     this.uri,
@@ -155,30 +158,4 @@ class ExpectedNode {
     this.classMembers,
     this.classTypeParameters,
   });
-}
-
-/// TODO(scheglov) remove it once we get actual implementation
-class _ReferenceCollector implements ReferenceCollector {
-  @override
-  Uri get libraryUri => null;
-
-  @override
-  void addImportPrefix(String name) {}
-
-  @override
-  void appendExpression(Expression node) {}
-
-  @override
-  void appendFormalParameters(FormalParameterList formalParameterList) {}
-
-  @override
-  void appendFunctionBody(FunctionBody node) {}
-
-  @override
-  void appendTypeAnnotation(TypeAnnotation node) {}
-
-  @override
-  DependencyNodeDependencies finish(List<int> tokenSignature) {
-    return DependencyNodeDependencies(tokenSignature, [], [], [], []);
-  }
 }

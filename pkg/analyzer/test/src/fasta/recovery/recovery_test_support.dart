@@ -1,31 +1,33 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+import 'package:analyzer/dart/analysis/features.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/ast/token.dart';
 import 'package:analyzer/error/error.dart';
+import 'package:analyzer/src/dart/ast/ast.dart';
 import 'package:analyzer/src/dart/ast/utilities.dart';
 import 'package:test/test.dart';
 
-import '../../../generated/parser_fasta_test.dart';
+import '../../../generated/parser_test_base.dart';
 import '../../../generated/test_support.dart';
 
-/**
- * The base class for tests that test how well the parser recovers from various
- * syntactic errors.
- */
+/// The base class for tests that test how well the parser recovers from various
+/// syntactic errors.
 abstract class AbstractRecoveryTest extends FastaParserTestCase {
   void testRecovery(
-      String invalidCode, List<ErrorCode> errorCodes, String validCode,
-      {CompilationUnit adjustValidUnitBeforeComparison(CompilationUnit unit),
-      List<ErrorCode> expectedErrorsInValidCode}) {
-    CompilationUnit validUnit;
+      String invalidCode, List<ErrorCode>? errorCodes, String validCode,
+      {CompilationUnitImpl Function(CompilationUnitImpl unit)?
+          adjustValidUnitBeforeComparison,
+      List<ErrorCode>? expectedErrorsInValidCode,
+      FeatureSet? featureSet}) {
+    CompilationUnitImpl validUnit;
 
     // Assert that the valid code is indeed valid.
     try {
-      validUnit =
-          parseCompilationUnit(validCode, codes: expectedErrorsInValidCode);
+      validUnit = parseCompilationUnit(validCode,
+          codes: expectedErrorsInValidCode, featureSet: featureSet);
       validateTokenStream(validUnit.beginToken);
     } catch (e) {
 //      print('');
@@ -37,9 +39,9 @@ abstract class AbstractRecoveryTest extends FastaParserTestCase {
     }
 
     // Compare the structures before asserting valid errors.
-    GatheringErrorListener listener =
-        new GatheringErrorListener(checkRanges: true);
-    CompilationUnit invalidUnit = parseCompilationUnit2(invalidCode, listener);
+    GatheringErrorListener listener = GatheringErrorListener(checkRanges: true);
+    var invalidUnit =
+        parseCompilationUnit2(invalidCode, listener, featureSet: featureSet);
     validateTokenStream(invalidUnit.beginToken);
     if (adjustValidUnitBeforeComparison != null) {
       validUnit = adjustValidUnitBeforeComparison(validUnit);
@@ -56,7 +58,7 @@ abstract class AbstractRecoveryTest extends FastaParserTestCase {
 
   void validateTokenStream(Token token) {
     while (!token.isEof) {
-      Token next = token.next;
+      Token next = token.next!;
       expect(token.end, lessThanOrEqualTo(next.offset));
       if (next.isSynthetic) {
         if (const [')', ']', '}'].contains(next.lexeme)) {
@@ -68,13 +70,12 @@ abstract class AbstractRecoveryTest extends FastaParserTestCase {
   }
 }
 
-/**
- * An object used to compare to AST structures and cause the test to fail if
- * they differ in any important ways.
- */
+/// An object used to compare to AST structures and cause the test to fail if
+/// they differ in any important ways.
 class ResultComparator extends AstComparator {
+  @override
   bool failDifferentLength(List first, List second) {
-    StringBuffer buffer = new StringBuffer();
+    StringBuffer buffer = StringBuffer();
     buffer.writeln('Expected a list of length ${second.length}');
     buffer.writeln('  $second');
     buffer.writeln('But found a list of length ${first.length}');
@@ -86,9 +87,9 @@ class ResultComparator extends AstComparator {
   }
 
   @override
-  bool failIfNotNull(Object first, Object second) {
+  bool failIfNotNull(Object? first, Object? second) {
     if (second != null) {
-      StringBuffer buffer = new StringBuffer();
+      StringBuffer buffer = StringBuffer();
       buffer.write('Expected null; found a ');
       buffer.writeln(second.runtimeType);
       if (second is AstNode) {
@@ -100,8 +101,8 @@ class ResultComparator extends AstComparator {
   }
 
   @override
-  bool failIsNull(Object first, Object second) {
-    StringBuffer buffer = new StringBuffer();
+  bool failIsNull(Object first, Object? second) {
+    StringBuffer buffer = StringBuffer();
     buffer.write('Expected a ');
     buffer.write(first.runtimeType);
     buffer.writeln('; found null');
@@ -113,7 +114,7 @@ class ResultComparator extends AstComparator {
 
   @override
   bool failRuntimeType(Object first, Object second) {
-    StringBuffer buffer = new StringBuffer();
+    StringBuffer buffer = StringBuffer();
     buffer.write('Expected a ');
     buffer.writeln(second.runtimeType);
     buffer.write('; found ');
@@ -124,12 +125,10 @@ class ResultComparator extends AstComparator {
     fail(buffer.toString());
   }
 
-  /**
-   * Overridden to allow the valid code to contain an explicit identifier where
-   * a synthetic identifier is expected to be inserted by recovery.
-   */
+  /// Overridden to allow the valid code to contain an explicit identifier where
+  /// a synthetic identifier is expected to be inserted by recovery.
   @override
-  bool isEqualNodes(AstNode first, AstNode second) {
+  bool isEqualNodes(AstNode? first, AstNode? second) {
     if (first is SimpleIdentifier && second is SimpleIdentifier) {
       if (first.isSynthetic && second.name == '_s_') {
         return true;
@@ -138,16 +137,14 @@ class ResultComparator extends AstComparator {
     return super.isEqualNodes(first, second);
   }
 
-  /**
-   * Overridden to ignore the offsets of tokens because these can legitimately
-   * be different.
-   */
+  /// Overridden to ignore the offsets of tokens because these can legitimately
+  /// be different.
   @override
   bool isEqualTokensNotNull(Token first, Token second) =>
       (first.isSynthetic && first.type == second.type) ||
       (first.length == second.length && first.lexeme == second.lexeme);
 
-  void _safelyWriteNodePath(StringBuffer buffer, AstNode node) {
+  void _safelyWriteNodePath(StringBuffer buffer, AstNode? node) {
     buffer.write('  path: ');
     if (node == null) {
       buffer.write(' null');
@@ -157,7 +154,7 @@ class ResultComparator extends AstComparator {
   }
 
   void _writeNodePath(StringBuffer buffer, AstNode node) {
-    AstNode parent = node.parent;
+    var parent = node.parent;
     if (parent != null) {
       _writeNodePath(buffer, parent);
       buffer.write(', ');
@@ -165,12 +162,10 @@ class ResultComparator extends AstComparator {
     buffer.write(node.runtimeType);
   }
 
-  /**
-   * Compare the [actual] and [expected] nodes, failing the test if they are
-   * different.
-   */
+  /// Compare the [actual] and [expected] nodes, failing the test if they are
+  /// different.
   static void compare(AstNode actual, AstNode expected) {
-    ResultComparator comparator = new ResultComparator();
+    ResultComparator comparator = ResultComparator();
     if (!comparator.isEqualNodes(actual, expected)) {
       fail('Expected: $expected\n   Found: $actual');
     }

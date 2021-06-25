@@ -24,15 +24,15 @@
 
 #include "bin/fdutils.h"
 #include "bin/lockers.h"
-#include "bin/log.h"
 #include "bin/socket.h"
 #include "bin/thread.h"
 #include "bin/utils.h"
 #include "platform/hashmap.h"
+#include "platform/syslog.h"
 #include "platform/utils.h"
 
 // The EventHandler for Fuchsia uses its "ports v2" API:
-// https://fuchsia.googlesource.com/zircon/+/HEAD/docs/syscalls/port_create.md
+// https://fuchsia.googlesource.com/fuchsia/+/HEAD/zircon/docs/syscalls/port_create.md
 // This API does not have epoll()-like edge triggering (EPOLLET). Since clients
 // of the EventHandler expect edge-triggered notifications, we must simulate it.
 // When a packet from zx_port_wait() indicates that a signal is asserted for a
@@ -45,7 +45,7 @@
 // 4. Some time later the Dart thread actually does a write().
 // 5. After writing, the Dart thread resubscribes to write events.
 //
-// We use he same procedure for ZX_SOCKET_READABLE, and read()/accept().
+// We use the same procedure for ZX_SOCKET_READABLE, and read()/accept().
 
 // define EVENTHANDLER_LOG_ERROR to get log messages only for errors.
 // define EVENTHANDLER_LOG_INFO to get log messages for both information and
@@ -56,14 +56,14 @@
 #define LOG_ERR(msg, ...)                                                      \
   {                                                                            \
     int err = errno;                                                           \
-    Log::PrintErr("Dart EventHandler ERROR: %s:%d: " msg, __FILE__, __LINE__,  \
-                  ##__VA_ARGS__);                                              \
+    Syslog::PrintErr("Dart EventHandler ERROR: %s:%d: " msg, __FILE__,         \
+                     __LINE__, ##__VA_ARGS__);                                 \
     errno = err;                                                               \
   }
 #if defined(EVENTHANDLER_LOG_INFO)
 #define LOG_INFO(msg, ...)                                                     \
-  Log::Print("Dart EventHandler INFO: %s:%d: " msg, __FILE__, __LINE__,        \
-             ##__VA_ARGS__)
+  Syslog::Print("Dart EventHandler INFO: %s:%d: " msg, __FILE__, __LINE__,     \
+                ##__VA_ARGS__)
 #else
 #define LOG_INFO(msg, ...)
 #endif  // defined(EVENTHANDLER_LOG_INFO)
@@ -76,7 +76,7 @@ namespace dart {
 namespace bin {
 
 intptr_t IOHandle::Read(void* buffer, intptr_t num_bytes) {
-  MutexLocker ml(mutex_);
+  MutexLocker ml(&mutex_);
   const ssize_t read_bytes = NO_RETRY_EXPECTED(read(fd_, buffer, num_bytes));
   const int err = errno;
   LOG_INFO("IOHandle::Read: fd = %ld. read %ld bytes\n", fd_, read_bytes);
@@ -105,7 +105,7 @@ intptr_t IOHandle::Read(void* buffer, intptr_t num_bytes) {
 }
 
 intptr_t IOHandle::Write(const void* buffer, intptr_t num_bytes) {
-  MutexLocker ml(mutex_);
+  MutexLocker ml(&mutex_);
   const ssize_t written_bytes =
       NO_RETRY_EXPECTED(write(fd_, buffer, num_bytes));
   const int err = errno;
@@ -122,7 +122,7 @@ intptr_t IOHandle::Write(const void* buffer, intptr_t num_bytes) {
 }
 
 intptr_t IOHandle::Accept(struct sockaddr* addr, socklen_t* addrlen) {
-  MutexLocker ml(mutex_);
+  MutexLocker ml(&mutex_);
   const intptr_t socket = NO_RETRY_EXPECTED(accept(fd_, addr, addrlen));
   const int err = errno;
   LOG_INFO("IOHandle::Accept: fd = %ld. socket = %ld\n", fd_, socket);
@@ -138,7 +138,7 @@ intptr_t IOHandle::Accept(struct sockaddr* addr, socklen_t* addrlen) {
 }
 
 intptr_t IOHandle::AvailableBytes() {
-  MutexLocker ml(mutex_);
+  MutexLocker ml(&mutex_);
   ASSERT(fd_ >= 0);
   intptr_t available = FDUtils::AvailableBytes(fd_);
   LOG_INFO("IOHandle::AvailableBytes(): fd = %ld, bytes = %ld\n", fd_,
@@ -153,15 +153,20 @@ intptr_t IOHandle::AvailableBytes() {
 }
 
 void IOHandle::Close() {
-  MutexLocker ml(mutex_);
+  MutexLocker ml(&mutex_);
   VOID_NO_RETRY_EXPECTED(close(fd_));
 }
 
 uint32_t IOHandle::MaskToEpollEvents(intptr_t mask) {
-  MutexLocker ml(mutex_);
+  MutexLocker ml(&mutex_);
   // Do not ask for POLLERR and POLLHUP explicitly as they are
   // triggered anyway.
-  uint32_t events = POLLRDHUP;
+  uint32_t events = 0;
+  // Do not subscribe to read closed events when kCloseEvent has already been
+  // sent to the Dart thread.
+  if (close_events_enabled_) {
+    events |= POLLRDHUP;
+  }
   if (read_events_enabled_ && ((mask & (1 << kInEvent)) != 0)) {
     events |= POLLIN;
   }
@@ -230,12 +235,12 @@ bool IOHandle::AsyncWaitLocked(zx_handle_t port,
 }
 
 bool IOHandle::AsyncWait(zx_handle_t port, uint32_t events, uint64_t key) {
-  MutexLocker ml(mutex_);
+  MutexLocker ml(&mutex_);
   return AsyncWaitLocked(port, events, key);
 }
 
 void IOHandle::CancelWait(zx_handle_t port, uint64_t key) {
-  MutexLocker ml(mutex_);
+  MutexLocker ml(&mutex_);
   LOG_INFO("IOHandle::CancelWait: fd = %ld\n", fd_);
   ASSERT(port != ZX_HANDLE_INVALID);
   ASSERT(handle_ != ZX_HANDLE_INVALID);
@@ -246,31 +251,100 @@ void IOHandle::CancelWait(zx_handle_t port, uint64_t key) {
 }
 
 uint32_t IOHandle::WaitEnd(zx_signals_t observed) {
-  MutexLocker ml(mutex_);
+  MutexLocker ml(&mutex_);
   uint32_t events = 0;
   fdio_unsafe_wait_end(fdio_, observed, &events);
+  LOG_INFO("IOHandle::WaitEnd: fd = %ld, events = %x\n", fd_, events);
   return events;
 }
 
+// This function controls the simulation of edge-triggering. It is responsible
+// for removing events from the event mask when they should be supressed, and
+// for supressing future events. Events are unsupressed by their respective
+// operations by the Dart thread on the socket---that is, where the
+// *_events_enabled_ flags are set to true.
 intptr_t IOHandle::ToggleEvents(intptr_t event_mask) {
-  MutexLocker ml(mutex_);
+  MutexLocker ml(&mutex_);
+  // If write events are disabled, then remove the kOutEvent bit from the
+  // event mask.
   if (!write_events_enabled_) {
-    LOG_INFO("IOHandle::ToggleEvents: fd = %ld de-asserting write\n", fd_);
+    LOG_INFO(
+        "IOHandle::ToggleEvents: fd = %ld "
+        "de-asserting kOutEvent\n",
+        fd_);
     event_mask = event_mask & ~(1 << kOutEvent);
   }
+  // If the kOutEvent bit is set, then supress future write events until the
+  // Dart thread writes.
   if ((event_mask & (1 << kOutEvent)) != 0) {
-    LOG_INFO("IOHandle::ToggleEvents: fd = %ld asserting write and disabling\n",
-             fd_);
+    LOG_INFO(
+        "IOHandle::ToggleEvents: fd = %ld "
+        "asserting kOutEvent and disabling\n",
+        fd_);
     write_events_enabled_ = false;
   }
+
+  // If read events are disabled, then remove the kInEvent bit from the event
+  // mask.
   if (!read_events_enabled_) {
-    LOG_INFO("IOHandle::ToggleEvents: fd=%ld de-asserting read\n", fd_);
+    LOG_INFO(
+        "IOHandle::ToggleEvents: fd = %ld "
+        "de-asserting kInEvent\n",
+        fd_);
     event_mask = event_mask & ~(1 << kInEvent);
   }
+  // We may get In events without available bytes, so we must make sure there
+  // are actually bytes, or we will never resubscribe (due to a short-circuit
+  // on the Dart side).
+  //
+  // This happens due to how packets get enqueued on the port with all signals
+  // asserted at that time. Sometimes we enqueue a packet due to
+  // zx_object_wait_async e.g. for POLLOUT (writability) while the socket is
+  // readable and while we have a Read queued up on the Dart side. This packet
+  // will also have POLLIN (readable) asserted. We may then perform the Read
+  // and drain the socket before our zx_port_wait is serviced, at which point
+  // when we process the packet for POLLOUT with its stale POLLIN (readable)
+  // signal, the socket is no longer actually readable.
+  //
+  // As a detail, negative available bytes (errors) are handled specially; see
+  // IOHandle::AvailableBytes for more information.
   if ((event_mask & (1 << kInEvent)) != 0) {
-    LOG_INFO("IOHandle::ToggleEvents: fd = %ld asserting read and disabling\n",
-             fd_);
-    read_events_enabled_ = false;
+    if (FDUtils::AvailableBytes(fd_) != 0) {
+      LOG_INFO(
+          "IOHandle::ToggleEvents: fd = %ld "
+          "asserting kInEvent and disabling with bytes available\n",
+          fd_);
+      read_events_enabled_ = false;
+    }
+    // Also supress future read events if we get a kCloseEvent. This is to
+    // account for POLLIN being set by Fuchsia when the socket is read-closed.
+    if ((event_mask & (1 << kCloseEvent)) != 0) {
+      LOG_INFO(
+          "IOHandle::ToggleEvents: fd = %ld "
+          "asserting kInEvent and disabling due to a close event\n",
+          fd_);
+      read_events_enabled_ = false;
+    }
+  }
+
+  // If the close events are disabled, then remove the kCloseEvent bit from the
+  // event mask.
+  if (!close_events_enabled_) {
+    LOG_INFO(
+        "IOHandle::ToggleEvents: fd = %ld "
+        "de-asserting kCloseEvent\n",
+        fd_);
+    event_mask = event_mask & ~(1 << kCloseEvent);
+  }
+  // If the kCloseEvent bit is set, then supress future close events, they will
+  // be ignored by the Dart thread. See _NativeSocket.multiplex in
+  // socket_patch.dart.
+  if ((event_mask & (1 << kCloseEvent)) != 0) {
+    LOG_INFO(
+        "IOHandle::ToggleEvents: fd = %ld "
+        "asserting kCloseEvent and disabling\n",
+        fd_);
+    close_events_enabled_ = false;
   }
   return event_mask;
 }
@@ -325,7 +399,7 @@ void EventHandlerImplementation::UpdatePort(intptr_t old_mask,
   } else if ((old_mask == 0) && (new_mask != 0)) {
     AddToPort(port_handle_, di);
   } else if ((old_mask != 0) && (new_mask != 0)) {
-    ASSERT(!di->IsListeningSocket());
+    ASSERT((old_mask == new_mask) || !di->IsListeningSocket());
     RemoveFromPort(port_handle_, di);
     AddToPort(port_handle_, di);
   }
@@ -430,14 +504,15 @@ void EventHandlerImplementation::HandleInterrupt(InterruptMessage* msg) {
         socket_map_.Remove(GetHashmapKeyFromFd(fd), GetHashmapHashFromFd(fd));
         di->Close();
         delete di;
-        socket->SetClosedFd();
+        socket->CloseFd();
       }
+      socket->SetClosedFd();
     } else {
       ASSERT(new_mask == 0);
       socket_map_.Remove(GetHashmapKeyFromFd(fd), GetHashmapHashFromFd(fd));
       di->Close();
       delete di;
-      socket->SetClosedFd();
+      socket->CloseFd();
     }
     if (port != 0) {
       const bool success = DartUtils::PostInt32(port, 1 << kDestroyedEvent);
@@ -468,15 +543,15 @@ void EventHandlerImplementation::HandleInterrupt(InterruptMessage* msg) {
 
 void EventHandlerImplementation::HandlePacket(zx_port_packet_t* pkt) {
   LOG_INFO("HandlePacket: Got event packet: key=%lx\n", pkt->key);
-  LOG_INFO("HandlePacket: Got event packet: type=%lx\n", pkt->type);
-  LOG_INFO("HandlePacket: Got event packet: status=%ld\n", pkt->status);
+  LOG_INFO("HandlePacket: Got event packet: type=%x\n", pkt->type);
+  LOG_INFO("HandlePacket: Got event packet: status=%d\n", pkt->status);
   if (pkt->type == ZX_PKT_TYPE_USER) {
     ASSERT(pkt->key == kInterruptPacketKey);
     InterruptMessage* msg = reinterpret_cast<InterruptMessage*>(&pkt->user);
     HandleInterrupt(msg);
     return;
   }
-  LOG_INFO("HandlePacket: Got event packet: observed = %lx\n",
+  LOG_INFO("HandlePacket: Got event packet: observed = %x\n",
            pkt->signal.observed);
   LOG_INFO("HandlePacket: Got event packet: count = %ld\n", pkt->signal.count);
 
@@ -553,8 +628,9 @@ void EventHandlerImplementation::Poll(uword args) {
 }
 
 void EventHandlerImplementation::Start(EventHandler* handler) {
-  int result = Thread::Start(&EventHandlerImplementation::Poll,
-                             reinterpret_cast<uword>(handler));
+  int result =
+      Thread::Start("dart:io EventHandler", &EventHandlerImplementation::Poll,
+                    reinterpret_cast<uword>(handler));
   if (result != 0) {
     FATAL1("Failed to start event handler thread %d", result);
   }

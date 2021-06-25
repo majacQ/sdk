@@ -9,7 +9,7 @@ import 'package:js_ast/js_ast.dart';
 import '../common.dart';
 import '../options.dart';
 import '../dump_info.dart' show DumpInfoTask;
-import '../io/code_output.dart' show CodeBuffer;
+import '../io/code_output.dart' show CodeBuffer, CodeOutputListener;
 import 'js_source_mapping.dart';
 
 export 'package:js_ast/js_ast.dart';
@@ -18,12 +18,13 @@ export 'js_debug.dart';
 String prettyPrint(Node node,
     {bool enableMinification: false,
     bool allowVariableMinification: true,
-    Renamer renamerForNames: JavaScriptPrintingOptions.identityRenamer}) {
+    bool preferSemicolonToNewlineInMinifiedOutput: false}) {
   // TODO(johnniwinther): Do we need all the options here?
   JavaScriptPrintingOptions options = new JavaScriptPrintingOptions(
       shouldCompressOutput: enableMinification,
       minifyLocalVariables: allowVariableMinification,
-      renamerForNames: renamerForNames);
+      preferSemicolonToNewlineInMinifiedOutput:
+          preferSemicolonToNewlineInMinifiedOutput);
   SimpleJavaScriptPrintingContext context =
       new SimpleJavaScriptPrintingContext();
   Printer printer = new Printer(options, context);
@@ -35,12 +36,11 @@ CodeBuffer createCodeBuffer(Node node, CompilerOptions compilerOptions,
     JavaScriptSourceInformationStrategy sourceInformationStrategy,
     {DumpInfoTask monitor,
     bool allowVariableMinification: true,
-    Renamer renamerForNames: JavaScriptPrintingOptions.identityRenamer}) {
+    List<CodeOutputListener> listeners: const []}) {
   JavaScriptPrintingOptions options = new JavaScriptPrintingOptions(
       shouldCompressOutput: compilerOptions.enableMinification,
-      minifyLocalVariables: allowVariableMinification,
-      renamerForNames: renamerForNames);
-  CodeBuffer outBuffer = new CodeBuffer();
+      minifyLocalVariables: allowVariableMinification);
+  CodeBuffer outBuffer = new CodeBuffer(listeners);
   SourceInformationProcessor sourceInformationProcessor =
       sourceInformationStrategy.createProcessor(
           new SourceMapperProviderImpl(outBuffer),
@@ -69,20 +69,20 @@ class Dart2JSJavaScriptPrintingContext implements JavaScriptPrintingContext {
 
   @override
   void emit(String string) {
+    monitor?.emit(string);
     outBuffer.add(string);
   }
 
   @override
   void enterNode(Node node, int startPosition) {
+    monitor?.enterNode(node, startPosition);
     codePositionListener.onStartPosition(node, startPosition);
   }
 
   @override
   void exitNode(
       Node node, int startPosition, int endPosition, int closingPosition) {
-    if (monitor != null) {
-      monitor.recordAstSize(node, endPosition - startPosition);
-    }
+    monitor?.exitNode(node, startPosition, endPosition, closingPosition);
     codePositionListener.onPositions(
         node, startPosition, endPosition, closingPosition);
   }
@@ -119,7 +119,7 @@ class TokenCounter extends BaseVisitor {
 }
 
 abstract class ReferenceCountedAstNode implements Node {
-  markSeen(TokenCounter visitor);
+  void markSeen(TokenCounter visitor);
 }
 
 /// Represents the LiteralString resulting from unparsing [expression]. The
@@ -134,6 +134,7 @@ class UnparsedNode extends DeferredString implements AstContainer {
   final bool _protectForEval;
   LiteralString _cachedLiteral;
 
+  @override
   Iterable<Node> get containedNodes => [tree];
 
   /// A [js.Literal] that represents the string result of unparsing [ast].
@@ -156,7 +157,7 @@ class UnparsedNode extends DeferredString implements AstContainer {
           }
         }
       }
-      _cachedLiteral = js.escapedString(text);
+      _cachedLiteral = js.string(text);
     }
     return _cachedLiteral;
   }

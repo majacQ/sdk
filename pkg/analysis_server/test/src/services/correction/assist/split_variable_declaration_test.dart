@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'assist_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(SplitVariableDeclarationTest);
   });
@@ -19,8 +19,26 @@ class SplitVariableDeclarationTest extends AssistProcessorTest {
   @override
   AssistKind get kind => DartAssistKind.SPLIT_VARIABLE_DECLARATION;
 
-  test_notOneVariable() async {
-    await resolveTestUnit('''
+  Future<void> test_const() async {
+    await resolveTestCode('''
+main() {
+  const v = 1;
+}
+''');
+    await assertNoAssistAt('v = 1');
+  }
+
+  Future<void> test_final() async {
+    await resolveTestCode('''
+main() {
+  final v = 1;
+}
+''');
+    await assertNoAssistAt('v = 1');
+  }
+
+  Future<void> test_notOneVariable() async {
+    await resolveTestCode('''
 main() {
   var v = 1, v2;
 }
@@ -28,22 +46,38 @@ main() {
     await assertNoAssistAt('v = 1');
   }
 
-  test_onName() async {
-    await resolveTestUnit('''
+  Future<void> test_onName() async {
+    await resolveTestCode('''
 main() {
   var v = 1;
 }
 ''');
     await assertHasAssistAt('v =', '''
 main() {
-  var v;
+  int v;
   v = 1;
 }
 ''');
   }
 
-  test_onType() async {
-    await resolveTestUnit('''
+  Future<void> test_onName_functionStatement_noType() async {
+    await resolveTestCode('''
+f() => 1;
+main() {
+  var v = f();
+}
+''');
+    await assertHasAssistAt('v =', '''
+f() => 1;
+main() {
+  var v;
+  v = f();
+}
+''');
+  }
+
+  Future<void> test_onType() async {
+    await resolveTestCode('''
 main() {
   int v = 1;
 }
@@ -57,8 +91,8 @@ main() {
   }
 
   @failingTest
-  test_onType_prefixedByComment() async {
-    await resolveTestUnit('''
+  Future<void> test_onType_prefixedByComment() async {
+    await resolveTestCode('''
 main() {
   /*comment*/int v = 1;
 }
@@ -71,15 +105,15 @@ main() {
 ''');
   }
 
-  test_onVar() async {
-    await resolveTestUnit('''
+  Future<void> test_onVar() async {
+    await resolveTestCode('''
 main() {
   var v = 1;
 }
 ''');
     await assertHasAssistAt('var ', '''
 main() {
-  var v;
+  int v;
   v = 1;
 }
 ''');

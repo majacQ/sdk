@@ -1,7 +1,8 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+import 'package:analyzer/dart/analysis/features.dart';
 import 'package:analyzer/src/dart/error/syntactic_errors.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
@@ -16,12 +17,70 @@ main() {
   });
 }
 
-/**
- * Test how well the parser recovers when angle brackets (`<` and `>`) are
- * mismatched.
- */
+/// Test how well the parser recovers when angle brackets (`<` and `>`) are
+/// mismatched.
 @reflectiveTest
 class AngleBracketsTest extends AbstractRecoveryTest {
+  @failingTest
+  void test_typeArguments_inner_last() {
+    testRecovery('''
+List<List<int>
+''', [ScannerErrorCode.EXPECTED_TOKEN], '''
+List<List<int>> _s_;
+''');
+  }
+
+  void test_typeArguments_inner_last2() {
+    testRecovery('''
+List<List<int> f;
+''', [ParserErrorCode.EXPECTED_TOKEN], '''
+List<List<int>> f;
+''');
+  }
+
+  @failingTest
+  void test_typeArguments_inner_notLast() {
+    testRecovery('''
+Map<List<int, List<String>>
+''', [ScannerErrorCode.EXPECTED_TOKEN], '''
+Map<List<int>, List<String>> _s_;
+''');
+  }
+
+  void test_typeArguments_inner_notLast2() {
+    // TODO(danrubel): Investigate better recovery.
+    testRecovery('''
+Map<List<int, List<String>> f;
+''', [ParserErrorCode.EXPECTED_TOKEN], '''
+Map<List<int, List<String>>> f;
+''');
+  }
+
+  void test_typeArguments_missing_comma() {
+    testRecovery('''
+List<int double> f;
+''', [ParserErrorCode.EXPECTED_TOKEN], '''
+List<int, double> f;
+''');
+  }
+
+  @failingTest
+  void test_typeArguments_outer_last() {
+    testRecovery('''
+List<int
+''', [ScannerErrorCode.EXPECTED_TOKEN], '''
+List<int> _s_;
+''');
+  }
+
+  void test_typeArguments_outer_last2() {
+    testRecovery('''
+List<int f;
+''', [ParserErrorCode.EXPECTED_TOKEN], '''
+List<int> f;
+''');
+  }
+
   void test_typeParameters_extraGt() {
     testRecovery('''
 f<T>>() => null;
@@ -76,66 +135,6 @@ f<T extends List<int>>() => null;
 ''');
   }
 
-  @failingTest
-  void test_typeArguments_inner_last() {
-    testRecovery('''
-List<List<int>
-''', [ScannerErrorCode.EXPECTED_TOKEN], '''
-List<List<int>> _s_;
-''');
-  }
-
-  void test_typeArguments_inner_last2() {
-    testRecovery('''
-List<List<int> f;
-''', [ParserErrorCode.EXPECTED_TOKEN], '''
-List<List<int>> f;
-''');
-  }
-
-  @failingTest
-  void test_typeArguments_inner_notLast() {
-    testRecovery('''
-Map<List<int, List<String>>
-''', [ScannerErrorCode.EXPECTED_TOKEN], '''
-Map<List<int>, List<String>> _s_;
-''');
-  }
-
-  void test_typeArguments_inner_notLast2() {
-    // TODO(danrubel): Investigate better recovery.
-    testRecovery('''
-Map<List<int, List<String>> f;
-''', [ParserErrorCode.EXPECTED_TOKEN], '''
-Map<List<int, List<String>>> f;
-''');
-  }
-
-  @failingTest
-  void test_typeArguments_outer_last() {
-    testRecovery('''
-List<int
-''', [ScannerErrorCode.EXPECTED_TOKEN], '''
-List<int> _s_;
-''');
-  }
-
-  void test_typeArguments_outer_last2() {
-    testRecovery('''
-List<int f;
-''', [ParserErrorCode.EXPECTED_TOKEN], '''
-List<int> f;
-''');
-  }
-
-  void test_typeArguments_missing_comma() {
-    testRecovery('''
-List<int double> f;
-''', [ParserErrorCode.EXPECTED_TOKEN], '''
-List<int, double> f;
-''');
-  }
-
   void test_typeParameters_last() {
     testRecovery('''
 f<T() => null;
@@ -159,9 +158,7 @@ f<T extends List<int>>() => null;
   }
 }
 
-/**
- * Test how well the parser recovers when curly braces are mismatched.
- */
+/// Test how well the parser recovers when curly braces are mismatched.
 @reflectiveTest
 class BracesTest extends AbstractRecoveryTest {
   void test_statement_if_last() {
@@ -237,9 +234,7 @@ int y = 0;
   }
 }
 
-/**
- * Test how well the parser recovers when square brackets are mismatched.
- */
+/// Test how well the parser recovers when square brackets are mismatched.
 @reflectiveTest
 class BracketsTest extends AbstractRecoveryTest {
   void test_indexOperator() {
@@ -248,6 +243,16 @@ f(x) => l[x
 ''', [ScannerErrorCode.EXPECTED_TOKEN, ParserErrorCode.EXPECTED_TOKEN], '''
 f(x) => l[x];
 ''');
+  }
+
+  void test_indexOperator_nullAware() {
+    testRecovery('''
+f(x) => l?[x
+''', [ScannerErrorCode.EXPECTED_TOKEN, ParserErrorCode.EXPECTED_TOKEN], '''
+f(x) => l?[x];
+''',
+        featureSet: FeatureSet.forTesting(
+            sdkVersion: '2.3.0', additionalFeatures: [Feature.non_nullable]));
   }
 
   void test_listLiteral_inner_last() {
@@ -283,9 +288,7 @@ var x = [0, 1];
   }
 }
 
-/**
- * Test how well the parser recovers when parentheses are mismatched.
- */
+/// Test how well the parser recovers when parentheses are mismatched.
 @reflectiveTest
 class ParenthesesTest extends AbstractRecoveryTest {
   @failingTest

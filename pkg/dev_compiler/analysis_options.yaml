@@ -1,4 +1,10 @@
+include: package:pedantic/analysis_options.1.11.0.yaml
+
 analyzer:
+  strong-mode:
+    implicit-casts: false
+  errors:
+    todo: ignore
   exclude:
     - doc/api/**
     - gen/**
@@ -6,4 +12,10 @@ analyzer:
     - test/codegen/**
     - test/samples/**
     - test/transformer/hello_app/**
-    - tool/input_sdk/**
+
+linter:
+  rules:
+    # Not enforced by pedantic at any version.
+    - directives_ordering
+    - prefer_null_aware_operators
+    - prefer_typing_uninitialized_variables

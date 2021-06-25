@@ -15,11 +15,23 @@
 #include "vm/resolver.h"
 #include "vm/stack_frame.h"
 
-#if !defined(DART_PRECOMPILED_RUNTIME)
 namespace dart {
 namespace kernel {
 
 #define Z (zone_)
+
+// Returns static type of the parameter if it can be trusted (was type checked
+// by caller) and dynamic otherwise.
+static CompileType ParameterType(LocalVariable* param,
+                                 Representation representation = kTagged) {
+  return param->was_type_checked_by_caller()
+             ? CompileType::FromAbstractType(param->type(),
+                                             representation == kTagged,
+                                             CompileType::kCannotBeSentinel)
+             : ((representation == kTagged)
+                    ? CompileType::Dynamic()
+                    : CompileType::Dynamic().CopyNonNullable());
+}
 
 bool PrologueBuilder::PrologueSkippableOnUncheckedEntry(
     const Function& function) {
@@ -41,23 +53,12 @@ BlockEntryInstr* PrologueBuilder::BuildPrologue(BlockEntryInstr* entry,
 
   const bool load_optional_arguments = function_.HasOptionalParameters();
   const bool expect_type_args = function_.IsGeneric();
-  const bool check_arguments = function_.IsClosureFunction();
 
   Fragment prologue = Fragment(entry);
-  JoinEntryInstr* nsm = NULL;
-  if (load_optional_arguments || check_arguments || expect_type_args) {
-    nsm = BuildThrowNoSuchMethod();
-  }
-  if (check_arguments) {
-    Fragment f = BuildTypeArgumentsLengthCheck(nsm, expect_type_args);
-    if (link) prologue += f;
-  }
+
   if (load_optional_arguments) {
-    Fragment f = BuildOptionalParameterHandling(
-        nsm, parsed_function_->expression_temp_var());
-    if (link) prologue += f;
-  } else if (check_arguments) {
-    Fragment f = BuildFixedParameterLengthChecks(nsm);
+    Fragment f =
+        BuildOptionalParameterHandling(parsed_function_->expression_temp_var());
     if (link) prologue += f;
   }
   if (function_.IsClosureFunction()) {
@@ -65,69 +66,30 @@ BlockEntryInstr* PrologueBuilder::BuildPrologue(BlockEntryInstr* entry,
     if (!compiling_for_osr_) prologue += f;
   }
   if (expect_type_args) {
-    Fragment f = BuildTypeArgumentsHandling(nsm);
+    Fragment f = BuildTypeArgumentsHandling();
     if (link) prologue += f;
   }
 
   const bool is_empty_prologue = prologue.entry == prologue.current;
+  // Double-check we create empty prologues when HasEmptyPrologue returns true.
+  ASSERT(!HasEmptyPrologue(function_) || is_empty_prologue);
 
   // Always do this to preserve deoptid numbering.
   JoinEntryInstr* normal_code = BuildJoinEntry();
-  prologue += Goto(normal_code);
+  Fragment jump_to_normal_code = Goto(normal_code);
 
   if (is_empty_prologue) {
     *prologue_info = PrologueInfo(-1, -1);
     return entry;
   } else {
+    prologue += jump_to_normal_code;
     *prologue_info =
         PrologueInfo(previous_block_id, normal_code->block_id() - 1);
     return normal_code;
   }
 }
 
-Fragment PrologueBuilder::BuildTypeArgumentsLengthCheck(JoinEntryInstr* nsm,
-                                                        bool expect_type_args) {
-  Fragment check_type_args;
-  JoinEntryInstr* done = BuildJoinEntry();
-
-  // Type args are always optional, so length can always be zero.
-  // If expect_type_args, a non-zero length must match the declaration length.
-  TargetEntryInstr *then, *fail;
-  check_type_args += LoadArgDescriptor();
-  check_type_args += LoadNativeField(Slot::ArgumentsDescriptor_type_args_len());
-  if (expect_type_args) {
-    JoinEntryInstr* join2 = BuildJoinEntry();
-
-    LocalVariable* len = MakeTemporary();
-
-    TargetEntryInstr* otherwise;
-    check_type_args += LoadLocal(len);
-    check_type_args += IntConstant(0);
-    check_type_args += BranchIfEqual(&then, &otherwise);
-
-    TargetEntryInstr* then2;
-    Fragment check_len(otherwise);
-    check_len += LoadLocal(len);
-    check_len += IntConstant(function_.NumTypeParameters());
-    check_len += BranchIfEqual(&then2, &fail);
-
-    Fragment(then) + Goto(join2);
-    Fragment(then2) + Goto(join2);
-
-    Fragment(join2) + Drop() + Goto(done);
-    Fragment(fail) + Goto(nsm);
-  } else {
-    check_type_args += IntConstant(0);
-    check_type_args += BranchIfEqual(&then, &fail);
-    Fragment(then) + Goto(done);
-    Fragment(fail) + Goto(nsm);
-  }
-
-  return Fragment(check_type_args.entry, done);
-}
-
 Fragment PrologueBuilder::BuildOptionalParameterHandling(
-    JoinEntryInstr* nsm,
     LocalVariable* temp_var) {
   Fragment copy_args_prologue;
   const int num_fixed_params = function_.num_fixed_parameters();
@@ -136,40 +98,21 @@ Fragment PrologueBuilder::BuildOptionalParameterHandling(
   const int num_params =
       num_fixed_params + num_opt_pos_params + num_opt_named_params;
   ASSERT(function_.NumParameters() == num_params);
+  const intptr_t fixed_params_size =
+      FlowGraph::ParameterOffsetAt(function_, num_params, /*last_slot=*/false) -
+      num_opt_named_params - num_opt_pos_params;
 
   // Check that min_num_pos_args <= num_pos_args <= max_num_pos_args,
   // where num_pos_args is the number of positional arguments passed in.
   const int min_num_pos_args = num_fixed_params;
-  const int max_num_pos_args = num_fixed_params + num_opt_pos_params;
 
   copy_args_prologue += LoadArgDescriptor();
   copy_args_prologue +=
       LoadNativeField(Slot::ArgumentsDescriptor_positional_count());
-  LocalVariable* positional_count_var = MakeTemporary();
 
   copy_args_prologue += LoadArgDescriptor();
   copy_args_prologue += LoadNativeField(Slot::ArgumentsDescriptor_count());
   LocalVariable* count_var = MakeTemporary();
-
-  // Ensure the caller provided at least [min_num_pos_args] arguments.
-  copy_args_prologue += IntConstant(min_num_pos_args);
-  copy_args_prologue += LoadLocal(positional_count_var);
-  copy_args_prologue += SmiRelationalOp(Token::kLTE);
-  TargetEntryInstr *success1, *fail1;
-  copy_args_prologue += BranchIfTrue(&success1, &fail1);
-  copy_args_prologue = Fragment(copy_args_prologue.entry, success1);
-
-  // Ensure the caller provided at most [max_num_pos_args] arguments.
-  copy_args_prologue += LoadLocal(positional_count_var);
-  copy_args_prologue += IntConstant(max_num_pos_args);
-  copy_args_prologue += SmiRelationalOp(Token::kLTE);
-  TargetEntryInstr *success2, *fail2;
-  copy_args_prologue += BranchIfTrue(&success2, &fail2);
-  copy_args_prologue = Fragment(copy_args_prologue.entry, success2);
-
-  // Link up the argument check failing code.
-  Fragment(fail1) + Goto(nsm);
-  Fragment(fail2) + Goto(nsm);
 
   copy_args_prologue += LoadLocal(count_var);
   copy_args_prologue += IntConstant(min_num_pos_args);
@@ -178,11 +121,44 @@ Fragment PrologueBuilder::BuildOptionalParameterHandling(
 
   // Copy mandatory parameters down.
   intptr_t param = 0;
+  intptr_t param_offset = -1;
+
+  const auto update_param_offset = [&param_offset](const Function& function,
+                                                   intptr_t param_id) {
+    if (param_id < 0) {
+      // Type arguments of Factory constructor is processed with parameters
+      param_offset++;
+      return;
+    }
+
+    // update parameter offset
+    if (function.is_unboxed_integer_parameter_at(param_id)) {
+      param_offset += compiler::target::kIntSpillFactor;
+    } else if (function.is_unboxed_double_parameter_at(param_id)) {
+      param_offset += compiler::target::kDoubleSpillFactor;
+    } else {
+      ASSERT(!function.is_unboxed_parameter_at(param_id));
+      // Tagged parameters always occupy one word
+      param_offset++;
+    }
+  };
+
   for (; param < num_fixed_params; ++param) {
+    const intptr_t param_index = param - (function_.IsFactory() ? 1 : 0);
+    update_param_offset(function_, param_index);
+
+    const auto representation =
+        ((param_index >= 0)
+             ? FlowGraph::ParameterRepresentationAt(function_, param_index)
+             : kTagged);
+
     copy_args_prologue += LoadLocal(optional_count_var);
     copy_args_prologue += LoadFpRelativeSlot(
-        kWordSize *
-        (compiler_frame_layout.param_end_from_fp + num_fixed_params - param));
+        compiler::target::kWordSize *
+            (compiler::target::frame_layout.param_end_from_fp +
+             fixed_params_size - param_offset),
+        ParameterType(ParameterVariable(param), representation),
+        representation);
     copy_args_prologue +=
         StoreLocalRaw(TokenPosition::kNoSource, ParameterVariable(param));
     copy_args_prologue += Drop();
@@ -192,6 +168,9 @@ Fragment PrologueBuilder::BuildOptionalParameterHandling(
   if (num_opt_pos_params > 0) {
     JoinEntryInstr* next_missing = NULL;
     for (intptr_t opt_param = 1; param < num_params; ++param, ++opt_param) {
+      const intptr_t param_index = param - (function_.IsFactory() ? 1 : 0);
+      update_param_offset(function_, param_index);
+
       TargetEntryInstr *supplied, *missing;
       copy_args_prologue += IntConstant(opt_param);
       copy_args_prologue += LoadLocal(optional_count_var);
@@ -201,8 +180,10 @@ Fragment PrologueBuilder::BuildOptionalParameterHandling(
       Fragment good(supplied);
       good += LoadLocal(optional_count_var);
       good += LoadFpRelativeSlot(
-          kWordSize *
-          (compiler_frame_layout.param_end_from_fp + num_fixed_params - param));
+          compiler::target::kWordSize *
+              (compiler::target::frame_layout.param_end_from_fp +
+               fixed_params_size - param_offset),
+          ParameterType(ParameterVariable(param)));
       good += StoreLocalRaw(TokenPosition::kNoSource, ParameterVariable(param));
       good += Drop();
 
@@ -222,23 +203,14 @@ Fragment PrologueBuilder::BuildOptionalParameterHandling(
     }
     copy_args_prologue += Goto(next_missing /* join good/not_good flows */);
     copy_args_prologue.current = next_missing;
-
-    // If there are more arguments from the caller we haven't processed, go
-    // NSM.
-    TargetEntryInstr *done, *unknown_named_arg_passed;
-    copy_args_prologue += LoadLocal(positional_count_var);
-    copy_args_prologue += LoadLocal(count_var);
-    copy_args_prologue += BranchIfEqual(&done, &unknown_named_arg_passed);
-    copy_args_prologue.current = done;
-    {
-      Fragment f(unknown_named_arg_passed);
-      f += Goto(nsm);
-    }
   } else {
     ASSERT(num_opt_named_params > 0);
 
+    const bool check_required_params =
+        IsolateGroup::Current()->use_strict_null_safety_checks();
     const intptr_t first_name_offset =
-        ArgumentsDescriptor::first_named_entry_offset() - Array::data_offset();
+        compiler::target::ArgumentsDescriptor::first_named_entry_offset() -
+        compiler::target::Array::data_offset();
 
     // Start by alphabetically sorting the names of the optional parameters.
     int* opt_param_position = Z->Alloc<int>(num_opt_named_params);
@@ -253,54 +225,39 @@ Fragment PrologueBuilder::BuildOptionalParameterHandling(
     copy_args_prologue += Drop();
 
     for (intptr_t i = 0; param < num_params; ++param, ++i) {
-      JoinEntryInstr* join = BuildJoinEntry();
-
-      copy_args_prologue +=
-          IntConstant(ArgumentsDescriptor::named_entry_size() / kWordSize);
+      copy_args_prologue += IntConstant(
+          compiler::target::ArgumentsDescriptor::named_entry_size() /
+          compiler::target::kCompressedWordSize);
       copy_args_prologue += LoadLocal(optional_count_vars_processed);
       copy_args_prologue += SmiBinaryOp(Token::kMUL, /* truncate= */ true);
       LocalVariable* tuple_diff = MakeTemporary();
 
-      // name = arg_desc[names_offset + arg_desc_name_index + nameOffset]
-      copy_args_prologue += LoadArgDescriptor();
-      copy_args_prologue += IntConstant(
-          (first_name_offset + ArgumentsDescriptor::name_offset()) / kWordSize);
-      copy_args_prologue += LoadLocal(tuple_diff);
-      copy_args_prologue += SmiBinaryOp(Token::kADD, /* truncate= */ true);
-      copy_args_prologue += LoadIndexed(/* index_scale = */ kWordSize);
-
-      // first name in sorted list of all names
-      const String& param_name = String::ZoneHandle(
-          Z, function_.ParameterNameAt(opt_param_position[i]));
-      ASSERT(param_name.IsSymbol());
-      copy_args_prologue += Constant(param_name);
-
-      // Compare the two names: Note that the ArgumentDescriptor array always
-      // terminates with a "null" name (i.e. kNullCid), which will prevent us
-      // from running out-of-bounds.
-      TargetEntryInstr *supplied, *missing;
-      copy_args_prologue += BranchIfStrictEqual(&supplied, &missing);
-
       // Let's load position from arg descriptor (to see which parameter is the
       // name) and move kEntrySize forward in ArgDescriptopr names array.
-      Fragment good(supplied);
-
+      //
+      // Later we'll either add this fragment directly to the copy_args_prologue
+      // if no check is needed or add an appropriate check.
+      Fragment good;
       {
-        // fp[compiler_frame_layout.param_end_from_fp + (count_var - pos)]
+        // fp[target::frame_layout.param_end_from_fp + (count_var - pos)]
         good += LoadLocal(count_var);
         {
           // pos = arg_desc[names_offset + arg_desc_name_index + positionOffset]
           good += LoadArgDescriptor();
           good += IntConstant(
-              (first_name_offset + ArgumentsDescriptor::position_offset()) /
-              kWordSize);
+              (first_name_offset +
+               compiler::target::ArgumentsDescriptor::position_offset()) /
+              compiler::target::kCompressedWordSize);
           good += LoadLocal(tuple_diff);
           good += SmiBinaryOp(Token::kADD, /* truncate= */ true);
-          good += LoadIndexed(/* index_scale = */ kWordSize);
+          good += LoadIndexed(
+              kArrayCid, /*index_scale*/ compiler::target::kCompressedWordSize);
         }
         good += SmiBinaryOp(Token::kSUB, /* truncate= */ true);
-        good += LoadFpRelativeSlot(kWordSize *
-                                   compiler_frame_layout.param_end_from_fp);
+        good += LoadFpRelativeSlot(
+            compiler::target::kWordSize *
+                compiler::target::frame_layout.param_end_from_fp,
+            ParameterType(ParameterVariable(opt_param_position[i])));
 
         // Copy down.
         good += StoreLocalRaw(TokenPosition::kNoSource,
@@ -314,13 +271,46 @@ Fragment PrologueBuilder::BuildOptionalParameterHandling(
         good += StoreLocalRaw(TokenPosition::kNoSource,
                               optional_count_vars_processed);
         good += Drop();
-
-        good += Goto(join);
       }
 
-      // We had no match, let's just load the default constant.
-      Fragment not_good(missing);
-      {
+      const bool required = check_required_params &&
+                            function_.IsRequiredAt(opt_param_position[i]);
+
+      if (required) {
+        copy_args_prologue += good;
+      } else {
+        // name = arg_desc[names_offset + arg_desc_name_index + nameOffset]
+        copy_args_prologue += LoadArgDescriptor();
+        copy_args_prologue +=
+            IntConstant((first_name_offset +
+                         compiler::target::ArgumentsDescriptor::name_offset()) /
+                        compiler::target::kCompressedWordSize);
+        copy_args_prologue += LoadLocal(tuple_diff);
+        copy_args_prologue += SmiBinaryOp(Token::kADD, /* truncate= */ true);
+        copy_args_prologue += LoadIndexed(
+            kArrayCid, /*index_scale*/ compiler::target::kCompressedWordSize);
+
+        // first name in sorted list of all names
+        const String& param_name = String::ZoneHandle(
+            Z, function_.ParameterNameAt(opt_param_position[i]));
+        ASSERT(param_name.IsSymbol());
+        copy_args_prologue += Constant(param_name);
+
+        // Compare the two names: Note that the ArgumentDescriptor array always
+        // terminates with a "null" name (i.e. kNullCid), which will prevent us
+        // from running out-of-bounds.
+        TargetEntryInstr *supplied, *missing;
+        copy_args_prologue += BranchIfStrictEqual(&supplied, &missing);
+
+        // Join good/not_good.
+        JoinEntryInstr* join = BuildJoinEntry();
+
+        // Put good in the flowgraph as a separate basic block.
+        good.Prepend(supplied);
+        good += Goto(join);
+
+        // We had no match, so load the default constant.
+        Fragment not_good(missing);
         not_good += Constant(
             DefaultParameterValueAt(opt_param_position[i] - num_fixed_params));
 
@@ -329,23 +319,11 @@ Fragment PrologueBuilder::BuildOptionalParameterHandling(
                                   ParameterVariable(opt_param_position[i]));
         not_good += Drop();
         not_good += Goto(join);
+
+        copy_args_prologue.current = join;
       }
 
-      copy_args_prologue.current = join;
       copy_args_prologue += Drop();  // tuple_diff
-    }
-
-    // If there are more arguments from the caller we haven't processed, go
-    // NSM.
-    TargetEntryInstr *done, *unknown_named_arg_passed;
-    copy_args_prologue += LoadLocal(optional_count_var);
-    copy_args_prologue += LoadLocal(optional_count_vars_processed);
-    copy_args_prologue += BranchIfEqual(&done, &unknown_named_arg_passed);
-    copy_args_prologue.current = done;
-
-    {
-      Fragment f(unknown_named_arg_passed);
-      f += Goto(nsm);
     }
   }
 
@@ -356,36 +334,8 @@ Fragment PrologueBuilder::BuildOptionalParameterHandling(
   return copy_args_prologue;
 }
 
-Fragment PrologueBuilder::BuildFixedParameterLengthChecks(JoinEntryInstr* nsm) {
-  Fragment check_args;
-  JoinEntryInstr* done = BuildJoinEntry();
-
-  check_args += LoadArgDescriptor();
-  check_args += LoadNativeField(Slot::ArgumentsDescriptor_count());
-  LocalVariable* count = MakeTemporary();
-
-  TargetEntryInstr *then, *fail;
-  check_args += LoadLocal(count);
-  check_args += IntConstant(function_.num_fixed_parameters());
-  check_args += BranchIfEqual(&then, &fail);
-
-  TargetEntryInstr *then2, *fail2;
-  Fragment check_len(then);
-  check_len += LoadArgDescriptor();
-  check_len += LoadNativeField(Slot::ArgumentsDescriptor_positional_count());
-  check_len += BranchIfEqual(&then2, &fail2);
-
-  Fragment(fail) + Goto(nsm);
-  Fragment(fail2) + Goto(nsm);
-  Fragment(then2) + Goto(done);
-
-  return Fragment(check_args.entry, done);
-}
-
 Fragment PrologueBuilder::BuildClosureContextHandling() {
-  LocalScope* scope = parsed_function_->node_sequence()->scope();
-  LocalVariable* closure_parameter = scope->VariableAt(0);
-
+  LocalVariable* closure_parameter = parsed_function_->ParameterVariable(0);
   LocalVariable* context = parsed_function_->current_context_var();
 
   // Load closure.context & store it into the context variable.
@@ -398,16 +348,20 @@ Fragment PrologueBuilder::BuildClosureContextHandling() {
   return populate_context;
 }
 
-Fragment PrologueBuilder::BuildTypeArgumentsHandling(JoinEntryInstr* nsm) {
+Fragment PrologueBuilder::BuildTypeArgumentsHandling() {
   LocalVariable* type_args_var = parsed_function_->RawTypeArgumentsVariable();
+  ASSERT(type_args_var != nullptr);
 
   Fragment handling;
 
   Fragment store_type_args;
   store_type_args += LoadArgDescriptor();
-  store_type_args += LoadNativeField(Slot::ArgumentsDescriptor_count());
+  store_type_args += LoadNativeField(Slot::ArgumentsDescriptor_size());
   store_type_args += LoadFpRelativeSlot(
-      kWordSize * (1 + compiler_frame_layout.param_end_from_fp));
+      compiler::target::kWordSize *
+          (1 + compiler::target::frame_layout.param_end_from_fp),
+      CompileType(CompileType::kCanBeNull, CompileType::kCannotBeSentinel,
+                  kTypeArgumentsCid, nullptr));
   store_type_args += StoreLocal(TokenPosition::kNoSource, type_args_var);
   store_type_args += Drop();
 
@@ -418,9 +372,9 @@ Fragment PrologueBuilder::BuildTypeArgumentsHandling(JoinEntryInstr* nsm) {
 
   handling += TestTypeArgsLen(store_null, store_type_args, 0);
 
-  if (parsed_function_->function().IsClosureFunction()) {
-    LocalVariable* closure =
-        parsed_function_->node_sequence()->scope()->VariableAt(0);
+  const auto& function = parsed_function_->function();
+  if (function.IsClosureFunction()) {
+    LocalVariable* closure = parsed_function_->ParameterVariable(0);
 
     // Currently, delayed type arguments can only be introduced through type
     // inference in the FE. So if they are present, we can assume they are
@@ -433,10 +387,9 @@ Fragment PrologueBuilder::BuildTypeArgumentsHandling(JoinEntryInstr* nsm) {
         StoreLocal(TokenPosition::kNoSource, type_args_var);
     use_delayed_type_args += Drop();
 
-    handling += TestDelayedTypeArgs(
-        closure,
-        /*present=*/TestTypeArgsLen(use_delayed_type_args, Goto(nsm), 0),
-        /*absent=*/Fragment());
+    handling += TestDelayedTypeArgs(closure,
+                                    /*present=*/use_delayed_type_args,
+                                    /*absent=*/Fragment());
   }
 
   return handling;
@@ -463,5 +416,3 @@ void PrologueBuilder::SortOptionalNamedParametersInto(int* opt_param_position,
 
 }  // namespace kernel
 }  // namespace dart
-
-#endif  // !defined(DART_PRECOMPILED_RUNTIME)

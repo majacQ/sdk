@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart=2.9
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
@@ -9,11 +11,10 @@ import 'dart:io';
 
 import 'standard_deviation.dart';
 
-const String bRootPath = const String.fromEnvironment("bRoot");
-const int abIterations =
-    const int.fromEnvironment("abIterations", defaultValue: 15);
-const int iterations =
-    const int.fromEnvironment("iterations", defaultValue: 15);
+const String bRootPath =
+    bool.hasEnvironment("bRoot") ? String.fromEnvironment("bRoot") : null;
+const int abIterations = int.fromEnvironment("abIterations", defaultValue: 15);
+const int iterations = int.fromEnvironment("iterations", defaultValue: 15);
 
 /// Compare the performance of two different fast implementations
 /// by alternately launching the compile application in this directory
@@ -180,6 +181,7 @@ Future<Null> run(Uri workingDir, Uri dartApp, List<String> args,
 
   Process process = await Process.start(Platform.executable, procArgs,
       workingDirectory: workingDirPath);
+  // ignore: unawaited_futures
   stderr.addStream(process.stderr);
   StreamSubscription<String> stdOutSubscription;
   stdOutSubscription = process.stdout

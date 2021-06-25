@@ -2,19 +2,30 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
+import 'dart:collection';
+
 import 'package:kernel/kernel.dart';
 
-import '../js_ast/js_ast.dart' as JS;
+import '../compiler/js_names.dart' as js_ast;
+import '../compiler/module_containers.dart'
+    show ModuleItemContainer, ModuleItemData;
+import '../js_ast/js_ast.dart' as js_ast;
 import '../js_ast/js_ast.dart' show js;
-import '../compiler/js_names.dart' as JS;
+import 'kernel_helpers.dart';
 
+/// Returns all non-locally defined type parameters referred to by [t].
 Set<TypeParameter> freeTypeParameters(DartType t) {
-  var result = Set<TypeParameter>();
+  assert(isKnownDartTypeImplementor(t));
+  var result = <TypeParameter>{};
   void find(DartType t) {
     if (t is TypeParameterType) {
       result.add(t.parameter);
     } else if (t is InterfaceType) {
       t.typeArguments.forEach(find);
+    } else if (t is FutureOrType) {
+      find(t.typeArgument);
     } else if (t is TypedefType) {
       t.typeArguments.forEach(find);
     } else if (t is FunctionType) {
@@ -30,140 +41,161 @@ Set<TypeParameter> freeTypeParameters(DartType t) {
   return result;
 }
 
-/// _CacheTable tracks cache variables for variables that
-/// are emitted in place with a hoisted variable for a cache.
-class _CacheTable {
-  /// Mapping from types to their canonical names.
-  // Use a LinkedHashMap to maintain key insertion order so the generated code
-  // is stable under slight perturbation.  (If this is not good enough we could
-  // sort by name to canonicalize order.)
-  final _names = <DartType, JS.TemporaryId>{};
-  Iterable<DartType> get keys => _names.keys.toList();
-
-  JS.Statement _dischargeType(DartType type) {
-    var name = _names.remove(type);
-    if (name != null) {
-      return js.statement('let #;', [name]);
-    }
-    return null;
+/// A name for a type made of JS identifier safe characters.
+///
+/// 'L' and 'N' are appended to a type name to represent a legacy or nullable
+/// flavor of a type.
+String _typeString(DartType type, {bool flat = false}) {
+  var nullability = type.declaredNullability == Nullability.legacy
+      ? 'L'
+      : type.declaredNullability == Nullability.nullable
+          ? 'N'
+          : '';
+  assert(isKnownDartTypeImplementor(type));
+  if (type is InterfaceType) {
+    var name = '${type.classNode.name}$nullability';
+    var typeArgs = type.typeArguments;
+    if (typeArgs == null) return name;
+    if (typeArgs.every((p) => p == const DynamicType())) return name;
+    return "${name}Of${typeArgs.map(_typeString).join("\$")}";
   }
-
-  /// Emit a list of statements declaring the cache variables for
-  /// types tracked by this table.  If [typeFilter] is given,
-  /// only emit the types listed in the filter.
-  List<JS.Statement> discharge([Iterable<DartType> typeFilter]) {
-    var decls = <JS.Statement>[];
-    var types = typeFilter ?? keys;
-    for (var t in types) {
-      var stmt = _dischargeType(t);
-      if (stmt != null) decls.add(stmt);
-    }
-    return decls;
+  if (type is FutureOrType) {
+    var name = 'FutureOr$nullability';
+    if (type.typeArgument == const DynamicType()) return name;
+    return '${name}Of${_typeString(type.typeArgument)}';
   }
-
-  bool isNamed(DartType type) => _names.containsKey(type);
-
-  String _typeString(DartType type, {bool flat = false}) {
-    if (type is InterfaceType) {
-      var name = type.classNode.name;
-      var typeArgs = type.typeArguments;
-      if (typeArgs == null) return name;
-      if (typeArgs.every((p) => p == const DynamicType())) return name;
-      return "${name}Of${typeArgs.map(_typeString).join("\$")}";
-    }
-    if (type is TypedefType) {
-      var name = type.typedefNode.name;
-      var typeArgs = type.typeArguments;
-      if (typeArgs == null) return name;
-      if (typeArgs.every((p) => p == const DynamicType())) return name;
-      return "${name}Of${typeArgs.map(_typeString).join("\$")}";
-    }
-    if (type is FunctionType) {
-      if (flat) return "Fn";
-      var rType = _typeString(type.returnType, flat: true);
-      var params = type.positionalParameters
-          .take(3)
-          .map((p) => _typeString(p, flat: true));
-      var paramList = params.join("And");
-      var count = type.positionalParameters.length;
-      if (count > 3 || type.namedParameters.isNotEmpty) {
-        paramList = "${paramList}__";
-      } else if (count == 0) {
-        paramList = "Void";
-      }
-      return "${paramList}To${rType}";
-    }
-    if (type is TypeParameterType) return type.parameter.name;
-    if (type == const DynamicType()) return 'dynamic';
-    if (type == const VoidType()) return 'void';
-    if (type == const BottomType()) return 'bottom';
-    return 'invalid';
+  if (type is TypedefType) {
+    var name = '${type.typedefNode.name}$nullability';
+    var typeArgs = type.typeArguments;
+    if (typeArgs == null) return name;
+    if (typeArgs.every((p) => p == const DynamicType())) return name;
+    return "${name}Of${typeArgs.map(_typeString).join("\$")}";
   }
-
-  /// Heuristically choose a good name for the cache and generator
-  /// variables.
-  JS.TemporaryId chooseTypeName(DartType type) {
-    return JS.TemporaryId(_typeString(type));
-  }
-}
-
-/// _GeneratorTable tracks types which have been
-/// named and hoisted.
-class _GeneratorTable extends _CacheTable {
-  final _defs = <DartType, JS.Expression>{};
-
-  final JS.Identifier _runtimeModule;
-
-  _GeneratorTable(this._runtimeModule);
-
-  JS.Statement _dischargeType(DartType t) {
-    var name = _names.remove(t);
-    if (name != null) {
-      JS.Expression init = _defs.remove(t);
-      assert(init != null);
-      return js.statement('let # = () => ((# = #.constFn(#))());',
-          [name, name, _runtimeModule, init]);
+  if (type is FunctionType) {
+    if (flat) return 'Fn';
+    var rType = _typeString(type.returnType, flat: true);
+    var params = type.positionalParameters
+        .take(3)
+        .map((p) => _typeString(p, flat: true));
+    var paramList = params.join('And');
+    var count = type.positionalParameters.length;
+    if (count > 3 || type.namedParameters.isNotEmpty) {
+      paramList = '${paramList}__';
+    } else if (count == 0) {
+      paramList = 'Void';
     }
-    return null;
+    return '${paramList}To$nullability$rType';
   }
-
-  /// If [type] does not already have a generator name chosen for it,
-  /// assign it one, using [typeRep] as the initializer for it.
-  /// Emit the generator name.
-  JS.TemporaryId _nameType(DartType type, JS.Expression typeRep) {
-    var temp = _names[type];
-    if (temp == null) {
-      _names[type] = temp = chooseTypeName(type);
-      _defs[type] = typeRep;
-    }
-    return temp;
-  }
+  if (type is TypeParameterType) return '${type.parameter.name}$nullability';
+  if (type is DynamicType) return 'dynamic';
+  if (type is VoidType) return 'void';
+  if (type is NeverType) return 'Never$nullability';
+  if (type is NullType) return 'Null';
+  return 'invalid';
 }
 
 class TypeTable {
-  /// Generator variable names for hoisted types.
-  final _GeneratorTable _generators;
-
   /// Mapping from type parameters to the types which must have their
   /// cache/generator variables discharged at the binding site for the
   /// type variable since the type definition depends on the type
   /// parameter.
   final _scopeDependencies = <TypeParameter, List<DartType>>{};
 
-  TypeTable(JS.Identifier runtime) : _generators = _GeneratorTable(runtime);
+  /// Contains types with any free type parameters and maps them to a unique
+  /// JS identifier.
+  ///
+  /// Used to reference types hoisted to the top of a generic class or generic
+  /// function (as opposed to the top of the entire module).
+  final _unboundTypeIds = HashMap<DartType, js_ast.Identifier>();
 
-  /// Emit a list of statements declaring the cache variables and generator
-  /// definitions tracked by the table.  If [formals] is present, only
-  /// emit the definitions which depend on the formals.
-  List<JS.Statement> discharge([List<TypeParameter> formals]) {
-    var filter = formals?.expand((p) => _scopeDependencies[p] ?? <DartType>[]);
-    var stmts = _generators.discharge(filter);
-    formals?.forEach(_scopeDependencies.remove);
-    return stmts;
+  /// Holds JS type generators keyed by their underlying DartType.
+  final typeContainer = ModuleItemContainer<DartType>.asObject('T',
+      keyToString: (DartType t) => escapeIdentifier(_typeString(t)));
+
+  final js_ast.Identifier _runtimeModule;
+
+  TypeTable(this._runtimeModule);
+
+  /// Returns true if [type] is already recorded in the table.
+  bool _isNamed(DartType type) =>
+      typeContainer.contains(type) || _unboundTypeIds.containsKey(type);
+
+  Set<Library> incrementalLibraries() {
+    var libraries = <Library>{};
+    for (var t in typeContainer.incrementalModuleItems) {
+      if (t is InterfaceType) {
+        libraries.add(t.classNode.enclosingLibrary);
+      }
+    }
+    return libraries;
   }
 
-  /// Record the dependencies of the type on its free variables
+  /// Emit the initializer statements for the type container, which contains
+  /// all named types with fully bound type parameters.
+  List<js_ast.Statement> dischargeBoundTypes() {
+    js_ast.Expression emitValue(DartType t, ModuleItemData data) {
+      var access = js.call('#.#', [data.id, data.jsKey]);
+      return js.call('() => ((# = #.constFn(#))())',
+          [access, _runtimeModule, data.jsValue]);
+    }
+
+    var boundTypes = typeContainer.emit(emitValue: emitValue);
+    // Bound types should only be emitted once (even across multiple evals).
+    for (var t in typeContainer.keys) {
+      typeContainer.setNoEmit(t);
+    }
+    return boundTypes;
+  }
+
+  js_ast.Statement _dischargeFreeType(DartType type) {
+    typeContainer.setNoEmit(type);
+    var init = typeContainer[type];
+    var id = _unboundTypeIds[type];
+    // TODO(vsm): Change back to `let`.
+    // See https://github.com/dart-lang/sdk/issues/40380.
+    return js.statement('var # = () => ((# = #.constFn(#))());',
+        [id, id, _runtimeModule, init]);
+  }
+
+  /// Emit a list of statements declaring the cache variables and generator
+  /// definitions tracked by the table so far.
+  ///
+  /// If [formals] is present, only emit the definitions which depend on the
+  /// formals.
+  List<js_ast.Statement> dischargeFreeTypes([Iterable<TypeParameter> formals]) {
+    var decls = <js_ast.Statement>[];
+    var types = formals == null
+        ? typeContainer.keys.where((p) => freeTypeParameters(p).isNotEmpty)
+        : formals.expand((p) => _scopeDependencies[p] ?? <DartType>[]).toSet();
+
+    for (var t in types) {
+      var stmt = _dischargeFreeType(t);
+      if (stmt != null) decls.add(stmt);
+    }
+    return decls;
+  }
+
+  /// Emit a JS expression that evaluates to the generator for [type].
+  ///
+  /// If [type] does not already have a generator name chosen for it,
+  /// assign it one, using [typeRep] as its initializer.
+  js_ast.Expression _nameType(DartType type, js_ast.Expression typeRep) {
+    if (!typeContainer.contains(type)) {
+      typeContainer[type] = typeRep;
+    }
+    typeContainer.setEmitIfIncremental(type);
+    return _unboundTypeIds[type] ?? typeContainer.access(type);
+  }
+
+  /// Record the dependencies of the type on its free variables.
+  ///
+  /// Returns true if [type] is a free type parameter (but not a bound) and so
+  /// is not locally hoisted.
   bool recordScopeDependencies(DartType type) {
+    if (_isNamed(type)) {
+      return false;
+    }
+
     var freeVariables = freeTypeParameters(type);
     // TODO(leafp): This is a hack to avoid trying to hoist out of
     // generic functions and generic function types.  This often degrades
@@ -172,6 +204,19 @@ class TypeTable {
     // now we just disable it.
     if (freeVariables.any((i) => i.parent is FunctionNode)) {
       return true;
+    }
+
+    // This is only reached when [type] is itself a bound that depends on a
+    // free type parameter.
+    // TODO(markzipan): Bounds are locally hoisted to their own JS identifiers,
+    // but we don't do this this for other types that depend on free variables,
+    // resulting in some duplicated runtime code. We may get some performance
+    // wins if we just locally hoist everything.
+    if (freeVariables.isNotEmpty) {
+      // TODO(40273) Remove prepended text when we have a better way to hide
+      // these names from debug tools.
+      _unboundTypeIds[type] =
+          js_ast.TemporaryId(escapeIdentifier('__t\$${_typeString(type)}'));
     }
 
     for (var free in freeVariables) {
@@ -185,11 +230,11 @@ class TypeTable {
   /// Given a type [type], and a JS expression [typeRep] which implements it,
   /// add the type and its representation to the table, returning an
   /// expression which implements the type (but which caches the value).
-  JS.Expression nameType(DartType type, JS.Expression typeRep) {
-    if (!_generators.isNamed(type) && recordScopeDependencies(type)) {
+  js_ast.Expression nameType(DartType type, js_ast.Expression typeRep) {
+    if (recordScopeDependencies(type)) {
       return typeRep;
     }
-    var name = _generators._nameType(type, typeRep);
+    var name = _nameType(type, typeRep);
     return js.call('#()', [name]);
   }
 
@@ -199,12 +244,13 @@ class TypeTable {
   /// should be a function that is invoked to compute the type, rather than the
   /// type itself. This allows better integration with `lazyFn`, avoiding an
   /// extra level of indirection.
-  JS.Expression nameFunctionType(FunctionType type, JS.Expression typeRep,
+  js_ast.Expression nameFunctionType(
+      FunctionType type, js_ast.Expression typeRep,
       {bool lazy = false}) {
-    if (!_generators.isNamed(type) && recordScopeDependencies(type)) {
-      return lazy ? JS.ArrowFun([], typeRep) : typeRep;
+    if (recordScopeDependencies(type)) {
+      return lazy ? js_ast.ArrowFun([], typeRep) : typeRep;
     }
-    var name = _generators._nameType(type, typeRep);
+    var name = _nameType(type, typeRep);
     return lazy ? name : js.call('#()', [name]);
   }
 }

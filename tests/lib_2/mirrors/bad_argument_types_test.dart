@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import 'dart:io';
 import 'dart:mirrors';
 
@@ -80,7 +82,7 @@ void badClassStaticInvoke() {
 }
 
 void badStaticInvoke() {
-  final ClosureMirror im = reflect(foo);
+  final im = reflect(foo) as ClosureMirror;
   Expect.throwsTypeError(() => im.apply(['Hello world!']));
 }
 
@@ -124,7 +126,7 @@ void badGenericFactoryInvoke() {
 }
 
 void badGenericStaticInvoke() {
-  final ClosureMirror im = reflect(bar);
+  final im = reflect(bar) as ClosureMirror;
   Expect.throwsTypeError(() => im.apply(['Hello world!']));
 }
 

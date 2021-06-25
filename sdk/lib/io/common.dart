@@ -19,9 +19,7 @@ const int _osErrorResponseMessage = 2;
 bool _isErrorResponse(response) =>
     response is List && response[0] != _successResponse;
 
-/**
- * Returns an Exception or an Error
- */
+/// Returns an [Exception] or an [Error].
 _exceptionFromResponse(response, String message, String path) {
   assert(_isErrorResponse(response));
   switch (response[_errorResponseErrorType]) {
@@ -38,24 +36,20 @@ _exceptionFromResponse(response, String message, String path) {
   }
 }
 
-/**
- * Base class for all IO related exceptions.
- */
+/// Base class for all IO related exceptions.
 abstract class IOException implements Exception {
   String toString() => "IOException";
 }
 
-/**
-  * An [OSError] object holds information about an error from the
-  * operating system.
-  */
+/// An [Exception] holding information about an error from the
+/// operating system.
 @pragma("vm:entry-point")
-class OSError {
-  /** Constant used to indicate that no OS error code is available. */
+class OSError implements Exception {
+  /// Constant used to indicate that no OS error code is available.
   static const int noErrorCode = -1;
 
-  /// Error message supplied by the operating system. This may be `null` or
-  /// empty if no message is associated with the error.
+  /// Error message supplied by the operating system. This will be empty if no
+  /// message is associated with the error.
   final String message;
 
   /// Error code supplied by the operating system.
@@ -64,11 +58,11 @@ class OSError {
   /// associated with the error.
   final int errorCode;
 
-  /** Creates an OSError object from a message and an errorCode. */
+  /// Creates an OSError object from a message and an errorCode.
   @pragma("vm:entry-point")
   const OSError([this.message = "", this.errorCode = noErrorCode]);
 
-  /** Converts an OSError object to a string representation. */
+  /// Converts an OSError object to a string representation.
   String toString() {
     StringBuffer sb = new StringBuffer();
     sb.write("OS Error");
@@ -97,20 +91,17 @@ class _BufferAndStart {
 // benefit that it is faster to access from the C code as well.
 _BufferAndStart _ensureFastAndSerializableByteData(
     List<int> buffer, int start, int end) {
-  if (buffer is Uint8List || buffer is Int8List) {
+  if (_isDirectIOCapableTypedList(buffer)) {
     return new _BufferAndStart(buffer, start);
   }
   int length = end - start;
   var newBuffer = new Uint8List(length);
-  int j = start;
-  for (int i = 0; i < length; i++) {
-    int value = buffer[j];
-    if (value == null) throw ArgumentError("List element is null at index $j");
-    newBuffer[i] = value;
-    j++;
-  }
+  newBuffer.setRange(0, length, buffer, start);
   return new _BufferAndStart(newBuffer, 0);
 }
+
+// The VM will use ClassID to check whether buffer is Uint8List or Int8List.
+external bool _isDirectIOCapableTypedList(List<int> buffer);
 
 class _IOCrypto {
   external static Uint8List getRandomBytes(int count);

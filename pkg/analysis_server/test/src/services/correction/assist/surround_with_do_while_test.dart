@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'assist_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(SurroundWithDoWhileTest);
   });
@@ -19,8 +19,8 @@ class SurroundWithDoWhileTest extends AssistProcessorTest {
   @override
   AssistKind get kind => DartAssistKind.SURROUND_WITH_DO_WHILE;
 
-  test_twoStatements() async {
-    await resolveTestUnit('''
+  Future<void> test_twoStatements() async {
+    await resolveTestCode('''
 main() {
 // start
   print(0);
@@ -30,12 +30,10 @@ main() {
 ''');
     await assertHasAssist('''
 main() {
-// start
   do {
     print(0);
     print(1);
   } while (condition);
-// end
 }
 ''');
     assertLinkedGroup(0, ['condition);']);

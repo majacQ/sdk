@@ -13,9 +13,10 @@ import 'package:kernel/binary/ast_to_binary.dart' show BinaryPrinter;
 
 import 'package:front_end/src/api_unstable/dart2js.dart' as fe;
 import 'package:kernel/kernel.dart' hide LibraryDependency, Combinator;
-import 'package:kernel/target/targets.dart';
+import 'package:kernel/target/targets.dart' hide DiagnosticReporter;
 
 import '../../compiler_new.dart' as api;
+import '../commandline_options.dart' show Flags;
 import '../common/tasks.dart' show CompilerTask, Measurer;
 import '../common.dart';
 import '../options.dart';
@@ -51,36 +52,139 @@ class KernelLoaderTask extends CompilerTask {
       : initializedCompilerState = _options.kernelInitializedCompilerState,
         super(measurer);
 
+  @override
   String get name => 'kernel loader';
 
   /// Loads an entire Kernel [Component] from a file on disk.
   Future<KernelResult> load(Uri resolvedUri) {
     return measure(() async {
-      var isDill = resolvedUri.path.endsWith('.dill');
+      String targetName =
+          _options.compileForServer ? "dart2js_server" : "dart2js";
+
+      // We defer selecting the platform until we've resolved the NNBD mode.
+      String getPlatformFilename() {
+        String platform = targetName;
+        if (!_options.useLegacySubtyping) {
+          platform += "_nnbd_strong";
+        }
+        platform += "_platform.dill";
+        return platform;
+      }
+
       ir.Component component;
+      var isDill = resolvedUri.path.endsWith('.dill');
+
+      void inferNullSafetyMode(bool isSound) {
+        if (isSound) assert(_options.enableNonNullable);
+        if (_options.nullSafetyMode == NullSafetyMode.unspecified) {
+          _options.nullSafetyMode =
+              isSound ? NullSafetyMode.sound : NullSafetyMode.unsound;
+        }
+      }
+
+      void validateNullSafety() {
+        assert(_options.nullSafetyMode != NullSafetyMode.unspecified);
+        if (_options.nullSafetyMode == NullSafetyMode.sound) {
+          assert(_options.enableNonNullable);
+        }
+      }
+
       if (isDill) {
-        api.Input input = await _compilerInput.readFromUri(resolvedUri,
-            inputKind: api.InputKind.binary);
         component = new ir.Component();
-        new BinaryBuilder(input.data).readComponent(component);
+        Future<void> read(Uri uri) async {
+          api.Input input = await _compilerInput.readFromUri(uri,
+              inputKind: api.InputKind.binary);
+          new BinaryBuilder(input.data).readComponent(component);
+        }
+
+        await read(resolvedUri);
+
+        var isStrongDill =
+            component.mode == ir.NonNullableByDefaultCompiledMode.Strong;
+        var incompatibleNullSafetyMode =
+            isStrongDill ? NullSafetyMode.unsound : NullSafetyMode.sound;
+        if (_options.nullSafetyMode == incompatibleNullSafetyMode) {
+          var dillMode = isStrongDill ? 'sound' : 'unsound';
+          var option =
+              isStrongDill ? Flags.noSoundNullSafety : Flags.soundNullSafety;
+          throw ArgumentError("$resolvedUri was compiled with $dillMode null "
+              "safety and is incompatible with the '$option' option");
+        }
+        inferNullSafetyMode(isStrongDill);
+        validateNullSafety();
+
+        if (_options.dillDependencies != null) {
+          // Modular compiles do not include the platform on the input dill
+          // either.
+          if (_options.platformBinaries != null) {
+            await read(
+                _options.platformBinaries.resolve(getPlatformFilename()));
+          }
+          for (Uri dependency in _options.dillDependencies) {
+            await read(dependency);
+          }
+        }
+
+        // This is not expected to be null when creating a whole-program .dill
+        // file, but needs to be checked for modular inputs.
+        if (component.mainMethod == null) {
+          // TODO(sigmund): move this so that we use the same error template
+          // from the CFE.
+          _reporter.reportError(_reporter.createMessage(NO_LOCATION_SPANNABLE,
+              MessageKind.GENERIC, {'text': "No 'main' method found."}));
+          return null;
+        }
       } else {
-        String targetName =
-            _options.compileForServer ? "dart2js_server" : "dart2js";
-        String platform = '${targetName}_platform.dill';
+        bool verbose = false;
+        Target target =
+            Dart2jsTarget(targetName, TargetFlags(), options: _options);
+        fe.FileSystem fileSystem = CompilerFileSystem(_compilerInput);
+        fe.Verbosity verbosity = _options.verbosity;
+        fe.DiagnosticMessageHandler onDiagnostic =
+            (fe.DiagnosticMessage message) {
+          if (fe.Verbosity.shouldPrint(verbosity, message)) {
+            reportFrontEndMessage(_reporter, message);
+          }
+        };
+        fe.CompilerOptions options = fe.CompilerOptions()
+          ..target = target
+          ..librariesSpecificationUri = _options.librariesSpecificationUri
+          ..packagesFileUri = _options.packageConfig
+          ..explicitExperimentalFlags = _options.explicitExperimentalFlags
+          ..verbose = verbose
+          ..fileSystem = fileSystem
+          ..onDiagnostic = onDiagnostic
+          ..verbosity = verbosity;
+        bool isLegacy =
+            await fe.uriUsesLegacyLanguageVersion(resolvedUri, options);
+        inferNullSafetyMode(_options.enableNonNullable && !isLegacy);
+
+        List<Uri> dependencies = [];
+        if (_options.platformBinaries != null) {
+          dependencies
+              .add(_options.platformBinaries.resolve(getPlatformFilename()));
+        }
+        if (_options.dillDependencies != null) {
+          dependencies.addAll(_options.dillDependencies);
+        }
+
         initializedCompilerState = fe.initializeCompiler(
             initializedCompilerState,
-            new Dart2jsTarget(targetName, new TargetFlags()),
+            target,
             _options.librariesSpecificationUri,
-            _options.platformBinaries.resolve(platform),
-            _options.packageConfig);
-        component = await fe.compile(
-            initializedCompilerState,
-            false,
-            new CompilerFileSystem(_compilerInput),
-            (e) => reportFrontEndMessage(_reporter, e),
-            resolvedUri);
+            dependencies,
+            _options.packageConfig,
+            explicitExperimentalFlags: _options.explicitExperimentalFlags,
+            nnbdMode: _options.useLegacySubtyping
+                ? fe.NnbdMode.Weak
+                : fe.NnbdMode.Strong,
+            invocationModes: _options.cfeInvocationModes,
+            verbosity: verbosity);
+        component = await fe.compile(initializedCompilerState, verbose,
+            fileSystem, onDiagnostic, resolvedUri);
+        if (component == null) return null;
+        validateNullSafety();
       }
-      if (component == null) return null;
 
       if (_options.cfeOnly) {
         measureSubtask('serialize dill', () {
@@ -156,5 +260,6 @@ class KernelResult {
     assert(rootLibraryUri != null);
   }
 
+  @override
   String toString() => 'root=$rootLibraryUri,libraries=${libraries}';
 }

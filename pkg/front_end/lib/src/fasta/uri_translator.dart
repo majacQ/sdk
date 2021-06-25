@@ -4,21 +4,20 @@
 
 library fasta.uri_translator;
 
-import 'package:package_config/packages.dart' show Packages;
+import 'package:package_config/package_config.dart';
 
 import '../base/libraries_specification.dart' show TargetLibrariesSpecification;
 import 'compiler_context.dart' show CompilerContext;
 import 'fasta_codes.dart';
-import 'severity.dart' show Severity;
 
 class UriTranslator {
   final TargetLibrariesSpecification dartLibraries;
 
-  final Packages packages;
+  final PackageConfig packages;
 
   UriTranslator(this.dartLibraries, this.packages);
 
-  List<Uri> getDartPatches(String libraryName) =>
+  List<Uri>? getDartPatches(String libraryName) =>
       dartLibraries.libraryInfoFor(libraryName)?.patches;
 
   bool isPlatformImplementation(Uri uri) {
@@ -30,12 +29,23 @@ class UriTranslator {
   // TODO(sigmund, ahe): consider expanding this API to include an error
   // callback, so we can provide an error location when one is available. For
   // example, if the error occurs in an `import`.
-  Uri translate(Uri uri, [bool reportMessage = true]) {
+  Uri? translate(Uri uri, [bool reportMessage = true]) {
     if (uri.scheme == "dart") return _translateDartUri(uri);
     if (uri.scheme == "package") {
       return _translatePackageUri(uri, reportMessage);
     }
     return null;
+  }
+
+  /// For a package uri, get the corresponding [Package].
+  Package? getPackage(Uri uri) {
+    // ignore: unnecessary_null_comparison
+    if (packages == null) return null;
+    if (uri.scheme != "package") return null;
+    int firstSlash = uri.path.indexOf('/');
+    if (firstSlash == -1) return null;
+    String packageName = uri.path.substring(0, firstSlash);
+    return packages[packageName];
   }
 
   bool isLibrarySupported(String libraryName) {
@@ -44,19 +54,22 @@ class UriTranslator {
     return dartLibraries.libraryInfoFor(libraryName)?.isSupported ?? true;
   }
 
-  Uri _translateDartUri(Uri uri) {
+  Uri? _translateDartUri(Uri uri) {
     if (!uri.isScheme('dart')) return null;
     return dartLibraries.libraryInfoFor(uri.path)?.uri;
   }
 
-  Uri _translatePackageUri(Uri uri, bool reportMessage) {
+  Uri? _translatePackageUri(Uri uri, bool reportMessage) {
     try {
       // TODO(sigmund): once we remove the `parse` API, we can ensure that
       // packages will never be null and get rid of `?` below.
-      return packages?.resolve(uri,
-          notFound: reportMessage
-              ? _packageUriNotFound
-              : _packageUriNotFoundNoReport);
+      Uri? translated = packages.resolve(uri);
+      if (translated == null) {
+        return (reportMessage
+            ? _packageUriNotFound
+            : _packageUriNotFoundNoReport)(uri);
+      }
+      return translated;
     } on ArgumentError catch (e) {
       // TODO(sigmund): catch a more precise error when
       // https://github.com/dart-lang/package_config/issues/40 is fixed.
@@ -68,7 +81,7 @@ class UriTranslator {
     }
   }
 
-  static Uri _packageUriNotFound(Uri uri) {
+  static Uri? _packageUriNotFound(Uri uri) {
     String name = uri.pathSegments.first;
     CompilerContext.current.reportWithoutLocation(
         templatePackageNotFound.withArguments(name, uri), Severity.error);
@@ -78,7 +91,7 @@ class UriTranslator {
     return null;
   }
 
-  static Uri _packageUriNotFoundNoReport(Uri uri) {
+  static Uri? _packageUriNotFoundNoReport(Uri uri) {
     return null;
   }
 }

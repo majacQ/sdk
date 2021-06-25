@@ -5,47 +5,75 @@
 #ifndef RUNTIME_VM_COMPILER_BACKEND_COMPILE_TYPE_H_
 #define RUNTIME_VM_COMPILER_BACKEND_COMPILE_TYPE_H_
 
-#include "vm/object.h"
-#include "vm/thread.h"
+#if defined(DART_PRECOMPILED_RUNTIME)
+#error "AOT runtime should not use compiler sources (including header files)"
+#endif  // defined(DART_PRECOMPILED_RUNTIME)
+
+#include "vm/allocation.h"
+#include "vm/class_id.h"
+#include "vm/compiler/runtime_api.h"
 
 namespace dart {
 
-class BufferFormatter;
+class AbstractType;
+class BaseTextBuffer;
+class Definition;
+
+template <typename T>
+class GrowableArray;
 
 // CompileType describes type of a value produced by a definition.
 //
 // It captures the following properties:
 //    - whether the value can potentially be null or if it is definitely not
 //      null;
+//    - whether the value can potentially be sentinel or if it is definitely
+//      not sentinel;
 //    - concrete class id of the value or kDynamicCid if unknown statically;
-//    - abstract super type of the value, concrete type of the value in runtime
-//      is guaranteed to be sub type of this type.
+//    - abstract super type of the value, where the concrete type of the value
+//      in runtime is guaranteed to be sub type of this type.
 //
 // Values of CompileType form a lattice with a None type as a bottom and a
 // nullable Dynamic type as a top element. Method Union provides a join
 // operation for the lattice.
 class CompileType : public ZoneAllocated {
  public:
-  static const bool kNullable = true;
-  static const bool kNonNullable = false;
+  static constexpr bool kCanBeNull = true;
+  static constexpr bool kCannotBeNull = false;
 
-  CompileType(bool is_nullable, intptr_t cid, const AbstractType* type)
-      : is_nullable_(is_nullable), cid_(cid), type_(type) {}
+  static constexpr bool kCanBeSentinel = true;
+  static constexpr bool kCannotBeSentinel = false;
+
+  CompileType(bool can_be_null,
+              bool can_be_sentinel,
+              intptr_t cid,
+              const AbstractType* type)
+      : can_be_null_(can_be_null),
+        can_be_sentinel_(can_be_sentinel),
+        cid_(cid),
+        type_(type) {}
 
   CompileType(const CompileType& other)
       : ZoneAllocated(),
-        is_nullable_(other.is_nullable_),
+        can_be_null_(other.can_be_null_),
+        can_be_sentinel_(other.can_be_sentinel_),
         cid_(other.cid_),
         type_(other.type_) {}
 
   CompileType& operator=(const CompileType& other) {
-    is_nullable_ = other.is_nullable_;
+    // This intentionally does not change the owner of this type.
+    can_be_null_ = other.can_be_null_;
+    can_be_sentinel_ = other.can_be_sentinel_;
     cid_ = other.cid_;
     type_ = other.type_;
     return *this;
   }
 
-  bool is_nullable() const { return is_nullable_; }
+  bool is_nullable() const { return can_be_null_; }
+
+  // Return true if value of this type can be Object::sentinel().
+  // Such values cannot be unboxed.
+  bool can_be_sentinel() const { return can_be_sentinel_; }
 
   // Return type such that concrete value's type in runtime is guaranteed to
   // be subtype of it.
@@ -66,41 +94,51 @@ class CompileType : public ZoneAllocated {
   // Return true if the value is known to be always null.
   bool IsNull();
 
-  // Return true if this type is more specific than given type.
-  bool IsMoreSpecificThan(const AbstractType& other);
+  // Return true if this type is a subtype of the given type.
+  bool IsSubtypeOf(const AbstractType& other);
 
   // Return true if value of this type is assignable to a location of the
   // given type.
-  bool IsAssignableTo(const AbstractType& type) {
-    bool is_instance;
-    return CanComputeIsInstanceOf(type, kNullable, &is_instance) && is_instance;
+  bool IsAssignableTo(const AbstractType& other);
+
+  // Return true if value of this type always passes 'is' test
+  // against given type.
+  bool IsInstanceOf(const AbstractType& other);
+
+  // Return the non-nullable version of this type.
+  CompileType CopyNonNullable() {
+    if (IsNull()) {
+      // Represent a non-nullable null type (typically arising for
+      // unreachable values) as None.
+      return None();
+    }
+
+    return CompileType(kCannotBeNull, can_be_sentinel_, cid_, type_);
   }
 
-  // Create a new CompileType representing given combination of class id and
-  // abstract type. The pair is assumed to be coherent.
-  static CompileType Create(intptr_t cid, const AbstractType& type);
-
-  CompileType CopyNonNullable() const {
-    return CompileType(kNonNullable, kIllegalCid, type_);
+  // Return the non-sentinel version of this type.
+  CompileType CopyNonSentinel() {
+    return CompileType(can_be_null_, kCannotBeSentinel, cid_, type_);
   }
 
-  static CompileType CreateNullable(bool is_nullable, intptr_t cid) {
-    return CompileType(is_nullable, cid, NULL);
-  }
-
-  // Create a new CompileType representing given abstract type. By default
-  // values as assumed to be nullable.
+  // Create a new CompileType representing given abstract type.
+  // By default nullability of values is determined by type.
+  // CompileType can be further constrained to non-nullable values by
+  // passing kCannotBeNull as |can_be_null| parameter.
   static CompileType FromAbstractType(const AbstractType& type,
-                                      bool is_nullable = kNullable);
+                                      bool can_be_null,
+                                      bool can_be_sentinel);
 
   // Create a new CompileType representing a value with the given class id.
-  // Resulting CompileType is nullable only if cid is kDynamicCid or kNullCid.
+  // Resulting CompileType can be null only if cid is kDynamicCid or kNullCid.
+  // Resulting CompileType can be sentinel only if cid is kDynamicCid or
+  // kSentinelCid.
   static CompileType FromCid(intptr_t cid);
 
   // Create None CompileType. It is the bottom of the lattice and is used to
   // represent type of the phi that was not yet inferred.
   static CompileType None() {
-    return CompileType(kNullable, kIllegalCid, NULL);
+    return CompileType(kCanBeNull, kCanBeSentinel, kIllegalCid, nullptr);
   }
 
   // Create Dynamic CompileType. It is the top of the lattice and is used to
@@ -115,6 +153,9 @@ class CompileType : public ZoneAllocated {
   // Create non-nullable Int type.
   static CompileType Int();
 
+  // Create non-nullable 32-bit Int type (arch dependent).
+  static CompileType Int32();
+
   // Create nullable Int type.
   static CompileType NullableInt();
 
@@ -123,12 +164,12 @@ class CompileType : public ZoneAllocated {
 
   // Create nullable Smi type.
   static CompileType NullableSmi() {
-    return CreateNullable(kNullable, kSmiCid);
+    return CompileType(kCanBeNull, kCannotBeSentinel, kSmiCid, nullptr);
   }
 
   // Create nullable Mint type.
   static CompileType NullableMint() {
-    return CreateNullable(kNullable, kMintCid);
+    return CompileType(kCanBeNull, kCannotBeSentinel, kMintCid, nullptr);
   }
 
   // Create non-nullable Double type.
@@ -151,12 +192,13 @@ class CompileType : public ZoneAllocated {
 
   // Return true if this and other types are the same.
   bool IsEqualTo(CompileType* other) {
-    return (is_nullable_ == other->is_nullable_) &&
+    return (can_be_null_ == other->can_be_null_) &&
+           (can_be_sentinel_ == other->can_be_sentinel_) &&
            (ToNullableCid() == other->ToNullableCid()) &&
-           (ToAbstractType()->Equals(*other->ToAbstractType()));
+           (compiler::IsEqualType(*ToAbstractType(), *other->ToAbstractType()));
   }
 
-  bool IsNone() const { return (cid_ == kIllegalCid) && (type_ == NULL); }
+  bool IsNone() const { return (cid_ == kIllegalCid) && (type_ == nullptr); }
 
   // Return true if value of this type is a non-nullable int.
   bool IsInt() { return !is_nullable() && IsNullableInt(); }
@@ -164,13 +206,16 @@ class CompileType : public ZoneAllocated {
   // Return true if value of this type is a non-nullable double.
   bool IsDouble() { return !is_nullable() && IsNullableDouble(); }
 
+  // Return true if value of this type is a non-nullable double.
+  bool IsBool() { return !is_nullable() && IsNullableBool(); }
+
   // Return true if value of this type is either int or null.
   bool IsNullableInt() {
-    if ((cid_ == kSmiCid) || (cid_ == kMintCid)) {
+    if (cid_ == kSmiCid || cid_ == kMintCid) {
       return true;
     }
-    if ((cid_ == kIllegalCid) || (cid_ == kDynamicCid)) {
-      return (type_ != NULL) && ((type_->IsIntType() || type_->IsSmiType()));
+    if (cid_ == kIllegalCid || cid_ == kDynamicCid) {
+      return type_ != nullptr && compiler::IsSubtypeOfInt(*type_);
     }
     return false;
   }
@@ -180,8 +225,8 @@ class CompileType : public ZoneAllocated {
     if (cid_ == kSmiCid) {
       return true;
     }
-    if ((cid_ == kIllegalCid) || (cid_ == kDynamicCid)) {
-      return type_ != nullptr && type_->IsSmiType();
+    if (cid_ == kIllegalCid || cid_ == kDynamicCid) {
+      return type_ != nullptr && compiler::IsSmiType(*type_);
     }
     return false;
   }
@@ -192,22 +237,50 @@ class CompileType : public ZoneAllocated {
       return true;
     }
     if ((cid_ == kIllegalCid) || (cid_ == kDynamicCid)) {
-      return (type_ != NULL) && type_->IsDoubleType();
+      return type_ != nullptr && compiler::IsDoubleType(*type_);
     }
     return false;
   }
 
-  void PrintTo(BufferFormatter* f) const;
+  // Return true if value of this type is either double or null.
+  bool IsNullableBool() {
+    if (cid_ == kBoolCid) {
+      return true;
+    }
+    if ((cid_ == kIllegalCid) || (cid_ == kDynamicCid)) {
+      return type_ != nullptr && compiler::IsBoolType(*type_);
+    }
+    return false;
+  }
+
+  // Returns true if a value of this CompileType can contain a Smi.
+  // Note that this is not the same as calling
+  // CompileType::Smi().IsAssignableTo(this) - because this compile type
+  // can be uninstantiated.
+  bool CanBeSmi();
+
+  bool Specialize(GrowableArray<intptr_t>* class_ids);
+
+  void PrintTo(BaseTextBuffer* f) const;
+
   const char* ToCString() const;
 
- private:
-  bool CanComputeIsInstanceOf(const AbstractType& type,
-                              bool is_nullable,
-                              bool* is_instance);
+  // CompileType object might be unowned or owned by a definition.
+  // Owned CompileType objects can change during type propagation when
+  // [RecomputeType] is called on the owner. We keep track of which
+  // definition owns [CompileType] to prevent situations where
+  // owned [CompileType] is cached as a reaching type in a [Value] which
+  // is no longer connected to the original owning definition.
+  // See [Value::SetReachingType].
+  void set_owner(Definition* owner) { owner_ = owner; }
+  Definition* owner() const { return owner_; }
 
-  bool is_nullable_;
-  intptr_t cid_;
+ private:
+  bool can_be_null_;
+  bool can_be_sentinel_;
+  classid_t cid_;
   const AbstractType* type_;
+  Definition* owner_ = nullptr;
 };
 
 }  // namespace dart

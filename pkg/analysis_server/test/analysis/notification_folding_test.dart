@@ -1,19 +1,17 @@
-// Copyright (c) 2018, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2018, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 import 'dart:async';
 
-import 'package:analysis_server/protocol/protocol.dart';
 import 'package:analysis_server/protocol/protocol_constants.dart';
-import 'package:analysis_server/protocol/protocol_generated.dart';
 import 'package:analysis_server/src/protocol_server.dart';
 import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import '../analysis_abstract.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(AnalysisNotificationFoldingTest);
   });
@@ -31,23 +29,24 @@ main async() {}
   static final expectedResults = [
     // We don't include the first "import" in the region because
     // we want that to remain visible (not collapse).
-    new FoldingRegion(FoldingKind.DIRECTIVES, 6, 34)
+    FoldingRegion(FoldingKind.DIRECTIVES, 6, 34)
   ];
 
-  List<FoldingRegion> lastRegions;
+  List<FoldingRegion>? lastRegions;
 
-  Completer _regionsReceived;
+  late Completer _regionsReceived;
 
+  @override
   void processNotification(Notification notification) {
     if (notification.event == ANALYSIS_NOTIFICATION_FOLDING) {
-      var params = new AnalysisFoldingParams.fromNotification(notification);
+      var params = AnalysisFoldingParams.fromNotification(notification);
       if (params.file == testFile) {
         lastRegions = params.regions;
         _regionsReceived.complete(null);
       }
     } else if (notification.event == SERVER_NOTIFICATION_ERROR) {
-      var params = new ServerErrorParams.fromNotification(notification);
-      throw "${params.message}\n${params.stackTrace}";
+      var params = ServerErrorParams.fromNotification(notification);
+      throw '${params.message}\n${params.stackTrace}';
     }
   }
 
@@ -61,7 +60,7 @@ main async() {}
     addAnalysisSubscription(AnalysisService.FOLDING, testFile);
   }
 
-  test_afterAnalysis() async {
+  Future<void> test_afterAnalysis() async {
     addTestFile(sampleCode);
     await waitForTasksFinished();
     expect(lastRegions, isNull);
@@ -71,7 +70,7 @@ main async() {}
     expect(lastRegions, expectedResults);
   }
 
-  test_afterUpdate() async {
+  Future<void> test_afterUpdate() async {
     addTestFile('');
     // Currently required to get notifications on updates
     setPriorityFiles([testFile]);
@@ -90,8 +89,8 @@ main async() {}
     expect(lastRegions, expectedResults);
   }
 
-  Future waitForFolding(action()) {
-    _regionsReceived = new Completer();
+  Future waitForFolding(void Function() action) {
+    _regionsReceived = Completer();
     action();
     return _regionsReceived.future;
   }

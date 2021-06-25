@@ -5,11 +5,12 @@
 #ifndef RUNTIME_VM_UNIT_TEST_H_
 #define RUNTIME_VM_UNIT_TEST_H_
 
+#include <functional>
+
 #include "include/dart_native_api.h"
 
 #include "platform/globals.h"
 
-#include "bin/kernel_isolate.h"
 #include "vm/dart.h"
 #include "vm/dart_api_state.h"
 #include "vm/dart_entry.h"
@@ -24,27 +25,33 @@
 
 // The VM_UNIT_TEST_CASE macro is used for tests that do not need any
 // default isolate or zone functionality.
-#define VM_UNIT_TEST_CASE(name)                                                \
+#define VM_UNIT_TEST_CASE_WITH_EXPECTATION(name, expectation)                  \
   void Dart_Test##name();                                                      \
-  static const dart::TestCase kRegister##name(Dart_Test##name, #name);         \
+  static const dart::TestCase kRegister##name(Dart_Test##name, #name,          \
+                                              expectation);                    \
   void Dart_Test##name()
+
+#define VM_UNIT_TEST_CASE(name) VM_UNIT_TEST_CASE_WITH_EXPECTATION(name, "Pass")
 
 // The UNIT_TEST_CASE macro is used for tests that do not require any
 // functionality provided by the VM. Tests declared using this macro will be run
 // after the VM is cleaned up.
-#define UNIT_TEST_CASE(name)                                                   \
+#define UNIT_TEST_CASE_WITH_EXPECTATION(name, expectation)                     \
   void Dart_Test##name();                                                      \
-  static const dart::RawTestCase kRegister##name(Dart_Test##name, #name);      \
+  static const dart::RawTestCase kRegister##name(Dart_Test##name, #name,       \
+                                                 expectation);                 \
   void Dart_Test##name()
+
+#define UNIT_TEST_CASE(name) UNIT_TEST_CASE_WITH_EXPECTATION(name, "Pass")
 
 // The ISOLATE_UNIT_TEST_CASE macro is used for tests that need an isolate and
 // zone in order to test its functionality. This macro is used for tests that
 // are implemented using the VM code directly and do not use the Dart API
 // for calling into the VM. The safepoint execution state of threads using
 // this macro is transitioned from kThreadInNative to kThreadInVM.
-#define ISOLATE_UNIT_TEST_CASE(name)                                           \
+#define ISOLATE_UNIT_TEST_CASE_WITH_EXPECTATION(name, expectation)             \
   static void Dart_TestHelper##name(Thread* thread);                           \
-  VM_UNIT_TEST_CASE(name) {                                                    \
+  VM_UNIT_TEST_CASE_WITH_EXPECTATION(name, expectation) {                      \
     TestIsolateScope __test_isolate__;                                         \
     Thread* __thread__ = Thread::Current();                                    \
     ASSERT(__thread__->isolate() == __test_isolate__.isolate());               \
@@ -55,13 +62,16 @@
   }                                                                            \
   static void Dart_TestHelper##name(Thread* thread)
 
+#define ISOLATE_UNIT_TEST_CASE(name)                                           \
+  ISOLATE_UNIT_TEST_CASE_WITH_EXPECTATION(name, "Pass")
+
 // The TEST_CASE macro is used for tests that need an isolate and zone
 // in order to test its functionality. This macro is used for tests that
 // are implemented using the Dart API for calling into the VM. The safepoint
 // execution state of threads using this macro remains kThreadNative.
-#define TEST_CASE(name)                                                        \
+#define TEST_CASE_WITH_EXPECTATION(name, expectation)                          \
   static void Dart_TestHelper##name(Thread* thread);                           \
-  VM_UNIT_TEST_CASE(name) {                                                    \
+  VM_UNIT_TEST_CASE_WITH_EXPECTATION(name, expectation) {                      \
     TestIsolateScope __test_isolate__;                                         \
     Thread* __thread__ = Thread::Current();                                    \
     ASSERT(__thread__->isolate() == __test_isolate__.isolate());               \
@@ -73,28 +83,30 @@
   }                                                                            \
   static void Dart_TestHelper##name(Thread* thread)
 
+#define TEST_CASE(name) TEST_CASE_WITH_EXPECTATION(name, "Pass")
+
 // The ASSEMBLER_TEST_GENERATE macro is used to generate a unit test
 // for the assembler.
 #define ASSEMBLER_TEST_GENERATE(name, assembler)                               \
-  void AssemblerTestGenerate##name(Assembler* assembler)
+  void AssemblerTestGenerate##name(compiler::Assembler* assembler)
 
 // The ASSEMBLER_TEST_EXTERN macro is used to declare a unit test
 // for the assembler.
 #define ASSEMBLER_TEST_EXTERN(name)                                            \
-  extern void AssemblerTestGenerate##name(Assembler* assembler);
+  extern void AssemblerTestGenerate##name(compiler::Assembler* assembler);
 
 // The ASSEMBLER_TEST_RUN macro is used to execute the assembler unit
 // test generated using the ASSEMBLER_TEST_GENERATE macro.
 // C++ callee-saved registers are not preserved. Arguments may be passed in.
-#define ASSEMBLER_TEST_RUN(name, test)                                         \
+#define ASSEMBLER_TEST_RUN_WITH_EXPECTATION(name, test, expectation)           \
   static void AssemblerTestRun##name(AssemblerTest* test);                     \
-  ISOLATE_UNIT_TEST_CASE(name) {                                               \
+  ISOLATE_UNIT_TEST_CASE_WITH_EXPECTATION(name, expectation) {                 \
     {                                                                          \
       bool use_far_branches = false;                                           \
       LongJumpScope jump;                                                      \
       if (setjmp(*jump.Set()) == 0) {                                          \
-        ObjectPoolWrapper object_pool_wrapper;                                 \
-        Assembler assembler(&object_pool_wrapper, use_far_branches);           \
+        compiler::ObjectPoolBuilder object_pool_builder;                       \
+        compiler::Assembler assembler(&object_pool_builder, use_far_branches); \
         AssemblerTest test("" #name, &assembler);                              \
         AssemblerTestGenerate##name(test.assembler());                         \
         test.Assemble();                                                       \
@@ -104,10 +116,10 @@
     }                                                                          \
                                                                                \
     const Error& error = Error::Handle(Thread::Current()->sticky_error());     \
-    if (error.raw() == Object::branch_offset_error().raw()) {                  \
+    if (error.ptr() == Object::branch_offset_error().ptr()) {                  \
       bool use_far_branches = true;                                            \
-      ObjectPoolWrapper object_pool_wrapper;                                   \
-      Assembler assembler(&object_pool_wrapper, use_far_branches);             \
+      compiler::ObjectPoolBuilder object_pool_builder;                         \
+      compiler::Assembler assembler(&object_pool_builder, use_far_branches);   \
       AssemblerTest test("" #name, &assembler);                                \
       AssemblerTestGenerate##name(test.assembler());                           \
       test.Assemble();                                                         \
@@ -117,6 +129,9 @@
     }                                                                          \
   }                                                                            \
   static void AssemblerTestRun##name(AssemblerTest* test)
+
+#define ASSEMBLER_TEST_RUN(name, test)                                         \
+  ASSEMBLER_TEST_RUN_WITH_EXPECTATION(name, test, "Pass")
 
 #if defined(TARGET_ARCH_ARM) || defined(TARGET_ARCH_ARM64)
 #if defined(HOST_ARCH_ARM) || defined(HOST_ARCH_ARM64)
@@ -199,7 +214,9 @@ inline Dart_Handle NewString(const char* str) {
 namespace dart {
 
 // Forward declarations.
+namespace compiler {
 class Assembler;
+}
 class CodeGenerator;
 class VirtualMemory;
 
@@ -217,9 +234,9 @@ extern const intptr_t platform_strong_dill_size;
 class TesterState : public AllStatic {
  public:
   static const uint8_t* vm_snapshot_data;
-  static Dart_IsolateCreateCallback create_callback;
+  static Dart_IsolateGroupCreateCallback create_callback;
   static Dart_IsolateShutdownCallback shutdown_callback;
-  static Dart_IsolateCleanupCallback cleanup_callback;
+  static Dart_IsolateGroupCleanupCallback group_cleanup_callback;
   static const char** argv;
   static int argc;
 };
@@ -248,10 +265,11 @@ class KernelBufferList {
 
 class TestCaseBase {
  public:
-  explicit TestCaseBase(const char* name);
+  explicit TestCaseBase(const char* name, const char* expectation);
   virtual ~TestCaseBase() {}
 
   const char* name() const { return name_; }
+  const char* expectation() const { return expectation_; }
 
   virtual void Run() = 0;
   void RunTest();
@@ -271,6 +289,7 @@ class TestCaseBase {
 
   TestCaseBase* next_;
   const char* name_;
+  const char* expectation_;
 
   DISALLOW_COPY_AND_ASSIGN(TestCaseBase);
 };
@@ -283,7 +302,8 @@ class TestCase : TestCaseBase {
  public:
   typedef void(RunEntry)();
 
-  TestCase(RunEntry* run, const char* name) : TestCaseBase(name), run_(run) {}
+  TestCase(RunEntry* run, const char* name, const char* expectation)
+      : TestCaseBase(name, expectation), run_(run) {}
 
   static char* CompileTestScriptWithDFE(const char* url,
                                         const char* source,
@@ -302,15 +322,16 @@ class TestCase : TestCaseBase {
                                         bool allow_compile_errors = false,
                                         const char* multiroot_filepaths = NULL,
                                         const char* multiroot_scheme = NULL);
-  static Dart_Handle LoadTestScript(const char* script,
-                                    Dart_NativeEntryResolver resolver,
-                                    const char* lib_uri = USER_TEST_URI,
-                                    bool finalize = true,
-                                    bool allow_compile_errors = false);
+  static Dart_Handle LoadTestScript(
+      const char* script,
+      Dart_NativeEntryResolver resolver,
+      const char* lib_uri = RESOLVED_USER_TEST_URI,
+      bool finalize = true,
+      bool allow_compile_errors = false);
   static Dart_Handle LoadTestScriptWithErrors(
       const char* script,
       Dart_NativeEntryResolver resolver = NULL,
-      const char* lib_uri = USER_TEST_URI,
+      const char* lib_uri = RESOLVED_USER_TEST_URI,
       bool finalize = true);
   static Dart_Handle LoadTestLibrary(const char* lib_uri,
                                      const char* script,
@@ -339,8 +360,14 @@ class TestCase : TestCaseBase {
                                                     const char* name = NULL) {
     return CreateIsolate(buffer, 0, NULL, name);
   }
-  static Dart_Isolate CreateTestIsolate(const char* name = NULL,
-                                        void* data = NULL);
+  static Dart_Isolate CreateTestIsolate(const char* name = nullptr,
+                                        void* isolate_group_data = nullptr,
+                                        void* isolate_data = nullptr);
+  static Dart_Isolate CreateTestIsolateInGroup(const char* name,
+                                               Dart_Isolate parent,
+                                               void* group_data = nullptr,
+                                               void* isolate_data = nullptr);
+
   static Dart_Handle library_handler(Dart_LibraryTag tag,
                                      Dart_Handle library,
                                      Dart_Handle url);
@@ -353,6 +380,7 @@ class TestCase : TestCaseBase {
   // Initiates the reload.
   static Dart_Handle TriggerReload(const uint8_t* kernel_buffer,
                                    intptr_t kernel_buffer_size);
+  static Dart_Handle TriggerReload(const char* root_script_url);
 
   // Helper function which reloads the current isolate using |script|.
   static Dart_Handle ReloadTestScript(const char* script);
@@ -364,7 +392,17 @@ class TestCase : TestCaseBase {
   static void AddTestLib(const char* url, const char* source);
   static const char* GetTestLib(const char* url);
 
+  // Return true if non-nullable experiment is enabled.
+  static bool IsNNBD();
+
+  static const char* NullableTag() { return IsNNBD() ? "?" : ""; }
+  static const char* NullAssertTag() { return IsNNBD() ? "!" : ""; }
+  static const char* LateTag() { return IsNNBD() ? "late" : ""; }
+
  private:
+  static Dart_Handle TriggerReload(
+      std::function<bool(IsolateGroup*, JSONStream*)> do_reload);
+
   // |data_buffer| can either be snapshot data, or kernel binary data.
   // If |data_buffer| is snapshot data, then |len| should be zero as snapshot
   // size is encoded within them. If |len| is non-zero, then |data_buffer|
@@ -374,7 +412,8 @@ class TestCase : TestCaseBase {
                                     intptr_t len,
                                     const uint8_t* instr_buffer,
                                     const char* name,
-                                    void* data = NULL);
+                                    void* group_data = nullptr,
+                                    void* isolate_data = nullptr);
 
   static char* ValidateCompilationResult(Zone* zone,
                                          Dart_KernelCompilationResult result,
@@ -389,7 +428,8 @@ class RawTestCase : TestCaseBase {
  public:
   typedef void(RunEntry)();
 
-  RawTestCase(RunEntry* run, const char* name) : TestCaseBase(name), run_(run) {
+  RawTestCase(RunEntry* run, const char* name, const char* expectation)
+      : TestCaseBase(name, expectation), run_(run) {
     raw_test_ = true;
   }
   virtual void Run();
@@ -418,6 +458,10 @@ class TestIsolateScope {
   DISALLOW_COPY_AND_ASSIGN(TestIsolateScope);
 };
 
+// Ensures core libraries are initialized, thereby allowing vm/cc tests to
+// e.g. run functions using microtasks.
+void SetupCoreLibrariesForUnitTest();
+
 template <typename T>
 struct is_void {
   static const bool value = false;
@@ -440,14 +484,17 @@ struct is_double<double> {
 
 class AssemblerTest {
  public:
-  AssemblerTest(const char* name, Assembler* assembler)
-      : name_(name), assembler_(assembler), code_(Code::ZoneHandle()) {
+  AssemblerTest(const char* name, compiler::Assembler* assembler)
+      : name_(name),
+        assembler_(assembler),
+        code_(Code::ZoneHandle()),
+        disassembly_(Thread::Current()->zone()->Alloc<char>(DISASSEMBLY_SIZE)) {
     ASSERT(name != NULL);
     ASSERT(assembler != NULL);
   }
   ~AssemblerTest() {}
 
-  Assembler* assembler() const { return assembler_; }
+  compiler::Assembler* assembler() const { return assembler_; }
 
   const Code& code() const { return code_; }
 
@@ -459,7 +506,7 @@ class AssemblerTest {
 // using the ABI calling convention.
 // ResultType is the return type of the assembler test function.
 // ArgNType is the type of the Nth argument.
-#if defined(USING_SIMULATOR) && !defined(TARGET_ARCH_DBC)
+#if defined(USING_SIMULATOR)
 
 #if defined(ARCH_IS_64_BIT)
   // TODO(fschneider): Make InvokeWithCodeAndThread<> more general and work on
@@ -506,32 +553,9 @@ class AssemblerTest {
     const bool fp_args = false;
     const bool fp_return = false;
     Simulator::Current()->Call(
-        bit_cast<intptr_t, uword>(entry()), reinterpret_cast<intptr_t>(arg1),
-        reinterpret_cast<intptr_t>(arg2), reinterpret_cast<intptr_t>(arg3), 0,
+        bit_cast<intptr_t, uword>(entry()), static_cast<intptr_t>(arg1),
+        static_cast<intptr_t>(arg2), reinterpret_cast<intptr_t>(arg3), 0,
         fp_return, fp_args);
-  }
-#elif defined(USING_SIMULATOR) && defined(TARGET_ARCH_DBC)
-  template <typename ResultType,
-            typename Arg1Type,
-            typename Arg2Type,
-            typename Arg3Type>
-  ResultType Invoke(Arg1Type arg1, Arg2Type arg2, Arg3Type arg3) {
-    // TODO(fschneider): Support double arguments for simulator calls.
-    COMPILE_ASSERT(is_void<ResultType>::value);
-    COMPILE_ASSERT(!is_double<Arg1Type>::value);
-    COMPILE_ASSERT(!is_double<Arg2Type>::value);
-    COMPILE_ASSERT(!is_double<Arg3Type>::value);
-    const Object& arg1obj = Object::Handle(reinterpret_cast<RawObject*>(arg1));
-    const Object& arg2obj = Object::Handle(reinterpret_cast<RawObject*>(arg2));
-    const intptr_t kTypeArgsLen = 0;
-    const intptr_t kNumArgs = 2;
-    const Array& argdesc =
-        Array::Handle(ArgumentsDescriptor::New(kTypeArgsLen, kNumArgs));
-    const Array& arguments = Array::Handle(Array::New(2));
-    arguments.SetAt(0, arg1obj);
-    arguments.SetAt(1, arg2obj);
-    Simulator::Current()->Call(code(), argdesc, arguments,
-                               reinterpret_cast<Thread*>(arg3));
   }
 #else
   template <typename ResultType>
@@ -558,7 +582,7 @@ class AssemblerTest {
     typedef ResultType (*FunctionType)(Arg1Type, Arg2Type, Arg3Type);
     return reinterpret_cast<FunctionType>(entry())(arg1, arg2, arg3);
   }
-#endif  // defined(USING_SIMULATOR) && !defined(TARGET_ARCH_DBC)
+#endif  // defined(USING_SIMULATOR)
 
   // Assemble test and set code_.
   void Assemble();
@@ -568,20 +592,16 @@ class AssemblerTest {
 
  private:
   const char* name_;
-  Assembler* assembler_;
+  compiler::Assembler* assembler_;
   Code& code_;
   static const intptr_t DISASSEMBLY_SIZE = 10240;
-  char disassembly_[DISASSEMBLY_SIZE];
+  char* disassembly_;
 
   DISALLOW_COPY_AND_ASSIGN(AssemblerTest);
 };
 
 class CompilerTest : public AllStatic {
  public:
-  // Test the Compiler::CompileScript functionality by checking the return
-  // value to see if no parse errors were reported.
-  static bool TestCompileScript(const Library& library, const Script& script);
-
   // Test the Compiler::CompileFunction functionality by checking the return
   // value to see if no parse errors were reported.
   static bool TestCompileFunction(const Function& function);
@@ -670,6 +690,7 @@ class CompilerTest : public AllStatic {
 //
 //    out = "\"id\":\"\""
 //
+// WARNING: This function is not safe to use if `in` is bigger than `out`!
 void ElideJSONSubstring(const char* prefix, const char* in, char* out);
 
 template <typename T>

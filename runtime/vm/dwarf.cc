@@ -4,26 +4,52 @@
 
 #include "vm/dwarf.h"
 
+#include "vm/code_comments.h"
 #include "vm/code_descriptors.h"
+#include "vm/elf.h"
+#include "vm/image_snapshot.h"
 #include "vm/object_store.h"
 
 namespace dart {
 
-#ifdef DART_PRECOMPILER
+#if defined(DART_PRECOMPILER)
 
-#if defined(ARCH_IS_32_BIT)
-#define FORM_ADDR ".4byte"
-#elif defined(ARCH_IS_64_BIT)
-#define FORM_ADDR ".8byte"
-#endif
+DEFINE_FLAG(bool,
+            resolve_dwarf_paths,
+            false,
+            "Resolve script URIs to absolute or relative file paths in DWARF");
+
+DEFINE_FLAG(charp,
+            write_code_comments_as_synthetic_source_to,
+            nullptr,
+            "Print comments associated with instructions into the given file");
+
+class DwarfPosition {
+ public:
+  DwarfPosition(int32_t line, int32_t column) : line_(line), column_(column) {
+    // Should only have no line information if also no column information.
+    ASSERT(line_ > 0 || column_ <= 0);
+  }
+  explicit DwarfPosition(int32_t line) : DwarfPosition(line, -1) {}
+  constexpr DwarfPosition() : line_(-1), column_(-1) {}
+
+  int32_t line() const { return line_; }
+  int32_t column() const { return column_; }
+
+ private:
+  int32_t line_;
+  int32_t column_;
+};
+
+static constexpr auto kNoDwarfPositionInfo = DwarfPosition();
 
 class InliningNode : public ZoneAllocated {
  public:
   InliningNode(const Function& function,
-               TokenPosition call_pos,
+               const DwarfPosition& position,
                int32_t start_pc_offset)
       : function(function),
-        call_pos(call_pos),
+        position(position),
         start_pc_offset(start_pc_offset),
         end_pc_offset(-1),
         children_head(NULL),
@@ -43,7 +69,7 @@ class InliningNode : public ZoneAllocated {
   }
 
   const Function& function;
-  TokenPosition call_pos;
+  DwarfPosition position;
   int32_t start_pc_offset;
   int32_t end_pc_offset;
   InliningNode* children_head;
@@ -51,28 +77,81 @@ class InliningNode : public ZoneAllocated {
   InliningNode* children_next;
 };
 
-Dwarf::Dwarf(Zone* zone, StreamingWriteStream* stream)
+template <typename T>
+Trie<T>* Trie<T>::AddString(Zone* zone,
+                            Trie<T>* trie,
+                            const char* key,
+                            const T* value) {
+  ASSERT(key != nullptr);
+  if (trie == nullptr) {
+    trie = new (zone) Trie<T>();
+  }
+  if (*key == '\0') {
+    ASSERT(trie->value_ == nullptr);
+    trie->value_ = value;
+  } else {
+    auto const index = ChildIndex(*key);
+    ASSERT(index >= 0 && index < kNumValidChars);
+    trie->children_[index] =
+        AddString(zone, trie->children_[index], key + 1, value);
+  }
+
+  return trie;
+}
+
+template <typename T>
+const T* Trie<T>::Lookup(const Trie<T>* trie, const char* key, intptr_t* end) {
+  intptr_t i = 0;
+  for (; key[i] != '\0'; i++) {
+    auto const index = ChildIndex(key[i]);
+    ASSERT(index < kNumValidChars);
+    if (index < 0) {
+      if (end == nullptr) return nullptr;
+      break;
+    }
+    // Still find the longest valid trie prefix when no stored value.
+    if (trie == nullptr) continue;
+    trie = trie->children_[index];
+  }
+  if (end != nullptr) {
+    *end = i;
+  }
+  if (trie == nullptr) return nullptr;
+  return trie->value_;
+}
+
+Dwarf::Dwarf(Zone* zone)
     : zone_(zone),
-      stream_(stream),
+      reverse_obfuscation_trie_(CreateReverseObfuscationTrie(zone)),
       codes_(zone, 1024),
-      code_to_index_(zone),
+      code_to_name_(zone),
       functions_(zone, 1024),
       function_to_index_(zone),
       scripts_(zone, 1024),
       script_to_index_(zone),
       temp_(0) {}
 
-intptr_t Dwarf::AddCode(const Code& code) {
-  RELEASE_ASSERT(!code.IsNull());
-  CodeIndexPair* pair = code_to_index_.Lookup(&code);
-  if (pair != NULL) {
-    return pair->index_;
+void Dwarf::AddCode(const Code& orig_code, const char* name) {
+  ASSERT(!orig_code.IsNull());
+  ASSERT(name != nullptr);
+
+  if (auto const old_pair = code_to_name_.Lookup(&orig_code)) {
+    // Dwarf objects can be shared, so we may get the same information for a
+    // given code object in different calls. In DEBUG mode, make sure the
+    // information is the same before returning.
+    ASSERT(old_pair->value != nullptr);
+    ASSERT_EQUAL(strcmp(old_pair->value, name), 0);
+    return;
   }
-  intptr_t index = codes_.length();
-  const Code& zone_code = Code::ZoneHandle(zone_, code.raw());
-  code_to_index_.Insert(CodeIndexPair(&zone_code, index));
-  codes_.Add(&zone_code);
-  if (code.IsFunctionCode()) {
+
+  // Generate an appropriately zoned ZoneHandle for storing.
+  const auto& code = Code::ZoneHandle(zone_, orig_code.ptr());
+  codes_.Add(&code);
+  // Currently assumes the name has the same lifetime as the Zone of the
+  // Dwarf object (which is currently true).  Otherwise, need to copy.
+  code_to_name_.Insert({&code, name});
+
+  if (code.IsFunctionCode() && !code.IsUnknownDartCode()) {
     const Function& function = Function::Handle(zone_, code.function());
     AddFunction(function);
   }
@@ -85,7 +164,6 @@ intptr_t Dwarf::AddCode(const Code& code) {
       AddFunction(function);
     }
   }
-  return index;
 }
 
 intptr_t Dwarf::AddFunction(const Function& function) {
@@ -95,7 +173,7 @@ intptr_t Dwarf::AddFunction(const Function& function) {
     return pair->index_;
   }
   intptr_t index = functions_.length();
-  const Function& zone_func = Function::ZoneHandle(zone_, function.raw());
+  const Function& zone_func = Function::ZoneHandle(zone_, function.ptr());
   function_to_index_.Insert(FunctionIndexPair(&zone_func, index));
   functions_.Add(&zone_func);
   const Script& script = Script::Handle(zone_, function.script());
@@ -111,7 +189,7 @@ intptr_t Dwarf::AddScript(const Script& script) {
   }
   // DWARF file numbers start from 1.
   intptr_t index = scripts_.length() + 1;
-  const Script& zone_script = Script::ZoneHandle(zone_, script.raw());
+  const Script& zone_script = Script::ZoneHandle(zone_, script.ptr());
   script_to_index_.Insert(ScriptIndexPair(&zone_script, index));
   scripts_.Add(&zone_script);
   return index;
@@ -137,208 +215,193 @@ intptr_t Dwarf::LookupScript(const Script& script) {
   return pair->index_;
 }
 
-void Dwarf::Print(const char* format, ...) {
-  va_list args;
-  va_start(args, format);
-  stream_->VPrint(format, args);
-  va_end(args);
+void Dwarf::WriteAbbreviations(DwarfWriteStream* stream) {
+  // Dwarf data mostly takes the form of a tree, whose nodes are called
+  // DIEs. Each DIE begins with an abbreviation code, and the abbreviation
+  // describes the attributes of that DIE and their representation.
+
+  stream->uleb128(kCompilationUnit);     // Abbrev code.
+  stream->uleb128(DW_TAG_compile_unit);  // Type.
+  stream->u1(DW_CHILDREN_yes);
+  stream->uleb128(DW_AT_name);  // Start of attributes.
+  stream->uleb128(DW_FORM_string);
+  stream->uleb128(DW_AT_producer);
+  stream->uleb128(DW_FORM_string);
+  stream->uleb128(DW_AT_comp_dir);
+  stream->uleb128(DW_FORM_string);
+  stream->uleb128(DW_AT_low_pc);
+  stream->uleb128(DW_FORM_addr);
+  stream->uleb128(DW_AT_high_pc);
+  stream->uleb128(DW_FORM_addr);
+  stream->uleb128(DW_AT_stmt_list);
+  stream->uleb128(DW_FORM_sec_offset);
+  stream->uleb128(0);
+  stream->uleb128(0);  // End of attributes.
+
+  stream->uleb128(kAbstractFunction);  // Abbrev code.
+  stream->uleb128(DW_TAG_subprogram);  // Type.
+  stream->u1(DW_CHILDREN_yes);
+  stream->uleb128(DW_AT_name);  // Start of attributes.
+  stream->uleb128(DW_FORM_string);
+  stream->uleb128(DW_AT_decl_file);
+  stream->uleb128(DW_FORM_udata);
+  stream->uleb128(DW_AT_inline);
+  stream->uleb128(DW_FORM_udata);
+  stream->uleb128(0);
+  stream->uleb128(0);  // End of attributes.
+
+  stream->uleb128(kConcreteFunction);  // Abbrev code.
+  stream->uleb128(DW_TAG_subprogram);  // Type.
+  stream->u1(DW_CHILDREN_yes);
+  stream->uleb128(DW_AT_abstract_origin);  // Start of attributes.
+  stream->uleb128(DW_FORM_ref4);
+  stream->uleb128(DW_AT_low_pc);
+  stream->uleb128(DW_FORM_addr);
+  stream->uleb128(DW_AT_high_pc);
+  stream->uleb128(DW_FORM_addr);
+  stream->uleb128(DW_AT_artificial);
+  stream->uleb128(DW_FORM_flag);
+  stream->uleb128(0);
+  stream->uleb128(0);  // End of attributes.
+
+  stream->uleb128(kInlinedFunction);           // Abbrev code.
+  stream->uleb128(DW_TAG_inlined_subroutine);  // Type.
+  stream->u1(DW_CHILDREN_yes);
+  stream->uleb128(DW_AT_abstract_origin);  // Start of attributes.
+  stream->uleb128(DW_FORM_ref4);
+  stream->uleb128(DW_AT_low_pc);
+  stream->uleb128(DW_FORM_addr);
+  stream->uleb128(DW_AT_high_pc);
+  stream->uleb128(DW_FORM_addr);
+  stream->uleb128(DW_AT_call_file);
+  stream->uleb128(DW_FORM_udata);
+  stream->uleb128(DW_AT_call_line);
+  stream->uleb128(DW_FORM_udata);
+  stream->uleb128(DW_AT_call_column);
+  stream->uleb128(DW_FORM_udata);
+  stream->uleb128(0);
+  stream->uleb128(0);  // End of attributes.
+
+  stream->uleb128(0);  // End of abbreviations.
 }
 
-void Dwarf::WriteAbbreviations() {
-// Dwarf data mostly takes the form of a tree, whose nodes are called
-// DIEs. Each DIE begins with an abbreviation code, and the abbreviation
-// describes the attributes of that DIE and their representation.
+void Dwarf::WriteDebugInfo(DwarfWriteStream* stream) {
+  // 7.5.1.1 Compilation Unit Header
 
-#if defined(TARGET_OS_MACOS) || defined(TARGET_OS_MACOS_IOS)
-  Print(".section __DWARF,__debug_abbrev,regular,debug\n");
-#elif defined(TARGET_OS_LINUX) || defined(TARGET_OS_ANDROID) ||                \
-    defined(TARGET_OS_FUCHSIA)
-  Print(".section .debug_abbrev,\"\"\n");
-#else
-  UNIMPLEMENTED();
-#endif
+  // Unit length.
+  auto const cu_prefix = "cu";
+  intptr_t cu_start;
+  intptr_t cu_size_fixup = stream->ReserveSize(cu_prefix, &cu_start);
 
-  uleb128(kCompilationUnit);     // Abbrev code.
-  uleb128(DW_TAG_compile_unit);  // Type.
-  u1(DW_CHILDREN_yes);
-  uleb128(DW_AT_name);  // Start of attributes.
-  uleb128(DW_FORM_string);
-  uleb128(DW_AT_producer);
-  uleb128(DW_FORM_string);
-  uleb128(DW_AT_comp_dir);
-  uleb128(DW_FORM_string);
-  uleb128(DW_AT_low_pc);
-  uleb128(DW_FORM_addr);
-  uleb128(DW_AT_high_pc);
-  uleb128(DW_FORM_addr);
-  uleb128(DW_AT_stmt_list);
-  uleb128(DW_FORM_sec_offset);
-  uleb128(0);
-  uleb128(0);  // End of attributes.
-
-  uleb128(kAbstractFunction);  // Abbrev code.
-  uleb128(DW_TAG_subprogram);  // Type.
-  u1(DW_CHILDREN_yes);
-  uleb128(DW_AT_name);  // Start of attributes.
-  uleb128(DW_FORM_string);
-  uleb128(DW_AT_decl_file);
-  uleb128(DW_FORM_udata);
-  uleb128(DW_AT_decl_line);
-  uleb128(DW_FORM_udata);
-  uleb128(DW_AT_inline);
-  uleb128(DW_FORM_udata);
-  uleb128(0);
-  uleb128(0);  // End of attributes.
-
-  uleb128(kConcreteFunction);  // Abbrev code.
-  uleb128(DW_TAG_subprogram);  // Type.
-  u1(DW_CHILDREN_yes);
-  uleb128(DW_AT_abstract_origin);  // Start of attributes.
-  uleb128(DW_FORM_ref4);
-  uleb128(DW_AT_low_pc);
-  uleb128(DW_FORM_addr);
-  uleb128(DW_AT_high_pc);
-  uleb128(DW_FORM_addr);
-  uleb128(0);
-  uleb128(0);  // End of attributes.
-
-  uleb128(kInlinedFunction);           // Abbrev code.
-  uleb128(DW_TAG_inlined_subroutine);  // Type.
-  u1(DW_CHILDREN_yes);
-  uleb128(DW_AT_abstract_origin);  // Start of attributes.
-  uleb128(DW_FORM_ref4);
-  uleb128(DW_AT_low_pc);
-  uleb128(DW_FORM_addr);
-  uleb128(DW_AT_high_pc);
-  uleb128(DW_FORM_addr);
-  uleb128(DW_AT_call_file);
-  uleb128(DW_FORM_udata);
-  uleb128(DW_AT_call_line);
-  uleb128(DW_FORM_udata);
-  uleb128(0);
-  uleb128(0);  // End of attributes.
-
-  uleb128(0);  // End of abbreviations.
-}
-
-void Dwarf::WriteCompilationUnit() {
-// 7.5.1.1 Compilation Unit Header
-
-#if defined(TARGET_OS_MACOS) || defined(TARGET_OS_MACOS_IOS)
-  Print(".section __DWARF,__debug_info,regular,debug\n");
-#elif defined(TARGET_OS_LINUX) || defined(TARGET_OS_ANDROID) ||                \
-    defined(TARGET_OS_FUCHSIA)
-  Print(".section .debug_info,\"\"\n");
-#else
-  UNIMPLEMENTED();
-#endif
-  Print(".Ldebug_info:\n");
-
-  // Unit length. Assignment to temp works around buggy Mac assembler.
-  Print("Lcu_size = .Lcu_end - .Lcu_start\n");
-  Print(".4byte Lcu_size\n");
-  Print(".Lcu_start:\n");
-
-  u2(2);              // DWARF version 2
-  u4(0);              // debug_abbrev_offset
-  u1(sizeof(void*));  // address_size
+  stream->u2(2);                            // DWARF version 2
+  stream->u4(0);                            // debug_abbrev_offset
+  stream->u1(compiler::target::kWordSize);  // address_size
 
   // Compilation Unit DIE. We describe the entire Dart program as a single
   // compilation unit. Note we write attributes in the same order we declared
   // them in our abbreviation above in WriteAbbreviations.
-  uleb128(kCompilationUnit);
+  stream->uleb128(kCompilationUnit);
   const Library& root_library = Library::Handle(
-      zone_, Isolate::Current()->object_store()->root_library());
+      zone_, IsolateGroup::Current()->object_store()->root_library());
   const String& root_uri = String::Handle(zone_, root_library.url());
-  Print(".string \"%s\"\n", root_uri.ToCString());  // DW_AT_name
-  Print(".string \"Dart VM\"\n");                   // DW_AT_producer
-  Print(".string \"\"\n");                          // DW_AT_comp_dir
+  stream->string(root_uri.ToCString());  // DW_AT_name
+  stream->string("Dart VM");             // DW_AT_producer
+  stream->string("");                    // DW_AT_comp_dir
 
   // DW_AT_low_pc
   // The lowest instruction address in this object file that is part of our
   // compilation unit. Dwarf consumers use this to quickly decide which
   // compilation unit DIE to consult for a given pc.
-  Print(FORM_ADDR " _kDartIsolateSnapshotInstructions\n");
+  stream->OffsetFromSymbol(kIsolateSnapshotInstructionsAsmSymbol, 0);
 
   // DW_AT_high_pc
   // The highest instruction address in this object file that is part of our
   // compilation unit. Dwarf consumers use this to quickly decide which
   // compilation unit DIE to consult for a given pc.
-  intptr_t last_code_index = codes_.length() - 1;
-  const Code& last_code = *(codes_[last_code_index]);
-  Print(FORM_ADDR " .Lcode%" Pd " + %" Pd "\n", last_code_index,
-        last_code.Size());
+  if (codes_.is_empty()) {
+    // No code objects in this program, so set high_pc to same as low_pc.
+    stream->OffsetFromSymbol(kIsolateSnapshotInstructionsAsmSymbol, 0);
+  } else {
+    const Code& last_code = *codes_.Last();
+    auto const last_code_name = code_to_name_.LookupValue(&last_code);
+    ASSERT(last_code_name != nullptr);
+    stream->OffsetFromSymbol(last_code_name, last_code.Size());
+  }
 
   // DW_AT_stmt_list (offset into .debug_line)
   // Indicates which line number program is associated with this compilation
   // unit. We only emit a single line number program.
-  u4(0);
+  stream->u4(0);
 
-  WriteAbstractFunctions();
-  WriteConcreteFunctions();
+  WriteAbstractFunctions(stream);
+  WriteConcreteFunctions(stream);
 
-  uleb128(0);  // End of children.
+  stream->uleb128(0);  // End of children.
 
-  uleb128(0);  // End of entries.
-  Print(".Lcu_end:\n");
+  stream->uleb128(0);  // End of entries.
+  stream->SetSize(cu_size_fixup, cu_prefix, cu_start);
 }
 
-void Dwarf::WriteAbstractFunctions() {
+void Dwarf::WriteAbstractFunctions(DwarfWriteStream* stream) {
   Script& script = Script::Handle(zone_);
   String& name = String::Handle(zone_);
+  stream->InitializeAbstractOrigins(functions_.length());
+  // By the point we're creating DWARF information, scripts have already lost
+  // their token stream and we can't look up their line number or column
+  // information, hence the lack of DW_AT_decl_line and DW_AT_decl_column.
   for (intptr_t i = 0; i < functions_.length(); i++) {
     const Function& function = *(functions_[i]);
     name = function.QualifiedUserVisibleName();
     script = function.script();
-    intptr_t file = LookupScript(script);
-    intptr_t line = 0;  // Not known. Script has already lost its token stream.
+    const intptr_t file = LookupScript(script);
+    auto const name_cstr = Deobfuscate(name.ToCString());
 
-    Print(".Lfunc%" Pd ":\n", i);  // Label for DW_AT_abstract_origin references
-    uleb128(kAbstractFunction);
-    Print(".string \"%s\"\n", name.ToCString());  // DW_AT_name
-    uleb128(file);                                // DW_AT_decl_file
-    uleb128(line);                                // DW_AT_decl_line
-    uleb128(DW_INL_inlined);                      // DW_AT_inline
-    uleb128(0);                                   // End of children.
+    stream->RegisterAbstractOrigin(i);
+    stream->uleb128(kAbstractFunction);
+    stream->string(name_cstr);        // DW_AT_name
+    stream->uleb128(file);            // DW_AT_decl_file
+    stream->uleb128(DW_INL_inlined);  // DW_AT_inline
+    stream->uleb128(0);               // End of children.
   }
 }
 
-void Dwarf::WriteConcreteFunctions() {
+void Dwarf::WriteConcreteFunctions(DwarfWriteStream* stream) {
   Function& function = Function::Handle(zone_);
   Script& script = Script::Handle(zone_);
   for (intptr_t i = 0; i < codes_.length(); i++) {
     const Code& code = *(codes_[i]);
     RELEASE_ASSERT(!code.IsNull());
-    if (!code.IsFunctionCode()) {
+    if (!code.IsFunctionCode() || code.IsUnknownDartCode()) {
       continue;
     }
+
     function = code.function();
     intptr_t function_index = LookupFunction(function);
     script = function.script();
+    const char* asm_name = code_to_name_.LookupValue(&code);
+    ASSERT(asm_name != nullptr);
 
-    uleb128(kConcreteFunction);
+    stream->uleb128(kConcreteFunction);
     // DW_AT_abstract_origin
     // References a node written above in WriteAbstractFunctions.
-    // Assignment to temp works around buggy Mac assembler.
-    intptr_t temp = temp_++;
-    Print("Ltemp%" Pd " = .Lfunc%" Pd " - .Ldebug_info\n", temp,
-          function_index);
-    Print(".4byte Ltemp%" Pd "\n", temp);
+    stream->AbstractOrigin(function_index);
 
     // DW_AT_low_pc
-    Print(FORM_ADDR " .Lcode%" Pd "\n", i);
+    stream->OffsetFromSymbol(asm_name, 0);
     // DW_AT_high_pc
-    Print(FORM_ADDR " .Lcode%" Pd " + %" Pd "\n", i, code.Size());
+    stream->OffsetFromSymbol(asm_name, code.Size());
+    // DW_AT_artificial
+    stream->u1(function.is_visible() ? 0 : 1);
 
     InliningNode* node = ExpandInliningTree(code);
     if (node != NULL) {
       for (InliningNode* child = node->children_head; child != NULL;
            child = child->children_next) {
-        WriteInliningNode(child, i, script);
+        WriteInliningNode(stream, child, asm_name, script);
       }
     }
 
-    uleb128(0);  // End of children.
+    stream->uleb128(0);  // End of children.
   }
 }
 
@@ -359,44 +422,45 @@ InliningNode* Dwarf::ExpandInliningTree(const Code& code) {
   }
 
   GrowableArray<InliningNode*> node_stack(zone_, 4);
-  GrowableArray<TokenPosition> token_positions(zone_, 4);
+  GrowableArray<DwarfPosition> token_positions(zone_, 4);
 
   NoSafepointScope no_safepoint;
   ReadStream stream(map.Data(), map.Length());
 
   int32_t current_pc_offset = 0;
+  token_positions.Add(kNoDwarfPositionInfo);
   InliningNode* root_node =
-      new (zone_) InliningNode(root_function, TokenPosition(), 0);
+      new (zone_) InliningNode(root_function, token_positions.Last(), 0);
   root_node->end_pc_offset = code.Size();
   node_stack.Add(root_node);
-  token_positions.Add(CodeSourceMapBuilder::kInitialPosition);
 
   while (stream.PendingBytes() > 0) {
-    uint8_t opcode = stream.Read<uint8_t>();
+    int32_t arg1;
+    int32_t arg2 = -1;
+    const uint8_t opcode = CodeSourceMapOps::Read(&stream, &arg1, &arg2);
     switch (opcode) {
-      case CodeSourceMapBuilder::kChangePosition: {
-        int32_t position = stream.Read<int32_t>();
-        token_positions[token_positions.length() - 1] = TokenPosition(position);
+      case CodeSourceMapOps::kChangePosition: {
+        const DwarfPosition& old_pos =
+            token_positions[token_positions.length() - 1];
+        token_positions[token_positions.length() - 1] =
+            DwarfPosition(Utils::AddWithWrapAround(old_pos.line(), arg1), arg2);
         break;
       }
-      case CodeSourceMapBuilder::kAdvancePC: {
-        int32_t delta = stream.Read<int32_t>();
-        current_pc_offset += delta;
+      case CodeSourceMapOps::kAdvancePC: {
+        current_pc_offset += arg1;
         break;
       }
-      case CodeSourceMapBuilder::kPushFunction: {
-        int32_t func = stream.Read<int32_t>();
+      case CodeSourceMapOps::kPushFunction: {
         const Function& child_func =
-            Function::ZoneHandle(zone_, Function::RawCast(functions.At(func)));
-        TokenPosition call_pos = token_positions.Last();
-        InliningNode* child_node =
-            new (zone_) InliningNode(child_func, call_pos, current_pc_offset);
+            Function::ZoneHandle(zone_, Function::RawCast(functions.At(arg1)));
+        InliningNode* child_node = new (zone_)
+            InliningNode(child_func, token_positions.Last(), current_pc_offset);
         node_stack.Last()->AppendChild(child_node);
         node_stack.Add(child_node);
-        token_positions.Add(CodeSourceMapBuilder::kInitialPosition);
+        token_positions.Add(kNoDwarfPositionInfo);
         break;
       }
-      case CodeSourceMapBuilder::kPopFunction: {
+      case CodeSourceMapOps::kPopFunction: {
         // We never pop the root function.
         ASSERT(node_stack.length() > 1);
         ASSERT(token_positions.length() > 1);
@@ -405,8 +469,7 @@ InliningNode* Dwarf::ExpandInliningTree(const Code& code) {
         token_positions.RemoveLast();
         break;
       }
-      case CodeSourceMapBuilder::kNullCheck: {
-        stream.Read<int32_t>();
+      case CodeSourceMapOps::kNullCheck: {
         break;
       }
       default:
@@ -423,120 +486,169 @@ InliningNode* Dwarf::ExpandInliningTree(const Code& code) {
   return root_node;
 }
 
-void Dwarf::WriteInliningNode(InliningNode* node,
-                              intptr_t root_code_index,
+void Dwarf::WriteInliningNode(DwarfWriteStream* stream,
+                              InliningNode* node,
+                              const char* root_asm_name,
                               const Script& parent_script) {
   intptr_t file = LookupScript(parent_script);
-  intptr_t line = node->call_pos.value();
   intptr_t function_index = LookupFunction(node->function);
   const Script& script = Script::Handle(zone_, node->function.script());
 
-  uleb128(kInlinedFunction);
+  stream->uleb128(kInlinedFunction);
   // DW_AT_abstract_origin
   // References a node written above in WriteAbstractFunctions.
-  // Assignment to temp works around buggy Mac assembler.
-  intptr_t temp = temp_++;
-  Print("Ltemp%" Pd " = .Lfunc%" Pd " - .Ldebug_info\n", temp, function_index);
-  Print(".4byte Ltemp%" Pd "\n", temp);
+  stream->AbstractOrigin(function_index);
+
   // DW_AT_low_pc
-  Print(FORM_ADDR " .Lcode%" Pd " + %d\n", root_code_index,
-        node->start_pc_offset);
+  stream->OffsetFromSymbol(root_asm_name, node->start_pc_offset);
   // DW_AT_high_pc
-  Print(FORM_ADDR " .Lcode%" Pd " + %d\n", root_code_index,
-        node->end_pc_offset);
+  stream->OffsetFromSymbol(root_asm_name, node->end_pc_offset);
   // DW_AT_call_file
-  uleb128(file);
+  stream->uleb128(file);
+
+  // The DWARF standard uses 0 to denote missing line or column information.
+
   // DW_AT_call_line
-  uleb128(line);
+  stream->uleb128(node->position.line() < 0 ? 0 : node->position.line());
+  // DW_at_call_column
+  stream->uleb128(node->position.column() < 0 ? 0 : node->position.column());
 
   for (InliningNode* child = node->children_head; child != NULL;
        child = child->children_next) {
-    WriteInliningNode(child, root_code_index, script);
+    WriteInliningNode(stream, child, root_asm_name, script);
   }
 
-  uleb128(0);  // End of children.
+  stream->uleb128(0);  // End of children.
 }
 
-void Dwarf::WriteLines() {
-#if defined(TARGET_OS_MACOS) || defined(TARGET_OS_MACOS_IOS)
-  Print(".section __DWARF,__debug_line,regular,debug\n");
-#elif defined(TARGET_OS_LINUX) || defined(TARGET_OS_ANDROID) ||                \
-    defined(TARGET_OS_FUCHSIA)
-  Print(".section .debug_line,\"\"\n");
-#else
-  UNIMPLEMENTED();
-#endif
+// Helper class for tracking state of DWARF registers and emitting
+// line number program commands to set these registers to the right
+// state.
+class LineNumberProgramWriter {
+ public:
+  explicit LineNumberProgramWriter(DwarfWriteStream* stream)
+      : stream_(stream) {}
 
-  // 6.2.4 The Line Number Program Header
-
-  // 1. unit_length. This encoding implies 32-bit DWARF.
-  Print("Lline_size = .Lline_end - .Lline_start\n");
-  Print(".4byte Lline_size\n");
-
-  Print(".Lline_start:\n");
-
-  u2(2);  // 2. DWARF version 2
-
-  // 3. header_length
-  // Assignment to temp works around buggy Mac assembler.
-  Print("Llineheader_size = .Llineheader_end - .Llineheader_start\n");
-  Print(".4byte Llineheader_size\n");
-  Print(".Llineheader_start:\n");
-
-  u1(1);   // 4. minimum_instruction_length
-  u1(1);   // 5. default_is_stmt (true for compatibility with dsymutil).
-  u1(0);   // 6. line_base
-  u1(1);   // 7. line_range
-  u1(13);  // 8. opcode_base (12 standard opcodes in Dwarf 2)
-
-  // 9. standard_opcode_lengths
-  u1(0);  // DW_LNS_copy, 0 operands
-  u1(1);  // DW_LNS_advance_pc, 1 operands
-  u1(1);  // DW_LNS_advance_list, 1 operands
-  u1(1);  // DW_LNS_set_file, 1 operands
-  u1(1);  // DW_LNS_set_column, 1 operands
-  u1(0);  // DW_LNS_negate_stmt, 0 operands
-  u1(0);  // DW_LNS_set_basic_block, 0 operands
-  u1(0);  // DW_LNS_const_add_pc, 0 operands
-  u1(1);  // DW_LNS_fixed_advance_pc, 1 operands
-  u1(0);  // DW_LNS_set_prolog_end, 0 operands
-  u1(0);  // DW_LNS_set_epligoue_begin, 0 operands
-  u1(1);  // DW_LNS_set_isa, 1 operands
-
-  // 10. include_directories (sequence of path names)
-  // We don't emit any because we use full paths below.
-  u1(0);
-
-  // 11. file_names (sequence of file entries)
-  String& uri = String::Handle(zone_);
-  for (intptr_t i = 0; i < scripts_.length(); i++) {
-    const Script& script = *(scripts_[i]);
-    uri ^= script.url();
-    Print(".string \"%s\"\n", uri.ToCString());
-    uleb128(0);  // Include directory index.
-    uleb128(0);  // File modification time.
-    uleb128(0);  // File length.
+  void SetFile(intptr_t file) {
+    if (file != file_) {
+      stream_->u1(Dwarf::DW_LNS_set_file);
+      stream_->uleb128(file);
+      file_ = file;
+    }
   }
-  u1(0);  // End of file names.
 
-  Print(".Llineheader_end:\n");
+  void SetLine(intptr_t line) {
+    if (line != line_) {
+      stream_->u1(Dwarf::DW_LNS_advance_line);
+      stream_->sleb128(line - line_);
+      line_ = line;
+    }
+  }
 
-  // 6.2.5 The Line Number Program
+  void SetColumn(intptr_t column) {
+    if (column != column_) {
+      stream_->u1(Dwarf::DW_LNS_set_column);
+      stream_->uleb128(column);
+      column_ = column;
+    }
+  }
 
-  intptr_t previous_file = 1;
-  intptr_t previous_line = 1;
-  intptr_t previous_code_index = -1;
-  intptr_t previous_pc_offset = 0;
+  void SetPCOffset(const char* asm_name, intptr_t pc_offset) {
+    if (asm_name_ == nullptr) {
+      auto const instr_size = 1 + compiler::target::kWordSize;
+      stream_->u1(0);           // This is an extended opcode
+      stream_->u1(instr_size);  // that is 5 or 9 bytes long
+      stream_->u1(Dwarf::DW_LNE_set_address);
+      stream_->OffsetFromSymbol(asm_name, pc_offset);
+    } else {
+      // Emit LNP row if the address register has been updated to a
+      // non-zero value (dartbug.com/41756).
+      stream_->u1(Dwarf::DW_LNS_copy);
+      stream_->u1(Dwarf::DW_LNS_advance_pc);
+      stream_->DistanceBetweenSymbolOffsets(asm_name, pc_offset, asm_name_,
+                                            pc_offset_);
+    }
+    asm_name_ = asm_name;
+    pc_offset_ = pc_offset;
+  }
 
+ private:
+  DwarfWriteStream* const stream_;
+  // The initial values for the line number program state machine registers
+  // according to the DWARF standard.
+  intptr_t pc_offset_ = 0;
+  intptr_t file_ = 1;
+  intptr_t line_ = 1;
+  intptr_t column_ = 0;
+
+  // Other info not stored in the state machine registers.
+  const char* asm_name_ = nullptr;
+};
+
+void Dwarf::WriteSyntheticLineNumberProgram(LineNumberProgramWriter* writer) {
+  // We emit it last after all other scripts.
+  const intptr_t comments_file_index = scripts_.length() + 1;
+
+  auto file_open = Dart::file_open_callback();
+  auto file_write = Dart::file_write_callback();
+  auto file_close = Dart::file_close_callback();
+  if ((file_open == nullptr) || (file_write == nullptr) ||
+      (file_close == nullptr)) {
+    return;
+  }
+
+  TextBuffer comments_buffer(128 * KB);
+
+  auto comments_file = file_open(
+      FLAG_write_code_comments_as_synthetic_source_to, /*write=*/true);
+  if (comments_file == nullptr) {
+    OS::PrintErr("Failed to open file %s\n",
+                 FLAG_write_code_comments_as_synthetic_source_to);
+    return;
+  }
+
+  intptr_t current_line = 0;
+
+  writer->SetFile(comments_file_index);
+
+  for (intptr_t i = 0; i < codes_.length(); i++) {
+    const Code& code = *(codes_[i]);
+    auto const asm_name = code_to_name_.LookupValue(&code);
+    ASSERT(asm_name != nullptr);
+
+    auto& comments = code.comments();
+    for (intptr_t i = 0, len = comments.Length(); i < len;) {
+      intptr_t current_pc_offset = comments.PCOffsetAt(i);
+      writer->SetPCOffset(asm_name, current_pc_offset);
+      while (i < len && current_pc_offset == comments.PCOffsetAt(i)) {
+        comments_buffer.AddString(comments.CommentAt(i));
+        comments_buffer.AddChar('\n');
+        current_line++;
+        i++;
+      }
+
+      writer->SetLine(current_line);
+    }
+  }
+
+  file_write(comments_buffer.buffer(), comments_buffer.length(), comments_file);
+  file_close(comments_file);
+}
+
+void Dwarf::WriteLineNumberProgramFromCodeSourceMaps(
+    LineNumberProgramWriter* writer) {
   Function& root_function = Function::Handle(zone_);
   Script& script = Script::Handle(zone_);
   CodeSourceMap& map = CodeSourceMap::Handle(zone_);
   Array& functions = Array::Handle(zone_);
   GrowableArray<const Function*> function_stack(zone_, 8);
-  GrowableArray<TokenPosition> token_positions(zone_, 8);
+  GrowableArray<DwarfPosition> token_positions(zone_, 8);
 
   for (intptr_t i = 0; i < codes_.length(); i++) {
     const Code& code = *(codes_[i]);
+    auto const asm_name = code_to_name_.LookupValue(&code);
+    ASSERT(asm_name != nullptr);
+
     map = code.code_source_map();
     if (map.IsNull()) {
       continue;
@@ -545,76 +657,59 @@ void Dwarf::WriteLines() {
     functions = code.inlined_id_to_function();
 
     NoSafepointScope no_safepoint;
-    ReadStream stream(map.Data(), map.Length());
+    ReadStream code_map_stream(map.Data(), map.Length());
 
     function_stack.Clear();
     token_positions.Clear();
 
     int32_t current_pc_offset = 0;
     function_stack.Add(&root_function);
-    token_positions.Add(CodeSourceMapBuilder::kInitialPosition);
+    token_positions.Add(kNoDwarfPositionInfo);
 
-    while (stream.PendingBytes() > 0) {
-      uint8_t opcode = stream.Read<uint8_t>();
+    while (code_map_stream.PendingBytes() > 0) {
+      int32_t arg1;
+      int32_t arg2 = -1;
+      const uint8_t opcode =
+          CodeSourceMapOps::Read(&code_map_stream, &arg1, &arg2);
       switch (opcode) {
-        case CodeSourceMapBuilder::kChangePosition: {
-          int32_t position = stream.Read<int32_t>();
-          token_positions[token_positions.length() - 1] =
-              TokenPosition(position);
+        case CodeSourceMapOps::kChangePosition: {
+          const DwarfPosition& old_pos =
+              token_positions[token_positions.length() - 1];
+          token_positions[token_positions.length() - 1] = DwarfPosition(
+              Utils::AddWithWrapAround(old_pos.line(), arg1), arg2);
           break;
         }
-        case CodeSourceMapBuilder::kAdvancePC: {
-          int32_t delta = stream.Read<int32_t>();
-          current_pc_offset += delta;
+        case CodeSourceMapOps::kAdvancePC: {
+          current_pc_offset += arg1;
 
           const Function& function = *(function_stack.Last());
           script = function.script();
           intptr_t file = LookupScript(script);
 
           // 1. Update LNP file.
-          if (file != previous_file) {
-            u1(DW_LNS_set_file);
-            uleb128(file);
-            previous_file = file;
-          }
+          writer->SetFile(file);
 
           // 2. Update LNP line.
-          TokenPosition pos = token_positions.Last();
-          intptr_t line = pos.value();
-          if (line != previous_line) {
-            u1(DW_LNS_advance_line);
-            sleb128(line - previous_line);
-            previous_line = line;
-          }
+          // The DWARF standard uses 0 to denote missing line or column
+          // information.
+          writer->SetLine(token_positions.Last().line() < 0
+                              ? 0
+                              : token_positions.Last().line());
+          writer->SetColumn(token_positions.Last().column() < 0
+                                ? 0
+                                : token_positions.Last().column());
 
-          // 3. Emit LNP row.
-          u1(DW_LNS_copy);
-
-          // 4. Update LNP pc.
-          if (previous_code_index == -1) {
-            // This variant is relocatable.
-            u1(0);                  // This is an extended opcode
-            u1(1 + sizeof(void*));  // that is 5 or 9 bytes long
-            u1(DW_LNE_set_address);
-            Print(FORM_ADDR " .Lcode%" Pd " + %d\n", i, current_pc_offset);
-          } else {
-            u1(DW_LNS_advance_pc);
-            Print(".uleb128 .Lcode%" Pd " - .Lcode%" Pd " + %" Pd "\n", i,
-                  previous_code_index, current_pc_offset - previous_pc_offset);
-          }
-          previous_code_index = i;
-          previous_pc_offset = current_pc_offset;
+          writer->SetPCOffset(asm_name, current_pc_offset);
           break;
         }
-        case CodeSourceMapBuilder::kPushFunction: {
-          int32_t func_index = stream.Read<int32_t>();
-          const Function& child_func = Function::Handle(
-              zone_, Function::RawCast(functions.At(func_index)));
-          function_stack.Add(&child_func);
-          token_positions.Add(CodeSourceMapBuilder::kInitialPosition);
+        case CodeSourceMapOps::kPushFunction: {
+          auto child_func =
+              &Function::Handle(zone_, Function::RawCast(functions.At(arg1)));
+          function_stack.Add(child_func);
+          token_positions.Add(kNoDwarfPositionInfo);
           break;
         }
-        case CodeSourceMapBuilder::kPopFunction: {
+        case CodeSourceMapOps::kPopFunction: {
           // We never pop the root function.
           ASSERT(function_stack.length() > 1);
           ASSERT(token_positions.length() > 1);
@@ -622,8 +717,7 @@ void Dwarf::WriteLines() {
           token_positions.RemoveLast();
           break;
         }
-        case CodeSourceMapBuilder::kNullCheck: {
-          stream.Read<int32_t>();
+        case CodeSourceMapOps::kNullCheck: {
           break;
         }
         default:
@@ -631,20 +725,176 @@ void Dwarf::WriteLines() {
       }
     }
   }
+}
 
-  // Advance pc to end of the compilation unit.
-  intptr_t last_code_index = codes_.length() - 1;
-  const Code& last_code = *(codes_[last_code_index]);
-  u1(DW_LNS_advance_pc);
-  Print(".uleb128 .Lcode%" Pd " - .Lcode%" Pd " + %" Pd "\n", last_code_index,
-        previous_code_index, last_code.Size() - previous_pc_offset);
+static constexpr char kResolvedFileRoot[] = "file:///";
+static constexpr intptr_t kResolvedFileRootLen = sizeof(kResolvedFileRoot) - 1;
+static constexpr char kResolvedSdkRoot[] = "org-dartlang-sdk:///sdk/";
+static constexpr intptr_t kResolvedSdkRootLen = sizeof(kResolvedSdkRoot) - 1;
+
+static const char* ConvertResolvedURI(const char* str) {
+  const intptr_t len = strlen(str);
+  if (len > kResolvedFileRootLen &&
+      strncmp(str, kResolvedFileRoot, kResolvedFileRootLen) == 0) {
+#if defined(HOST_OS_WINDOWS)
+    return str + kResolvedFileRootLen;  // Strip off the entire prefix.
+#else
+    return str + kResolvedFileRootLen - 1;  // Leave a '/' on the front.
+#endif
+  }
+  if (len > kResolvedSdkRootLen &&
+      strncmp(str, kResolvedSdkRoot, kResolvedSdkRootLen) == 0) {
+    // Leave "sdk/" as a prefix in the returned path.
+    return str + (kResolvedSdkRootLen - 4);
+  }
+  return nullptr;
+}
+
+void Dwarf::WriteLineNumberProgram(DwarfWriteStream* stream) {
+  // 6.2.4 The Line Number Program Header
+
+  // 1. unit_length. This encoding implies 32-bit DWARF.
+  auto const line_prefix = "line";
+  intptr_t line_start;
+  intptr_t line_size_fixup = stream->ReserveSize(line_prefix, &line_start);
+
+  stream->u2(2);  // 2. DWARF version 2
+
+  // 3. header_length
+  auto const lineheader_prefix = "lineheader";
+  intptr_t lineheader_start;
+  intptr_t lineheader_size_fixup =
+      stream->ReserveSize(lineheader_prefix, &lineheader_start);
+
+  stream->u1(1);   // 4. minimum_instruction_length
+  stream->u1(1);   // 5. default_is_stmt (true for compatibility with dsymutil).
+  stream->u1(0);   // 6. line_base
+  stream->u1(1);   // 7. line_range
+  stream->u1(13);  // 8. opcode_base (12 standard opcodes in Dwarf 2)
+
+  // 9. standard_opcode_lengths
+  stream->u1(0);  // DW_LNS_copy, 0 operands
+  stream->u1(1);  // DW_LNS_advance_pc, 1 operands
+  stream->u1(1);  // DW_LNS_advance_list, 1 operands
+  stream->u1(1);  // DW_LNS_set_file, 1 operands
+  stream->u1(1);  // DW_LNS_set_column, 1 operands
+  stream->u1(0);  // DW_LNS_negate_stmt, 0 operands
+  stream->u1(0);  // DW_LNS_set_basic_block, 0 operands
+  stream->u1(0);  // DW_LNS_const_add_pc, 0 operands
+  stream->u1(1);  // DW_LNS_fixed_advance_pc, 1 operands
+  stream->u1(0);  // DW_LNS_set_prolog_end, 0 operands
+  stream->u1(0);  // DW_LNS_set_epligoue_begin, 0 operands
+  stream->u1(1);  // DW_LNS_set_isa, 1 operands
+
+  // 10. include_directories (sequence of path names)
+  // We don't emit any because we use full paths below.
+  stream->u1(0);
+
+  // 11. file_names (sequence of file entries)
+  String& uri = String::Handle(zone_);
+  for (intptr_t i = 0; i < scripts_.length(); i++) {
+    const Script& script = *(scripts_[i]);
+    if (FLAG_resolve_dwarf_paths) {
+      uri = script.resolved_url();
+      // Strictly enforce this to catch unresolvable cases.
+      if (uri.IsNull()) {
+        FATAL("no resolved URI for Script %s available", script.ToCString());
+      }
+    } else {
+      uri = script.url();
+    }
+    ASSERT(!uri.IsNull());
+    auto uri_cstr = Deobfuscate(uri.ToCString());
+    if (FLAG_resolve_dwarf_paths) {
+      auto const converted_cstr = ConvertResolvedURI(uri_cstr);
+      // Strictly enforce this to catch inconvertable cases.
+      if (converted_cstr == nullptr) {
+        FATAL("cannot convert resolved URI %s", uri_cstr);
+      }
+      uri_cstr = converted_cstr;
+    }
+    RELEASE_ASSERT(strlen(uri_cstr) != 0);
+
+    stream->string(uri_cstr);  // NOLINT
+    stream->uleb128(0);        // Include directory index.
+    stream->uleb128(0);        // File modification time.
+    stream->uleb128(0);        // File length.
+  }
+  if (FLAG_write_code_comments_as_synthetic_source_to != nullptr) {
+    stream->string(FLAG_write_code_comments_as_synthetic_source_to);  // NOLINT
+    stream->uleb128(0);  // Include directory index.
+    stream->uleb128(0);  // File modification time.
+    stream->uleb128(0);  // File length.
+  }
+  stream->u1(0);  // End of file names.
+  stream->SetSize(lineheader_size_fixup, lineheader_prefix, lineheader_start);
+
+  // 6.2.5 The Line Number Program
+  LineNumberProgramWriter lnp_writer(stream);
+  if (FLAG_write_code_comments_as_synthetic_source_to != nullptr) {
+    WriteSyntheticLineNumberProgram(&lnp_writer);
+  } else {
+    WriteLineNumberProgramFromCodeSourceMaps(&lnp_writer);
+  }
+
+  // Advance pc to end of the compilation unit if not already there.
+  if (codes_.length() != 0) {
+    const intptr_t last_code_index = codes_.length() - 1;
+    const Code& last_code = *(codes_[last_code_index]);
+    const intptr_t last_pc_offset = last_code.Size();
+    const char* last_asm_name = code_to_name_.LookupValue(&last_code);
+    ASSERT(last_asm_name != nullptr);
+    lnp_writer.SetPCOffset(last_asm_name, last_pc_offset);
+  }
 
   // End of contiguous machine code.
-  u1(0);  // This is an extended opcode
-  u1(1);  // that is 1 byte long
-  u1(DW_LNE_end_sequence);
+  stream->u1(0);  // This is an extended opcode
+  stream->u1(1);  // that is 1 byte long
+  stream->u1(DW_LNE_end_sequence);
+  stream->SetSize(line_size_fixup, line_prefix, line_start);
+}
 
-  Print(".Lline_end:\n");
+const char* Dwarf::Deobfuscate(const char* cstr) {
+  if (reverse_obfuscation_trie_ == nullptr) return cstr;
+  TextBuffer buffer(256);
+  // Used to avoid Zone-allocating strings if no deobfuscation was performed.
+  bool changed = false;
+  intptr_t i = 0;
+  while (cstr[i] != '\0') {
+    intptr_t offset;
+    auto const value = reverse_obfuscation_trie_->Lookup(cstr + i, &offset);
+    if (offset == 0) {
+      // The first character was an invalid key element (that isn't the null
+      // terminator due to the while condition), copy it and skip to the next.
+      buffer.AddChar(cstr[i++]);
+    } else if (value != nullptr) {
+      changed = true;
+      buffer.AddString(value);
+    } else {
+      buffer.AddRaw(reinterpret_cast<const uint8_t*>(cstr + i), offset);
+    }
+    i += offset;
+  }
+  if (!changed) return cstr;
+  return OS::SCreate(zone_, "%s", buffer.buffer());
+}
+
+Trie<const char>* Dwarf::CreateReverseObfuscationTrie(Zone* zone) {
+  auto const map_array = IsolateGroup::Current()->obfuscation_map();
+  if (map_array == nullptr) return nullptr;
+
+  Trie<const char>* trie = nullptr;
+  for (intptr_t i = 0; map_array[i] != nullptr; i += 2) {
+    auto const key = map_array[i];
+    auto const value = map_array[i + 1];
+    ASSERT(value != nullptr);
+    // Don't include identity mappings.
+    if (strcmp(key, value) == 0) continue;
+    // Otherwise, any value in the obfuscation map should be a valid key.
+    ASSERT(Trie<const char>::IsValidKey(value));
+    trie = Trie<const char>::AddString(zone, trie, value, key);
+  }
+  return trie;
 }
 
 #endif  // DART_PRECOMPILER

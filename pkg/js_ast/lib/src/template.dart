@@ -199,7 +199,8 @@ class InstantiatorGeneratorVisitor implements NodeVisitor<Instantiator> {
       var value = arguments[nameOrPosition];
       if (value is Expression) return value;
       if (value is String) return convertStringToVariableUse(value);
-      error('Interpolated value #$nameOrPosition is not an Expression: $value');
+      throw error(
+          'Interpolated value #$nameOrPosition is not an Expression: $value');
     };
   }
 
@@ -209,7 +210,8 @@ class InstantiatorGeneratorVisitor implements NodeVisitor<Instantiator> {
       var value = arguments[nameOrPosition];
       if (value is Declaration) return value;
       if (value is String) return convertStringToVariableDeclaration(value);
-      error('Interpolated value #$nameOrPosition is not a declaration: $value');
+      throw error(
+          'Interpolated value #$nameOrPosition is not a declaration: $value');
     };
   }
 
@@ -221,7 +223,7 @@ class InstantiatorGeneratorVisitor implements NodeVisitor<Instantiator> {
         Expression toExpression(item) {
           if (item is Expression) return item;
           if (item is String) return convertStringToVariableUse(item);
-          return error('Interpolated value #$nameOrPosition is not '
+          throw error('Interpolated value #$nameOrPosition is not '
               'an Expression or List of Expressions: $value');
         }
 
@@ -236,7 +238,7 @@ class InstantiatorGeneratorVisitor implements NodeVisitor<Instantiator> {
     var nameOrPosition = node.nameOrPosition;
     return (arguments) {
       var value = arguments[nameOrPosition];
-      if (value is Literal) return value;
+      if (value is Literal || value is DeferredExpression) return value;
       error('Interpolated value #$nameOrPosition is not a Literal: $value');
     };
   }
@@ -249,7 +251,7 @@ class InstantiatorGeneratorVisitor implements NodeVisitor<Instantiator> {
       Parameter toParameter(item) {
         if (item is Parameter) return item;
         if (item is String) return new Parameter(item);
-        return error('Interpolated value #$nameOrPosition is not a Parameter or'
+        throw error('Interpolated value #$nameOrPosition is not a Parameter or'
             ' List of Parameters: $value');
       }
 
@@ -266,8 +268,9 @@ class InstantiatorGeneratorVisitor implements NodeVisitor<Instantiator> {
     return (arguments) {
       var value = arguments[nameOrPosition];
       if (value is Expression) return value;
-      if (value is String) return new LiteralString('"$value"');
-      error('Interpolated value #$nameOrPosition is not a selector: $value');
+      if (value is String) return LiteralString(value);
+      throw error(
+          'Interpolated value #$nameOrPosition is not a selector: $value');
     };
   }
 
@@ -276,7 +279,8 @@ class InstantiatorGeneratorVisitor implements NodeVisitor<Instantiator> {
     return (arguments) {
       var value = arguments[nameOrPosition];
       if (value is Node) return value.toStatement();
-      error('Interpolated value #$nameOrPosition is not a Statement: $value');
+      throw error(
+          'Interpolated value #$nameOrPosition is not a Statement: $value');
     };
   }
 
@@ -288,7 +292,7 @@ class InstantiatorGeneratorVisitor implements NodeVisitor<Instantiator> {
         Statement toStatement(item) {
           if (item is Statement) return item;
           if (item is Expression) return item.toStatement();
-          return error('Interpolated value #$nameOrPosition is not '
+          throw error('Interpolated value #$nameOrPosition is not '
               'a Statement or List of Statements: $value');
         }
 
@@ -370,7 +374,7 @@ class InstantiatorGeneratorVisitor implements NodeVisitor<Instantiator> {
         if (value is bool) return value;
         if (value is Expression) return value;
         if (value is String) return convertStringToVariableUse(value);
-        error('Interpolated value #$nameOrPosition '
+        throw error('Interpolated value #$nameOrPosition '
             'is not an Expression: $value');
       };
     }
@@ -655,7 +659,29 @@ class InstantiatorGeneratorVisitor implements NodeVisitor<Instantiator> {
     };
   }
 
+  Instantiator visitArrowFunction(ArrowFunction node) {
+    List<Instantiator> paramMakers = node.params.map(visitSplayable).toList();
+    Instantiator makeBody = visit(node.body);
+    // TODO(sra): Avoid copying params if no interpolation or forced copying.
+    return (arguments) {
+      List<Parameter> params = <Parameter>[];
+      for (Instantiator instantiator in paramMakers) {
+        var result = instantiator(arguments);
+        if (result is Iterable) {
+          params.addAll(result);
+        } else {
+          params.add(result);
+        }
+      }
+      // Either a Block or Expression.
+      Node body = makeBody(arguments);
+      return new ArrowFunction(params, body);
+    };
+  }
+
   Instantiator visitDeferredExpression(DeferredExpression node) => same(node);
+
+  Instantiator visitDeferredStatement(DeferredStatement node) => same(node);
 
   Instantiator visitDeferredNumber(DeferredNumber node) => same(node);
 
@@ -734,6 +760,14 @@ class InstantiatorGeneratorVisitor implements NodeVisitor<Instantiator> {
     Instantiator makeValue = visit(node.value);
     return (arguments) {
       return new Property(makeName(arguments), makeValue(arguments));
+    };
+  }
+
+  Instantiator visitMethodDefinition(MethodDefinition node) {
+    Instantiator makeName = visit(node.name);
+    Instantiator makeFunction = visit(node.function);
+    return (arguments) {
+      return new MethodDefinition(makeName(arguments), makeFunction(arguments));
     };
   }
 

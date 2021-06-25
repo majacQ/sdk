@@ -3,7 +3,7 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:observatory/service_io.dart';
-import 'package:unittest/unittest.dart';
+import 'package:test/test.dart';
 import 'test_helper.dart';
 
 genRepeater(value) {
@@ -48,7 +48,7 @@ void testeeDoNamed() {
 
 var tests = <IsolateTest>[
   (Isolate isolate) async {
-    Library rootLib = await isolate.rootLibrary.load();
+    Library rootLib = await isolate.rootLibrary.load() as Library;
 
     var breaksHit = 0;
 
@@ -92,7 +92,7 @@ var tests = <IsolateTest>[
     await cancelFutureSubscription(subscriptionFuture);
   },
   (Isolate isolate) async {
-    Library rootLib = await isolate.rootLibrary.load();
+    Library rootLib = await isolate.rootLibrary.load() as Library;
 
     var breaksHit = 0;
 
@@ -136,7 +136,7 @@ var tests = <IsolateTest>[
     await cancelFutureSubscription(subscriptionFuture);
   },
   (Isolate isolate) async {
-    Library rootLib = await isolate.rootLibrary.load();
+    Library rootLib = await isolate.rootLibrary.load() as Library;
 
     var breaksHit = 0;
 

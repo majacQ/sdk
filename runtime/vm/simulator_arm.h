@@ -16,13 +16,12 @@
 #error Do not include simulator_arm.h directly; use simulator.h.
 #endif
 
-#include "vm/constants_arm.h"
+#include "vm/constants.h"
 
 namespace dart {
 
 class Isolate;
 class Mutex;
-class RawObject;
 class SimulatorSetjmpBuffer;
 class Thread;
 
@@ -79,6 +78,8 @@ class Simulator {
 
   // High address.
   uword stack_base() const { return stack_base_; }
+  // Limit for StackOverflowError.
+  uword overflow_stack_limit() const { return overflow_stack_limit_; }
   // Low address.
   uword stack_limit() const { return stack_limit_; }
 
@@ -107,8 +108,7 @@ class Simulator {
     kRuntimeCall,
     kLeafRuntimeCall,
     kLeafFloatRuntimeCall,
-    kBootstrapNativeCall,
-    kNativeCall
+    kNativeCallWrapper
   };
   static uword RedirectExternalReference(uword function,
                                          CallKind call_kind,
@@ -149,6 +149,7 @@ class Simulator {
   // Simulator support.
   char* stack_;
   uword stack_limit_;
+  uword overflow_stack_limit_;
   uword stack_base_;
   bool pc_modified_;
   uint64_t icount_;

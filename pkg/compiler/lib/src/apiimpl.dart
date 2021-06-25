@@ -11,6 +11,7 @@ import 'package:front_end/src/api_unstable/dart2js.dart'
     show getSupportedLibraryNames;
 
 import '../compiler_new.dart' as api;
+import 'common/metrics.dart' show Metrics, Metric;
 import 'common/tasks.dart' show GenericTask, Measurer;
 import 'common.dart';
 import 'compiler.dart';
@@ -22,7 +23,9 @@ import 'options.dart' show CompilerOptions;
 /// Implements the [Compiler] using a [api.CompilerInput] for supplying the
 /// sources.
 class CompilerImpl extends Compiler {
+  @override
   final Measurer measurer;
+  @override
   api.CompilerInput provider;
   api.CompilerDiagnostics handler;
 
@@ -46,7 +49,11 @@ class CompilerImpl extends Compiler {
     ]);
   }
 
-  void log(message) {
+  void logInfo(String message) {
+    callUserHandler(null, null, null, null, message, api.Diagnostic.INFO);
+  }
+
+  void logVerbose(String message) {
     callUserHandler(
         null, null, null, null, message, api.Diagnostic.VERBOSE_INFO);
   }
@@ -81,6 +88,7 @@ class CompilerImpl extends Compiler {
     return future;
   }
 
+  @override
   Future<bool> run(Uri uri) {
     Duration setupDuration = measurer.elapsedWallClock;
     return selfTask.measureSubtask("impl.run", () {
@@ -88,9 +96,14 @@ class CompilerImpl extends Compiler {
         return super.run(uri);
       }).then((bool success) {
         if (options.verbose) {
-          StringBuffer timings = new StringBuffer();
+          StringBuffer timings = StringBuffer();
           computeTimings(setupDuration, timings);
-          log("$timings");
+          logVerbose('$timings');
+        }
+        if (options.reportPrimaryMetrics || options.reportSecondaryMetrics) {
+          StringBuffer metrics = StringBuffer();
+          collectMetrics(metrics);
+          logInfo('$metrics');
         }
         return success;
       });
@@ -146,6 +159,32 @@ class CompilerImpl extends Compiler {
         ' (${percent.toStringAsFixed(2)}%)');
   }
 
+  void collectMetrics(StringBuffer buffer) {
+    buffer.writeln('Metrics:');
+    for (final task in tasks) {
+      Metrics metrics = task.metrics;
+      String namespace = metrics.namespace;
+      if (namespace == '') {
+        namespace =
+            task.name.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '_');
+      }
+      void report(Metric metric) {
+        buffer
+            .writeln('  ${namespace}.${metric.name}: ${metric.formatValue()}');
+      }
+
+      for (final metric in metrics.primary) {
+        report(metric);
+      }
+      if (options.reportSecondaryMetrics) {
+        for (final metric in metrics.secondary) {
+          report(metric);
+        }
+      }
+    }
+  }
+
+  @override
   void reportDiagnostic(DiagnosticMessage message,
       List<DiagnosticMessage> infos, api.Diagnostic kind) {
     _reportDiagnosticMessage(message, kind);
@@ -193,11 +232,14 @@ class CompilerImpl extends Compiler {
 
 class _Environment implements Environment {
   final Map<String, String> definitions;
+  Map<String, String> _completeMap;
   Set<String> supportedLibraries;
 
   _Environment(this.definitions);
 
+  @override
   String valueOf(String name) {
+    if (_completeMap != null) return _completeMap[name];
     var result = definitions[name];
     if (result != null || definitions.containsKey(name)) return result;
     if (!name.startsWith(_dartLibraryEnvironmentPrefix)) return null;
@@ -208,6 +250,22 @@ class _Environment implements Environment {
     if (libraryName.startsWith("_")) return null;
     if (supportedLibraries.contains(libraryName)) return "true";
     return null;
+  }
+
+  @override
+  Map<String, String> toMap() {
+    if (_completeMap == null) {
+      _completeMap = new Map<String, String>.from(definitions);
+      for (String libraryName in supportedLibraries) {
+        if (!libraryName.startsWith("_")) {
+          String key = '${_dartLibraryEnvironmentPrefix}${libraryName}';
+          if (!definitions.containsKey(key)) {
+            _completeMap[key] = "true";
+          }
+        }
+      }
+    }
+    return _completeMap;
   }
 }
 

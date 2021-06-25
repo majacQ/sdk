@@ -2,11 +2,12 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library test.repeated_private_anon_mixin_app;
 
 // Regression test for symbol mangling.
 
-@MirrorsUsed(targets: "test.repeated_private_anon_mixin_app")
 import 'dart:mirrors';
 import 'package:expect/expect.dart';
 

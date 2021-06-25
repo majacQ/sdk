@@ -9,7 +9,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'fix_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(ImportLibrarySdkTest);
   });
@@ -20,20 +20,20 @@ class ImportLibrarySdkTest extends FixProcessorTest {
   @override
   FixKind get kind => DartFixKind.IMPORT_LIBRARY_SDK;
 
-  test_alreadyImported_sdk() async {
-    await resolveTestUnit('''
+  Future<void> test_alreadyImported_sdk() async {
+    await resolveTestCode('''
 import 'dart:collection' show HashMap;
 main() {
-  HashMap s = null;
-  LinkedHashMap f = null;
+  HashMap? s = null;
+  LinkedHashMap? f = null;
   print('\$s \$f');
 }
 ''');
     await assertNoFix();
   }
 
-  test_withClass_asExpression() async {
-    await resolveTestUnit('''
+  Future<void> test_withClass_asExpression() async {
+    await resolveTestCode('''
 main(p) {
   p as HashMap;
 }
@@ -47,8 +47,30 @@ main(p) {
 ''');
   }
 
-  test_withClass_instanceCreation_explicitNew() async {
-    await resolveTestUnit('''
+  Future<void> test_withClass_extends() async {
+    await resolveTestCode('''
+class MyCompleter extends Completer<String> {}
+''');
+    await assertHasFix('''
+import 'dart:async';
+
+class MyCompleter extends Completer<String> {}
+''');
+  }
+
+  Future<void> test_withClass_implements() async {
+    await resolveTestCode('''
+class MyCompleter implements Completer<String> {}
+''');
+    await assertHasFix('''
+import 'dart:async';
+
+class MyCompleter implements Completer<String> {}
+''');
+  }
+
+  Future<void> test_withClass_instanceCreation_explicitNew() async {
+    await resolveTestCode('''
 class C {
   foo() {
     new HashMap();
@@ -66,8 +88,9 @@ class C {
 ''');
   }
 
-  test_withClass_instanceCreation_explicitNew_namedConstructor() async {
-    await resolveTestUnit('''
+  Future<void>
+      test_withClass_instanceCreation_explicitNew_namedConstructor() async {
+    await resolveTestCode('''
 class C {
   foo() {
     new Completer.sync(0);
@@ -85,8 +108,8 @@ class C {
 ''');
   }
 
-  test_withClass_instanceCreation_implicitNew() async {
-    await resolveTestUnit('''
+  Future<void> test_withClass_instanceCreation_implicitNew() async {
+    await resolveTestCode('''
 class C {
   foo() {
     HashMap();
@@ -104,8 +127,9 @@ class C {
 ''');
   }
 
-  test_withClass_instanceCreation_implicitNew_namedConstructor() async {
-    await resolveTestUnit('''
+  Future<void>
+      test_withClass_instanceCreation_implicitNew_namedConstructor() async {
+    await resolveTestCode('''
 class C {
   foo() {
     Completer.sync(0);
@@ -123,8 +147,8 @@ class C {
 ''');
   }
 
-  test_withClass_invocationTarget() async {
-    await resolveTestUnit('''
+  Future<void> test_withClass_invocationTarget() async {
+    await resolveTestCode('''
 main() {
   Timer.run(null);
 }
@@ -138,8 +162,8 @@ main() {
 ''');
   }
 
-  test_withClass_IsExpression() async {
-    await resolveTestUnit('''
+  Future<void> test_withClass_IsExpression() async {
+    await resolveTestCode('''
 main(p) {
   p is Completer;
 }
@@ -153,8 +177,8 @@ main(p) {
 ''');
   }
 
-  test_withClass_itemOfList() async {
-    await resolveTestUnit('''
+  Future<void> test_withClass_itemOfList() async {
+    await resolveTestCode('''
 main() {
   var a = [Completer];
   print(a);
@@ -170,8 +194,8 @@ main() {
 ''');
   }
 
-  test_withClass_itemOfList_inAnnotation() async {
-    await resolveTestUnit('''
+  Future<void> test_withClass_itemOfList_inAnnotation() async {
+    await resolveTestCode('''
 class MyAnnotation {
   const MyAnnotation(a, b);
 }
@@ -187,12 +211,12 @@ class MyAnnotation {
 @MyAnnotation(int, const [Completer])
 main() {}
 ''', errorFilter: (error) {
-      return error.errorCode == StaticWarningCode.UNDEFINED_IDENTIFIER;
+      return error.errorCode == CompileTimeErrorCode.UNDEFINED_IDENTIFIER;
     });
   }
 
-  test_withClass_typeAnnotation() async {
-    await resolveTestUnit('''
+  Future<void> test_withClass_typeAnnotation() async {
+    await resolveTestCode('''
 main() {
   Completer f = null;
   print(f);
@@ -208,8 +232,8 @@ main() {
 ''');
   }
 
-  test_withClass_typeAnnotation_PrefixedIdentifier() async {
-    await resolveTestUnit('''
+  Future<void> test_withClass_typeAnnotation_PrefixedIdentifier() async {
+    await resolveTestCode('''
 main() {
   Timer.run;
 }
@@ -223,8 +247,8 @@ main() {
 ''');
   }
 
-  test_withClass_typeArgument() async {
-    await resolveTestUnit('''
+  Future<void> test_withClass_typeArgument() async {
+    await resolveTestCode('''
 main() {
   List<Completer> completers = [];
   print(completers);
@@ -240,31 +264,42 @@ main() {
 ''');
   }
 
-  test_withTopLevelVariable() async {
-    await resolveTestUnit('''
+  Future<void> test_withClass_with() async {
+    await resolveTestCode('''
+class MyCompleter with Completer<String> {}
+''');
+    await assertHasFix('''
+import 'dart:async';
+
+class MyCompleter with Completer<String> {}
+''');
+  }
+
+  Future<void> test_withTopLevelVariable() async {
+    await resolveTestCode('''
 main() {
-  print(PI);
+  print(pi);
 }
 ''');
     await assertHasFix('''
 import 'dart:math';
 
 main() {
-  print(PI);
+  print(pi);
 }
 ''');
   }
 
-  test_withTopLevelVariable_annotation() async {
-    await resolveTestUnit('''
-@PI
+  Future<void> test_withTopLevelVariable_annotation() async {
+    await resolveTestCode('''
+@pi
 main() {
 }
 ''');
     await assertHasFix('''
 import 'dart:math';
 
-@PI
+@pi
 main() {
 }
 ''');

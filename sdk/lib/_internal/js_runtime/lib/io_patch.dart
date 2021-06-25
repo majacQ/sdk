@@ -73,7 +73,7 @@ class _AsyncDirectoryListerOps {
 @patch
 class _EventHandler {
   @patch
-  static void _sendData(Object sender, SendPort sendPort, int data) {
+  static void _sendData(Object? sender, SendPort sendPort, int data) {
     throw new UnsupportedError("EventHandler._sendData");
   }
 }
@@ -215,6 +215,11 @@ class _RandomAccessFileOps {
 }
 
 @patch
+bool _isDirectIOCapableTypedList(List<int> buffer) {
+  throw UnsupportedError("_isDirectIOCapableTypedList");
+}
+
+@patch
 class _IOCrypto {
   @patch
   static Uint8List getRandomBytes(int count) {
@@ -298,7 +303,7 @@ class _Platform {
 @patch
 class _ProcessUtils {
   @patch
-  static void _exit(int status) {
+  static Never _exit(int status) {
     throw new UnsupportedError("ProcessUtils._exit");
   }
 
@@ -318,7 +323,7 @@ class _ProcessUtils {
   }
 
   @patch
-  static int _pid(Process process) {
+  static int _pid(Process? process) {
     throw new UnsupportedError("ProcessUtils._pid");
   }
 
@@ -345,8 +350,8 @@ class ProcessInfo {
 class Process {
   @patch
   static Future<Process> start(String executable, List<String> arguments,
-      {String workingDirectory,
-      Map<String, String> environment,
+      {String? workingDirectory,
+      Map<String, String>? environment,
       bool includeParentEnvironment: true,
       bool runInShell: false,
       ProcessStartMode mode: ProcessStartMode.normal}) {
@@ -355,8 +360,8 @@ class Process {
 
   @patch
   static Future<ProcessResult> run(String executable, List<String> arguments,
-      {String workingDirectory,
-      Map<String, String> environment,
+      {String? workingDirectory,
+      Map<String, String>? environment,
       bool includeParentEnvironment: true,
       bool runInShell: false,
       Encoding stdoutEncoding: systemEncoding,
@@ -366,8 +371,8 @@ class Process {
 
   @patch
   static ProcessResult runSync(String executable, List<String> arguments,
-      {String workingDirectory,
-      Map<String, String> environment,
+      {String? workingDirectory,
+      Map<String, String>? environment,
       bool includeParentEnvironment: true,
       bool runInShell: false,
       Encoding stdoutEncoding: systemEncoding,
@@ -404,9 +409,16 @@ class InternetAddress {
   }
 
   @patch
-  factory InternetAddress(String address) {
+  factory InternetAddress(String address, {InternetAddressType? type}) {
     throw new UnsupportedError("InternetAddress");
   }
+
+  @patch
+  factory InternetAddress.fromRawAddress(Uint8List rawAddress,
+      {InternetAddressType? type}) {
+    throw new UnsupportedError("InternetAddress.fromRawAddress");
+  }
+
   @patch
   static Future<List<InternetAddress>> lookup(String host,
       {InternetAddressType type: InternetAddressType.any}) {
@@ -417,6 +429,11 @@ class InternetAddress {
   static InternetAddress _cloneWithNewHost(
       InternetAddress address, String host) {
     throw new UnsupportedError("InternetAddress._cloneWithNewHost");
+  }
+
+  @patch
+  static InternetAddress? tryParse(String address) {
+    throw UnsupportedError("InternetAddress.tryParse");
   }
 }
 
@@ -448,7 +465,7 @@ class RawServerSocket {
 @patch
 class ServerSocket {
   @patch
-  static Future<ServerSocket> bind(address, int port,
+  static Future<ServerSocket> _bind(address, int port,
       {int backlog: 0, bool v6Only: false, bool shared: false}) {
     throw new UnsupportedError("ServerSocket.bind");
   }
@@ -457,14 +474,14 @@ class ServerSocket {
 @patch
 class RawSocket {
   @patch
-  static Future<RawSocket> connect(host, int port,
-      {sourceAddress, Duration timeout}) {
+  static Future<RawSocket> connect(dynamic host, int port,
+      {dynamic sourceAddress, Duration? timeout}) {
     throw new UnsupportedError("RawSocket constructor");
   }
 
   @patch
-  static Future<ConnectionTask<RawSocket>> startConnect(host, int port,
-      {sourceAddress}) {
+  static Future<ConnectionTask<RawSocket>> startConnect(dynamic host, int port,
+      {dynamic sourceAddress}) {
     throw new UnsupportedError("RawSocket constructor");
   }
 }
@@ -472,14 +489,14 @@ class RawSocket {
 @patch
 class Socket {
   @patch
-  static Future<Socket> _connect(host, int port,
-      {sourceAddress, Duration timeout}) {
+  static Future<Socket> _connect(dynamic host, int port,
+      {dynamic sourceAddress, Duration? timeout}) {
     throw new UnsupportedError("Socket constructor");
   }
 
   @patch
-  static Future<ConnectionTask<Socket>> _startConnect(host, int port,
-      {sourceAddress}) {
+  static Future<ConnectionTask<Socket>> _startConnect(dynamic host, int port,
+      {dynamic sourceAddress}) {
     throw new UnsupportedError("Socket constructor");
   }
 }
@@ -495,8 +512,16 @@ class SecureSocket {
 @patch
 class RawSynchronousSocket {
   @patch
-  static RawSynchronousSocket connectSync(host, int port) {
+  static RawSynchronousSocket connectSync(dynamic host, int port) {
     throw new UnsupportedError("RawSynchronousSocket.connectSync");
+  }
+}
+
+@patch
+class RawSocketOption {
+  @patch
+  static int _getOptionValue(int key) {
+    throw UnsupportedError("RawSocketOption._getOptionValue");
   }
 }
 
@@ -529,7 +554,7 @@ class X509Certificate {
 @patch
 class RawDatagramSocket {
   @patch
-  static Future<RawDatagramSocket> bind(host, int port,
+  static Future<RawDatagramSocket> bind(dynamic host, int port,
       {bool reuseAddress: true, bool reusePort: false, int ttl: 1}) {
     throw new UnsupportedError("RawDatagramSocket.bind");
   }
@@ -538,7 +563,7 @@ class RawDatagramSocket {
 @patch
 class _SecureFilter {
   @patch
-  factory _SecureFilter() {
+  factory _SecureFilter._() {
     throw new UnsupportedError("_SecureFilter._SecureFilter");
   }
 }
@@ -591,14 +616,14 @@ class RawZLibFilter {
       int windowBits,
       int memLevel,
       int strategy,
-      List<int> dictionary,
+      List<int>? dictionary,
       bool raw) {
     throw new UnsupportedError("_newZLibDeflateFilter");
   }
 
   @patch
   static RawZLibFilter _makeZLibInflateFilter(
-      int windowBits, List<int> dictionary, bool raw) {
+      int windowBits, List<int>? dictionary, bool raw) {
     throw new UnsupportedError("_newZLibInflateFilter");
   }
 }

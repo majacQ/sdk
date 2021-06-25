@@ -16,7 +16,8 @@ enum CallKind {
   Method, // x.foo(..) or foo()
   PropertyGet, // ... x.foo ...
   PropertySet, // x.foo = ...
-  FieldInitializer,
+  FieldInitializer, // run initializer of a field
+  SetFieldInConstructor, // foo = ... in initializer list in a constructor
 }
 
 /// [Selector] encapsulates the way of calling (at the call site).
@@ -38,7 +39,8 @@ abstract class Selector {
   int get hashCode => callKind.hashCode;
 
   @override
-  bool operator ==(other) => other is Selector && other.callKind == callKind;
+  bool operator ==(other) =>
+      identical(this, other) || other is Selector && other.callKind == callKind;
 
   /// Static approximation of Dart return type.
   DartType get staticReturnType {
@@ -49,12 +51,13 @@ abstract class Selector {
       case CallKind.Method:
         return (member is Procedure)
             ? member.function.returnType
-            : const BottomType();
+            : const NeverType.nonNullable();
       case CallKind.PropertyGet:
         return member.getterType;
       case CallKind.PropertySet:
       case CallKind.FieldInitializer:
-        return const BottomType();
+      case CallKind.SetFieldInConstructor:
+        return const NeverType.nonNullable();
     }
     return null;
   }
@@ -71,7 +74,8 @@ abstract class Selector {
       case CallKind.PropertySet:
         return (member is Field) || ((member is Procedure) && member.isSetter);
       case CallKind.FieldInitializer:
-        return (member is Field);
+      case CallKind.SetFieldInConstructor:
+        return member is Field;
     }
     return false;
   }
@@ -83,6 +87,7 @@ abstract class Selector {
       case CallKind.PropertyGet:
         return 'get ';
       case CallKind.PropertySet:
+      case CallKind.SetFieldInConstructor:
         return 'set ';
       case CallKind.FieldInitializer:
         return 'init ';
@@ -97,7 +102,7 @@ class DirectSelector extends Selector {
 
   DirectSelector(this.member, {CallKind callKind = CallKind.Method})
       : super(callKind) {
-    assertx((callKind == CallKind.Method) ||
+    assert((callKind == CallKind.Method) ||
         (callKind == CallKind.PropertyGet) ||
         memberAgreesToCallKind(member));
   }
@@ -107,10 +112,12 @@ class DirectSelector extends Selector {
 
   @override
   bool operator ==(other) =>
+      identical(this, other) ||
       other is DirectSelector && super == (other) && other.member == member;
 
   @override
-  String toString() => 'direct ${_callKindPrefix}[$member]';
+  String toString() => 'direct ${_callKindPrefix}'
+      '[${nodeToText(member)}]';
 }
 
 /// Interface call via known interface target [member].
@@ -125,10 +132,12 @@ class InterfaceSelector extends Selector {
 
   @override
   bool operator ==(other) =>
+      identical(this, other) ||
       other is InterfaceSelector && super == (other) && other.member == member;
 
   @override
-  String toString() => '${_callKindPrefix}[$member]';
+  String toString() => '${_callKindPrefix}'
+      '[${nodeToText(member)}]';
 }
 
 /// Virtual call (using 'this' as a receiver).
@@ -140,10 +149,12 @@ class VirtualSelector extends InterfaceSelector {
   int get hashCode => (super.hashCode + 37) & kHashMask;
 
   @override
-  bool operator ==(other) => other is VirtualSelector && super == (other);
+  bool operator ==(other) =>
+      identical(this, other) || other is VirtualSelector && super == (other);
 
   @override
-  String toString() => 'virtual ${_callKindPrefix}[$member]';
+  String toString() => 'virtual ${_callKindPrefix}'
+      '[${nodeToText(member)}]';
 }
 
 /// Dynamic call.
@@ -163,10 +174,11 @@ class DynamicSelector extends Selector {
 
   @override
   bool operator ==(other) =>
+      identical(this, other) ||
       other is DynamicSelector && super == (other) && other.name == name;
 
   @override
-  String toString() => 'dynamic ${_callKindPrefix}[$name]';
+  String toString() => 'dynamic ${_callKindPrefix}[${nodeToText(name)}]';
 }
 
 /// Arguments passed to a call, including implicit receiver argument.
@@ -174,10 +186,11 @@ class DynamicSelector extends Selector {
 class Args<T extends TypeExpr> {
   final List<T> values;
   final List<String> names;
+
   int _hashCode;
 
   Args(this.values, {this.names = const <String>[]}) {
-    assertx(isSorted(names));
+    assert(isSorted(names));
   }
 
   Args.withReceiver(Args<T> args, T receiver)
@@ -207,6 +220,7 @@ class Args<T extends TypeExpr> {
 
   @override
   bool operator ==(other) {
+    if (identical(this, other)) return true;
     if (other is Args<T> &&
         (this.values.length == other.values.length) &&
         (this.names.length == other.names.length)) {

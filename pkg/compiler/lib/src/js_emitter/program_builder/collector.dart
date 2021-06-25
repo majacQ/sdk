@@ -4,22 +4,16 @@
 
 part of dart2js.js_emitter.program_builder;
 
-/**
- * Generates the code for all used classes in the program. Static fields (even
- * in classes) are ignored, since they can be treated as non-class elements.
- *
- * The code for the containing (used) methods must exist in the `universe`.
- */
+/// Generates the code for all used classes in the program. Static fields (even
+/// in classes) are ignored, since they can be treated as non-class elements.
+///
+/// The code for the containing (used) methods must exist in the `universe`.
 class Collector {
-  final CompilerOptions _options;
   final JCommonElements _commonElements;
   final JElementEnvironment _elementEnvironment;
   final OutputUnitData _outputUnitData;
-  final CodegenWorldBuilder _worldBuilder;
-  // TODO(floitsch): the code-emitter task should not need a namer.
-  final Namer _namer;
+  final CodegenWorld _codegenWorld;
   final Emitter _emitter;
-  final JavaScriptConstantCompiler _constantHandler;
   final NativeData _nativeData;
   final InterceptorData _interceptorData;
   final OneShotInterceptorData _oneShotInterceptorData;
@@ -28,36 +22,30 @@ class Collector {
   final Map<MemberEntity, js.Expression> _generatedCode;
   final Sorter _sorter;
 
-  final Set<ClassEntity> neededClasses = new Set<ClassEntity>();
-  // This field is set in [computeNeededDeclarations].
-  Set<ClassEntity> classesOnlyNeededForRti;
-  final Map<OutputUnit, List<ClassEntity>> outputClassLists =
-      new Map<OutputUnit, List<ClassEntity>>();
-  final Map<OutputUnit, List<ConstantValue>> outputConstantLists =
-      new Map<OutputUnit, List<ConstantValue>>();
-  final Map<OutputUnit, List<MemberEntity>> outputStaticLists =
-      new Map<OutputUnit, List<MemberEntity>>();
-  final Map<OutputUnit, List<FieldEntity>> outputStaticNonFinalFieldLists =
-      new Map<OutputUnit, List<FieldEntity>>();
-  final Map<OutputUnit, Set<LibraryEntity>> outputLibraryLists =
-      new Map<OutputUnit, Set<LibraryEntity>>();
+  final Set<ClassEntity> neededClasses = {};
+  final Set<ClassEntity> neededClassTypes = {};
+  final Set<ClassEntity> classesOnlyNeededForConstructor = {};
+  final Map<OutputUnit, List<ClassEntity>> outputClassLists = {};
+  final Map<OutputUnit, List<ClassEntity>> outputClassTypeLists = {};
+  final Map<OutputUnit, List<ConstantValue>> outputConstantLists = {};
+  final Map<OutputUnit, List<MemberEntity>> outputStaticLists = {};
+  final Map<OutputUnit, List<FieldEntity>> outputStaticNonFinalFieldLists = {};
+  final Map<OutputUnit, List<FieldEntity>> outputLazyStaticFieldLists = {};
+  final Map<OutputUnit, Set<LibraryEntity>> outputLibraryLists = {};
 
   /// True, if the output contains a constant list.
   ///
   /// This flag is updated in [computeNeededConstants].
   bool outputContainsConstantList = false;
 
-  final List<ClassEntity> nativeClassesAndSubclasses = <ClassEntity>[];
+  final List<ClassEntity> nativeClassesAndSubclasses = [];
 
   Collector(
-      this._options,
       this._commonElements,
       this._elementEnvironment,
       this._outputUnitData,
-      this._worldBuilder,
-      this._namer,
+      this._codegenWorld,
       this._emitter,
-      this._constantHandler,
       this._nativeData,
       this._interceptorData,
       this._oneShotInterceptorData,
@@ -67,8 +55,8 @@ class Collector {
       this._sorter);
 
   Set<ClassEntity> computeInterceptorsReferencedFromConstants() {
-    Set<ClassEntity> classes = new Set<ClassEntity>();
-    List<ConstantValue> constants = _worldBuilder.getConstantsForEmission();
+    Set<ClassEntity> classes = {};
+    Iterable<ConstantValue> constants = _codegenWorld.getConstantsForEmission();
     for (ConstantValue constant in constants) {
       if (constant is InterceptorConstantValue) {
         InterceptorConstantValue interceptorConstant = constant;
@@ -78,23 +66,20 @@ class Collector {
     return classes;
   }
 
-  /**
-   * Return a function that returns true if its argument is a class
-   * that needs to be emitted.
-   */
+  /// Return a function that returns true if its argument is a class
+  /// that needs to be emitted.
   Function computeClassFilter(Iterable<ClassEntity> backendTypeHelpers) {
-    Set<ClassEntity> unneededClasses = new Set<ClassEntity>();
+    Set<ClassEntity> unneededClasses = {};
     // The [Bool] class is not marked as abstract, but has a factory
     // constructor that always throws. We never need to emit it.
     unneededClasses.add(_commonElements.boolClass);
 
     // Go over specialized interceptors and then constants to know which
     // interceptors are needed.
-    Set<ClassEntity> needed = new Set<ClassEntity>();
-    for (js.Name name
-        in _oneShotInterceptorData.specializedGetInterceptorNames) {
-      needed.addAll(
-          _oneShotInterceptorData.getSpecializedGetInterceptorsFor(name));
+    Set<ClassEntity> needed = {};
+    for (SpecializedGetInterceptor interceptor
+        in _oneShotInterceptorData.specializedGetInterceptors) {
+      needed.addAll(interceptor.classes);
     }
 
     // Add interceptors referenced by constants.
@@ -117,7 +102,7 @@ class Collector {
   // Return the classes that are just helpers for the backend's type system.
   static Iterable<ClassEntity> getBackendTypeHelpers(
       JCommonElements commonElements) {
-    return <ClassEntity>[
+    return [
       commonElements.jsMutableArrayClass,
       commonElements.jsFixedArrayClass,
       commonElements.jsExtendableArrayClass,
@@ -129,12 +114,10 @@ class Collector {
     ];
   }
 
-  /**
-   * Compute all the constants that must be emitted.
-   */
+  /// Compute all the constants that must be emitted.
   void computeNeededConstants() {
-    List<ConstantValue> constants =
-        _worldBuilder.getConstantsForEmission(_emitter.compareConstants);
+    Iterable<ConstantValue> constants =
+        _codegenWorld.getConstantsForEmission(_emitter.compareConstants);
     for (ConstantValue constant in constants) {
       if (_emitter.isConstantInlinedOrAlreadyEmitted(constant)) continue;
 
@@ -147,9 +130,7 @@ class Collector {
         // TODO(sigurdm): We should track those constants.
         constantUnit = _outputUnitData.mainOutputUnit;
       }
-      outputConstantLists
-          .putIfAbsent(constantUnit, () => new List<ConstantValue>())
-          .add(constant);
+      outputConstantLists.putIfAbsent(constantUnit, () => []).add(constant);
     }
   }
 
@@ -162,22 +143,15 @@ class Collector {
     Set<ClassEntity> instantiatedClasses =
         // TODO(johnniwinther): This should be accessed from a codegen closed
         // world.
-        _worldBuilder.directlyInstantiatedClasses
+        _codegenWorld.directlyInstantiatedClasses
             .where(computeClassFilter(backendTypeHelpers))
             .toSet();
 
-    void addClassWithSuperclasses(ClassEntity cls) {
-      neededClasses.add(cls);
-      for (ClassEntity superclass = _elementEnvironment.getSuperClass(cls);
-          superclass != null;
-          superclass = _elementEnvironment.getSuperClass(superclass)) {
-        neededClasses.add(superclass);
-      }
-    }
-
     void addClassesWithSuperclasses(Iterable<ClassEntity> classes) {
       for (ClassEntity cls in classes) {
-        addClassWithSuperclasses(cls);
+        neededClasses.add(cls);
+        _elementEnvironment.forEachSuperClass(
+            cls, (superClass) => neededClasses.add(superClass));
       }
     }
 
@@ -191,63 +165,44 @@ class Collector {
         .toSet();
     neededClasses.addAll(mixinClasses);
 
-    // 3. Find all classes needed for rti.
-    // It is important that this is the penultimate step, at this point,
-    // neededClasses must only contain classes that have been resolved and
-    // codegen'd. The rtiNeededClasses may contain additional classes, but
-    // these are thought to not have been instantiated, so we need to be able
-    // to identify them later and make sure we only emit "empty shells" without
-    // fields, etc.
-    classesOnlyNeededForRti = new Set<ClassEntity>();
+    // 3. Add classes only needed for their constructors.
+    for (var cls in _codegenWorld.constructorReferences) {
+      if (neededClasses.add(cls)) {
+        classesOnlyNeededForConstructor.add(cls);
+      }
+    }
+
+    // 4. Find all class types needed for rti.
     for (ClassEntity cls in _rtiNeededClasses) {
       if (backendTypeHelpers.contains(cls)) continue;
-      while (cls != null && !neededClasses.contains(cls)) {
-        if (!classesOnlyNeededForRti.add(cls)) break;
+      while (cls != null && neededClassTypes.add(cls)) {
         cls = _elementEnvironment.getSuperClass(cls);
       }
     }
 
-    neededClasses.addAll(classesOnlyNeededForRti);
-
-    // TODO(18175, floitsch): remove once issue 18175 is fixed.
-    if (neededClasses.contains(_commonElements.jsIntClass)) {
-      neededClasses.add(_commonElements.intClass);
-    }
-    if (neededClasses.contains(_commonElements.jsDoubleClass)) {
-      neededClasses.add(_commonElements.doubleClass);
-    }
-    if (neededClasses.contains(_commonElements.jsNumberClass)) {
-      neededClasses.add(_commonElements.numClass);
-    }
-    if (neededClasses.contains(_commonElements.jsStringClass)) {
-      neededClasses.add(_commonElements.stringClass);
-    }
-    if (neededClasses.contains(_commonElements.jsBoolClass)) {
-      neededClasses.add(_commonElements.boolClass);
-    }
-    if (neededClasses.contains(_commonElements.jsArrayClass)) {
-      neededClasses.add(_commonElements.listClass);
-    }
-
-    // 4. Finally, sort the classes.
-    List<ClassEntity> sortedClasses = _sorter.sortClasses(neededClasses);
-
-    for (ClassEntity cls in sortedClasses) {
+    // 5. Sort classes and add them to their respective OutputUnits.
+    for (ClassEntity cls in _sorter.sortClasses(neededClasses)) {
       if (_nativeData.isNativeOrExtendsNative(cls) &&
-          !classesOnlyNeededForRti.contains(cls)) {
+          !classesOnlyNeededForConstructor.contains(cls)) {
         // For now, native classes and related classes cannot be deferred.
         nativeClassesAndSubclasses.add(cls);
         assert(!_outputUnitData.isDeferredClass(cls), failedAt(cls));
         outputClassLists
-            .putIfAbsent(
-                _outputUnitData.mainOutputUnit, () => new List<ClassEntity>())
+            .putIfAbsent(_outputUnitData.mainOutputUnit, () => [])
             .add(cls);
       } else {
         outputClassLists
-            .putIfAbsent(_outputUnitData.outputUnitForClass(cls),
-                () => new List<ClassEntity>())
+            .putIfAbsent(_outputUnitData.outputUnitForClass(cls), () => [])
             .add(cls);
       }
+    }
+
+    // 6. Sort classes needed for type checking and then add them to their
+    // respective OutputUnits.
+    for (ClassEntity cls in _sorter.sortClasses(neededClassTypes)) {
+      outputClassTypeLists
+          .putIfAbsent(_outputUnitData.outputUnitForClassType(cls), () => [])
+          .add(cls);
     }
   }
 
@@ -260,8 +215,7 @@ class Collector {
 
     for (MemberEntity member in _sorter.sortMembers(elements)) {
       List<MemberEntity> list = outputStaticLists.putIfAbsent(
-          _outputUnitData.outputUnitForMember(member),
-          () => new List<MemberEntity>());
+          _outputUnitData.outputUnitForMember(member), () => []);
       list.add(member);
     }
   }
@@ -269,37 +223,66 @@ class Collector {
   void computeNeededStaticNonFinalFields() {
     addToOutputUnit(FieldEntity element) {
       List<FieldEntity> list = outputStaticNonFinalFieldLists.putIfAbsent(
-          // ignore: UNNECESSARY_CAST
-          _outputUnitData.outputUnitForMember(element as MemberEntity),
-          () => new List<FieldEntity>());
+          _outputUnitData.outputUnitForMember(element), () => []);
       list.add(element);
     }
 
-    Iterable<FieldEntity> fields =
-        // TODO(johnniwinther): This should be accessed from a codegen closed
-        // world.
-        _worldBuilder.allReferencedStaticFields.where((FieldEntity field) {
-      return field.isAssignable &&
-          _worldBuilder.hasConstantFieldInitializer(field);
+    List<FieldEntity> eagerFields = [];
+    _codegenWorld.forEachStaticField((FieldEntity field) {
+      if (_closedWorld.fieldAnalysis.getFieldData(field).isEager) {
+        eagerFields.add(field);
+      }
     });
 
-    _sorter.sortMembers(fields).forEach((MemberEntity e) => addToOutputUnit(e));
+    eagerFields.sort((FieldEntity a, FieldEntity b) {
+      FieldAnalysisData aFieldData = _closedWorld.fieldAnalysis.getFieldData(a);
+      FieldAnalysisData bFieldData = _closedWorld.fieldAnalysis.getFieldData(b);
+      int aIndex = aFieldData.eagerCreationIndex;
+      int bIndex = bFieldData.eagerCreationIndex;
+      if (aIndex != null && bIndex != null) {
+        return aIndex.compareTo(bIndex);
+      } else if (aIndex != null) {
+        // Sort [b] before [a].
+        return 1;
+      } else if (bIndex != null) {
+        // Sort [a] before [b].
+        return -1;
+      } else {
+        return _sorter.compareMembersByLocation(a, b);
+      }
+    });
+    eagerFields.forEach(addToOutputUnit);
+  }
+
+  void computeNeededLazyStaticFields() {
+    List<FieldEntity> lazyFields = [];
+    _codegenWorld.forEachStaticField((FieldEntity field) {
+      if (_closedWorld.fieldAnalysis.getFieldData(field).isLazy) {
+        lazyFields.add(field);
+      }
+    });
+
+    for (FieldEntity field in _sorter.sortMembers(lazyFields)) {
+      OutputUnit unit = _outputUnitData.outputUnitForMember(field);
+      (outputLazyStaticFieldLists[unit] ??= []).add(field);
+    }
   }
 
   void computeNeededLibraries() {
     _generatedCode.keys.forEach((MemberEntity element) {
       OutputUnit unit = _outputUnitData.outputUnitForMember(element);
       LibraryEntity library = element.library;
-      outputLibraryLists
-          .putIfAbsent(unit, () => new Set<LibraryEntity>())
-          .add(library);
+      outputLibraryLists.putIfAbsent(unit, () => {}).add(library);
     });
     neededClasses.forEach((ClassEntity element) {
       OutputUnit unit = _outputUnitData.outputUnitForClass(element);
       LibraryEntity library = element.library;
-      outputLibraryLists
-          .putIfAbsent(unit, () => new Set<LibraryEntity>())
-          .add(library);
+      outputLibraryLists.putIfAbsent(unit, () => {}).add(library);
+    });
+    neededClassTypes.forEach((ClassEntity element) {
+      OutputUnit unit = _outputUnitData.outputUnitForClassType(element);
+      LibraryEntity library = element.library;
+      outputLibraryLists.putIfAbsent(unit, () => {}).add(library);
     });
   }
 
@@ -308,6 +291,7 @@ class Collector {
     computeNeededConstants();
     computeNeededStatics();
     computeNeededStaticNonFinalFields();
+    computeNeededLazyStaticFields();
     computeNeededLibraries();
   }
 }

@@ -5,8 +5,11 @@
 /// Defines wrapper class around incremental compiler to support
 /// the flow, where incremental deltas can be rejected by VM.
 import 'dart:async';
+import 'dart:developer';
 
 import 'package:front_end/src/api_unstable/vm.dart';
+import 'package:kernel/class_hierarchy.dart' show ClassHierarchy;
+import 'package:kernel/core_types.dart' show CoreTypes;
 import 'package:kernel/kernel.dart';
 
 const String kDebugProcedureName = ":Eval";
@@ -16,26 +19,39 @@ const String kDebugProcedureName = ":Eval";
 /// accepted.
 class IncrementalCompiler {
   IncrementalKernelGenerator _generator;
+  IncrementalSerializer incrementalSerializer;
 
-  // Component that reflect current state of the compiler, which has not
-  // been yet accepted by the client. Is [null] if no compilation was done
-  // since last accept/reject acknowledgement by the client.
-  Component _candidate;
   // Component that reflect the state that was most recently accepted by the
   // client. Is [null], if no compilation results were accepted by the client.
   Component _lastKnownGood;
-
   List<Component> _pendingDeltas;
   CompilerOptions _compilerOptions;
   bool initialized = false;
   bool fullComponent = false;
   Uri initializeFromDillUri;
   Uri _entryPoint;
+  final bool forExpressionCompilationOnly;
+
+  Uri get entryPoint => _entryPoint;
+  IncrementalKernelGenerator get generator => _generator;
+  Component get lastKnownGoodComponent => _lastKnownGood;
 
   IncrementalCompiler(this._compilerOptions, this._entryPoint,
-      {this.initializeFromDillUri}) {
-    _generator = new IncrementalKernelGenerator(
-        _compilerOptions, _entryPoint, initializeFromDillUri);
+      {this.initializeFromDillUri, bool incrementalSerialization: true})
+      : forExpressionCompilationOnly = false {
+    if (incrementalSerialization) {
+      incrementalSerializer = new IncrementalSerializer();
+    }
+    _generator = new IncrementalKernelGenerator(_compilerOptions, _entryPoint,
+        initializeFromDillUri, false, incrementalSerializer);
+    _pendingDeltas = <Component>[];
+  }
+
+  IncrementalCompiler.forExpressionCompilationOnly(
+      Component component, this._compilerOptions, this._entryPoint)
+      : forExpressionCompilationOnly = true {
+    _generator = new IncrementalKernelGenerator.forExpressionCompilationOnly(
+        _compilerOptions, _entryPoint, component);
     _pendingDeltas = <Component>[];
   }
 
@@ -44,71 +60,113 @@ class IncrementalCompiler {
   /// If [entryPoint] is specified, that points to new entry point for the
   /// compilation. Otherwise, previously set entryPoint is used.
   Future<Component> compile({Uri entryPoint}) async {
-    Component component = await _generator.computeDelta(
-        entryPoint: entryPoint, fullComponent: fullComponent);
-    initialized = true;
-    fullComponent = false;
-    final bool firstDelta = _pendingDeltas.isEmpty;
-    _pendingDeltas.add(component);
-    if (!firstDelta) {
-      // If more than one delta is pending, we need to combine them.
-      Procedure mainMethod;
-      Map<Uri, Library> combined = <Uri, Library>{};
-      for (Component delta in _pendingDeltas) {
-        if (delta.mainMethod != null) {
-          mainMethod = delta.mainMethod;
-        }
-        for (Library library in delta.libraries) {
-          combined[library.importUri] = library;
-        }
-      }
-      // TODO(vegorov) this needs to merge metadata repositories from deltas.
-      component = new Component(libraries: combined.values.toList())
-        ..mainMethod = mainMethod;
+    final task = new TimelineTask();
+    try {
+      task.start("IncrementalCompiler.compile");
+      _entryPoint = entryPoint ?? _entryPoint;
+      List<Uri> entryPoints;
+      if (entryPoint != null) entryPoints = [entryPoint];
+      Component component = await _generator.computeDelta(
+          entryPoints: entryPoints, fullComponent: fullComponent);
+      initialized = true;
+      fullComponent = false;
+      _pendingDeltas.add(component);
+      return _combinePendingDeltas(false);
+    } finally {
+      task.finish();
     }
-    _candidate = component;
-    return component;
   }
+
+  _combinePendingDeltas(bool includePlatform) {
+    Procedure mainMethod;
+    NonNullableByDefaultCompiledMode compilationMode;
+    Map<Uri, Library> combined = <Uri, Library>{};
+    Map<Uri, Source> uriToSource = new Map<Uri, Source>();
+    for (Component delta in _pendingDeltas) {
+      if (delta.mainMethod != null) {
+        mainMethod = delta.mainMethod;
+      }
+      compilationMode = delta.mode;
+      uriToSource.addAll(delta.uriToSource);
+      for (Library library in delta.libraries) {
+        bool isPlatform =
+            library.importUri.scheme == "dart" && !library.isSynthetic;
+        if (!includePlatform && isPlatform) continue;
+        combined[library.importUri] = library;
+      }
+    }
+
+    // TODO(vegorov) this needs to merge metadata repositories from deltas.
+    return new Component(
+        libraries: combined.values.toList(), uriToSource: uriToSource)
+      ..setMainMethodAndMode(mainMethod?.reference, true, compilationMode);
+  }
+
+  CoreTypes getCoreTypes() => _generator.getCoreTypes();
+  ClassHierarchy getClassHierarchy() => _generator.getClassHierarchy();
 
   /// This lets incremental compiler know that results of last [compile] call
   /// were accepted, don't need to be included into subsequent [compile] calls
   /// results.
   accept() {
-    _pendingDeltas.clear();
-
+    if (forExpressionCompilationOnly) {
+      throw new StateError("Incremental compiler created for expression "
+          "compilation only; cannot accept");
+    }
     Map<Uri, Library> combined = <Uri, Library>{};
+    Map<Uri, Source> uriToSource = <Uri, Source>{};
+
     if (_lastKnownGood != null) {
       // TODO(aam): Figure out how to skip no-longer-used libraries from
       // [_lastKnownGood] libraries.
       for (Library library in _lastKnownGood.libraries) {
         combined[library.importUri] = library;
       }
-    }
-    for (Library library in _candidate.libraries) {
-      combined[library.importUri] = library;
-    }
-    _lastKnownGood = new Component(
-      libraries: combined.values.toList(),
-      uriToSource: _candidate.uriToSource,
-    )..mainMethod = _candidate.mainMethod;
-    for (final repo in _candidate.metadata.values) {
-      _lastKnownGood.addMetadataRepository(repo);
+      uriToSource.addAll(_lastKnownGood.uriToSource);
     }
 
-    _candidate = null;
+    Component candidate = _combinePendingDeltas(true);
+    for (Library library in candidate.libraries) {
+      combined[library.importUri] = library;
+    }
+    uriToSource.addAll(candidate.uriToSource);
+
+    _lastKnownGood = new Component(
+      libraries: combined.values.toList(),
+      uriToSource: uriToSource,
+    )..setMainMethodAndMode(
+        candidate.mainMethod?.reference, true, candidate.mode);
+    for (final repo in candidate.metadata.values) {
+      _lastKnownGood.addMetadataRepository(repo);
+    }
+    _pendingDeltas.clear();
   }
 
   /// This lets incremental compiler know that results of last [compile] call
   /// were rejected. Subsequent [compile] or [compileExpression] calls need to
   /// be processed without changes picked up by rejected [compile] call.
   reject() async {
+    if (forExpressionCompilationOnly) {
+      throw new StateError("Incremental compiler created for expression "
+          "compilation only; cannot reject");
+    }
     _pendingDeltas.clear();
-    _candidate = null;
     // Need to reset and warm up compiler so that expression evaluation requests
     // are processed in that known good state.
-    _generator = new IncrementalKernelGenerator.fromComponent(
-        _compilerOptions, _entryPoint, _lastKnownGood);
-    await _generator.computeDelta(entryPoint: _entryPoint);
+    if (incrementalSerializer != null) {
+      incrementalSerializer = new IncrementalSerializer();
+    }
+    // Make sure the last known good component is linked to itself, i.e. if the
+    // rejected delta was an "advanced incremental recompilation" that updated
+    // old libraries to point to a new library (that we're now rejecting), make
+    // sure it's "updated back".
+    // Note that if accept was never called [_lastKnownGood] is null (and
+    // loading from it below is basically nonsense, it will just start over).
+    _lastKnownGood?.relink();
+
+    _generator = new IncrementalKernelGenerator.fromComponent(_compilerOptions,
+        _entryPoint, _lastKnownGood, false, incrementalSerializer);
+    await _generator.computeDelta(entryPoints: [_entryPoint]);
   }
 
   /// This tells incremental compiler that it needs rescan [uri] file during

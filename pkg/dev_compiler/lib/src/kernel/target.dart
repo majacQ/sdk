@@ -2,24 +2,60 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import 'dart:collection';
-import 'dart:core' hide MapEntry;
-import 'package:kernel/kernel.dart';
-import 'package:kernel/core_types.dart';
+
+import 'package:_fe_analyzer_shared/src/messages/codes.dart'
+    show Message, LocatedMessage;
+import 'package:_js_interop_checks/js_interop_checks.dart';
+import 'package:_js_interop_checks/src/transformations/js_util_optimizer.dart';
 import 'package:kernel/class_hierarchy.dart';
+import 'package:kernel/core_types.dart';
+import 'package:kernel/kernel.dart';
+import 'package:kernel/reference_from_index.dart';
+import 'package:kernel/target/changed_structure_notifier.dart';
 import 'package:kernel/target/targets.dart';
+import 'package:kernel/transformations/track_widget_constructor_locations.dart';
+
+import 'constants.dart' show DevCompilerConstantsBackend;
 import 'kernel_helpers.dart';
 
 /// A kernel [Target] to configure the Dart Front End for dartdevc.
 class DevCompilerTarget extends Target {
-  ClassHierarchy hierarchy;
+  DevCompilerTarget(this.flags);
 
-  bool get legacyMode => false;
+  @override
+  final TargetFlags flags;
 
+  WidgetCreatorTracker _widgetTracker;
+
+  Map<String, Class> _nativeClasses;
+
+  @override
   bool get enableSuperMixins => true;
 
+  @override
+  int get enabledLateLowerings => LateLowering.all;
+
+  @override
+  bool get supportsLateLoweringSentinel => false;
+
+  @override
+  bool get useStaticFieldLowering => false;
+
+  // TODO(johnniwinther,sigmund): Remove this when js-interop handles getter
+  //  calls encoded with an explicit property get or disallows getter calls.
+  @override
+  bool get supportsExplicitGetterCalls => false;
+
+  @override
+  bool get supportsNewMethodInvocationEncoding => true;
+
+  @override
   String get name => 'dartdevc';
 
+  @override
   List<String> get extraRequiredLibraries => const [
         'dart:_runtime',
         'dart:_debugger',
@@ -28,7 +64,6 @@ class DevCompilerTarget extends Target {
         'dart:_internal',
         'dart:_isolate_helper',
         'dart:_js_helper',
-        'dart:_js_mirrors',
         'dart:_js_primitives',
         'dart:_metadata',
         'dart:_native_typed_data',
@@ -41,7 +76,6 @@ class DevCompilerTarget extends Target {
         'dart:js',
         'dart:js_util',
         'dart:math',
-        'dart:mirrors',
         'dart:typed_data',
         'dart:indexed_db',
         'dart:html',
@@ -52,13 +86,57 @@ class DevCompilerTarget extends Target {
         'dart:web_sql'
       ];
 
+  // The libraries required to be indexed via CoreTypes.
   @override
-  bool mayDefineRestrictedType(Uri uri) =>
-      uri.scheme == 'dart' &&
-      (uri.path == 'core' || uri.path == '_interceptors');
+  List<String> get extraIndexedLibraries => const [
+        'dart:async',
+        'dart:collection',
+        'dart:html',
+        'dart:indexed_db',
+        'dart:js',
+        'dart:js_util',
+        'dart:math',
+        'dart:svg',
+        'dart:web_audio',
+        'dart:web_gl',
+        'dart:web_sql',
+        'dart:_foreign_helper',
+        'dart:_interceptors',
+        'dart:_js_helper',
+        'dart:_native_typed_data',
+        'dart:_runtime',
+      ];
 
   @override
-  bool enableNative(Uri uri) => uri.scheme == 'dart';
+  bool mayDefineRestrictedType(Uri uri) =>
+      uri.isScheme('dart') &&
+      (uri.path == 'core' ||
+          uri.path == 'typed_data' ||
+          uri.path == '_interceptors' ||
+          uri.path == '_native_typed_data');
+
+  /// Returns [true] if [uri] represents a test script has been whitelisted to
+  /// import private platform libraries.
+  ///
+  /// Unit tests for the dart:_runtime library have imports like this. It is
+  /// only allowed from a specific SDK test directory or through the modular
+  /// test framework.
+  bool _allowedTestLibrary(Uri uri) {
+    // Multi-root scheme used by modular test framework.
+    if (uri.scheme == 'dev-dart-app') return true;
+    return allowedNativeTest(uri);
+  }
+
+  bool _allowedDartLibrary(Uri uri) => uri.scheme == 'dart';
+
+  @override
+  bool enableNative(Uri uri) =>
+      _allowedTestLibrary(uri) || _allowedDartLibrary(uri);
+
+  @override
+  bool allowPlatformPrivateLibraryAccess(Uri importer, Uri imported) =>
+      super.allowPlatformPrivateLibraryAccess(importer, imported) ||
+      _allowedTestLibrary(importer);
 
   @override
   bool get nativeExtensionExpectsString => false;
@@ -70,12 +148,40 @@ class DevCompilerTarget extends Target {
   bool get enableNoSuchMethodForwarders => true;
 
   @override
-  void performModularTransformationsOnLibraries(Component component,
-      CoreTypes coreTypes, ClassHierarchy hierarchy, List<Library> libraries,
-      {void logger(String msg)}) {
-    this.hierarchy = hierarchy;
+  void performModularTransformationsOnLibraries(
+      Component component,
+      CoreTypes coreTypes,
+      ClassHierarchy hierarchy,
+      List<Library> libraries,
+      Map<String, String> environmentDefines,
+      DiagnosticReporter diagnosticReporter,
+      ReferenceFromIndex referenceFromIndex,
+      {void Function(String msg) logger,
+      ChangedStructureNotifier changedStructureNotifier}) {
+    _nativeClasses ??= JsInteropChecks.getNativeClasses(component);
+    var jsUtilOptimizer = JsUtilOptimizer(coreTypes, hierarchy);
     for (var library in libraries) {
       _CovarianceTransformer(library).transform();
+      jsUtilOptimizer.visitLibrary(library);
+      JsInteropChecks(
+              coreTypes,
+              diagnosticReporter as DiagnosticReporter<Message, LocatedMessage>,
+              _nativeClasses)
+          .visitLibrary(library);
+    }
+  }
+
+  @override
+  void performPreConstantEvaluationTransformations(
+      Component component,
+      CoreTypes coreTypes,
+      List<Library> libraries,
+      DiagnosticReporter diagnosticReporter,
+      {void Function(String msg) logger,
+      ChangedStructureNotifier changedStructureNotifier}) {
+    if (flags.trackWidgetCreation) {
+      _widgetTracker ??= WidgetCreatorTracker();
+      _widgetTracker.transform(component, libraries, changedStructureNotifier);
     }
   }
 
@@ -94,7 +200,7 @@ class DevCompilerTarget extends Target {
       var ctor = coreTypes.index
           .getClass('dart:core', '_Invocation')
           .constructors
-          .firstWhere((c) => c.name.name == name);
+          .firstWhere((c) => c.name.text == name);
       return ConstructorInvocation(ctor, Arguments(positional));
     }
 
@@ -102,27 +208,22 @@ class DevCompilerTarget extends Target {
       return createInvocation('getter', [SymbolLiteral(name.substring(4))]);
     }
     if (name.startsWith('set:')) {
-      return createInvocation('setter', [
-        SymbolLiteral(name.substring(4) + '='),
-        arguments.positional.single
-      ]);
+      return createInvocation('setter',
+          [SymbolLiteral(name.substring(4)), arguments.positional.single]);
     }
-    var ctorArgs = <Expression>[SymbolLiteral(name)];
-    bool isGeneric = arguments.types.isNotEmpty;
-    if (isGeneric) {
-      ctorArgs.add(
-          ListLiteral(arguments.types.map((t) => TypeLiteral(t)).toList()));
-    } else {
-      ctorArgs.add(NullLiteral());
-    }
-    ctorArgs.add(ListLiteral(arguments.positional));
-    if (arguments.named.isNotEmpty) {
-      ctorArgs.add(MapLiteral(
-          arguments.named
-              .map((n) => MapEntry(SymbolLiteral(n.name), n.value))
-              .toList(),
-          keyType: coreTypes.symbolClass.rawType));
-    }
+    var ctorArgs = <Expression>[
+      SymbolLiteral(name),
+      if (arguments.types.isNotEmpty)
+        ListLiteral([for (var t in arguments.types) TypeLiteral(t)])
+      else
+        NullLiteral(),
+      ListLiteral(arguments.positional),
+      if (arguments.named.isNotEmpty)
+        MapLiteral([
+          for (var n in arguments.named)
+            MapLiteralEntry(SymbolLiteral(n.name), n.value)
+        ], keyType: coreTypes.symbolLegacyRawType),
+    ];
     return createInvocation('method', ctorArgs);
   }
 
@@ -142,13 +243,17 @@ class DevCompilerTarget extends Target {
     // TODO(sigmund): implement;
     return InvalidExpression(null);
   }
+
+  @override
+  ConstantsBackend constantsBackend(CoreTypes coreTypes) =>
+      const DevCompilerConstantsBackend();
 }
 
 /// Analyzes a component to determine if any covariance checks in private
 /// members can be eliminated, and adjusts the flags to remove those checks.
 ///
 /// See [_CovarianceTransformer.transform].
-class _CovarianceTransformer extends RecursiveVisitor<void> {
+class _CovarianceTransformer extends RecursiveVisitor {
   /// The set of private instance members in [_library] that (potentially) need
   /// covariance checks.
   ///
@@ -162,13 +267,13 @@ class _CovarianceTransformer extends RecursiveVisitor<void> {
   ///
   /// [transform] uses this list to eliminate covariance flags for members that
   /// aren't in [_checkedMembers].
-  final _privateProcedures = List<Procedure>();
+  final _privateProcedures = <Procedure>[];
 
   /// List of private instance fields.
   ///
   /// [transform] uses this list to eliminate covariance flags for members that
   /// aren't in [_checkedMembers].
-  final _privateFields = List<Field>();
+  final _privateFields = <Field>[];
 
   final Library _library;
 
@@ -276,7 +381,14 @@ class _CovarianceTransformer extends RecursiveVisitor<void> {
 
   @override
   void visitProcedure(Procedure node) {
-    if (node.name.isPrivate && node.isInstanceMember && node.function != null) {
+    if (node.name.isPrivate &&
+        // The member must be private to this library. Member signatures,
+        // forwarding stubs and noSuchMethod forwarders for private members in
+        // other libraries can be injected.
+        node.name.library == _library &&
+        node.isInstanceMember &&
+        // No need to check abstract methods.
+        node.function.body != null) {
       _privateProcedures.add(node);
     }
     super.visitProcedure(node);
@@ -284,7 +396,14 @@ class _CovarianceTransformer extends RecursiveVisitor<void> {
 
   @override
   void visitField(Field node) {
-    if (node.name.isPrivate && isCovariantField(node)) _privateFields.add(node);
+    if (node.name.isPrivate &&
+        // The member must be private to this library. Member signatures,
+        // forwarding stubs and noSuchMethod forwarders for private members in
+        // other libraries can be injected.
+        node.name.library == _library &&
+        isCovariantField(node)) {
+      _privateFields.add(node);
+    }
     super.visitField(node);
   }
 
@@ -295,9 +414,9 @@ class _CovarianceTransformer extends RecursiveVisitor<void> {
   }
 
   @override
-  void visitDirectPropertyGet(DirectPropertyGet node) {
-    _checkTearoff(node.target);
-    super.visitDirectPropertyGet(node);
+  void visitInstanceGet(InstanceGet node) {
+    _checkTearoff(node.interfaceTarget);
+    super.visitInstanceGet(node);
   }
 
   @override
@@ -307,9 +426,9 @@ class _CovarianceTransformer extends RecursiveVisitor<void> {
   }
 
   @override
-  void visitDirectPropertySet(DirectPropertySet node) {
-    _checkTarget(node.receiver, node.target);
-    super.visitDirectPropertySet(node);
+  void visitInstanceSet(InstanceSet node) {
+    _checkTarget(node.receiver, node.interfaceTarget);
+    super.visitInstanceSet(node);
   }
 
   @override
@@ -319,8 +438,39 @@ class _CovarianceTransformer extends RecursiveVisitor<void> {
   }
 
   @override
-  void visitDirectMethodInvocation(DirectMethodInvocation node) {
-    _checkTarget(node.receiver, node.target);
-    super.visitDirectMethodInvocation(node);
+  void visitInstanceInvocation(InstanceInvocation node) {
+    _checkTarget(node.receiver, node.interfaceTarget);
+    super.visitInstanceInvocation(node);
   }
+
+  @override
+  void visitInstanceGetterInvocation(InstanceGetterInvocation node) {
+    _checkTarget(node.receiver, node.interfaceTarget);
+    super.visitInstanceGetterInvocation(node);
+  }
+
+  @override
+  void visitInstanceTearOff(InstanceTearOff node) {
+    _checkTearoff(node.interfaceTarget);
+    super.visitInstanceTearOff(node);
+  }
+
+  @override
+  void visitEqualsCall(EqualsCall node) {
+    _checkTarget(node.left, node.interfaceTarget);
+    super.visitEqualsCall(node);
+  }
+}
+
+List<Pattern> _allowedNativeTestPatterns = [
+  'tests/dartdevc',
+  'tests/web/native',
+  'tests/web_2/native',
+  'tests/web/internal',
+  'tests/web_2/internal',
+];
+
+bool allowedNativeTest(Uri uri) {
+  var path = uri.path;
+  return _allowedNativeTestPatterns.any((pattern) => path.contains(pattern));
 }

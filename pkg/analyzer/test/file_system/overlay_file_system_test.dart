@@ -1,16 +1,15 @@
-// Copyright (c) 2018, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2018, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-
-import 'dart:core';
 
 import 'package:analyzer/file_system/file_system.dart';
 import 'package:analyzer/file_system/memory_file_system.dart';
 import 'package:analyzer/file_system/overlay_file_system.dart';
 import 'package:analyzer/src/generated/source.dart';
-import 'package:meta/meta.dart';
 import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
+
+import 'file_system_test_support.dart';
 
 main() {
   defineReflectiveSuite(() {
@@ -20,9 +19,9 @@ main() {
   });
 }
 
-final _isFile = new TypeMatcher<File>();
-final _isFileSystemException = new TypeMatcher<FileSystemException>();
-final _isFolder = new TypeMatcher<Folder>();
+final _isFile = TypeMatcher<File>();
+final _isFileSystemException = TypeMatcher<FileSystemException>();
+final _isFolder = TypeMatcher<Folder>();
 
 @reflectiveTest
 class FileTest extends OverlayTestSupport {
@@ -37,7 +36,7 @@ class FileTest extends OverlayTestSupport {
     File targetFile =
         provider.getFile(baseProvider.convertPath('/foo/test.dart'));
     expect(targetFile.exists, isFalse);
-    file.copyTo(file.parent.parent);
+    file.copyTo(file.parent2.parent2);
     expect(targetFile.exists, isTrue);
   }
 
@@ -47,7 +46,7 @@ class FileTest extends OverlayTestSupport {
     File targetFile =
         provider.getFile(baseProvider.convertPath('/foo/test.dart'));
     expect(targetFile.exists, isFalse);
-    file.copyTo(file.parent.parent);
+    file.copyTo(file.parent2.parent2);
     expect(targetFile.exists, isTrue);
     expect(targetFile.readAsStringSync(), 'overlay');
     provider.removeOverlay(targetFile.path);
@@ -60,7 +59,7 @@ class FileTest extends OverlayTestSupport {
     File targetFile =
         provider.getFile(baseProvider.convertPath('/foo/test.dart'));
     expect(targetFile.exists, isFalse);
-    file.copyTo(file.parent.parent);
+    file.copyTo(file.parent2.parent2);
     expect(targetFile.exists, isTrue);
     expect(targetFile.readAsStringSync(), 'overlay');
     provider.removeOverlay(targetFile.path);
@@ -73,7 +72,7 @@ class FileTest extends OverlayTestSupport {
     Source source = file.createSource();
     expect(source, isNotNull);
     expect(source.fullName, defaultFilePath);
-    expect(source.uri, new Uri.file(defaultFilePath));
+    expect(source.uri, Uri.file(defaultFilePath));
   }
 
   test_delete_existing_withoutOverlay() {
@@ -165,8 +164,7 @@ class FileTest extends OverlayTestSupport {
   }
 
   test_parent() {
-    Folder parent = _file(exists: true).parent;
-    expect(parent, isNotNull);
+    var parent = _file(exists: true).parent2;
     expect(parent.exists, isTrue);
     expect(parent.path, defaultFolderPath);
   }
@@ -179,6 +177,15 @@ class FileTest extends OverlayTestSupport {
   test_readAsBytesSync_existing_withOverlay() {
     File file = _file(exists: true, withOverlay: true);
     expect(file.readAsBytesSync(), <int>[98, 98, 98]);
+  }
+
+  test_readAsBytesSync_existing_withOverlay_utf8() {
+    // Strings should be encoded as UTF8 when they're written, so when we read
+    // them back as bytes we should see the UTF8-encoded version of the string.
+    String overlayContent = '\u00e5'; // latin small letter a with ring above
+    File file =
+        _file(exists: true, withOverlay: true, overlayContent: overlayContent);
+    expect(file.readAsBytesSync(), <int>[0xc3, 0xa5]);
   }
 
   test_readAsBytesSync_notExisting_withoutOverlay() {
@@ -326,13 +333,24 @@ class FileTest extends OverlayTestSupport {
   }
 
   void test_resolveSymbolicLinksSync_noLinks_notExisting_withoutOverlay() {
-    _resolveSymbolicLinksSync_noLinks(
-        _file(exists: false, path: '/temp/a/b/test.txt'));
+    var file = _file(
+      exists: false,
+      path: '/temp/a/b/test.txt',
+    );
+
+    expect(() {
+      file.resolveSymbolicLinksSync();
+    }, throwsA(isFileSystemException));
   }
 
   void test_resolveSymbolicLinksSync_noLinks_notExisting_withOverlay() {
-    _resolveSymbolicLinksSync_noLinks(
-        _file(exists: false, path: '/temp/a/b/test.txt', withOverlay: true));
+    var file = _file(
+      exists: false,
+      path: '/temp/a/b/test.txt',
+      withOverlay: true,
+    );
+
+    expect(file.resolveSymbolicLinksSync(), file);
   }
 
   test_shortName() {
@@ -341,7 +359,7 @@ class FileTest extends OverlayTestSupport {
 
   test_toUri() {
     File file = _file(exists: true);
-    expect(file.toUri(), new Uri.file(file.path));
+    expect(file.toUri(), Uri.file(file.path));
   }
 
   test_writeAsBytesSync_withoutOverlay() {
@@ -441,7 +459,7 @@ class FolderTest extends OverlayTestSupport {
         provider.getFolder(baseProvider.convertPath('/destination'));
 
     Folder copy = source.copyTo(destination);
-    expect(copy.parent, destination);
+    expect(copy.parent2, destination);
     _verifyStructure(copy, source);
   }
 
@@ -462,15 +480,49 @@ class FolderTest extends OverlayTestSupport {
   test_delete_notExisting() {
     Folder folder = _folder(exists: false);
     expect(folder.exists, isFalse);
-    expect(() => folder.delete(), throwsA(new TypeMatcher<ArgumentError>()));
+    expect(() => folder.delete(), throwsA(TypeMatcher<ArgumentError>()));
   }
 
-  test_exists_false() {
+  void test_exists_links_existing() {
+    var foo_path = baseProvider.convertPath('/foo');
+    var bar_path = baseProvider.convertPath('/bar');
+
+    baseProvider.newFolder(foo_path);
+    baseProvider.newLink(bar_path, foo_path);
+
+    var bar = provider.getFolder(bar_path);
+    expect(bar.exists, isTrue);
+  }
+
+  void test_exists_links_notExisting() {
+    var foo_path = baseProvider.convertPath('/foo');
+    var bar_path = baseProvider.convertPath('/bar');
+
+    baseProvider.newLink(bar_path, foo_path);
+
+    var bar = provider.getFolder(bar_path);
+    expect(bar.exists, isFalse);
+  }
+
+  void test_exists_links_notExisting_withOverlay() {
+    var foo_path = baseProvider.convertPath('/foo');
+    var bar_path = baseProvider.convertPath('/bar');
+
+    _file(exists: false, path: '/foo/aaa/a.dart', withOverlay: true);
+    baseProvider.newLink(bar_path, foo_path);
+
+    // We cannot resolve `/bar` to `/foo` using the base provider.
+    // So, we don't know that we should check that `/foo/aaa/a.dart` exists.
+    var bar = provider.getFolder(bar_path);
+    expect(bar.exists, isFalse);
+  }
+
+  test_exists_noLinks_false() {
     Folder folder = _folder(exists: false);
     expect(folder.exists, isFalse);
   }
 
-  test_exists_true() {
+  test_exists_noLinks_true() {
     Folder folder = _folder(exists: true);
     expect(folder.exists, isTrue);
   }
@@ -508,7 +560,7 @@ class FolderTest extends OverlayTestSupport {
     expect(child, isNotNull);
   }
 
-  test_getChildren() {
+  test_getChildren_existing() {
     Folder folder = _folder(exists: true);
     Folder child1 = _folder(
         exists: true, path: provider.pathContext.join(folder.path, 'lib'));
@@ -523,6 +575,43 @@ class FolderTest extends OverlayTestSupport {
     expect(children, hasLength(3));
     expect(children.map((resource) => resource.path),
         unorderedEquals([child1.path, child2.path, child3.path]));
+  }
+
+  test_getChildren_existing_withOverlay() {
+    Folder folder = _folder(exists: true);
+    Folder child1 = _folder(
+        exists: true, path: provider.pathContext.join(folder.path, 'lib'));
+    _file(
+        exists: true,
+        path: provider.pathContext.join(child1.path, 'a.dart'),
+        withOverlay: true);
+    List<String> childPaths =
+        folder.getChildren().map((resource) => resource.path).toList();
+    expect(childPaths, equals([child1.path]));
+  }
+
+  test_getChildren_multipleDescendantOverlays() {
+    Folder folder = _folder(exists: true);
+    Folder child1 = _folder(
+        exists: false, path: provider.pathContext.join(folder.path, 'lib'));
+    _file(
+        exists: false,
+        withOverlay: true,
+        path: provider.pathContext.join(child1.path, 'a.dart'));
+    _file(
+        exists: false,
+        withOverlay: true,
+        path: provider.pathContext.join(child1.path, 'b.dart'));
+    List<String> childPaths =
+        folder.getChildren().map((resource) => resource.path).toList();
+    expect(childPaths, equals([child1.path]));
+  }
+
+  test_getChildren_nonExisting_withOverlay() {
+    File file = _file(exists: false, withOverlay: true);
+    List<Resource> children = file.parent2.parent2.getChildren();
+    expect(children, hasLength(1));
+    expect(children[0], _isFolder);
   }
 
   test_isOrContains_false() {
@@ -541,15 +630,15 @@ class FolderTest extends OverlayTestSupport {
   }
 
   test_parent_ofNonRoot() {
-    Folder parent = _folder(exists: true).parent;
-    expect(parent, isNotNull);
+    Folder parent = _folder(exists: true).parent2;
     expect(parent.exists, isTrue);
     expect(parent.path, baseProvider.convertPath('/foo'));
   }
 
   test_parent_ofRoot() {
-    Folder parent = _folder(exists: true, path: '/').parent;
-    expect(parent, isNull);
+    var parent = _folder(exists: true, path: '/').parent2;
+    expect(parent.exists, isTrue);
+    expect(parent.path, baseProvider.convertPath('/'));
   }
 
   @failingTest
@@ -558,14 +647,61 @@ class FolderTest extends OverlayTestSupport {
     fail('Not tested');
   }
 
-  void test_resolveSymbolicLinksSync_noLinks_existingFile() {
-    _resolveSymbolicLinksSync_noLinks(
-        _folder(exists: true, path: '/temp/a/b/test.txt'));
+  void test_resolveSymbolicLinksSync_links_existing() {
+    var foo_path = baseProvider.convertPath('/foo');
+    var bar_path = baseProvider.convertPath('/bar');
+
+    baseProvider.newFolder(foo_path);
+    baseProvider.newLink(bar_path, foo_path);
+
+    var foo = provider.getFolder(foo_path);
+    var bar = provider.getFolder(bar_path);
+    expect(bar.resolveSymbolicLinksSync(), foo);
+  }
+
+  void test_resolveSymbolicLinksSync_links_notExisting() {
+    var foo_path = baseProvider.convertPath('/foo');
+    var bar_path = baseProvider.convertPath('/bar');
+
+    baseProvider.newLink(bar_path, foo_path);
+
+    expect(() {
+      var bar = provider.getFolder(bar_path);
+      bar.resolveSymbolicLinksSync();
+    }, throwsA(isFileSystemException));
+  }
+
+  void test_resolveSymbolicLinksSync_links_notExisting_withOverlay() {
+    var foo_path = baseProvider.convertPath('/foo');
+    var bar_path = baseProvider.convertPath('/bar');
+
+    _file(exists: false, path: '/foo/aaa/a.dart', withOverlay: true);
+    baseProvider.newLink(bar_path, foo_path);
+
+    // We cannot resolve `/bar` to `/foo` using the base provider.
+    // So, we don't know that we should check that `/foo/aaa/a.dart` exists.
+    expect(() {
+      var bar = provider.getFolder(bar_path);
+      bar.resolveSymbolicLinksSync();
+    }, throwsA(isFileSystemException));
+  }
+
+  void test_resolveSymbolicLinksSync_noLinks_existing() {
+    var folder = _folder(exists: true, path: '/test');
+    expect(folder.resolveSymbolicLinksSync(), folder);
   }
 
   void test_resolveSymbolicLinksSync_noLinks_notExisting() {
-    _resolveSymbolicLinksSync_noLinks(
-        _folder(exists: false, path: '/temp/a/b/test.txt'));
+    var folder = _folder(exists: false, path: '/test');
+    expect(() {
+      folder.resolveSymbolicLinksSync();
+    }, throwsA(isFileSystemException));
+  }
+
+  void test_resolveSymbolicLinksSync_noLinks_notExisting_withOverlay() {
+    _file(exists: false, path: '/test/aaa/a.dart', withOverlay: true);
+    var folder = _folder(exists: false, path: '/test');
+    expect(folder.resolveSymbolicLinksSync(), folder);
   }
 
   test_shortName() {
@@ -574,22 +710,10 @@ class FolderTest extends OverlayTestSupport {
 
   test_toUri() {
     Folder folder = _folder(exists: true);
-    expect(folder.toUri(), new Uri.directory(folder.path));
+    expect(folder.toUri(), Uri.directory(folder.path));
   }
 
-  void _resolveSymbolicLinksSync_noLinks(Folder folder) {
-    //
-    // On some platforms the path to the temp directory includes a symbolic
-    // link. We remove that from the equation before creating the File in order
-    // to show that the operation works as expected without symbolic links.
-    //
-    folder = baseProvider.getFolder(folder.resolveSymbolicLinksSync().path);
-    expect(folder.resolveSymbolicLinksSync(), folder);
-  }
-
-  /**
-   * Verify that the [copy] has the same name and content as the [source].
-   */
+  /// Verify that the [copy] has the same name and content as the [source].
   void _verifyStructure(Folder copy, Folder source) {
     expect(copy.shortName, source.shortName);
     Map<String, File> sourceFiles = <String, File>{};
@@ -615,8 +739,8 @@ class FolderTest extends OverlayTestSupport {
       }
     }
     for (String fileName in sourceFiles.keys) {
-      File sourceChild = sourceFiles[fileName];
-      File copiedChild = copyFiles[fileName];
+      var sourceChild = sourceFiles[fileName]!;
+      var copiedChild = copyFiles[fileName];
       if (copiedChild == null) {
         fail('Failed to copy file ${sourceChild.path}');
       }
@@ -624,8 +748,8 @@ class FolderTest extends OverlayTestSupport {
           reason: 'Incorrectly copied file ${sourceChild.path}');
     }
     for (String fileName in sourceFolders.keys) {
-      Folder sourceChild = sourceFolders[fileName];
-      Folder copiedChild = copyFolders[fileName];
+      var sourceChild = sourceFolders[fileName]!;
+      var copiedChild = copyFolders[fileName];
       if (copiedChild == null) {
         fail('Failed to copy folder ${sourceChild.path}');
       }
@@ -664,18 +788,26 @@ class OverlayResourceProviderTest extends OverlayTestSupport {
     expect(file.exists, isTrue);
   }
 
-  test_getFolder_existing() {
+  test_getFolder_existing_withoutOverlay() {
     Folder folder = _folder(exists: true);
     expect(folder, isNotNull);
     expect(folder.path, defaultFolderPath);
     expect(folder.exists, isTrue);
   }
 
-  test_getFolder_notExisting() {
+  test_getFolder_notExisting_withoutOverlay() {
     Folder folder = _folder(exists: false);
     expect(folder, isNotNull);
     expect(folder.path, defaultFolderPath);
     expect(folder.exists, isFalse);
+  }
+
+  test_getFolder_notExisting_withOverlay() {
+    File file = _file(exists: false, withOverlay: true);
+    Folder folder = file.parent2;
+    expect(folder, isNotNull);
+    expect(folder.path, defaultFolderPath);
+    expect(folder.exists, isTrue);
   }
 
   test_getModificationTimes_withoutOverlay() async {
@@ -690,45 +822,62 @@ class OverlayResourceProviderTest extends OverlayTestSupport {
     expect(times, [42]);
   }
 
-  test_getResource_existingFile_withoutOverlay() {
+  test_getResource_file_existing_withoutOverlay() {
     String path = _file(exists: true).path;
     Resource resource = provider.getResource(path);
     expect(resource, _isFile);
   }
 
-  test_getResource_existingFile_withOverlay() {
+  test_getResource_file_existing_withOverlay() {
     String path = _file(exists: true, withOverlay: true).path;
     Resource resource = provider.getResource(path);
     expect(resource, _isFile);
   }
 
-  test_getResource_existingFolder() {
-    String path = _folder(exists: true).path;
-    Resource resource = provider.getResource(path);
-    expect(resource, _isFolder);
-  }
-
-  test_getResource_notExisting_withoutOverlay() {
+  test_getResource_file_notExisting_withoutOverlay() {
     String path = _file(exists: false).path;
     Resource resource = provider.getResource(path);
     expect(resource, _isFile);
   }
 
-  test_getResource_notExisting_withOverlay() {
+  test_getResource_file_notExisting_withOverlay() {
     String path = _file(exists: false, withOverlay: true).path;
     Resource resource = provider.getResource(path);
     expect(resource, _isFile);
   }
 
+  test_getResource_folder_existing() {
+    String path = _folder(exists: true).path;
+    Resource resource = provider.getResource(path);
+    expect(resource, _isFolder);
+  }
+
+  test_getResource_folder_nonExisting_withOverlay() {
+    String filePath = _file(exists: false, withOverlay: true).path;
+    String folderPath = provider.pathContext.dirname(filePath);
+    Resource resource = provider.getResource(folderPath);
+    expect(resource, _isFolder);
+  }
+
   test_getStateLocation_uniqueness() {
     String idOne = 'one';
-    Folder folderOne = provider.getStateLocation(idOne);
-    expect(folderOne, isNotNull);
+    Folder folderOne = provider.getStateLocation(idOne)!;
+
     String idTwo = 'two';
-    Folder folderTwo = provider.getStateLocation(idTwo);
-    expect(folderTwo, isNotNull);
+    Folder folderTwo = provider.getStateLocation(idTwo)!;
+
     expect(folderTwo, isNot(equals(folderOne)));
     expect(provider.getStateLocation(idOne), equals(folderOne));
+  }
+
+  test_hasOverlay() {
+    expect(provider.hasOverlay(defaultFilePath), isFalse);
+
+    provider.setOverlay(defaultFilePath, content: 'x', modificationStamp: 0);
+    expect(provider.hasOverlay(defaultFilePath), isTrue);
+
+    provider.removeOverlay(defaultFilePath);
+    expect(provider.hasOverlay(defaultFilePath), isFalse);
   }
 
   test_pathContext() {
@@ -737,25 +886,26 @@ class OverlayResourceProviderTest extends OverlayTestSupport {
 }
 
 class OverlayTestSupport {
-  MemoryResourceProvider baseProvider;
-  OverlayResourceProvider provider;
+  late final MemoryResourceProvider baseProvider;
+  late final OverlayResourceProvider provider;
 
-  String defaultFolderPath;
-  String defaultFilePath;
+  late final String defaultFolderPath;
+  late final String defaultFilePath;
 
   void setUp() {
-    baseProvider = new MemoryResourceProvider();
-    provider = new OverlayResourceProvider(baseProvider);
+    baseProvider = MemoryResourceProvider();
+    provider = OverlayResourceProvider(baseProvider);
 
     defaultFolderPath = baseProvider.convertPath('/foo/bar');
     defaultFilePath = baseProvider.convertPath('/foo/bar/test.dart');
   }
 
   File _file(
-      {@required bool exists,
-      String content,
-      String path,
-      bool withOverlay = false}) {
+      {required bool exists,
+      String? content,
+      String? path,
+      bool withOverlay = false,
+      String overlayContent = 'bbb'}) {
     if (path == null) {
       path = defaultFilePath;
     } else {
@@ -765,12 +915,12 @@ class OverlayTestSupport {
       baseProvider.newFile(path, content ?? 'a');
     }
     if (withOverlay) {
-      provider.setOverlay(path, content: 'bbb', modificationStamp: 42);
+      provider.setOverlay(path, content: overlayContent, modificationStamp: 42);
     }
     return provider.getFile(path);
   }
 
-  Folder _folder({@required bool exists, String path}) {
+  Folder _folder({required bool exists, String? path}) {
     if (path == null) {
       path = defaultFolderPath;
     } else {

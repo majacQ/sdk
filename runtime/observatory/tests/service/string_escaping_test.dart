@@ -6,23 +6,38 @@ library string_escaping_test;
 
 import 'dart:async';
 import 'package:observatory/service_io.dart';
-import 'package:unittest/unittest.dart';
+import 'package:test/test.dart';
 import 'test_helper.dart';
 
+@pragma("vm:entry-point") // Prevent obfuscation
 var ascii;
+@pragma("vm:entry-point") // Prevent obfuscation
 var latin1;
+@pragma("vm:entry-point") // Prevent obfuscation
 var unicode;
+@pragma("vm:entry-point") // Prevent obfuscation
 var hebrew;
+@pragma("vm:entry-point") // Prevent obfuscation
 var singleQuotes;
+@pragma("vm:entry-point") // Prevent obfuscation
 var doubleQuotes;
+@pragma("vm:entry-point") // Prevent obfuscation
 var newLines;
+@pragma("vm:entry-point") // Prevent obfuscation
 var tabs;
+@pragma("vm:entry-point") // Prevent obfuscation
 var suggrogatePairs;
+@pragma("vm:entry-point") // Prevent obfuscation
 var nullInTheMiddle;
+@pragma("vm:entry-point") // Prevent obfuscation
 var escapedUnicodeEscape;
+@pragma("vm:entry-point") // Prevent obfuscation
 var longStringEven;
+@pragma("vm:entry-point") // Prevent obfuscation
 var longStringOdd;
+@pragma("vm:entry-point") // Prevent obfuscation
 var malformedWithLeadSurrogate;
+@pragma("vm:entry-point") // Prevent obfuscation
 var malformedWithTrailSurrogate;
 
 void script() {
@@ -57,16 +72,15 @@ Future testStrings(Isolate isolate) async {
 
   expectFullString(String varName, String varValueAsString) {
     Field field = lib.variables.singleWhere((v) => v.name == varName);
-    Instance value = field.staticValue;
+    Instance value = field.staticValue as Instance;
     expect(value.valueAsString, equals(varValueAsString));
     expect(value.valueAsStringIsTruncated, isFalse);
   }
 
   expectTruncatedString(String varName, String varValueAsString) {
     Field field = lib.variables.singleWhere((v) => v.name == varName);
-    Instance value = field.staticValue;
-    print(value.valueAsString);
-    expect(varValueAsString, startsWith(value.valueAsString));
+    Instance value = field.staticValue as Instance;
+    expect(varValueAsString, startsWith(value.valueAsString!));
     expect(value.valueAsStringIsTruncated, isTrue);
   }
 

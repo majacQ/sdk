@@ -10,16 +10,10 @@ import '../elements/entities.dart';
 import '../elements/types.dart';
 import '../js/js.dart' as jsAst;
 import '../js/js.dart' show js;
-import '../js_backend/js_interop_analysis.dart' as jsInteropAnalysis;
 import '../js_backend/namer.dart' show Namer;
-import '../js_backend/runtime_types.dart'
-    show
-        ClassChecks,
-        ClassFunctionType,
-        RuntimeTypesChecks,
-        RuntimeTypesEncoder,
-        Substitution,
-        TypeCheck;
+import '../js_backend/runtime_types.dart' show RuntimeTypesChecks;
+import '../js_backend/runtime_types_codegen.dart'
+    show ClassChecks, ClassFunctionType, TypeCheck;
 import '../js_emitter/sorter.dart';
 import '../util/util.dart' show Setlet;
 
@@ -89,26 +83,22 @@ class TypeTestProperties {
 }
 
 class RuntimeTypeGenerator {
-  final CommonElements _commonElements;
   final OutputUnitData _outputUnitData;
   final CodeEmitterTask emitterTask;
   final Namer _namer;
   final RuntimeTypesChecks _rtiChecks;
-  final RuntimeTypesEncoder _rtiEncoder;
   final _TypeContainedInOutputUnitVisitor _outputUnitVisitor;
 
-  RuntimeTypeGenerator(this._commonElements, this._outputUnitData,
-      this.emitterTask, this._namer, this._rtiChecks, this._rtiEncoder)
+  RuntimeTypeGenerator(CommonElements _commonElements, this._outputUnitData,
+      this.emitterTask, this._namer, this._rtiChecks)
       : _outputUnitVisitor = new _TypeContainedInOutputUnitVisitor(
             _commonElements, _outputUnitData);
 
-  /**
-   * Generate "is tests" for [cls] itself, and the "is tests" for the
-   * classes it implements and type argument substitution functions for these
-   * tests.   We don't need to add the "is tests" of the super class because
-   * they will be inherited at runtime, but we may need to generate the
-   * substitutions, because they may have changed.
-   */
+  /// Generate "is tests" for [cls] itself, and the "is tests" for the
+  /// classes it implements and type argument substitution functions for these
+  /// tests.   We don't need to add the "is tests" of the super class because
+  /// they will be inherited at runtime, but we may need to generate the
+  /// substitutions, because they may have changed.
 
   /// Generates all properties necessary for is-checks on the [classElement].
   ///
@@ -174,7 +164,7 @@ class RuntimeTypeGenerator {
         }
         if (encoding != null) {
           jsAst.Name operatorSignature =
-              _namer.asName(_namer.operatorSignature);
+              _namer.asName(_namer.fixedNames.operatorSignature);
           result.addSignature(classElement, operatorSignature, encoding);
         }
       }
@@ -186,28 +176,11 @@ class RuntimeTypeGenerator {
         result.addIsTest(
             checkedClass, _namer.operatorIs(checkedClass), js('1'));
       }
-      Substitution substitution = check.substitution;
-      if (substitution != null) {
-        jsAst.Expression body =
-            _rtiEncoder.getSubstitutionCode(emitterTask.emitter, substitution);
-        result.addSubstitution(
-            checkedClass, _namer.substitutionName(checkedClass), body);
-      }
     }
 
     _generateIsTestsOn(
         classElement, generateFunctionTypeSignature, generateTypeCheck);
 
-    if (classElement == _commonElements.jsJavaScriptFunctionClass) {
-      var type = jsInteropAnalysis.buildJsFunctionType();
-      if (type != null) {
-        jsAst.Expression thisAccess = new jsAst.This();
-        jsAst.Expression encoding = _rtiEncoder.getSignatureEncoding(
-            emitterTask.emitter, type, thisAccess);
-        jsAst.Name operatorSignature = _namer.asName(_namer.operatorSignature);
-        result.addSignature(classElement, operatorSignature, encoding);
-      }
-    }
     return result;
   }
 
@@ -260,6 +233,17 @@ class _TypeContainedInOutputUnitVisitor
   }
 
   @override
+  bool visitLegacyType(LegacyType type, OutputUnit argument) =>
+      visit(type.baseType, argument);
+
+  @override
+  bool visitNullableType(NullableType type, OutputUnit argument) =>
+      visit(type.baseType, argument);
+
+  @override
+  bool visitNeverType(NeverType type, OutputUnit argument) => true;
+
+  @override
   bool visitFutureOrType(FutureOrType type, OutputUnit argument) {
     if (_outputUnitData.outputUnitForClass(_commonElements.functionClass) !=
         argument) {
@@ -272,13 +256,14 @@ class _TypeContainedInOutputUnitVisitor
   bool visitDynamicType(DynamicType type, OutputUnit argument) => true;
 
   @override
-  bool visitTypedefType(TypedefType type, OutputUnit argument) {
-    return visit(type.unaliased, argument);
-  }
+  bool visitErasedType(ErasedType type, OutputUnit argument) => true;
+
+  @override
+  bool visitAnyType(AnyType type, OutputUnit argument) => true;
 
   @override
   bool visitInterfaceType(InterfaceType type, OutputUnit argument) {
-    if (_outputUnitData.outputUnitForClass(type.element) != argument) {
+    if (_outputUnitData.outputUnitForClassType(type.element) != argument) {
       return false;
     }
     return visitList(type.typeArguments, argument);

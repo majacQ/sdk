@@ -2,12 +2,14 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 // Test merging streams.
 library dart.test.stream_from_iterable;
 
 import 'dart:async';
 
-import 'package:expect/async_minitest.dart';
+import 'package:async_helper/async_minitest.dart';
 
 main() {
   test("stream-periodic1", () {

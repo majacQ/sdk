@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library test.invoke_test;
 
 import 'dart:mirrors';
@@ -110,7 +112,7 @@ testSync() {
       () => cm.newInstance(const Symbol('named'), []), 'Wrong arity');
 
   // LibraryMirror invoke
-  LibraryMirror lm = cm.owner;
+  LibraryMirror lm = cm.owner as LibraryMirror;
   result = lm.invoke(const Symbol('libraryFunction'), [':', ')']);
   Expect.equals(':)', result.reflectee);
   Expect.throwsNoSuchMethodError(

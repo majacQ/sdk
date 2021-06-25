@@ -10,14 +10,15 @@
 #include "bin/isolate_data.h"
 
 #include "platform/hashmap.h"
+#include "platform/priority_queue.h"
 
 namespace dart {
 namespace bin {
 
 // Flags used to provide information and actions to the eventhandler
 // when sending a message about a file descriptor. These flags should
-// be kept in sync with the constants in socket_impl.dart. For more
-// information see the comments in socket_impl.dart
+// be kept in sync with the constants in socket_patch.dart. For more
+// information see the comments in socket_patch.dart
 enum MessageFlags {
   kInEvent = 0,
   kOutEvent = 1,
@@ -57,56 +58,38 @@ enum MessageFlags {
 // clang-format on
 
 class TimeoutQueue {
- private:
-  class Timeout {
-   public:
-    Timeout(Dart_Port port, int64_t timeout, Timeout* next)
-        : port_(port), timeout_(timeout), next_(next) {}
-
-    Dart_Port port() const { return port_; }
-
-    int64_t timeout() const { return timeout_; }
-    void set_timeout(int64_t timeout) {
-      ASSERT(timeout >= 0);
-      timeout_ = timeout;
-    }
-
-    Timeout* next() const { return next_; }
-    void set_next(Timeout* next) { next_ = next; }
-
-   private:
-    Dart_Port port_;
-    int64_t timeout_;
-    Timeout* next_;
-  };
-
  public:
-  TimeoutQueue() : next_timeout_(NULL), timeouts_(NULL) {}
+  TimeoutQueue() {}
 
   ~TimeoutQueue() {
     while (HasTimeout())
       RemoveCurrent();
   }
 
-  bool HasTimeout() const { return next_timeout_ != NULL; }
+  bool HasTimeout() const { return !timeouts_.IsEmpty(); }
 
   int64_t CurrentTimeout() const {
-    ASSERT(next_timeout_ != NULL);
-    return next_timeout_->timeout();
+    ASSERT(!timeouts_.IsEmpty());
+    return timeouts_.Minimum().priority;
   }
 
   Dart_Port CurrentPort() const {
-    ASSERT(next_timeout_ != NULL);
-    return next_timeout_->port();
+    ASSERT(!timeouts_.IsEmpty());
+    return timeouts_.Minimum().value;
   }
 
-  void RemoveCurrent() { UpdateTimeout(CurrentPort(), -1); }
+  void RemoveCurrent() { timeouts_.RemoveMinimum(); }
 
-  void UpdateTimeout(Dart_Port port, int64_t timeout);
+  void UpdateTimeout(Dart_Port port, int64_t timeout) {
+    if (timeout < 0) {
+      timeouts_.RemoveByValue(port);
+    } else {
+      timeouts_.InsertOrChangePriority(timeout, port);
+    }
+  }
 
  private:
-  Timeout* next_timeout_;
-  Timeout* timeouts_;
+  PriorityQueue<int64_t, Dart_Port> timeouts_;
 
   DISALLOW_COPY_AND_ASSIGN(TimeoutQueue);
 };
@@ -399,7 +382,7 @@ class DescriptorInfoMultipleMixin : public DI {
     intptr_t is_reading;
     intptr_t token_count;
 
-    bool IsReady() { return token_count > 0 && is_reading; }
+    bool IsReady() { return token_count > 0 && is_reading != 0; }
   };
 
  public:
@@ -560,7 +543,7 @@ class DescriptorInfoMultipleMixin : public DI {
       pentry->token_count += count;
     }
     ASSERT(pentry->token_count <= kTokenCount);
-    bool is_ready = pentry->token_count > 0 && pentry->IsReady();
+    bool is_ready = pentry->IsReady();
     if (!was_ready && is_ready) {
       active_readers_.Add(pentry);
     }

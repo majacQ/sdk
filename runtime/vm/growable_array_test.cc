@@ -97,14 +97,45 @@ ISOLATE_UNIT_TEST_CASE(GrowableHandlePtr) {
   GrowableHandlePtrArray<const String> test1(zone, 1);
   EXPECT_EQ(0, test1.length());
   test1.Add(Symbols::Int());
-  EXPECT(test1[0].raw() == Symbols::Int().raw());
+  EXPECT(test1[0].ptr() == Symbols::Int().ptr());
   EXPECT_EQ(1, test1.length());
 
   ZoneGrowableHandlePtrArray<const String>* test2 =
       new ZoneGrowableHandlePtrArray<const String>(zone, 1);
   test2->Add(Symbols::GetterPrefix());
-  EXPECT((*test2)[0].raw() == Symbols::GetterPrefix().raw());
+  EXPECT((*test2)[0].ptr() == Symbols::GetterPrefix().ptr());
   EXPECT_EQ(1, test2->length());
+}
+
+TEST_CASE(GrowableArrayMoveCtor) {
+  GrowableArray<int> a;
+  a.Add(4);
+  a.Add(5);
+  int* a_data = a.data();
+
+  GrowableArray<int> b(std::move(a));
+
+  EXPECT_EQ(0, a.length());
+  EXPECT_EQ((int*)nullptr, a.data());
+  EXPECT_EQ(2, b.length());
+  EXPECT_EQ(a_data, b.data());
+}
+
+TEST_CASE(GrowableArrayMoveAssign) {
+  GrowableArray<int> a, b;
+  a.Add(1);
+  a.Add(2);
+  a.Add(3);
+  b.Add(7);
+  int* a_data = a.data();
+  int* b_data = b.data();
+
+  a = std::move(b);
+
+  EXPECT_EQ(1, a.length());
+  EXPECT_EQ(b_data, a.data());
+  EXPECT_EQ(3, b.length());
+  EXPECT_EQ(a_data, b.data());
 }
 
 }  // namespace dart

@@ -5,7 +5,7 @@
 
 import 'dart:async';
 import 'package:observatory/service_io.dart';
-import 'package:unittest/unittest.dart';
+import 'package:test/test.dart';
 import 'test_helper.dart';
 
 var tests = <VMTest>[
@@ -17,8 +17,8 @@ var tests = <VMTest>[
     var subscription;
     subscription = stream.listen((ServiceEvent event) {
       if (event.kind == ServiceEvent.kVMUpdate) {
-        expect(event.owner.type, equals('VM'));
-        expect(event.owner.name, equals('Barbara'));
+        expect(event.owner!.type, equals('VM'));
+        expect(event.owner!.name, equals('Barbara'));
         subscription.cancel();
         completer.complete();
       }

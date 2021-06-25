@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'assist_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(FlutterMoveUpTest);
   });
@@ -19,16 +19,23 @@ class FlutterMoveUpTest extends AssistProcessorTest {
   @override
   AssistKind get kind => DartAssistKind.FLUTTER_MOVE_UP;
 
-  test_first() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  @override
+  void setUp() {
+    super.setUp();
+    writeTestPackageConfig(
+      flutter: true,
+    );
+  }
+
+  Future<void> test_first() async {
+    await resolveTestCode('''
 import 'package:flutter/material.dart';
 main() {
-  new Column(
+  Column(
     children: <Widget>[
-      /*caret*/new Text('aaa'),
-      new Text('bbb'),
-      new Text('ccc'),
+      /*caret*/Text('aaa'),
+      Text('bbb'),
+      Text('ccc'),
     ],
   );
 }
@@ -36,16 +43,15 @@ main() {
     await assertNoAssist();
   }
 
-  test_last() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  Future<void> test_last() async {
+    await resolveTestCode('''
 import 'package:flutter/material.dart';
 main() {
-  new Column(
+  Column(
     children: <Widget>[
-      new Text('aaa'),
-      /*caret*/new Text('bbbbbb'),
-      new Text('ccccccccc'),
+      Text('aaa'),
+      /*caret*/Text('bbbbbb'),
+      Text('ccccccccc'),
     ],
   );
 }
@@ -53,25 +59,24 @@ main() {
     await assertHasAssist('''
 import 'package:flutter/material.dart';
 main() {
-  new Column(
+  Column(
     children: <Widget>[
-      new Text('bbbbbb'),
-      /*caret*/new Text('aaa'),
-      new Text('ccccccccc'),
+      Text('bbbbbb'),
+      Text('aaa'),
+      Text('ccccccccc'),
     ],
   );
 }
 ''');
-    assertExitPosition(before: "new Text('bbbbbb')");
+    assertExitPosition(before: "Text('bbbbbb')");
   }
 
-  test_notInList() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  Future<void> test_notInList() async {
+    await resolveTestCode('''
 import 'package:flutter/material.dart';
 main() {
-  new Center(
-    child: /*caret*/new Text('aaa'),
+  Center(
+    child: /*caret*/Text('aaa'),
   );
 }
 ''');

@@ -2,6 +2,11 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
+// VMOptions=--enable-isolate-groups --experimental-enable-isolate-groups-jit
+// VMOptions=--no-enable-isolate-groups
+
 // Dart test program for testing serialization of messages.
 // VMOptions=--enable_type_checks --enable_asserts
 
@@ -57,7 +62,11 @@ class D extends C with M {
 }
 
 class E {
+  // Make sure E.fun is not removed by the tree shaker, as this test verifies
+  // that an object with a tear-off in E.fun cannot be sent.
+  @pragma("vm:entry-point")
   Function fun;
+
   E(this.fun);
 
   static fooFun() => 499;

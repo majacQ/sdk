@@ -4,127 +4,50 @@
 
 import 'dart:collection';
 
-import 'package:analyzer/dart/analysis/analysis_context.dart';
 import 'package:analyzer/dart/analysis/context_locator.dart';
 import 'package:analyzer/dart/analysis/context_root.dart';
 import 'package:analyzer/file_system/file_system.dart';
 import 'package:analyzer/file_system/physical_file_system.dart'
     show PhysicalResourceProvider;
-import 'package:analyzer/src/context/builder.dart'
-    show ContextBuilder, ContextBuilderOptions;
-import 'package:analyzer/src/context/context_root.dart' as old;
-import 'package:analyzer/src/dart/analysis/byte_store.dart'
-    show MemoryByteStore;
+import 'package:analyzer/src/analysis_options/analysis_options_provider.dart';
+import 'package:analyzer/src/context/builder.dart' as old;
+import 'package:analyzer/src/context/builder.dart';
+import 'package:analyzer/src/context/packages.dart';
 import 'package:analyzer/src/dart/analysis/context_root.dart';
-import 'package:analyzer/src/dart/analysis/driver.dart'
-    show AnalysisDriver, AnalysisDriverScheduler;
-import 'package:analyzer/src/dart/analysis/driver_based_analysis_context.dart';
-import 'package:analyzer/src/dart/analysis/file_state.dart'
-    show FileContentOverlay;
-import 'package:analyzer/src/dart/analysis/performance_logger.dart'
-    show PerformanceLog;
-import 'package:analyzer/src/dart/sdk/sdk.dart' show FolderBasedDartSdk;
-import 'package:analyzer/src/generated/sdk.dart' show DartSdkManager;
-import 'package:meta/meta.dart';
+import 'package:analyzer/src/task/options.dart';
+import 'package:analyzer/src/util/file_paths.dart' as file_paths;
+import 'package:analyzer/src/util/yaml.dart';
+import 'package:analyzer/src/workspace/basic.dart';
+import 'package:analyzer/src/workspace/workspace.dart';
+import 'package:glob/glob.dart';
+import 'package:path/path.dart';
+import 'package:yaml/yaml.dart';
 
-/**
- * An implementation of a context locator.
- */
+/// An implementation of a context locator.
 class ContextLocatorImpl implements ContextLocator {
-  /**
-   * The name of the analysis options file.
-   */
-  static const String ANALYSIS_OPTIONS_NAME = 'analysis_options.yaml';
-
-  /**
-   * The old name of the analysis options file.
-   */
-  static const String OLD_ANALYSIS_OPTIONS_NAME = '.analysis_options';
-
-  /**
-   * The name of the packages file.
-   */
-  static const String PACKAGES_FILE_NAME = '.packages';
-
-  /**
-   * The resource provider used to access the file system.
-   */
+  /// The resource provider used to access the file system.
   final ResourceProvider resourceProvider;
 
-  /**
-   * Initialize a newly created context locator. If a [resourceProvider] is
-   * supplied, it will be used to access the file system. Otherwise the default
-   * resource provider will be used.
-   */
-  ContextLocatorImpl({ResourceProvider resourceProvider})
-      : this.resourceProvider =
+  /// Initialize a newly created context locator. If a [resourceProvider] is
+  /// supplied, it will be used to access the file system. Otherwise the default
+  /// resource provider will be used.
+  ContextLocatorImpl({ResourceProvider? resourceProvider})
+      : resourceProvider =
             resourceProvider ?? PhysicalResourceProvider.INSTANCE;
 
-  /**
-   * Return the path to the default location of the SDK.
-   */
-  String get _defaultSdkPath =>
-      FolderBasedDartSdk.defaultSdkDirectory(resourceProvider).path;
-
-  @deprecated
   @override
-  List<AnalysisContext> locateContexts(
-      {@required List<String> includedPaths,
-      List<String> excludedPaths: null,
-      String optionsFile: null,
-      String packagesFile: null,
-      String sdkPath: null}) {
-    List<ContextRoot> roots = locateRoots(
-        includedPaths: includedPaths,
-        excludedPaths: excludedPaths,
-        optionsFile: optionsFile,
-        packagesFile: packagesFile);
-    if (roots.isEmpty) {
-      return const <AnalysisContext>[];
-    }
-    PerformanceLog performanceLog = new PerformanceLog(new StringBuffer());
-    AnalysisDriverScheduler scheduler =
-        new AnalysisDriverScheduler(performanceLog);
-    DartSdkManager sdkManager =
-        new DartSdkManager(sdkPath ?? _defaultSdkPath, true);
-    scheduler.start();
-    ContextBuilderOptions options = new ContextBuilderOptions();
-    ContextBuilder builder = new ContextBuilder(
-        resourceProvider, sdkManager, null,
-        options: options);
-    if (packagesFile != null) {
-      options.defaultPackageFilePath = packagesFile;
-    }
-    builder.analysisDriverScheduler = scheduler;
-    builder.byteStore = new MemoryByteStore();
-    builder.fileContentOverlay = new FileContentOverlay();
-    builder.performanceLog = performanceLog;
-    List<AnalysisContext> contextList = <AnalysisContext>[];
-    for (ContextRoot root in roots) {
-      old.ContextRoot contextRoot = new old.ContextRoot(
-          root.root.path, root.excludedPaths.toList(),
-          pathContext: resourceProvider.pathContext);
-      AnalysisDriver driver = builder.buildDriver(contextRoot);
-      DriverBasedAnalysisContext context =
-          new DriverBasedAnalysisContext(resourceProvider, root, driver);
-      contextList.add(context);
-    }
-    return contextList;
-  }
-
-  @override
-  List<ContextRoot> locateRoots(
-      {@required List<String> includedPaths,
-      List<String> excludedPaths: null,
-      String optionsFile: null,
-      String packagesFile: null}) {
+  List<ContextRoot> locateRoots({
+    required List<String> includedPaths,
+    List<String>? excludedPaths,
+    String? optionsFile,
+    String? packagesFile,
+  }) {
     //
     // Compute the list of folders and files that are to be included.
     //
     List<Folder> includedFolders = <Folder>[];
     List<File> includedFiles = <File>[];
-    _resourcesFromPaths(
-        includedPaths ?? const <String>[], includedFolders, includedFiles);
+    _resourcesFromPaths(includedPaths, includedFolders, includedFiles);
     //
     // Compute the list of folders and files that are to be excluded.
     //
@@ -138,94 +61,217 @@ class ContextLocatorImpl implements ContextLocator {
     //
     includedFolders = includedFolders
         .where((Folder includedFolder) =>
-            !_containedInAny(excludedFolders, includedFolder) &&
-            !_containedInAny(includedFolders, includedFolder))
+            !_containedInAny(excludedFolders, includedFolder))
         .toList();
     includedFiles = includedFiles
         .where((File includedFile) =>
             !_containedInAny(excludedFolders, includedFile) &&
-            !excludedFiles.contains(includedFile) &&
-            !_containedInAny(includedFolders, includedFile))
+            !excludedFiles.contains(includedFile))
         .toList();
     //
     // We now have a list of all of the files and folders that need to be
     // analyzed. For each, walk the directory structure and figure out where to
     // create context roots.
     //
-    File defaultOptionsFile;
+    File? defaultOptionsFile;
     if (optionsFile != null) {
       defaultOptionsFile = resourceProvider.getFile(optionsFile);
       if (!defaultOptionsFile.exists) {
         defaultOptionsFile = null;
       }
     }
-    File defaultPackagesFile;
+    File? defaultPackagesFile;
     if (packagesFile != null) {
       defaultPackagesFile = resourceProvider.getFile(packagesFile);
       if (!defaultPackagesFile.exists) {
         defaultPackagesFile = null;
       }
     }
-    List<ContextRoot> roots = <ContextRoot>[];
+
+    var roots = <ContextRootImpl>[];
     for (Folder folder in includedFolders) {
-      ContextRootImpl root = new ContextRootImpl(resourceProvider, folder);
-      root.packagesFile = defaultPackagesFile ?? _findPackagesFile(folder);
-      root.optionsFile = defaultOptionsFile ?? _findOptionsFile(folder);
-      root.included.add(folder);
-      roots.add(root);
-      _createContextRootsIn(roots, folder, excludedFolders, root,
-          defaultOptionsFile, defaultPackagesFile);
+      var location = _contextRootLocation(
+        folder,
+        defaultOptionsFile: defaultOptionsFile,
+        defaultPackagesFile: defaultPackagesFile,
+        defaultRootFolder: () => folder,
+      );
+
+      ContextRootImpl? root;
+      for (var existingRoot in roots) {
+        if (existingRoot.root.isOrContains(folder.path) &&
+            _matchRootWithLocation(existingRoot, location)) {
+          root = existingRoot;
+          break;
+        }
+      }
+
+      root ??= _createContextRoot(
+        roots,
+        rootFolder: folder,
+        workspace: location.workspace,
+        optionsFile: location.optionsFile,
+        packagesFile: location.packagesFile,
+      );
+
+      if (!root.isAnalyzed(folder.path)) {
+        root.included.add(folder);
+      }
+
+      _createContextRootsIn(roots, {}, folder, excludedFolders, root,
+          root.excludedGlobs, defaultOptionsFile, defaultPackagesFile);
     }
-    Map<Folder, ContextRoot> rootMap = <Folder, ContextRoot>{};
+
     for (File file in includedFiles) {
-      Folder parent = file.parent;
-      ContextRoot root = rootMap.putIfAbsent(parent, () {
-        ContextRootImpl root = new ContextRootImpl(resourceProvider, parent);
-        root.packagesFile = defaultPackagesFile ?? _findPackagesFile(parent);
-        root.optionsFile = defaultOptionsFile ?? _findOptionsFile(parent);
-        roots.add(root);
-        return root;
-      });
-      root.included.add(file);
+      Folder parent = file.parent2;
+
+      var location = _contextRootLocation(
+        parent,
+        defaultOptionsFile: defaultOptionsFile,
+        defaultPackagesFile: defaultPackagesFile,
+        defaultRootFolder: () => _fileSystemRoot(parent),
+      );
+
+      ContextRootImpl? root;
+      for (var existingRoot in roots) {
+        if (existingRoot.root.isOrContains(file.path) &&
+            _matchRootWithLocation(existingRoot, location)) {
+          root = existingRoot;
+          break;
+        }
+      }
+
+      root ??= _createContextRoot(
+        roots,
+        rootFolder: location.rootFolder,
+        workspace: location.workspace,
+        optionsFile: location.optionsFile,
+        packagesFile: location.packagesFile,
+      );
+
+      if (!root.isAnalyzed(file.path)) {
+        root.included.add(file);
+      }
     }
     return roots;
   }
 
-  /**
-   * Return `true` if the given [resource] is contained in one or more of the
-   * given [folders].
-   */
+  /// Return `true` if the given [resource] is contained in one or more of the
+  /// given [folders].
   bool _containedInAny(Iterable<Folder> folders, Resource resource) =>
       folders.any((Folder folder) => folder.contains(resource.path));
 
-  /**
-   * If the given [folder] should be the root of a new analysis context, then
-   * create a new context root for it and add it to the list of context [roots].
-   * The [containingRoot] is the context root from an enclosing directory and is
-   * used to inherit configuration information that isn't overridden.
-   *
-   * If either the [optionsFile] or [packagesFile] is non-`null` then the given
-   * file will be used even if there is a local version of the file.
-   *
-   * For each directory within the given [folder] that is not in the list of
-   * [excludedFolders], recursively search for nested context roots.
-   */
+  /// Return the location of a context root for a file in the [parent].
+  ///
+  /// If the [defaultOptionsFile] is provided, it will be used, not a file
+  /// found relative to the [parent].
+  ///
+  /// If the [defaultPackagesFile] is provided, it will be used, not a file
+  /// found relative to the [parent].
+  ///
+  /// The root folder of the context is the parent of either the options,
+  /// or the packages (grand-parent for `.dart_tool/package_config.json`) file,
+  /// whichever is lower.
+  _RootLocation _contextRootLocation(
+    Folder parent, {
+    required File? defaultOptionsFile,
+    required File? defaultPackagesFile,
+    required Folder Function() defaultRootFolder,
+  }) {
+    File? optionsFile;
+    Folder? optionsFolderToChooseRoot;
+    if (defaultOptionsFile != null) {
+      optionsFile = defaultOptionsFile;
+    } else {
+      optionsFile = _findOptionsFile(parent);
+      optionsFolderToChooseRoot = optionsFile?.parent2;
+    }
+
+    File? packagesFile;
+    Folder? packagesFolderToChooseRoot;
+    if (defaultPackagesFile != null) {
+      packagesFile = defaultPackagesFile;
+    } else {
+      var foundPackages = _findPackagesFile(parent);
+      packagesFile = foundPackages?.file;
+      packagesFolderToChooseRoot = foundPackages?.parent;
+    }
+
+    var rootFolder = _lowest2(
+      optionsFolderToChooseRoot,
+      packagesFolderToChooseRoot,
+    );
+
+    var workspace = _createWorkspace(parent, packagesFile);
+    if (workspace is! BasicWorkspace) {
+      rootFolder = _lowest2(
+        rootFolder,
+        resourceProvider.getFolder(workspace.root),
+      );
+    }
+
+    if (rootFolder == null) {
+      rootFolder = defaultRootFolder();
+      if (workspace is BasicWorkspace) {
+        workspace = _createWorkspace(rootFolder, packagesFile);
+      }
+    }
+
+    return _RootLocation(
+      rootFolder: rootFolder,
+      workspace: workspace,
+      optionsFile: optionsFile,
+      packagesFile: packagesFile,
+    );
+  }
+
+  ContextRootImpl _createContextRoot(
+    List<ContextRootImpl> roots, {
+    required Folder rootFolder,
+    required Workspace workspace,
+    required File? optionsFile,
+    required File? packagesFile,
+  }) {
+    optionsFile ??= _findDefaultOptionsFile(workspace);
+
+    var root = ContextRootImpl(resourceProvider, rootFolder, workspace);
+    root.packagesFile = packagesFile;
+    root.optionsFile = optionsFile;
+    root.excludedGlobs = _getExcludedGlobs(root);
+    roots.add(root);
+    return root;
+  }
+
+  /// If the given [folder] should be the root of a new analysis context, then
+  /// create a new context root for it and add it to the list of context
+  /// [roots]. The [containingRoot] is the context root from an enclosing
+  /// directory and is used to inherit configuration information that isn't
+  /// overridden.
+  ///
+  /// If either the [optionsFile] or [packagesFile] is non-`null` then the given
+  /// file will be used even if there is a local version of the file.
+  ///
+  /// For each directory within the given [folder] that is neither in the list
+  /// of [excludedFolders] nor excluded by the [excludedGlobs], recursively
+  /// search for nested context roots.
   void _createContextRoots(
       List<ContextRoot> roots,
+      Set<String> visited,
       Folder folder,
       List<Folder> excludedFolders,
       ContextRoot containingRoot,
-      File optionsFile,
-      File packagesFile) {
+      List<Glob> excludedGlobs,
+      File? optionsFile,
+      File? packagesFile) {
     //
     // If the options and packages files are allowed to be locally specified,
     // then look to see whether they are.
     //
-    File localOptionsFile;
+    File? localOptionsFile;
     if (optionsFile == null) {
       localOptionsFile = _getOptionsFile(folder);
     }
-    File localPackagesFile;
+    File? localPackagesFile;
     if (packagesFile == null) {
       localPackagesFile = _getPackagesFile(folder);
     }
@@ -240,32 +286,57 @@ class ContextLocatorImpl implements ContextLocator {
       if (packagesFile != null) {
         localPackagesFile = packagesFile;
       }
-      ContextRootImpl root = new ContextRootImpl(resourceProvider, folder);
-      root.packagesFile = localPackagesFile ?? containingRoot.packagesFile;
+      var rootPackagesFile = localPackagesFile ?? containingRoot.packagesFile;
+      var workspace = _createWorkspace(folder, rootPackagesFile);
+      var root = ContextRootImpl(resourceProvider, folder, workspace);
+      root.packagesFile = rootPackagesFile;
       root.optionsFile = localOptionsFile ?? containingRoot.optionsFile;
       root.included.add(folder);
       containingRoot.excluded.add(folder);
       roots.add(root);
       containingRoot = root;
+      excludedGlobs = _getExcludedGlobs(root);
+      root.excludedGlobs = excludedGlobs;
     }
-    _createContextRootsIn(roots, folder, excludedFolders, containingRoot,
-        optionsFile, packagesFile);
+    _createContextRootsIn(roots, visited, folder, excludedFolders,
+        containingRoot, excludedGlobs, optionsFile, packagesFile);
   }
 
-  /**
-   * For each directory within the given [folder] that is not in the list of
-   * [excludedFolders], recursively search for nested context roots.
-   *
-   * If either the [optionsFile] or [packagesFile] is non-`null` then the given
-   * file will be used even if there is a local version of the file.
-   */
+  /// For each directory within the given [folder] that is neither in the list
+  /// of [excludedFolders] nor excluded by the [excludedGlobs], recursively
+  /// search for nested context roots and add them to the list of [roots].
+  ///
+  /// If either the [optionsFile] or [packagesFile] is non-`null` then the given
+  /// file will be used even if there is a local version of the file.
   void _createContextRootsIn(
       List<ContextRoot> roots,
+      Set<String> visited,
       Folder folder,
       List<Folder> excludedFolders,
       ContextRoot containingRoot,
-      File optionsFile,
-      File packagesFile) {
+      List<Glob> excludedGlobs,
+      File? optionsFile,
+      File? packagesFile) {
+    bool isExcluded(Folder folder) {
+      if (excludedFolders.contains(folder) ||
+          folder.shortName.startsWith('.')) {
+        return true;
+      }
+      // TODO(scheglov) Why not take it from `containingRoot`?
+      for (Glob pattern in excludedGlobs) {
+        if (pattern.matches(folder.path)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    // Stop infinite recursion via links.
+    var canonicalFolderPath = folder.resolveSymbolicLinksSync().path;
+    if (!visited.add(canonicalFolderPath)) {
+      return;
+    }
+
     //
     // Check each of the subdirectories to see whether a context root needs to
     // be added for it.
@@ -273,12 +344,11 @@ class ContextLocatorImpl implements ContextLocator {
     try {
       for (Resource child in folder.getChildren()) {
         if (child is Folder) {
-          if (excludedFolders.contains(folder) ||
-              folder.shortName.startsWith('.')) {
-            containingRoot.excluded.add(folder);
-          } else {
-            _createContextRoots(roots, child, excludedFolders, containingRoot,
-                optionsFile, packagesFile);
+          if (excludedFolders.contains(child)) {
+            containingRoot.excluded.add(child);
+          } else if (!isExcluded(child)) {
+            _createContextRoots(roots, visited, child, excludedFolders,
+                containingRoot, excludedGlobs, optionsFile, packagesFile);
           }
         }
       }
@@ -288,93 +358,237 @@ class ContextLocatorImpl implements ContextLocator {
     }
   }
 
-  /**
-   * Return the analysis options file to be used to analyze files in the given
-   * [folder], or `null` if there is no analysis options file in the given
-   * folder or any parent folder.
-   */
-  File _findOptionsFile(Folder folder) {
-    while (folder != null) {
-      File packagesFile = _getOptionsFile(folder);
-      if (packagesFile != null) {
-        return packagesFile;
+  Workspace _createWorkspace(Folder folder, File? packagesFile) {
+    Packages packages;
+    if (packagesFile != null) {
+      packages = parsePackagesFile(resourceProvider, packagesFile);
+    } else {
+      packages = Packages.empty;
+    }
+
+    return old.ContextBuilder.createWorkspace(
+      resourceProvider: resourceProvider,
+      packages: packages,
+      options: ContextBuilderOptions(), // TODO(scheglov) remove it
+      rootPath: folder.path,
+    );
+  }
+
+  File? _findDefaultOptionsFile(Workspace workspace) {
+    // TODO(scheglov) Create SourceFactory once.
+    var sourceFactory = workspace.createSourceFactory(null, null);
+
+    String? uriStr;
+    if (workspace is WorkspaceWithDefaultAnalysisOptions) {
+      uriStr = WorkspaceWithDefaultAnalysisOptions.uri;
+    } else {
+      uriStr = 'package:flutter/analysis_options_user.yaml';
+    }
+
+    var path = sourceFactory.forUri(uriStr)?.fullName;
+    if (path != null) {
+      var file = resourceProvider.getFile(path);
+      if (file.exists) {
+        return file;
       }
-      folder = folder.parent;
     }
-    return null;
   }
 
-  /**
-   * Return the packages file to be used to analyze files in the given [folder],
-   * or `null` if there is no packages file in the given folder or any parent
-   * folder.
-   */
-  File _findPackagesFile(Folder folder) {
-    while (folder != null) {
-      File packagesFile = _getPackagesFile(folder);
-      if (packagesFile != null) {
-        return packagesFile;
+  /// Return the analysis options file to be used to analyze files in the given
+  /// [folder], or `null` if there is no analysis options file in the given
+  /// folder or any parent folder.
+  File? _findOptionsFile(Folder folder) {
+    for (var current in folder.withAncestors) {
+      var file = _getOptionsFile(current);
+      if (file != null) {
+        return file;
       }
-      folder = folder.parent;
     }
-    return null;
   }
 
-  /**
-   * If the given [directory] contains a file with the given [name], then return
-   * the file. Otherwise, return `null`.
-   */
-  File _getFile(Folder directory, String name) {
-    Resource resource = directory.getChild(name);
-    if (resource is File && resource.exists) {
-      return resource;
+  /// Return the packages file to be used to analyze files in the given
+  /// [folder], or `null` if there is no packages file in the given folder or
+  /// any parent folder.
+  _PackagesFile? _findPackagesFile(Folder folder) {
+    for (var current in folder.withAncestors) {
+      var file = _getPackagesFile(current);
+      if (file != null) {
+        return _PackagesFile(current, file);
+      }
     }
-    return null;
   }
 
-  /**
-   * Return the analysis options file in the given [folder], or `null` if the
-   * folder does not contain an analysis options file.
-   */
-  File _getOptionsFile(Folder folder) =>
-      _getFile(folder, ANALYSIS_OPTIONS_NAME) ??
-      _getFile(folder, OLD_ANALYSIS_OPTIONS_NAME);
+  /// Return a list containing the glob patterns used to exclude files from the
+  /// given context [root]. The patterns are extracted from the analysis options
+  /// file associated with the context root. The list will be empty if there are
+  /// no exclusion patterns in the options file, or if there is no options file
+  /// associated with the context root.
+  List<Glob> _getExcludedGlobs(ContextRootImpl root) {
+    List<Glob> patterns = [];
+    File? optionsFile = root.optionsFile;
+    if (optionsFile != null) {
+      try {
+        var doc = AnalysisOptionsProvider(
+                root.workspace.createSourceFactory(null, null))
+            .getOptionsFromFile(optionsFile);
 
-  /**
-   * Return the packages file in the given [folder], or `null` if the folder
-   * does not contain a packages file.
-   */
-  File _getPackagesFile(Folder folder) => _getFile(folder, PACKAGES_FILE_NAME);
+        var analyzerOptions = doc.valueAt(AnalyzerOptions.analyzer);
+        if (analyzerOptions is YamlMap) {
+          var excludeOptions = analyzerOptions.valueAt(AnalyzerOptions.exclude);
+          if (excludeOptions is YamlList) {
+            var pathContext = resourceProvider.pathContext;
 
-  /**
-   * Add to the given lists of [folders] and [files] all of the resources in the
-   * given list of [paths] that exist and are not contained within one of the
-   * folders.
-   */
+            void addGlob(List<String> components) {
+              var pattern = posix.joinAll(components);
+              patterns.add(Glob(pattern, context: pathContext));
+            }
+
+            for (String excludedPath in excludeOptions.whereType<String>()) {
+              var excludedComponents = posix.split(excludedPath);
+              if (pathContext.isRelative(excludedPath)) {
+                excludedComponents = [
+                  ...pathContext.split(optionsFile.parent2.path),
+                  ...excludedComponents,
+                ];
+              }
+              addGlob(excludedComponents);
+              if (excludedComponents.last == '**') {
+                addGlob(excludedComponents..removeLast());
+              }
+            }
+          }
+        }
+      } catch (exception) {
+        // If we can't read and parse the analysis options file, then there
+        // aren't any excluded files that need to be read.
+      }
+    }
+    return patterns;
+  }
+
+  /// If the given [directory] contains a file with the given [name], then
+  /// return the file. Otherwise, return `null`.
+  File? _getFile(Folder directory, String name) {
+    var file = directory.getChildAssumingFile(name);
+    return file.exists ? file : null;
+  }
+
+  /// Return the analysis options file in the given [folder], or `null` if the
+  /// folder does not contain an analysis options file.
+  File? _getOptionsFile(Folder folder) =>
+      _getFile(folder, file_paths.analysisOptionsYaml);
+
+  /// Return the packages file in the given [folder], or `null` if the folder
+  /// does not contain a packages file.
+  File? _getPackagesFile(Folder folder) {
+    var file = folder
+        .getChildAssumingFolder(file_paths.dotDartTool)
+        .getChildAssumingFile(file_paths.packageConfigJson);
+    if (file.exists) {
+      return file;
+    }
+
+    return _getFile(folder, file_paths.dotPackages);
+  }
+
+  /// Add to the given lists of [folders] and [files] all of the resources in
+  /// the given list of [paths] that exist and are not contained within one of
+  /// the folders.
   void _resourcesFromPaths(
       List<String> paths, List<Folder> folders, List<File> files) {
     for (String path in _uniqueSortedPaths(paths)) {
       Resource resource = resourceProvider.getResource(path);
-      if (resource.exists && !_containedInAny(folders, resource)) {
-        if (resource is Folder) {
-          folders.add(resource);
-        } else if (resource is File) {
-          files.add(resource);
-        } else {
-          // Internal error: unhandled kind of resource.
-        }
+      if (resource is Folder) {
+        folders.add(resource);
+      } else if (resource is File) {
+        files.add(resource);
+      } else {
+        // Internal error: unhandled kind of resource.
       }
     }
   }
 
-  /**
-   * Return a list of paths that contains all of the unique elements from the
-   * given list of [paths], sorted such that shorter paths are first.
-   */
+  /// Return a list of paths that contains all of the unique elements from the
+  /// given list of [paths], sorted such that shorter paths are first.
   List<String> _uniqueSortedPaths(List<String> paths) {
-    Set<String> uniquePaths = new HashSet<String>.from(paths);
+    Set<String> uniquePaths = HashSet<String>.from(paths);
     List<String> sortedPaths = uniquePaths.toList();
     sortedPaths.sort((a, b) => a.length - b.length);
     return sortedPaths;
   }
+
+  static Folder _fileSystemRoot(Resource resource) {
+    for (var current = resource.parent2;; current = current.parent2) {
+      if (current.isRoot) {
+        return current;
+      }
+    }
+  }
+
+  /// The [first] and [second] must be folders on the path from a file to
+  /// the root of the file system. As such, they are either the same folder,
+  /// or one is strictly above the other.
+  static Folder? _lowest2(Folder? first, Folder? second) {
+    if (first != null) {
+      if (second != null) {
+        if (first.contains(second.path)) {
+          return second;
+        }
+      }
+      return first;
+    }
+    return second;
+  }
+
+  /// Return `true` if the configuration of [existingRoot] is the same as
+  /// the requested configuration for the [location].
+  static bool _matchRootWithLocation(
+    ContextRootImpl existingRoot,
+    _RootLocation location,
+  ) {
+    if (existingRoot.optionsFile != location.optionsFile) {
+      return false;
+    }
+
+    if (existingRoot.packagesFile != location.packagesFile) {
+      return false;
+    }
+
+    // BasicWorkspace has no special meaning, so can be ignored.
+    // Other workspaces have semantic meaning, so must match.
+    var workspace = location.workspace;
+    if (workspace is! BasicWorkspace) {
+      if (existingRoot.workspace.root != workspace.root) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+}
+
+/// The packages [file] found for the [parent].
+///
+/// In case of `.packages` file, [parent] is the parent of [file].
+///
+/// In case of `.dart_tool/package_config.json` it is a grand-parent.
+class _PackagesFile {
+  final Folder parent;
+  final File file;
+
+  _PackagesFile(this.parent, this.file);
+}
+
+class _RootLocation {
+  final Folder rootFolder;
+  final Workspace workspace;
+  final File? optionsFile;
+  final File? packagesFile;
+
+  _RootLocation({
+    required this.rootFolder,
+    required this.workspace,
+    required this.optionsFile,
+    required this.packagesFile,
+  });
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -9,7 +9,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'completion_contributor_util.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(LocalLibraryContributorTest);
   });
@@ -19,26 +19,27 @@ main() {
 class LocalLibraryContributorTest extends DartCompletionContributorTest {
   @override
   DartCompletionContributor createContributor() {
-    return new LocalLibraryContributor();
+    return LocalLibraryContributor();
   }
 
-  test_partFile_Constructor() async {
+  Future<void> test_partFile_Constructor() async {
     // SimpleIdentifier  TypeName  ConstructorName
-    addSource('/testB.dart', '''
+    newFile('$testPackageLibPath/b.dart', content: '''
         lib B;
         int T1;
         F1() { }
         class X {X.c(); X._d(); z() {}}''');
-    addSource('/testA.dart', '''
+    newFile('$testPackageLibPath/a.dart', content: '''
         library libA;
-        import "${convertAbsolutePathToUri("/testB.dart")}";
-        part "${convertAbsolutePathToUri(testFile)}";
+        import "b.dart";
+        part "test.dart";
         class A { }
         var m;''');
     addTestSource('''
         part of libA;
-        class B { factory B.bar(int x) => null; }
+        class B { B.bar(int x); }
         main() {new ^}''');
+    await resolveFile('$testPackageLibPath/a.dart');
     await computeSuggestions();
     expect(replacementOffset, completionOffset);
     expect(replacementLength, 0);
@@ -56,20 +57,20 @@ class LocalLibraryContributorTest extends DartCompletionContributorTest {
     assertNotSuggested('m');
   }
 
-  test_partFile_Constructor2() async {
+  Future<void> test_partFile_Constructor2() async {
     // SimpleIdentifier  TypeName  ConstructorName
-    addSource('/testB.dart', '''
+    newFile('$testPackageLibPath/b.dart', content: '''
         lib B;
         int T1;
         F1() { }
         class X {X.c(); X._d(); z() {}}''');
-    addSource('/testA.dart', '''
+    newFile('$testPackageLibPath/a.dart', content: '''
         part of libA;
         class B { }''');
     addTestSource('''
         library libA;
-        import "${convertAbsolutePathToUri("/testB.dart")}";
-        part "${convertAbsolutePathToUri("/testA.dart")}";
+        import "b.dart";
+        part "a.dart";
         class A { A({String boo: 'hoo'}) { } }
         main() {new ^}
         var m;''');
@@ -90,21 +91,38 @@ class LocalLibraryContributorTest extends DartCompletionContributorTest {
     assertNotSuggested('m');
   }
 
-  test_partFile_InstanceCreationExpression_assignment_filter() async {
+  Future<void> test_partFile_extension() async {
+    newFile('$testPackageLibPath/a.dart', content: '''
+part of libA;
+extension E on int {}
+''');
+    addTestSource('''
+library libA;
+part "a.dart";
+void f() {^}
+''');
+    await computeSuggestions();
+    expect(replacementOffset, completionOffset);
+    expect(replacementLength, 0);
+    assertSuggest('E');
+  }
+
+  Future<void>
+      test_partFile_InstanceCreationExpression_assignment_filter() async {
     // ConstructorName  InstanceCreationExpression  VariableDeclarationList
-    addSource('/testB.dart', '''
+    newFile('$testPackageLibPath/b.dart', content: '''
         lib B;
         int T1;
         F1() { }
         class X {X.c(); X._d(); z() {}}''');
-    addSource('/testA.dart', '''
+    newFile('$testPackageLibPath/a.dart', content: '''
         part of libA;
         class A {} class B extends A {} class C implements A {} class D {}
         ''');
     addTestSource('''
         library libA;
-        import "${convertAbsolutePathToUri("/testB.dart")}";
-        part "${convertAbsolutePathToUri("/testA.dart")}";
+        import "b.dart";
+        part "a.dart";
         class Local { }
         main() {
           A a;
@@ -116,15 +134,9 @@ class LocalLibraryContributorTest extends DartCompletionContributorTest {
     expect(replacementOffset, completionOffset);
     expect(replacementLength, 0);
     // A is suggested with a higher relevance
-    assertSuggestConstructor('A',
-        elemOffset: -1,
-        relevance: DART_RELEVANCE_DEFAULT + DART_RELEVANCE_BOOST_TYPE);
-    assertSuggestConstructor('B',
-        elemOffset: -1,
-        relevance: DART_RELEVANCE_DEFAULT + DART_RELEVANCE_BOOST_SUBTYPE);
-    assertSuggestConstructor('C',
-        elemOffset: -1,
-        relevance: DART_RELEVANCE_DEFAULT + DART_RELEVANCE_BOOST_SUBTYPE);
+    assertSuggestConstructor('A', elemOffset: -1);
+    assertSuggestConstructor('B', elemOffset: -1);
+    assertSuggestConstructor('C', elemOffset: -1);
     // D has the default relevance
     assertSuggestConstructor('D', elemOffset: -1);
 
@@ -142,21 +154,22 @@ class LocalLibraryContributorTest extends DartCompletionContributorTest {
     assertNotSuggested('m');
   }
 
-  test_partFile_InstanceCreationExpression_variable_declaration_filter() async {
+  Future<void>
+      test_partFile_InstanceCreationExpression_variable_declaration_filter() async {
     // ConstructorName  InstanceCreationExpression  VariableDeclarationList
-    addSource('/testB.dart', '''
+    newFile('$testPackageLibPath/b.dart', content: '''
         lib B;
         int T1;
         F1() { }
         class X {X.c(); X._d(); z() {}}''');
-    addSource('/testA.dart', '''
+    newFile('$testPackageLibPath/a.dart', content: '''
         part of libA;
         class A {} class B extends A {} class C implements A {} class D {}
         ''');
     addTestSource('''
         library libA;
-        import "${convertAbsolutePathToUri("/testB.dart")}";
-        part "${convertAbsolutePathToUri("/testA.dart")}";
+        import "b.dart";
+        part "a.dart";
         class Local { }
         main() {
           A a = new ^
@@ -166,15 +179,9 @@ class LocalLibraryContributorTest extends DartCompletionContributorTest {
     expect(replacementOffset, completionOffset);
     expect(replacementLength, 0);
     // A is suggested with a higher relevance
-    assertSuggestConstructor('A',
-        elemOffset: -1,
-        relevance: DART_RELEVANCE_DEFAULT + DART_RELEVANCE_BOOST_TYPE);
-    assertSuggestConstructor('B',
-        elemOffset: -1,
-        relevance: DART_RELEVANCE_DEFAULT + DART_RELEVANCE_BOOST_SUBTYPE);
-    assertSuggestConstructor('C',
-        elemOffset: -1,
-        relevance: DART_RELEVANCE_DEFAULT + DART_RELEVANCE_BOOST_SUBTYPE);
+    assertSuggestConstructor('A', elemOffset: -1);
+    assertSuggestConstructor('B', elemOffset: -1);
+    assertSuggestConstructor('C', elemOffset: -1);
     // D has the default relevance
     assertSuggestConstructor('D', elemOffset: -1);
 
@@ -192,24 +199,27 @@ class LocalLibraryContributorTest extends DartCompletionContributorTest {
     assertNotSuggested('m');
   }
 
-  test_partFile_TypeName() async {
-    addSource('/testB.dart', '''
+  Future<void> test_partFile_TypeName() async {
+    newFile('$testPackageLibPath/b.dart', content: '''
         lib B;
         int T1;
         F1() { }
         class X {X.c(); X._d(); z() {}}''');
-    addSource('/testA.dart', '''
+    newFile('$testPackageLibPath/a.dart', content: '''
         library libA;
-        import "${convertAbsolutePathToUri("/testB.dart")}";
-        part "${convertAbsolutePathToUri(testFile)}";
+        import "b.dart";
+        part "test.dart";
         class A { var a1; a2(){}}
         var m;
         typedef t1(int blue);
+        typedef t2 = void Function(int blue);
+        typedef t3 = List<int>;
         int af() {return 0;}''');
     addTestSource('''
         part of libA;
-        class B { factory B.bar(int x) => null; }
+        class B { B.bar(int x); }
         main() {^}''');
+    await resolveFile('$testPackageLibPath/a.dart');
     await computeSuggestions();
     expect(replacementOffset, completionOffset);
     expect(replacementLength, 0);
@@ -217,12 +227,13 @@ class LocalLibraryContributorTest extends DartCompletionContributorTest {
     if (suggestConstructorsWithoutNew) {
       assertSuggestConstructor('A');
     }
-    assertSuggestFunction('af', 'int',
-        relevance: DART_RELEVANCE_LOCAL_FUNCTION);
-    assertSuggestTopLevelVar('m', null,
-        relevance: DART_RELEVANCE_LOCAL_TOP_LEVEL_VARIABLE);
-    assertSuggestFunctionTypeAlias('t1', null,
-        relevance: DART_RELEVANCE_LOCAL_FUNCTION);
+    assertSuggestFunction('af', 'int');
+    assertSuggestTopLevelVar('m', null);
+    assertSuggestTypeAlias('t1',
+        aliasedType: 'dynamic Function(int)', returnType: 'dynamic');
+    assertSuggestTypeAlias('t2',
+        aliasedType: 'void Function(int)', returnType: 'void');
+    assertSuggestTypeAlias('t3', aliasedType: 'List<int>');
     assertNotSuggested('a1');
     assertNotSuggested('a2');
     // Suggested by LocalConstructorContributor
@@ -237,13 +248,13 @@ class LocalLibraryContributorTest extends DartCompletionContributorTest {
     assertNotSuggested('z');
   }
 
-  test_partFile_TypeName2() async {
-    addSource('/testB.dart', '''
+  Future<void> test_partFile_TypeName2() async {
+    newFile('$testPackageLibPath/b.dart', content: '''
         lib B;
         int T1;
         F1() { }
         class X {X.c(); X._d(); z() {}}''');
-    addSource('/testA.dart', '''
+    newFile('$testPackageLibPath/a.dart', content: '''
         part of libA;
         class B { var b1; b2(){}}
         int bf() => 0;
@@ -251,8 +262,8 @@ class LocalLibraryContributorTest extends DartCompletionContributorTest {
         var n;''');
     addTestSource('''
         library libA;
-        import "${convertAbsolutePathToUri("/testB.dart")}";
-        part "${convertAbsolutePathToUri("/testA.dart")}";
+        import "b.dart";
+        part "a.dart";
         class A { A({String boo: 'hoo'}) { } }
         main() {^}
         var m;''');
@@ -263,12 +274,10 @@ class LocalLibraryContributorTest extends DartCompletionContributorTest {
     if (suggestConstructorsWithoutNew) {
       assertSuggestConstructor('B');
     }
-    assertSuggestFunction('bf', 'int',
-        relevance: DART_RELEVANCE_LOCAL_FUNCTION);
-    assertSuggestTopLevelVar('n', null,
-        relevance: DART_RELEVANCE_LOCAL_TOP_LEVEL_VARIABLE);
-    assertSuggestFunctionTypeAlias('t1', null,
-        relevance: DART_RELEVANCE_LOCAL_FUNCTION);
+    assertSuggestFunction('bf', 'int');
+    assertSuggestTopLevelVar('n', null);
+    assertSuggestTypeAlias('t1',
+        aliasedType: 'dynamic Function(int)', returnType: 'dynamic');
     assertNotSuggested('b1');
     assertNotSuggested('b2');
     // Suggested by ConstructorContributor

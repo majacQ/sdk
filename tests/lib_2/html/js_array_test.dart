@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 @JS("ArrayTest.Util")
 library js_array_test;
 
@@ -9,8 +11,7 @@ import 'dart:html';
 
 import 'dart:js' as js;
 import 'package:js/js.dart';
-import 'package:unittest/unittest.dart';
-import 'package:unittest/html_config.dart';
+import 'package:expect/minitest.dart';
 import 'json_helper.dart' as json_helper;
 
 _injectJs() {
@@ -261,7 +262,6 @@ external newLiteral();
 
 main() {
   _injectJs();
-  useHtmlConfiguration();
 
   group('indexOf', () {
     var div = new DivElement();

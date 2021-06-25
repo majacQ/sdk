@@ -12,9 +12,9 @@
 #include "platform/globals.h"
 
 #include "bin/file.h"
-#include "bin/log.h"
 #include "bin/secure_socket_filter.h"
 #include "bin/security_context.h"
+#include "platform/syslog.h"
 
 namespace dart {
 namespace bin {
@@ -39,7 +39,7 @@ void SecureSocketUtils::FetchErrorString(const SSL* ssl,
     }
     if ((path != NULL) && (line >= 0)) {
       const char* file = strrchr(path, sep[0]);
-      path = file ? file + 1 : path;
+      path = file != nullptr ? file + 1 : path;
       text_buffer->Printf("(%s:%d)", path, line);
     }
   }
@@ -54,7 +54,7 @@ void SecureSocketUtils::ThrowIOException(int status,
   {
     TextBuffer error_string(SSL_ERROR_MESSAGE_BUFFER_SIZE);
     SecureSocketUtils::FetchErrorString(ssl, &error_string);
-    OSError os_error_struct(status, error_string.buf(), OSError::kBoringSSL);
+    OSError os_error_struct(status, error_string.buffer(), OSError::kBoringSSL);
     Dart_Handle os_error = DartUtils::NewDartOSError(&os_error_struct);
     exception =
         DartUtils::NewDartIOException(exception_type, message, os_error);
@@ -75,10 +75,10 @@ void SecureSocketUtils::CheckStatusSSL(int status,
   }
   if (SSL_LOG_STATUS) {
     int error = ERR_get_error();
-    Log::PrintErr("Failed: %s status %d", message, status);
+    Syslog::PrintErr("Failed: %s status: %d ", message, status);
     char error_string[SSL_ERROR_MESSAGE_BUFFER_SIZE];
     ERR_error_string_n(error, error_string, SSL_ERROR_MESSAGE_BUFFER_SIZE);
-    Log::PrintErr("ERROR: %d %s\n", error, error_string);
+    Syslog::PrintErr("%s\n", error_string);
   }
   SecureSocketUtils::ThrowIOException(status, type, message, ssl);
 }

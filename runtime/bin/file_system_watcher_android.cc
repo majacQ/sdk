@@ -48,7 +48,7 @@ intptr_t FileSystemWatcher::WatchPath(intptr_t id,
     list_events |= IN_CREATE;
   }
   if ((events & kModifyContent) != 0) {
-    list_events |= IN_CLOSE_WRITE | IN_ATTRIB;
+    list_events |= IN_CLOSE_WRITE | IN_ATTRIB | IN_MODIFY;
   }
   if ((events & kDelete) != 0) {
     list_events |= IN_DELETE;
@@ -77,11 +77,11 @@ intptr_t FileSystemWatcher::GetSocketId(intptr_t id, intptr_t path_id) {
 
 static int InotifyEventToMask(struct inotify_event* e) {
   int mask = 0;
-  if ((e->mask & IN_CLOSE_WRITE) != 0) {
+  if ((e->mask & IN_CLOSE_WRITE) != 0 || (e->mask & IN_MODIFY) != 0) {
     mask |= FileSystemWatcher::kModifyContent;
   }
   if ((e->mask & IN_ATTRIB) != 0) {
-    mask |= FileSystemWatcher::kModefyAttribute;
+    mask |= FileSystemWatcher::kModifyAttribute;
   }
   if ((e->mask & IN_CREATE) != 0) {
     mask |= FileSystemWatcher::kCreate;
@@ -108,7 +108,13 @@ Dart_Handle FileSystemWatcher::ReadEvents(intptr_t id, intptr_t path_id) {
   uint8_t buffer[kBufferSize];
   intptr_t bytes = TEMP_FAILURE_RETRY(read(id, buffer, kBufferSize));
   if (bytes < 0) {
-    return DartUtils::NewDartOSError();
+    ASSERT(EAGAIN == EWOULDBLOCK);
+    if ((bytes == -1) && (errno == EWOULDBLOCK)) {
+      // see also SocketBase::Read
+      bytes = 0;
+    } else {
+      return DartUtils::NewDartOSError();
+    }
   }
   const intptr_t kMaxCount = bytes / kEventSize;
   Dart_Handle events = Dart_NewList(kMaxCount);

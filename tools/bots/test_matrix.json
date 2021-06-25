@@ -1,11 +1,11 @@
 {
-  "global": {
-    "chrome": "65",
-    "firefox": "61"
-  },
+  "branches": [
+    "master"
+  ],
   "filesets": {
     "analyzer_unit_tests": [
       ".packages",
+      ".dart_tool/package_config.json",
       "pkg/",
       "third_party/pkg/",
       "third_party/pkg_tested/",
@@ -13,37 +13,93 @@
       "out/ReleaseX64/dart-sdk/",
       "xcodebuild/ReleaseX64/dart-sdk/"
     ],
-    "dart2js": [
+    "web_platform": [
       ".packages",
+      ".dart_tool/package_config.json",
       "out/ReleaseIA32/dart-sdk/",
       "out/ReleaseX64/dart-sdk/",
+      "out/ReleaseX64/gen/utils/dartdevc/",
+      "pkg/",
+      "runtime/tests/",
+      "samples-dev/",
+      "samples_2/",
+      "sdk/",
+      "tests/.dart_tool/package_config.json",
+      "tests/angular/",
+      "tests/co19_2/co19_2-analyzer.status",
+      "tests/co19_2/co19_2-co19.status",
+      "tests/co19_2/co19_2-dart2js.status",
+      "tests/co19_2/co19_2-dartdevc.status",
+      "tests/co19_2/co19_2-kernel.status",
+      "tests/co19_2/co19_2-runtime.status",
+      "tests/co19/co19-analyzer.status",
+      "tests/co19/co19-co19.status",
+      "tests/co19/co19-dart2js.status",
+      "tests/co19/co19-dartdevc.status",
+      "tests/co19/co19-kernel.status",
+      "tests/co19/co19-runtime.status",
+      "tests/corelib_2/",
+      "tests/web_2/",
+      "tests/dartdevc_2/",
+      "tests/language/",
+      "tests/language_2/",
+      "tests/lib_2/",
+      "tests/light_unittest.dart",
+      "tests/search/",
+      "tests/standalone_2/",
+      "tests/ffi/",
+      "tests/ffi_2/",
+      "third_party/babel/babel.min.js",
+      "third_party/d8/",
+      "third_party/pkg/",
+      "third_party/pkg_tested/",
+      "third_party/requirejs/",
+      "tools/",
+      "xcodebuild/ReleaseIA32/dart-sdk/",
+      "xcodebuild/ReleaseX64/dart-sdk/",
+      "xcodebuild/ReleaseX64/gen/utils/dartdevc/"
+    ],
+    "web_platform_nnbd": [
+      ".packages",
+      ".dart_tool/package_config.json",
+      "out/ReleaseIA32/dart-sdk/",
+      "out/ReleaseX64/dart-sdk/",
+      "out/ReleaseX64/gen/utils/dartdevc/",
       "pkg/",
       "runtime/tests/",
       "samples-dev/",
       "samples/",
       "sdk/",
+      "tests/.dart_tool/package_config.json",
       "tests/angular/",
-      "tests/co19_2/",
-      "tests/compiler/",
-      "tests/corelib_2/",
-      "tests/dart/",
-      "tests/kernel/",
+      "tests/co19/co19-analyzer.status",
+      "tests/co19/co19-co19.status",
+      "tests/co19/co19-dart2js.status",
+      "tests/co19/co19-dartdevc.status",
+      "tests/co19/co19-kernel.status",
+      "tests/co19/co19-runtime.status",
+      "tests/corelib/",
+      "tests/web/",
+      "tests/dartdevc/",
+      "tests/language/",
       "tests/language_2/",
-      "tests/lib_2/",
+      "tests/lib/",
       "tests/light_unittest.dart",
       "tests/search/",
-      "tests/standalone/",
-      "tests/standalone_2/",
+      "tests/ffi/",
+      "third_party/babel/babel.min.js",
       "third_party/d8/",
-      "third_party/observatory_pub_packages/packages/web_components/",
       "third_party/pkg/",
       "third_party/pkg_tested/",
+      "third_party/requirejs/",
       "tools/",
       "xcodebuild/ReleaseIA32/dart-sdk/",
-      "xcodebuild/ReleaseX64/dart-sdk/"
+      "xcodebuild/ReleaseX64/dart-sdk/",
+      "xcodebuild/ReleaseX64/gen/utils/dartdevc/"
     ],
-    "dart2js_hostasserts": [
+    "web_platform_hostasserts": [
       ".packages",
+      ".dart_tool/package_config.json",
       "out/ReleaseIA32/dart",
       "out/ReleaseIA32/dart2js_platform.dill",
       "out/ReleaseIA32/dart2js_platform_strong.dill",
@@ -53,23 +109,37 @@
       "pkg/",
       "runtime/tests/",
       "samples-dev/",
-      "samples/",
+      "samples_2/",
       "sdk/",
+      "tests/.dart_tool/package_config.json",
       "tests/angular/",
-      "tests/co19_2/",
-      "tests/compiler/",
+      "tests/co19/co19-analyzer.status",
+      "tests/co19/co19-co19.status",
+      "tests/co19/co19-dart2js.status",
+      "tests/co19/co19-dartdevc.status",
+      "tests/co19/co19-kernel.status",
+      "tests/co19/co19-runtime.status",
+      "tests/co19_2/co19_2-analyzer.status",
+      "tests/co19_2/co19_2-co19.status",
+      "tests/co19_2/co19_2-dart2js.status",
+      "tests/co19_2/co19_2-dartdevc.status",
+      "tests/co19_2/co19_2-kernel.status",
+      "tests/co19_2/co19_2-runtime.status",
       "tests/corelib_2/",
-      "tests/dart/",
-      "tests/kernel/",
+      "tests/web_2/",
+      "tests/dartdevc_2/",
+      "tests/language/",
       "tests/language_2/",
       "tests/lib_2/",
       "tests/light_unittest.dart",
       "tests/search/",
-      "tests/standalone/",
       "tests/standalone_2/",
+      "tests/ffi/",
+      "tests/ffi_2/",
       "third_party/d8/",
       "third_party/pkg/",
       "third_party/pkg_tested/",
+      "third_party/requirejs/",
       "tools/",
       "xcodebuild/ReleaseIA32/dart",
       "xcodebuild/ReleaseIA32/dart2js_platform.dill",
@@ -78,25 +148,111 @@
       "xcodebuild/ReleaseX64/dart2js_platform.dill",
       "xcodebuild/ReleaseX64/dart2js_platform_strong.dill"
     ],
+    "web_platform_hostasserts_nnbd": [
+      ".packages",
+      ".dart_tool/package_config.json",
+      "out/ReleaseX64/dart",
+      "out/ReleaseX64/dart2js_platform.dill",
+      "out/ReleaseX64/dart2js_nnbd_strong_platform.dill",
+      "out/ReleaseX64/dart2js_platform_strong.dill",
+      "pkg/",
+      "runtime/tests/",
+      "samples-dev/",
+      "samples/",
+      "sdk/",
+      "tests/.dart_tool/package_config.json",
+      "tests/angular/",
+      "tests/co19/co19-analyzer.status",
+      "tests/co19/co19-co19.status",
+      "tests/co19/co19-dart2js.status",
+      "tests/co19/co19-dartdevc.status",
+      "tests/co19/co19-kernel.status",
+      "tests/co19/co19-runtime.status",
+      "tests/corelib/",
+      "tests/web/",
+      "tests/dartdevc/",
+      "tests/language/",
+      "tests/language_2/",
+      "tests/lib/",
+      "tests/light_unittest.dart",
+      "tests/search/",
+      "tests/ffi/",
+      "third_party/d8/",
+      "third_party/pkg/",
+      "third_party/pkg_tested/",
+      "third_party/requirejs/",
+      "tools/",
+      "xcodebuild/ReleaseX64/dart",
+      "xcodebuild/ReleaseX64/dart2js_platform.dill",
+      "xcodebuild/ReleaseX64/dart2js_nnbd_strong_platform.dill",
+      "xcodebuild/ReleaseX64/dart2js_platform_strong.dill"
+    ],
+    "front-end": [
+      ".packages",
+      ".dart_tool/package_config.json",
+      "out/ReleaseIA32/",
+      "out/ReleaseX64/",
+      "pkg/",
+      "runtime/tests/",
+      "samples-dev/",
+      "samples/",
+      "samples_2/",
+      "sdk/",
+      "tests/.dart_tool/package_config.json",
+      "tests/angular/",
+      "tests/co19/co19-analyzer.status",
+      "tests/co19/co19-co19.status",
+      "tests/co19/co19-dart2js.status",
+      "tests/co19/co19-dartdevc.status",
+      "tests/co19/co19-kernel.status",
+      "tests/co19/co19-runtime.status",
+      "tests/co19_2/co19_2-analyzer.status",
+      "tests/co19_2/co19_2-co19.status",
+      "tests/co19_2/co19_2-dart2js.status",
+      "tests/co19_2/co19_2-dartdevc.status",
+      "tests/co19_2/co19_2-kernel.status",
+      "tests/co19_2/co19_2-runtime.status",
+      "tests/corelib/",
+      "tests/corelib_2/",
+      "tests/web/",
+      "tests/web_2/",
+      "tests/dartdevc/",
+      "tests/dartdevc_2/",
+      "tests/language/",
+      "tests/language_2/",
+      "tests/lib/",
+      "tests/lib_2/",
+      "tests/light_unittest.dart",
+      "tests/search/",
+      "tests/standalone_2/",
+      "tests/ffi/",
+      "tests/ffi_2/",
+      "third_party/d8/",
+      "third_party/pkg/",
+      "third_party/pkg_tested/",
+      "third_party/requirejs/",
+      "tools/",
+      "xcodebuild/ReleaseIA32/",
+      "xcodebuild/ReleaseX64/"
+    ],
     "fuzzer": [
       "runtime/tools/dartfuzz/",
       "out/DebugIA32/",
       "out/DebugSIMARM/",
       "out/DebugSIMARM64/",
-      "out/DebugSIMDBC/",
-      "out/DebugSIMDBC64/",
+      "out/DebugSIMARM64C/",
       "out/DebugX64/",
-      "out/ProductX64/",
+      "out/DebugX64C/",
       "out/ReleaseIA32/",
       "out/ReleaseSIMARM/",
       "out/ReleaseSIMARM64/",
-      "out/ReleaseSIMDBC/",
-      "out/ReleaseSIMDBC64/",
+      "out/ReleaseSIMARM64C/",
       "out/ReleaseX64/",
+      "out/ReleaseX64C/",
       "third_party/pkg/",
       "third_party/pkg_tested/",
-      "third_party/observatory_pub_packages/packages/",
       "tools/sdks/dart-sdk/",
+      "pkg/_fe_analyzer_shared/",
       "pkg/async_helper/",
       "pkg/build_integration/",
       "pkg/dart_internal/",
@@ -108,62 +264,128 @@
       "pkg/vm/",
       "runtime/",
       "sdk/",
+      ".dart_tool/package_config.json",
       ".packages"
     ],
     "vm-kernel": [
+      "benchmarks/",
       "out/DebugIA32/",
+      "out/DebugX64/",
+      "out/DebugX64C/",
       "out/DebugSIMARM/",
       "out/DebugSIMARM64/",
-      "out/DebugSIMDBC64/",
-      "out/DebugX64/",
-      "out/ProductX64/",
+      "out/DebugSIMARM64C/",
+      "out/DebugSIMARM_X64/",
+      "out/DebugAndroidARM/",
+      "out/DebugAndroidARM_X64/",
+      "out/DebugAndroidARM64/",
       "out/ReleaseIA32/",
+      "out/ReleaseX64/",
+      "out/ReleaseX64C/",
       "out/ReleaseSIMARM/",
       "out/ReleaseSIMARM64/",
+      "out/ReleaseSIMARM64C/",
+      "out/ReleaseSIMARM_X64/",
+      "out/ReleaseAndroidARM/",
+      "out/ReleaseAndroidARM_X64/",
+      "out/ReleaseAndroidARM64/",
+      "out/ReleaseASANX64/",
+      "out/ReleaseLSANX64/",
+      "out/ReleaseMSANX64/",
+      "out/ReleaseTSANX64/",
+      "out/ReleaseUBSANX64/",
       "out/ReleaseXARM64/",
-      "out/ReleaseSIMDBC64/",
-      "out/ReleaseX64/",
+      "out/ProductIA32/",
+      "out/ProductX64/",
+      "out/ProductX64C/",
+      "out/ProductSIMARM/",
+      "out/ProductSIMARM64/",
+      "out/ProductSIMARM64C/",
+      "out/ProductSIMARM_X64/",
+      "out/ProductAndroidARM/",
+      "out/ProductAndroidARM64/",
       "xcodebuild/DebugIA32/",
-      "xcodebuild/DebugSIMDBC64/",
+      "xcodebuild/DebugSIMARM/",
+      "xcodebuild/DebugSIMARM64/",
+      "xcodebuild/DebugSIMARM64C/",
       "xcodebuild/DebugX64/",
+      "xcodebuild/DebugX64C/",
+      "xcodebuild/DebugXARM64/",
       "xcodebuild/ProductX64/",
+      "xcodebuild/ProductX64C/",
+      "xcodebuild/ProductXARM64/",
       "xcodebuild/ReleaseIA32/",
+      "xcodebuild/ReleaseSIMARM/",
       "xcodebuild/ReleaseSIMARM64/",
-      "xcodebuild/ReleaseSIMDBC64/",
+      "xcodebuild/ReleaseSIMARM64C/",
       "xcodebuild/ReleaseX64/",
+      "xcodebuild/ReleaseX64C/",
+      "xcodebuild/ReleaseXARM64/",
+      "pkg/",
       "samples/",
+      "samples_2/",
       "samples-dev/",
       "tools/",
-      "third_party/gsutil/",
+      "third_party/android_tools/sdk/platform-tools/adb",
+      "third_party/android_tools/ndk/toolchains/aarch64-linux-android-4.9/prebuilt/linux-x86_64/bin/aarch64-linux-android-strip",
+      "third_party/android_tools/ndk/toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64/bin/arm-linux-androideabi-strip",
+      "third_party/devtools/",
+      "third_party/webdriver/",
       "third_party/pkg/",
       "third_party/pkg_tested/",
-      "third_party/observatory_pub_packages/packages/",
+      "tests/.dart_tool/package_config.json",
       "tests/angular/",
-      "tests/co19_2/",
-      "tests/compiler/",
+      "tests/co19/co19-analyzer.status",
+      "tests/co19/co19-co19.status",
+      "tests/co19/co19-dart2js.status",
+      "tests/co19/co19-dartdevc.status",
+      "tests/co19/co19-kernel.status",
+      "tests/co19/co19-runtime.status",
+      "tests/co19_2/co19_2-analyzer.status",
+      "tests/co19_2/co19_2-co19.status",
+      "tests/co19_2/co19_2-dart2js.status",
+      "tests/co19_2/co19_2-dartdevc.status",
+      "tests/co19_2/co19_2-kernel.status",
+      "tests/co19_2/co19_2-runtime.status",
+      "tests/corelib/",
       "tests/corelib_2/",
-      "tests/dart/",
-      "tests/kernel/",
+      "tests/web/",
+      "tests/web_2/",
+      "tests/dartdevc",
+      "tests/dartdevc_2",
+      "tests/language/",
       "tests/language_2/",
+      "tests/lib/",
       "tests/lib_2/",
       "tests/light_unittest.dart",
       "tests/search/",
       "tests/standalone/",
       "tests/standalone_2/",
+      "tests/ffi/",
+      "tests/ffi_2/",
+      "pkg/_fe_analyzer_shared/",
       "pkg/async_helper/",
       "pkg/build_integration/",
       "pkg/dart_internal/",
+      "pkg/dart2native/",
+      "pkg/dart2js_tools/",
+      "pkg/dds/",
       "pkg/expect/",
       "pkg/front_end/",
       "pkg/js/",
       "pkg/kernel/",
       "pkg/meta/",
+      "pkg/native_stack_traces/",
       "pkg/pkg.status",
       "pkg/smith/",
       "pkg/status_file/",
+      "pkg/test_runner/",
       "pkg/vm/",
+      "pkg/vm_service/",
+      "pkg/vm_snapshot_analysis/",
       "runtime/",
       "sdk/",
+      ".dart_tool/package_config.json",
       ".packages",
       ".vpython"
     ]
@@ -176,186 +398,629 @@
         "runtime": "vm",
         "timeout": 240,
         "use-sdk": true
-      }},
-    "unittest-asserts-(linux|mac|win)": {
+      }
+    },
+    "unittest-asserts-(debug|product|release)-mac-arm64": {
+      "options": {
+        "compiler": "dartk",
+        "enable-asserts": true,
+        "runtime": "vm",
+        "timeout": 240,
+        "use-sdk": true
+      }
+    },
+    "unittest-asserts-(debug|product|release)-(linux|mac|win)": {
+      "options": {
+        "compiler": "dartk",
+        "enable-asserts": true,
+        "runtime": "vm",
+        "timeout": 240,
+        "use-sdk": true
+      }
+    },
+    "unittest-weak-asserts-no-sdk-(linux|mac|win)": {
       "options": {
         "compiler": "dartk",
         "enable-asserts": true,
         "mode": "release",
         "runtime": "vm",
+        "timeout": 240
+      }
+    },
+    "analyzer-unittest-asserts-(debug|product|release)-(linux|mac|win)": {
+      "options": {
+        "compiler": "dartk",
+        "enable-asserts": true,
+        "runtime": "vm",
         "timeout": 240,
-        "use-sdk": true
-      }},
-      "unittest-asserts-no-sdk-(linux|mac|win)": {
-        "options": {
-          "compiler": "dartk",
-          "enable-asserts": true,
-          "mode": "release",
-          "runtime": "vm",
-          "timeout": 240
-        }},
-    "unittest-analyzer_use_fasta-linux": {
+        "use-sdk": true,
+        "builder-tag": "analyzer"
+      }
+    },
+    "cfe-unittest-asserts-(debug|product|release)-(linux|mac|win)": {
+      "options": {
+        "compiler": "dartk",
+        "enable-asserts": true,
+        "runtime": "vm",
+        "timeout": 240,
+        "use-sdk": true,
+        "builder-tag": "cfe"
+      }
+    },
+    "flutter-frontend": {
+      "__comment__": "This configuration is only used for a custom test runner. If it conflicts with a new configuration you are adding, you can make this configuration more specific by adding options."
+    },
+    "vm-ffi-unit-test": {
+      "__comment__": "This configuration is only used for a custom test runner. If it conflicts with a new configuration you are adding, you can make this configuration more specific by adding options."
+    },
+    "unittest-asserts-no-sdk-(linux|mac|win)": {
+      "options": {
+        "compiler": "dartk",
+        "enable-asserts": true,
+        "mode": "release",
+        "runtime": "vm",
+        "timeout": 240
+      }
+    },
+    "unittest-analyzer_use_fasta-(linux|mac|win)": {
       "options": {
         "compiler": "none",
         "runtime": "vm",
         "mode": "release",
         "use-sdk": true,
-        "vm-options": ["-DuseFastaParser=true"],
+        "vm-options": [
+          "-DuseFastaParser=true"
+        ],
         "builder-tag": "analyzer_use_fasta"
-      }},
-    "dartk-asan-linux-release-(ia32|x64)": {
+      }
+    },
+    "dartk-asan-(linux|mac)-(debug|product|release)-(ia32|x64|simarm|simarm64)": {
       "options": {
         "builder-tag": "asan",
         "timeout": 240
-      }},
+      }
+    },
+    "dartk-lsan-(linux|mac)-(debug|product|release)-(ia32|x64|simarm|simarm64)": {
+      "options": {
+        "builder-tag": "lsan",
+        "timeout": 240
+      }
+    },
+    "dartk-msan-linux-(debug|product|release)-(x64|simarm64)": {
+      "options": {
+        "builder-tag": "msan",
+        "timeout": 240
+      }
+    },
+    "dartk-tsan-(linux|mac)-(debug|product|release)-(x64|simarm64)": {
+      "options": {
+        "builder-tag": "tsan",
+        "timeout": 240
+      }
+    },
+    "dartk-ubsan-(linux|mac)-(debug|product|release)-(ia32|x64|simarm|simarm64)": {
+      "options": {
+        "builder-tag": "ubsan",
+        "timeout": 240
+      }
+    },
+    "dartkp-asan-(linux|mac)-(debug|product|release)-(x64|simarm|simarm64)": {
+      "options": {
+        "builder-tag": "asan",
+        "timeout": 240
+      }
+    },
+    "dartkp-lsan-(linux|mac)-(debug|product|release)-(x64|simarm|simarm64)": {
+      "options": {
+        "builder-tag": "lsan",
+        "timeout": 240
+      }
+    },
+    "dartkp-msan-linux-(debug|product|release)-(x64|simarm64)": {
+      "options": {
+        "builder-tag": "msan",
+        "timeout": 240
+      }
+    },
+    "dartkp-tsan-(linux|mac)-(debug|product|release)-(x64|simarm64)": {
+      "options": {
+        "builder-tag": "tsan",
+        "timeout": 240
+      }
+    },
+    "dartkp-ubsan-(linux|mac)-(debug|product|release)-(x64|simarm|simarm64)": {
+      "options": {
+        "builder-tag": "ubsan",
+        "timeout": 240
+      }
+    },
     "dart2js-(linux|mac|win)-chrome": {
       "options": {
+        "use-sdk": true,
+        "dart2js-options": [
+          "--canary"
+        ]
+      }
+    },
+    "dart2js-(linux|mac|win)-chrome-unsound": {
+      "options": {
+        "use-sdk": true,
+        "dart2js-options": [
+          "--no-sound-null-safety"
+        ]
+      }
+    },
+    "dart2js-weak-(linux|mac|win)-x64-d8": {
+      "options": {
+        "builder-tag": "dart2js-weak",
         "use-sdk": true
-      }},
+      }
+    },
     "dart2js-(linux|win)-firefox": {
       "options": {
         "use-sdk": true
-      }},
-    "dart2js-win-(ie11|edge)": {
+      }
+    },
+    "dart2js-(linux|win)-firefox-unsound": {
+      "options": {
+        "use-sdk": true,
+        "dart2js-options": [
+          "--no-sound-null-safety"
+        ]
+      }
+    },
+    "dart2js-win-ie11": {
+      "options": {
+        "use-sdk": true,
+        "babel": "{\"presets\":[\"es2015\"]}"
+      }
+    },
+    "dart2js-win-ie11-unsound": {
+      "options": {
+        "use-sdk": true,
+        "babel": "{\"presets\":[\"es2015\"]}",
+        "dart2js-options": [
+          "--no-sound-null-safety"
+        ]
+      }
+    },
+    "dart2js-win-edge": {
       "options": {
         "use-sdk": true
-      }},
+      }
+    },
+    "dart2js-win-edge-unsound": {
+      "options": {
+        "use-sdk": true,
+        "dart2js-options": [
+          "--no-sound-null-safety"
+        ]
+      }
+    },
     "dart2js-mac-safari": {
       "options": {
         "use-sdk": true
-      }},
-    "dart2js-faststartup-(linux|mac|win)-chrome": {
+      }
+    },
+    "dart2js-mac-safari-unsound": {
       "options": {
-        "fast-startup": true,
-        "use-sdk": true
-      }},
-    "dart2js-faststartup-(linux|win)-firefox": {
-      "options": {
-        "fast-startup": true,
-        "use-sdk": true
-      }},
-    "dart2js-faststartup-win-(ie11|edge)": {
-      "options": {
-        "fast-startup": true,
-        "use-sdk": true
-      }},
-    "dart2js-faststartup-mac-safari": {
-      "options": {
-        "fast-startup": true,
-        "use-sdk": true
-      }},
-    "dart2js-minified-csp-linux-chrome": {
+        "use-sdk": true,
+        "dart2js-options": [
+          "--no-sound-null-safety"
+        ]
+      }
+    },
+    "dart2js-minified-csp-(linux|mac|win)-chrome": {
       "options": {
         "minified": true,
         "csp": true,
         "use-sdk": true
-      }},
-    "dart2js-minified-faststartup-csp-linux-chrome": {
+      }
+    },
+    "dart2js-minified-csp-(linux|mac|win)-chrome-unsound": {
       "options": {
         "minified": true,
         "csp": true,
-        "fast-startup": true,
-        "use-sdk": true
-      }},
-    "dart2js-minified-linux-d8": {
+        "use-sdk": true,
+        "dart2js-options": [
+          "--no-sound-null-safety"
+        ]
+      }
+    },
+    "dart2js-minified-csp-max-fragments-(linux|mac|win)-chrome": {
+      "options": {
+        "minified": true,
+        "csp": true,
+        "timeout": 240,
+        "dart2js-options": [
+          "--libraries-spec=sdk/lib/libraries.json",
+          "--platform-binaries=out/ReleaseX64/",
+          "--merge-fragments-threshold=3",
+          "--simple-load-ids"
+        ]
+      }
+    },
+    "dart2js-minified-(linux|mac|win)-d8": {
       "options": {
         "minified": true,
         "use-sdk": true
-      }},
-    "dart2js-minified-faststartup-linux-d8": {
+      }
+    },
+    "dart2js-minified-(linux|mac|win)-d8-unsound": {
       "options": {
         "minified": true,
-        "fast-startup": true,
-        "use-sdk": true
-      }},
-    "dart2js-hostasserts-linux-ia32-d8": {
+        "use-sdk": true,
+        "dart2js-options": [
+          "--no-sound-null-safety"
+        ]
+      }
+    },
+    "dart2js-minified-hostasserts-weak-max-fragments-(linux|win)-x64-d8": {
       "options": {
-        "host-checked": true
-      }},
-    "dartkp-linux-release-(simarm|simarm64)": {
+        "minified": true,
+        "host-checked": true,
+        "timeout": 240,
+        "builder-tag": "dart2js-weak",
+        "dart2js-options": [
+          "--libraries-spec=sdk/lib/libraries.json",
+          "--platform-binaries=out/ReleaseX64/",
+          "--merge-fragments-threshold=3",
+          "--simple-load-ids"
+        ]
+      }
+    },
+    "dart2js-production-(linux|mac|win)-d8": {
       "options": {
-        "use-blobs": true
-    }},
-    "dartkp-(win|mac)-release-simarm64": {
+        "builder-tag": "dart2js_production",
+        "use-sdk": true,
+        "dart2js-options": [
+          "-O3"
+        ]
+      }
+    },
+    "dart2js-o0-(linux|mac|win)-d8": {
       "options": {
-        "use-blobs": true
-    }},
-    "dartkp-win-release-x64": {
+        "builder-tag": "dart2js_o0",
+        "use-sdk": true,
+        "dart2js-options": [
+          "-O0"
+        ]
+      }
+    },
+    "dart2js-modern-(linux|mac|win)-d8": {
       "options": {
-        "use-blobs": true
-    }},
-    "dartkp-linux-(product|release)-x64": { },
-    "dartkp-obfuscate-linux-release-x64": {
+        "builder-tag": "dart2js_modern",
+        "use-sdk": true,
+        "dart2js-options": [
+          "--canary"
+        ]
+      }
+    },
+    "dart2js-hostasserts-(linux|mac|win)-(ia32|x64)-d8": {
+      "options": {
+        "host-checked": true,
+        "timeout": 240
+      }
+    },
+    "dart2js-hostasserts-(linux|mac|win)-(ia32|x64)-d8-unsound": {
+      "options": {
+        "host-checked": true,
+        "timeout": 240,
+        "dart2js-options": [
+          "--no-sound-null-safety"
+        ]
+      }
+    },
+    "dart2js-hostasserts-weak-(linux|win)-x64-(d8|chrome)": {
+      "options": {
+        "host-checked": true,
+        "timeout": 240,
+        "builder-tag": "dart2js-weak",
+        "dart2js-options": [
+          "--libraries-spec=sdk/lib/libraries.json",
+          "--platform-binaries=out/ReleaseX64/"
+        ]
+      }
+    },
+    "dart2js-hostasserts-weak-max-fragments-(linux|win)-x64-(d8|chrome)": {
+      "options": {
+        "host-checked": true,
+        "timeout": 240,
+        "builder-tag": "dart2js-weak",
+        "dart2js-options": [
+          "--libraries-spec=sdk/lib/libraries.json",
+          "--platform-binaries=out/ReleaseX64/",
+          "--merge-fragments-threshold=3",
+          "--simple-load-ids"
+        ]
+      }
+    },
+    "dart2js-hostasserts-weak-mac-x64-(d8|chrome)": {
+      "options": {
+        "host-checked": true,
+        "timeout": 240,
+        "builder-tag": "dart2js-weak",
+        "dart2js-options": [
+          "--libraries-spec=sdk/lib/libraries.json",
+          "--platform-binaries=xcodebuild/ReleaseX64/"
+        ]
+      }
+    },
+    "dart2js-hostasserts-strong-(linux|win)-x64-(d8|chrome)": {
+      "options": {
+        "host-checked": true,
+        "timeout": 240,
+        "builder-tag": "dart2js-strong",
+        "dart2js-options": [
+          "--libraries-spec=sdk/lib/libraries.json",
+          "--platform-binaries=out/ReleaseX64/"
+        ]
+      }
+    },
+    "dart2js-hostasserts-strong-max-fragments-(linux|win)-x64-(d8|chrome)": {
+      "options": {
+        "host-checked": true,
+        "timeout": 240,
+        "builder-tag": "dart2js-strong",
+        "dart2js-options": [
+          "--libraries-spec=sdk/lib/libraries.json",
+          "--platform-binaries=out/ReleaseX64/",
+          "--merge-fragments-threshold=3",
+          "--simple-load-ids"
+        ]
+      }
+    },
+    "dart2js-hostasserts-strong-mac-x64-(d8|chrome)": {
+      "options": {
+        "host-checked": true,
+        "timeout": 240,
+        "builder-tag": "dart2js-strong",
+        "dart2js-options": [
+          "--libraries-spec=sdk/lib/libraries.json",
+          "--platform-binaries=xcodebuild/ReleaseX64/"
+        ]
+      }
+    },
+    "dartkp-android-(debug|product|release)-arm_x64": {
+      "options": {
+        "builder-tag": "crossword",
+        "use-elf": true
+      }
+    },
+    "dartkp-android-(debug|product|release)-(arm|arm64|arm64c)": {
+      "options": {
+        "use-elf": true
+      }
+    },
+    "dartk-android-(debug|product|release)-(arm|arm64|arm64c)": {},
+    "dartkp-(linux|win|mac)-(debug|product|release)-(arm64|arm64c|simarm|simarm64|simarm64c)": {
+      "options": {
+        "use-elf": true
+      }
+    },
+    "dartkp-dwarf-(linux|win|mac)-product-(arm64|arm64c|simarm|simarm64|simarm64c|x64|x64c)": {
+      "options": {
+        "builder-tag": "dwarf",
+        "vm-options": [
+          "--dwarf_stack_traces"
+        ],
+        "use-elf": true
+      }
+    },
+    "dartkp-linux-(debug|product|release)-simarm-crossword": {
+      "options": {
+        "builder-tag": "crossword"
+      }
+    },
+    "dartkp-weak-asserts-linux-(debug|product|release)-simarm-crossword": {
+      "options": {
+        "builder-tag": "crossword"
+      }
+    },
+    "dartkp-strong-linux-(debug|product|release)-simarm-crossword": {
+      "options": {
+        "builder-tag": "crossword"
+      }
+    },
+    "dartkp-(win|mac)-(debug|product|release)-simarm-crossword": {
+      "options": {
+        "builder-tag": "crossword",
+        "use-elf": true
+      }
+    },
+    "dartkp-win-(product|release)-(x64|x64c)": {
+      "options": {
+        "use-elf": true
+      }
+    },
+    "dartkp-win-debug-(x64|x64c)": {
+      "options": {
+        "use-elf": true,
+        "vm-options": []
+      }
+    },
+    "dartkp-(linux|mac)-(product|release)-(x64|x64c)": {},
+    "dartkp-obfuscate-(linux|mac|win)-(debug|product|release)-(x64|x64c)": {
       "options": {
         "builder-tag": "obfuscated",
-        "vm-options": ["--obfuscate"]
-    }},
-    "dartkp-linux-debug-x64": {
+        "vm-options": [
+          "--obfuscate"
+        ]
+      }
+    },
+    "dartkp-(linux|mac)-debug-(x64|x64c)": {
       "options": {
-        "vm-options": ["--no-enable-malloc-hooks"]
-    }},
-    "dartk-(linux|mac)-(debug|release)-(ia32|x64)": { },
-    "dartk-checked-linux-release-x64": {
+        "vm-options": []
+      }
+    },
+    "dartkp-no-bare-(linux|mac|win)-(debug|product|release)-(x64|x64c)": {
       "options": {
-        "checked": true
-    }},
-    "dartk-win-(debug|release)-(ia32|x64)": { },
-    "dartk-(linux|mac|win)-product-x64": { },
-    "dartk-(linux|mac)-(debug|release)-simdbc64": { },
-    "dartk-linux-release-(arm64|simarm|simarm64)": { },
-    "dartk-optcounter-linux-release-(ia32|x64)": {
+        "vm-options": [
+          "--no-use-bare-instructions"
+        ]
+      }
+    },
+    "dartkp-no-bare-(linux|mac|win)-(debug|product|release)-(simarm|simarm64|simarm64c)": {
+      "options": {
+        "vm-options": [
+          "--no-use-bare-instructions"
+        ],
+        "use-elf": true
+      }
+    },
+    "dartk-(linux|mac|win)-(debug|product|release)-(ia32|x64|x64c)": {},
+    "dartk-fuchsia-(debug|product|release)-(x64|x64c)": {},
+    "dartk-linux-debug-(ia32|x64)-canary": {
+      "options": {
+        "builder-tag": "canary"
+      }
+    },
+    "dartkp-weak-asserts-(linux|mac)-(debug|product|release)-(arm64|x64|x64c)": {
+      "options": {
+        "enable-asserts": true,
+        "builder-tag": "vm_nnbd"
+      }
+    },
+    "dartkp-weak-asserts-(linux|mac)-(debug|product|release)-(simarm|simarm64|simarm64c)": {
+      "options": {
+        "enable-asserts": true,
+        "use-elf": true,
+        "builder-tag": "vm_nnbd"
+      }
+    },
+    "dartkp-weak-asserts-win-(debug|product|release)-(simarm64|simarm64c|x64|x64c)": {
+      "options": {
+        "enable-asserts": true,
+        "use-elf": true,
+        "builder-tag": "vm_nnbd"
+      }
+    },
+    "dartk-weak-asserts-(linux|mac|win)-(debug|product|release)-(arm64|ia32|simarm|simarm64|simarm64c|x64|x64c)": {
+      "options": {
+        "enable-asserts": true,
+        "builder-tag": "vm_nnbd"
+      }
+    },
+    "dartk-strong-(linux|mac|win)-(debug|product|release)-(arm64|ia32|simarm|simarm64|simarm64c|x64|x64c)": {
+      "options": {
+        "builder-tag": "vm_nnbd"
+      }
+    },
+    "dartkp-strong-(linux|mac)-(debug|product|release)-(arm64|x64|x64c)": {
+      "options": {
+        "builder-tag": "vm_nnbd"
+      }
+    },
+    "dartkp-strong-(linux|mac)-(debug|product|release)-(simarm|simarm64|simarm64c)": {
+      "options": {
+        "use-elf": true,
+        "builder-tag": "vm_nnbd"
+      }
+    },
+    "dartkp-strong-win-(debug|product|release)-(simarm64|simarm64c|x64|x64c)": {
+      "options": {
+        "use-elf": true,
+        "builder-tag": "vm_nnbd"
+      }
+    },
+    "dartk-checked-(linux|mac|win)-(debug|product|release)-(ia32|x64|x64c)": {
+      "options": {
+        "enable-asserts": true
+      }
+    },
+    "dartk-(linux|mac|win)-(debug|product|release)-(arm64|arm64c|simarm|simarm64|simarm64c)": {},
+    "dartk-optcounter-(linux|mac|win)-(debug|product|release)-(ia32|x64|x64c|simarm|simarm64|simarm64c)": {
       "options": {
         "builder-tag": "optimization_counter_threshold",
-        "vm-options": ["--optimization-counter-threshold=5"]
-      }},
-    "dartk-reload-linux-(debug|release)-x64": {
+        "vm-options": [
+          "--optimization-counter-threshold=5",
+          "--random-seed=__RANDOM__"
+        ]
+      }
+    },
+    "dartk-reload-(linux|mac|win)-(debug|product|release)-(ia32|x64|x64c)": {
       "options": {
         "hot-reload": true
-      }},
-    "dartk-reload-mac-(debug|release)-simdbc64": {
-      "options": {
-        "hot-reload": true
-      }},
-    "dartk-reload-rollback-linux-(debug|release)-x64": {
+      }
+    },
+    "dartk-reload-rollback-(linux|mac|win)-(debug|product|release)-(ia32|x64|x64c)": {
       "options": {
         "hot-reload-rollback": true
-      }},
-    "app_jitk-linux-(debug|product|release)-x64": { },
-    "dartkb-interpret-linux-(debug|release)-x64": {
+      }
+    },
+    "dartk-linux-(debug|product|release)-(arm|arm64|arm64c)-qemu": {
       "options": {
-        "vm-options": ["--enable_interpreter", "--compilation-counter-threshold=-1"]
-      }},
-    "dartkb-mixed-linux-(debug|release)-x64": {
+        "use-qemu": true
+      }
+    },
+    "dartkp-linux-(debug|product|release)-(arm|arm64|arm64c)-qemu": {
       "options": {
-        "vm-options": ["--enable_interpreter"]
-      }},
-    "dartkb-compile-linux-(debug|release)-x64": {
-      "options": {
-        "vm-options": ["--use_bytecode_compiler"]
-      }},
-    "(dartdevc|dartdevk)-checked-(linux|mac|win)-release-chrome": {
+        "use-qemu": true
+      }
+    },
+    "app_jitk-(linux|mac|win)-(debug|product|release)-(ia32|x64|x64c)": {},
+    "dartdevk-checked-(linux|mac|win)-(debug|product|release)-(chrome|firefox)": {
       "options": {
         "checked": true,
         "use-sdk": true
-      }},
-    "fasta-(linux|mac|win)": { },
+      }
+    },
+    "dartdevk-strong-linux-release-chrome": {
+      "options": {
+        "checked": true,
+        "use-sdk": true,
+        "enable-asserts": true
+      }
+    },
+    "dartdevk-weak-linux-release-chrome": {
+      "options": {
+        "checked": true,
+        "use-sdk": true,
+        "enable-asserts": true
+      }
+    },
+    "cfe-(linux|mac|win)": {
+      "options": {
+        "compiler": "fasta"
+      }
+    },
+    "cfe-weak-(linux|mac|win)": {
+      "options": {
+        "compiler": "fasta"
+      }
+    },
+    "cfe-strong-(linux|mac|win)": {
+      "options": {
+        "compiler": "fasta"
+      }
+    },
     "analyzer-(linux|mac|win)": {
       "options": {
         "compiler": "dart2analyzer",
         "use-sdk": true
-      }},
+      }
+    },
     "analyzer-asserts-(linux|mac|win)": {
       "options": {
         "compiler": "dart2analyzer",
         "enable-asserts": true,
         "use-sdk": true
-      }},
-    "analyzer-fasta_parser-linux": {
+      }
+    },
+    "analyzer-asserts-strong-(linux|mac|win)": {
       "options": {
         "compiler": "dart2analyzer",
-        "analyzer-use-fasta-parser": true,
+        "enable-asserts": true,
         "use-sdk": true
-      }}
+      }
+    },
+    "analyzer-asserts-weak-(linux|mac|win)": {
+      "options": {
+        "compiler": "dart2analyzer",
+        "enable-asserts": true,
+        "use-sdk": true
+      }
+    }
   },
   "builder_configurations": [
     {
@@ -365,7 +1030,7 @@
         "front-end-win-release-x64"
       ],
       "meta": {
-        "description": "Runs the front-end unit tests and fasta tests."
+        "description": "Runs the cfe tests."
       },
       "steps": [
         {
@@ -379,88 +1044,122 @@
           ]
         },
         {
-          "name": "unit tests",
+          "name": "co19_2 tests",
           "arguments": [
-            "-nunittest-asserts-${system}",
-             "pkg/(kernel|front_end|fasta)"
+            "-ncfe-${system}",
+            "co19_2"
+          ],
+          "fileset": "front-end",
+          "shards": 2
+        },
+        {
+          "name": "sdk tests",
+          "arguments": [
+            "-ncfe-${system}"
+          ],
+          "fileset": "front-end",
+          "shards": 2
+        },
+        {
+          "name": "unit tests (no git)",
+          "arguments": [
+            "-ncfe-unittest-asserts-${mode}-${system}",
+            "pkg/pkg/(kernel|front_end|fasta)\/(*?)(?<!_git)_test"
+          ],
+          "fileset": "front-end",
+          "shards": 3
+        },
+        {
+          "name": "unit tests suites (no git)",
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "testRunner": true,
+          "arguments": [
+            "--enable-asserts",
+            "pkg/front_end/test/unit_test_suites.dart",
+            "-ncfe-unittest-asserts-${mode}-${system}",
+            "--skipTestsThatRequireGit"
+          ],
+          "fileset": "front-end",
+          "shards": 3
+        },
+        {
+          "name": "unit tests (with git)",
+          "arguments": [
+            "-ncfe-unittest-asserts-${mode}-${system}",
+            "pkg/pkg/(kernel|front_end|fasta)\/(*?)(_git)_test"
           ]
         },
         {
-          "name": "fasta sdk tests",
-          "arguments": ["-nfasta-${system}"]
-        },
-        {
-          "name": "fasta co19_2 tests",
+          "name": "unit tests suites (with git)",
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "testRunner": true,
           "arguments": [
-            "-nfasta-${system}",
-            "co19_2"
+            "--enable-asserts",
+            "pkg/front_end/test/unit_test_suites.dart",
+            "-ncfe-unittest-asserts-${mode}-${system}",
+            "--onlyTestsThatRequireGit"
           ]
         }
       ]
     },
     {
       "builders": [
-        "vm-dartkb-linux-debug-x64",
-        "vm-dartkb-linux-release-x64"
+        "front-end-nnbd-linux-release-x64",
+        "front-end-nnbd-mac-release-x64",
+        "front-end-nnbd-win-release-x64"
       ],
       "meta": {
-        "description": "This configuration is used by the vm kbc builders."
+        "description": "Runs the front-end tests with NNBD"
       },
       "steps": [
-        {
-          "name": "configure dart",
-          "script": "tools/gn.py",
-          "arguments": [
-            "--mode=debug,release",
-            "--arch=x64",
-            "--bytecode"
-          ]
-        },
         {
           "name": "build dart",
           "script": "tools/build.py",
           "arguments": [
-            "runtime"
+            "create_sdk",
+            "dartdevc_test",
+            "kernel_platform_files",
+            "runtime_kernel"
           ]
         },
         {
-          "name": "vm mixed mode tests",
+          "name": "weak co19 tests",
           "arguments": [
-            "-ndartkb-mixed-linux-${mode}-x64",
-            "--compiler=dartkb",
-            "language_2",
-            "corelib_2",
-            "lib_2",
-            "standalone_2"
+            "-ncfe-weak-${system}",
+            "co19"
           ],
-          "fileset": "vm-kernel",
-          "shards": 10
+          "fileset": "front-end",
+          "shards": 2
         },
         {
-          "name": "vm bytecode compiler tests",
+          "name": "strong co19 tests",
           "arguments": [
-            "-ndartkb-compile-linux-${mode}-x64",
-            "--compiler=dartkb",
-            "language_2",
-            "corelib_2",
-            "lib_2",
-            "standalone_2"
+            "-ncfe-strong-${system}",
+            "co19"
           ],
-          "fileset": "vm-kernel",
-          "shards": 10
+          "fileset": "front-end",
+          "shards": 2
         },
         {
-          "name": "vm interpreter tests",
+          "name": "weak sdk tests",
           "arguments": [
-            "-ndartkb-interpret-linux-${mode}-x64",
-            "--compiler=dartkb",
-            "language_2",
-            "corelib_2",
-            "lib_2",
-            "standalone_2"
-          ],
-          "fileset": "vm-kernel",
-          "shards": 10
+            "-ncfe-weak-${system}",
+            "corelib",
+            "ffi",
+            "language",
+            "lib",
+            "service"
+          ]
+        },
+        {
+          "name": "strong sdk tests",
+          "arguments": [
+            "-ncfe-strong-${system}",
+            "corelib",
+            "ffi",
+            "language",
+            "lib"
+          ]
         }
       ]
     },
@@ -475,32 +1174,276 @@
         {
           "name": "build dart",
           "script": "tools/build.py",
-          "arguments": ["--arch=ia32,x64", "runtime"]
+          "arguments": [
+            "--arch=ia32,x64",
+            "runtime"
+          ]
         },
         {
           "name": "vm ia32 tests",
           "arguments": [
-            "-ndartk-linux-debug-ia32",
-            "vm"]
+            "-ndartk-linux-debug-ia32-canary",
+            "vm"
+          ]
         },
         {
           "name": "vm x64 tests",
           "arguments": [
-            "-ndartk-linux-debug-x64",
-            "vm"]
+            "-ndartk-linux-debug-x64-canary",
+            "vm"
+          ]
         }
       ]
     },
     {
       "builders": [
-        "vm-kernel-precomp-linux-debug-x64",
+        "vm-kernel-precomp-android-release-arm",
+        "vm-kernel-precomp-android-release-arm_x64",
+        "vm-kernel-precomp-android-release-arm64",
+        "vm-kernel-precomp-android-release-arm64c"
+      ],
+      "meta": {
+        "description": "This configuration is used by the vm precomp builders on Android."
+      },
+      "steps": [
+        {
+          "name": "build dart",
+          "script": "tools/build.py",
+          "arguments": [
+            "runtime_kernel",
+            "dart_precompiled_runtime",
+            "--os=android"
+          ]
+        },
+        {
+          "name": "vm tests",
+          "arguments": [
+            "-ndartkp-android-${mode}-${arch}",
+            "-j2"
+          ],
+          "fileset": "vm-kernel",
+          "shards": 15
+        }
+      ]
+    },
+    {
+      "builders": [
+        "vm-ffi-android-debug-arm64",
+        "vm-ffi-android-debug-arm64c",
+        "vm-ffi-android-debug-arm",
+        "vm-ffi-android-release-arm64",
+        "vm-ffi-android-release-arm64c",
+        "vm-ffi-android-release-arm",
+        "vm-ffi-android-product-arm64",
+        "vm-ffi-android-product-arm64c",
+        "vm-ffi-android-product-arm"
+      ],
+      "meta": {
+        "description": "This configuration is used for running FFI tests in JIT-mode on Android."
+      },
+      "steps": [
+        {
+          "name": "build dart",
+          "script": "tools/build.py",
+          "arguments": [
+            "runtime_kernel",
+            "--os=android"
+          ]
+        },
+        {
+          "name": "ffi tests",
+          "arguments": [
+            "-ndartk-android-${mode}-${arch}",
+            "ffi_2"
+          ],
+          "fileset": "vm-kernel",
+          "shards": 1
+        }
+      ]
+    },
+    {
+      "builders": [
+        "vm-precomp-ffi-qemu-linux-release-arm"
+      ],
+      "meta": {
+        "description": "This configuration is used for running vm unit tests and FFI tests on qemu and FFI unit tests."
+      },
+      "steps": [
+        {
+          "name": "build run_ffi_unit_tests",
+          "script": "tools/build.py",
+          "arguments": [
+            "--arch=x64",
+            "--mode=debug",
+            "run_ffi_unit_tests"
+          ]
+        },
+        {
+          "name": "ffi unit tests",
+          "arguments": [
+            "-nvm-ffi-unit-test",
+            "ffi_unit"
+          ]
+        },
+        {
+          "name": "build dart",
+          "script": "tools/build.py",
+          "arguments": [
+            "--use-qemu",
+            "dart_precompiled_runtime",
+            "runtime_kernel"
+          ]
+        },
+        {
+          "name": "build dart",
+          "script": "tools/build.py",
+          "arguments": [
+            "--arch=simarm_x64",
+            "gen_snapshot"
+          ]
+        },
+        {
+          "name": "vm unit tests",
+          "arguments": [
+            "-ndartk-linux-${mode}-arm-qemu",
+            "vm/cc"
+          ]
+        },
+        {
+          "name": "ffi tests",
+          "arguments": [
+            "-ndartkp-linux-${mode}-arm-qemu",
+            "ffi_2"
+          ]
+        }
+      ]
+    },
+    {
+      "builders": [
+        "vm-kernel-precomp-nnbd-linux-debug-x64",
+        "vm-kernel-precomp-nnbd-linux-release-simarm64",
+        "vm-kernel-precomp-nnbd-linux-release-simarm64c",
+        "vm-kernel-precomp-nnbd-linux-release-x64",
+        "vm-kernel-precomp-nnbd-linux-release-x64c",
+        "vm-kernel-precomp-nnbd-mac-release-arm64",
+        "vm-kernel-precomp-nnbd-mac-release-simarm64",
+        "vm-kernel-precomp-nnbd-mac-release-simarm64c",
+        "vm-kernel-precomp-nnbd-win-release-x64",
+        "vm-kernel-precomp-nnbd-win-release-x64c"
+      ],
+      "meta": {
+        "description": "This configuration is for the VM AOT nnbd builder group."
+      },
+      "steps": [
+        {
+          "name": "build dart",
+          "script": "tools/build.py",
+          "arguments": [
+            "runtime_kernel",
+            "dart_precompiled_runtime"
+          ]
+        },
+        {
+          "name": "vm nnbd tests in weak mode with asserts",
+          "arguments": [
+            "-ndartkp-weak-asserts-${system}-${mode}-${arch}",
+            "benchmark_smoke",
+            "corelib",
+            "ffi",
+            "language",
+            "lib",
+            "samples",
+            "service",
+            "standalone",
+            "utils",
+            "vm"
+          ],
+          "fileset": "vm-kernel",
+          "shards": 6
+        },
+        {
+          "name": "vm nnbd tests in strong mode",
+          "arguments": [
+            "-ndartkp-strong-${system}-${mode}-${arch}",
+            "benchmark_smoke",
+            "corelib",
+            "ffi",
+            "language",
+            "lib",
+            "samples",
+            "standalone",
+            "utils",
+            "vm"
+          ],
+          "fileset": "vm-kernel",
+          "shards": 6
+        },
+        {
+          "name": "co19 nnbd tests in strong mode",
+          "arguments": [
+            "-ndartkp-strong-${system}-${mode}-${arch}",
+            "co19"
+          ],
+          "fileset": "vm-kernel",
+          "shards": 10
+        },
+        {
+          "name": "co19 nnbd tests in weak mode with asserts",
+          "arguments": [
+            "-ndartkp-weak-asserts-${system}-${mode}-${arch}",
+            "co19"
+          ],
+          "fileset": "vm-kernel",
+          "shards": 10
+        }
+      ]
+    },
+    {
+      "builders": [
+        "vm-kernel-precomp-linux-release-x64"
+      ],
+      "meta": {
+        "description": "This configuration is used by the vm kernel precomp linux release builders. (includes co19_2 testing)"
+      },
+      "steps": [
+        {
+          "name": "build dart",
+          "script": "tools/build.py",
+          "arguments": [
+            "runtime_kernel",
+            "dart_precompiled_runtime"
+          ]
+        },
+        {
+          "name": "vm tests",
+          "arguments": [
+            "-ndartkp-${system}-${mode}-${arch}"
+          ],
+          "fileset": "vm-kernel",
+          "shards": 6
+        },
+        {
+          "name": "vm co19_2 tests",
+          "arguments": [
+            "-ndartkp-${system}-${mode}-${arch}",
+            "co19_2"
+          ],
+          "fileset": "vm-kernel",
+          "shards": 10
+        }
+      ]
+    },
+    {
+      "builders": [
         "vm-kernel-precomp-linux-product-x64",
+        "vm-kernel-precomp-linux-product-x64c",
         "vm-kernel-precomp-linux-release-simarm",
         "vm-kernel-precomp-linux-release-simarm64",
-        "vm-kernel-precomp-linux-release-x64",
+        "vm-kernel-precomp-linux-release-simarm64c",
         "vm-kernel-precomp-mac-release-simarm64",
-        "vm-kernel-precomp-win-release-simarm64",
-        "vm-kernel-precomp-win-release-x64"
+        "vm-kernel-precomp-mac-release-simarm64c",
+        "vm-kernel-precomp-win-release-x64",
+        "vm-kernel-precomp-win-release-x64c"
       ],
       "meta": {
         "description": "This configuration is used by the vm kernel precomp builders."
@@ -526,7 +1469,94 @@
     },
     {
       "builders": [
-        "vm-kernel-precomp-obfuscate-linux-release-x64"
+        "vm-kernel-precomp-linux-debug-x64",
+        "vm-kernel-precomp-linux-debug-x64c",
+        "vm-kernel-precomp-linux-debug-simarm64",
+        "vm-kernel-precomp-linux-debug-simarm64c"
+      ],
+      "meta": {
+        "description": "This configuration is used by the vm kernel precomp debug builders. It uses 15 shards for testing to avoid 1 hour shard timeouts."
+      },
+      "steps": [
+        {
+          "name": "build dart",
+          "script": "tools/build.py",
+          "arguments": [
+            "runtime_kernel",
+            "dart_precompiled_runtime"
+          ]
+        },
+        {
+          "name": "vm tests",
+          "arguments": [
+            "-ndartkp-${system}-${mode}-${arch}"
+          ],
+          "fileset": "vm-kernel",
+          "shards": 15
+        }
+      ]
+    },
+    {
+      "builders": [
+        "vm-kernel-precomp-dwarf-linux-product-x64",
+        "vm-kernel-precomp-dwarf-linux-product-simarm64"
+      ],
+      "meta": {
+        "description": "This configuration is used by the vm kernel precomp builders with dwarf stack traces."
+      },
+      "steps": [
+        {
+          "name": "build dart",
+          "script": "tools/build.py",
+          "arguments": [
+            "runtime_kernel",
+            "dart_precompiled_runtime"
+          ]
+        },
+        {
+          "name": "vm tests",
+          "arguments": [
+            "-ndartkp-dwarf-${system}-${mode}-${arch}"
+          ],
+          "fileset": "vm-kernel",
+          "shards": 10
+        }
+      ]
+    },
+    {
+      "builders": [
+        "vm-kernel-precomp-bare-linux-release-x64",
+        "vm-kernel-precomp-bare-linux-release-x64c",
+        "vm-kernel-precomp-bare-linux-release-simarm",
+        "vm-kernel-precomp-bare-linux-release-simarm64",
+        "vm-kernel-precomp-bare-linux-release-simarm64c"
+      ],
+      "meta": {
+        "description": "This configuration is used by the vm kernel precomp builders using bare instructions."
+      },
+      "steps": [
+        {
+          "name": "build dart",
+          "script": "tools/build.py",
+          "arguments": [
+            "runtime_kernel",
+            "dart_precompiled_runtime"
+          ]
+        },
+        {
+          "name": "vm tests",
+          "arguments": [
+            "-ndartkp-no-bare-${system}-${mode}-${arch}"
+          ],
+          "fileset": "vm-kernel",
+          "shards": 10
+        }
+      ]
+    },
+    {
+      "builders": [
+        "vm-kernel-precomp-obfuscate-linux-release-x64",
+        "vm-kernel-precomp-obfuscate-linux-release-x64c"
       ],
       "meta": {
         "description": "This configuration is used by the obfuscated vm kernel precomp builders."
@@ -553,39 +1583,151 @@
     {
       "builders": [
         "vm-kernel-asan-linux-release-ia32",
-        "vm-kernel-asan-linux-release-x64"
+        "vm-kernel-asan-linux-release-x64",
+        "vm-kernel-lsan-linux-release-ia32",
+        "vm-kernel-lsan-linux-release-x64",
+        "vm-kernel-msan-linux-release-x64",
+        "vm-kernel-ubsan-linux-release-ia32",
+        "vm-kernel-ubsan-linux-release-x64"
       ],
       "meta": {
-        "description": "This configuration is used by the vm builders with address sanitizing (asan). We have to run gn.py with the DART_USE_ASAN options, which we do by running generate_buildfiles."
+        "description": "This configuration is used by the VM/JIT builders with sanitizers."
       },
       "steps": [
         {
           "name": "build dart",
           "script": "tools/build.py",
-          "arguments": ["runtime"],
-          "environment": {"DART_USE_ASAN": 1}
+          "arguments": [
+            "runtime"
+          ]
         },
         {
           "name": "vm tests",
           "arguments": [
-            "-ndartk-asan-linux-release-${arch}"],
-          "environment": {
-            "ASAN_OPTIONS": "handle_segv=0:detect_stack_use_after_return=0",
-            "ASAN_SYMBOLIZER_PATH": "buildtools/linux-x64/clang/bin/llvm-symbolizer"
-          }
+            "-ndartk-${sanitizer}-${system}-${mode}-${arch}"
+          ]
         }
       ]
     },
     {
       "builders": [
+        "vm-kernel-tsan-linux-release-x64"
+      ],
+      "meta": {
+        "description": "This configuration is used by the VM/JIT builders with sanitizers."
+      },
+      "steps": [
+        {
+          "name": "build dart",
+          "script": "tools/build.py",
+          "arguments": [
+            "runtime"
+          ]
+        },
+        {
+          "name": "vm tests",
+          "arguments": [
+            "-ndartk-${sanitizer}-${system}-${mode}-${arch}",
+            "vm",
+            "standalone_2"
+          ],
+          "fileset": "vm-kernel",
+          "shards": 8
+        }
+      ]
+    },
+    {
+      "builders": [
+        "vm-kernel-precomp-asan-linux-release-x64",
+        "vm-kernel-precomp-lsan-linux-release-x64",
+        "vm-kernel-precomp-msan-linux-release-x64",
+        "vm-kernel-precomp-ubsan-linux-release-x64"
+      ],
+      "meta": {
+        "description": "This configuration is used by the VM/AOT builders with sanitizers."
+      },
+      "steps": [
+        {
+          "name": "build dart",
+          "script": "tools/build.py",
+          "arguments": [
+            "runtime",
+            "runtime_precompiled"
+          ]
+        },
+        {
+          "name": "vm tests",
+          "arguments": [
+            "-ndartkp-${sanitizer}-${system}-${mode}-${arch}",
+            "vm",
+            "standalone_2"
+          ]
+        }
+      ]
+    },
+    {
+      "builders": [
+        "vm-kernel-precomp-tsan-linux-release-x64"
+      ],
+      "meta": {
+        "description": "This configuration is used by the VM/AOT builders with sanitizers."
+      },
+      "steps": [
+        {
+          "name": "build dart",
+          "script": "tools/build.py",
+          "arguments": [
+            "runtime",
+            "runtime_precompiled"
+          ]
+        },
+        {
+          "name": "vm tests",
+          "arguments": [
+            "-ndartkp-${sanitizer}-${system}-${mode}-${arch}",
+            "vm",
+            "standalone_2"
+          ],
+          "fileset": "vm-kernel",
+          "shards": 8
+        }
+      ]
+    },
+    {
+      "builders": [
+        "vm-kernel-gcc-linux"
+      ],
+      "meta": {
+        "description": "This configuration builds the VM with GCC."
+      },
+      "steps": [
+        {
+          "name": "build dart",
+          "script": "tools/build.py",
+          "arguments": [
+            "--mode=all",
+            "--arch=all",
+            "--no-clang",
+            "--no-goma",
+            "runtime"
+          ]
+        }
+      ]
+    },
+    {
+      "builders": [
+        "vm-kernel-linux-debug-simarm64",
+        "vm-kernel-linux-debug-simarm64c",
         "vm-kernel-linux-release-simarm",
         "vm-kernel-linux-release-simarm64",
+        "vm-kernel-linux-release-simarm64c",
         "vm-kernel-linux-release-ia32",
         "vm-kernel-win-debug-ia32",
         "vm-kernel-win-debug-x64",
+        "vm-kernel-win-debug-x64c",
         "vm-kernel-win-product-x64",
-        "vm-kernel-win-release-ia32",
-        "vm-kernel-win-release-x64"
+        "vm-kernel-win-product-x64c",
+        "vm-kernel-win-release-ia32"
       ],
       "meta": {
         "description": "This configuration is for the kernel builder group."
@@ -594,12 +1736,15 @@
         {
           "name": "build dart",
           "script": "tools/build.py",
-          "arguments": ["runtime_kernel"]
+          "arguments": [
+            "runtime_kernel"
+          ]
         },
         {
           "name": "vm tests",
           "arguments": [
-            "-ndartk-${system}-${mode}-${arch}"],
+            "-ndartk-${system}-${mode}-${arch}"
+          ],
           "fileset": "vm-kernel",
           "shards": 10
         }
@@ -607,17 +1752,112 @@
     },
     {
       "builders": [
+        "vm-kernel-nnbd-linux-debug-ia32",
+        "vm-kernel-nnbd-linux-debug-x64",
+        "vm-kernel-nnbd-linux-debug-x64c",
+        "vm-kernel-nnbd-linux-release-ia32",
+        "vm-kernel-nnbd-linux-release-simarm",
+        "vm-kernel-nnbd-linux-release-simarm64",
+        "vm-kernel-nnbd-linux-release-simarm64c",
+        "vm-kernel-nnbd-linux-release-x64",
+        "vm-kernel-nnbd-linux-release-x64c",
+        "vm-kernel-nnbd-mac-debug-arm64",
+        "vm-kernel-nnbd-mac-debug-x64",
+        "vm-kernel-nnbd-mac-debug-x64c",
+        "vm-kernel-nnbd-mac-release-arm64",
+        "vm-kernel-nnbd-mac-release-x64",
+        "vm-kernel-nnbd-mac-release-x64c",
+        "vm-kernel-nnbd-win-release-ia32",
+        "vm-kernel-nnbd-win-debug-x64",
+        "vm-kernel-nnbd-win-debug-x64c",
+        "vm-kernel-nnbd-win-release-x64",
+        "vm-kernel-nnbd-win-release-x64c"
+      ],
+      "meta": {
+        "description": "This configuration is for the VM nnbd builder group."
+      },
+      "steps": [
+        {
+          "name": "build dart",
+          "script": "tools/build.py",
+          "arguments": [
+            "create_sdk",
+            "runtime_kernel"
+          ]
+        },
+        {
+          "name": "vm nnbd tests in weak mode with asserts",
+          "arguments": [
+            "-ndartk-weak-asserts-${system}-${mode}-${arch}",
+            "benchmark_smoke",
+            "corelib",
+            "ffi",
+            "language",
+            "lib",
+            "samples",
+            "service",
+            "standalone",
+            "utils",
+            "vm"
+          ],
+          "fileset": "vm-kernel",
+          "shards": 6
+        },
+        {
+          "name": "vm co19 nnbd tests in weak mode with asserts",
+          "arguments": [
+            "-ndartk-weak-asserts-${system}-${mode}-${arch}",
+            "co19"
+          ],
+          "fileset": "vm-kernel",
+          "shards": 8
+        },
+        {
+          "name": "vm nnbd tests in strong mode",
+          "arguments": [
+            "-ndartk-strong-${system}-${mode}-${arch}",
+            "benchmark_smoke",
+            "corelib",
+            "ffi",
+            "language",
+            "lib",
+            "samples",
+            "standalone",
+            "utils",
+            "vm"
+          ],
+          "fileset": "vm-kernel",
+          "shards": 6
+        },
+        {
+          "name": "vm co19 nnbd tests in strong mode",
+          "arguments": [
+            "-ndartk-strong-${system}-${mode}-${arch}",
+            "co19"
+          ],
+          "fileset": "vm-kernel",
+          "shards": 8
+        }
+      ]
+    },
+    {
+      "builders": [
         "vm-kernel-linux-product-x64",
-        "vm-kernel-linux-release-simdbc64",
+        "vm-kernel-linux-product-x64c",
         "vm-kernel-linux-release-x64",
+        "vm-kernel-linux-release-x64c",
         "vm-kernel-linux-debug-ia32",
-        "vm-kernel-linux-debug-simdbc64",
         "vm-kernel-linux-debug-x64",
+        "vm-kernel-linux-debug-x64c",
         "vm-kernel-mac-product-x64",
-        "vm-kernel-mac-release-simdbc64",
+        "vm-kernel-mac-product-x64c",
+        "vm-kernel-mac-release-arm64",
         "vm-kernel-mac-release-x64",
-        "vm-kernel-mac-debug-simdbc64",
-        "vm-kernel-mac-debug-x64"
+        "vm-kernel-mac-release-x64c",
+        "vm-kernel-mac-debug-x64",
+        "vm-kernel-mac-debug-x64c",
+        "vm-kernel-win-release-x64",
+        "vm-kernel-win-release-x64c"
       ],
       "meta": {
         "description": "This configuration is for the co19_2 kernel builder group."
@@ -626,12 +1866,15 @@
         {
           "name": "build dart",
           "script": "tools/build.py",
-          "arguments": ["runtime_kernel"]
+          "arguments": [
+            "runtime_kernel"
+          ]
         },
         {
           "name": "vm tests",
           "arguments": [
-            "-ndartk-${system}-${mode}-${arch}"],
+            "-ndartk-${system}-${mode}-${arch}"
+          ],
           "fileset": "vm-kernel",
           "shards": 10
         },
@@ -648,7 +1891,8 @@
     },
     {
       "builders": [
-        "vm-kernel-checked-linux-release-x64"
+        "vm-kernel-checked-linux-release-x64",
+        "vm-kernel-checked-linux-release-x64c"
       ],
       "meta": {
         "description": "This configuration is for the kernel builder group in checked mode."
@@ -657,12 +1901,15 @@
         {
           "name": "build dart",
           "script": "tools/build.py",
-          "arguments": ["runtime_kernel"]
+          "arguments": [
+            "runtime_kernel"
+          ]
         },
         {
           "name": "vm tests",
           "arguments": [
-            "-ndartk-checked-linux-release-x64"],
+            "-ndartk-checked-linux-release-${arch}"
+          ],
           "fileset": "vm-kernel",
           "shards": 10
         }
@@ -670,7 +1917,30 @@
     },
     {
       "builders": [
-        "cross-vm-linux-release-arm64"
+        "vm-fuchsia-release-x64"
+      ],
+      "meta": {
+        "description": "This configuration is for the VM fuchsia builder."
+      },
+      "steps": [
+        {
+          "name": "build dart",
+          "script": "tools/build.py",
+          "arguments": [
+            "--os=fuchsia",
+            "--arch=x64,arm64",
+            "runtime",
+            "create_sdk",
+            "fuchsia_test_package",
+            "fuchsia_ffi_test_package"
+          ]
+        }
+      ]
+    },
+    {
+      "builders": [
+        "cross-vm-linux-release-arm64",
+        "cross-vm-linux-release-arm64c"
       ],
       "meta": {
         "description": "This configuration is for the cross arm builders."
@@ -679,11 +1949,43 @@
         {
           "name": "build dart",
           "script": "tools/build.py",
-          "arguments": ["runtime_kernel"]
+          "arguments": [
+            "runtime_kernel"
+          ]
         },
         {
           "name": "vm tests",
-          "arguments": ["-ndartk-${system}-${mode}-${arch}"],
+          "arguments": [
+            "-ndartk-${system}-${mode}-${arch}"
+          ],
+          "fileset": "vm-kernel",
+          "shards": 1
+        }
+      ]
+    },
+    {
+      "builders": [
+        "cross-vm-precomp-linux-release-arm64",
+        "cross-vm-precomp-linux-release-arm64c"
+      ],
+      "meta": {
+        "description": "This configuration is for the cross arm AOT builders."
+      },
+      "steps": [
+        {
+          "name": "build dart",
+          "script": "tools/build.py",
+          "arguments": [
+            "dart_precompiled_runtime",
+            "gen_snapshot",
+            "runtime_kernel"
+          ]
+        },
+        {
+          "name": "vm tests",
+          "arguments": [
+            "-ndartkp-${system}-${mode}-${arch}"
+          ],
           "fileset": "vm-kernel",
           "shards": 1
         }
@@ -692,8 +1994,11 @@
     {
       "builders": [
         "app-kernel-linux-debug-x64",
+        "app-kernel-linux-debug-x64c",
         "app-kernel-linux-product-x64",
-        "app-kernel-linux-release-x64"
+        "app-kernel-linux-product-x64c",
+        "app-kernel-linux-release-x64",
+        "app-kernel-linux-release-x64c"
       ],
       "meta": {
         "description": "This configuration is used by the vm kernel app builder group."
@@ -709,7 +2014,10 @@
         {
           "name": "vm tests",
           "arguments": [
-            "-napp_jitk-linux-${mode}-x64"]
+            "-napp_jitk-linux-${mode}-${arch}"
+          ],
+          "shards": 6,
+          "fileset": "vm-kernel"
         }
       ]
     },
@@ -725,16 +2033,19 @@
         {
           "name": "build dart",
           "script": "tools/build.py",
-          "arguments": ["dart2js_bot", "dartdevc_test"]
+          "arguments": [
+            "dart2js_bot",
+            "dartdevc_test"
+          ]
         },
         {
-          "name": "ddc tests",
+          "name": "ddk co19_2 tests",
           "arguments": [
-            "-ndartdevc-checked-${system}-release-chrome",
-            "language_2",
-            "corelib_2",
-            "lib_2"
-          ]
+            "-ndartdevk-checked-${system}-release-chrome",
+            "co19_2"
+          ],
+          "shards": 6,
+          "fileset": "web_platform"
         },
         {
           "name": "ddc kernel tests",
@@ -742,15 +2053,20 @@
             "-ndartdevk-checked-${system}-release-chrome",
             "language_2",
             "corelib_2",
-            "lib_2"
+            "lib_2",
+            "dartdevc_2",
+            "web_2"
           ]
         },
         {
-          "name": "ddc sourcemap tests",
-          "script": "out/ReleaseX64/dart",
+          "name": "ddc kernel modular tests",
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "testRunner": true,
           "arguments": [
-            "pkg/dev_compiler/test/sourcemap/sourcemaps_ddc_suite.dart",
-            "-rnone"
+            "pkg/dev_compiler/test/modular_suite.dart",
+            "-ndartdevk-checked-${system}-release-chrome",
+            "--verbose",
+            "--use-sdk"
           ]
         },
         {
@@ -762,19 +2078,137 @@
           ]
         },
         {
-          "name": "ddc sourcemap stacktrace tests",
-          "script": "out/ReleaseX64/dart",
-          "arguments": [
-            "pkg/dev_compiler/test/sourcemap/stacktrace_ddc_suite.dart",
-            "-rnone"
-          ]
-        },
-        {
           "name": "ddk sourcemap stacktrace tests",
           "script": "out/ReleaseX64/dart",
           "arguments": [
             "pkg/dev_compiler/test/sourcemap/stacktrace_ddk_suite.dart",
             "-rnone"
+          ]
+        },
+        {
+          "name": "ddc worker tests",
+          "script": "out/ReleaseX64/dart",
+          "arguments": [
+            "pkg/dev_compiler/test/worker/worker_test.dart",
+            "-rnone"
+          ]
+        },
+        {
+          "name": "ddk self host test",
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "--enable-asserts",
+            "pkg/dev_compiler/bin/dartdevc.dart",
+            "-k",
+            "-o",
+            "out/ReleaseX64/dartdevk.js",
+            "pkg/dev_compiler/bin/dartdevc.dart"
+          ]
+        }
+      ]
+    },
+    {
+      "builders": [
+        "ddk-linux-release-firefox"
+      ],
+      "meta": {
+        "description": "This configuration is used by the ddc builder group."
+      },
+      "steps": [
+        {
+          "name": "build dart",
+          "script": "tools/build.py",
+          "arguments": [
+            "dart2js_bot",
+            "dartdevc_test"
+          ]
+        },
+        {
+          "name": "ddk co19_2 tests",
+          "arguments": [
+            "-ndartdevk-checked-${system}-release-firefox",
+            "co19_2"
+          ],
+          "shards": 6,
+          "fileset": "web_platform"
+        },
+        {
+          "name": "ddc kernel tests",
+          "arguments": [
+            "-ndartdevk-checked-${system}-release-firefox",
+            "language_2",
+            "corelib_2",
+            "lib_2",
+            "dartdevc_2",
+            "web_2"
+          ]
+        }
+      ]
+    },
+    {
+      "builders": [
+        "ddc-nnbd-linux-release-chrome"
+      ],
+      "meta": {
+        "description": "This configuration is used by the ddc nnbd builder group."
+      },
+      "steps": [
+        {
+          "name": "build dart",
+          "script": "tools/build.py",
+          "arguments": [
+            "dartdevc_test"
+          ]
+        },
+        {
+          "name": "ddc weak modular tests",
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "testRunner": true,
+          "arguments": [
+            "pkg/dev_compiler/test/modular_suite_nnbd.dart",
+            "-ndartdevk-weak-${system}-release-chrome",
+            "--verbose",
+            "--use-sdk"
+          ]
+        },
+        {
+          "name": "ddc nnbd weak tests",
+          "arguments": [
+            "-ndartdevk-weak-linux-release-chrome",
+            "language",
+            "corelib",
+            "lib",
+            "dartdevc",
+            "web"
+          ],
+          "shards": 5,
+          "fileset": "web_platform_nnbd"
+        },
+        {
+          "name": "ddc nnbd weak co19 tests",
+          "arguments": [
+            "-ndartdevk-weak-linux-release-chrome",
+            "co19"
+          ],
+          "shards": 2,
+          "fileset": "web_platform_nnbd"
+        },
+        {
+          "name": "ddc nnbd strong tests",
+          "arguments": [
+            "-ndartdevk-strong-linux-release-chrome",
+            "language",
+            "corelib",
+            "lib",
+            "dartdevc",
+            "web"
+          ]
+        },
+        {
+          "name": "ddc nnbd strong co19 tests",
+          "arguments": [
+            "-ndartdevk-strong-linux-release-chrome",
+            "co19"
           ]
         }
       ]
@@ -790,15 +2224,9 @@
         {
           "name": "build dart",
           "script": "tools/build.py",
-          "arguments": ["dart2js_bot", "dartdevc_test"]
-        },
-        {
-          "name": "ddc tests",
           "arguments": [
-            "-ndartdevc-checked-mac-release-chrome",
-            "language_2",
-            "corelib_2",
-            "lib_2"
+            "dart2js_bot",
+            "dartdevc_test"
           ]
         },
         {
@@ -807,15 +2235,20 @@
             "-ndartdevk-checked-mac-release-chrome",
             "language_2",
             "corelib_2",
-            "lib_2"
+            "lib_2",
+            "dartdevc_2",
+            "web_2"
           ]
         },
         {
-          "name": "ddc sourcemap tests",
-          "script": "xcodebuild/ReleaseX64/dart",
+          "name": "ddc kernel modular tests",
+          "script": "xcodebuild/ReleaseX64/dart-sdk/bin/dart",
+          "testRunner": true,
           "arguments": [
-            "pkg/dev_compiler/test/sourcemap/sourcemaps_ddc_suite.dart",
-            "-rnone"
+            "pkg/dev_compiler/test/modular_suite.dart",
+            "-ndartdevk-checked-mac-release-chrome",
+            "--verbose",
+            "--use-sdk"
           ]
         },
         {
@@ -827,19 +2260,31 @@
           ]
         },
         {
-          "name": "ddc sourcemap stacktrace tests",
-          "script": "xcodebuild/ReleaseX64/dart",
-          "arguments": [
-            "pkg/dev_compiler/test/sourcemap/stacktrace_ddc_suite.dart",
-            "-rnone"
-          ]
-        },
-        {
           "name": "ddk sourcemap stacktrace tests",
           "script": "xcodebuild/ReleaseX64/dart",
           "arguments": [
             "pkg/dev_compiler/test/sourcemap/stacktrace_ddk_suite.dart",
             "-rnone"
+          ]
+        },
+        {
+          "name": "ddc worker tests",
+          "script": "xcodebuild/ReleaseX64/dart",
+          "arguments": [
+            "pkg/dev_compiler/test/worker/worker_test.dart",
+            "-rnone"
+          ]
+        },
+        {
+          "name": "ddk self host test",
+          "script": "xcodebuild/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "--enable-asserts",
+            "pkg/dev_compiler/bin/dartdevc.dart",
+            "-k",
+            "-o",
+            "xcodebuild/ReleaseX64/dartdevk.js",
+            "pkg/dev_compiler/bin/dartdevc.dart"
           ]
         }
       ]
@@ -847,7 +2292,11 @@
     {
       "builders": [
         "vm-kernel-optcounter-threshold-linux-release-ia32",
-        "vm-kernel-optcounter-threshold-linux-release-x64"
+        "vm-kernel-optcounter-threshold-linux-release-x64",
+        "vm-kernel-optcounter-threshold-linux-release-x64c",
+        "vm-kernel-optcounter-threshold-linux-release-simarm",
+        "vm-kernel-optcounter-threshold-linux-release-simarm64",
+        "vm-kernel-optcounter-threshold-linux-release-simarm64c"
       ],
       "meta": {
         "description": "This is the configuration for the kernel optcounter builders, under the vm-kernel group. They run the same tests as the ordinary VM kernel builders, but add extra options to the vm."
@@ -863,7 +2312,8 @@
         {
           "name": "vm tests",
           "arguments": [
-            "-ndartk-optcounter-linux-release-${arch}"],
+            "-ndartk-optcounter-linux-release-${arch}"
+          ],
           "fileset": "vm-kernel",
           "shards": 10
         }
@@ -872,9 +2322,9 @@
     {
       "builders": [
         "vm-kernel-reload-linux-debug-x64",
+        "vm-kernel-reload-linux-debug-x64c",
         "vm-kernel-reload-linux-release-x64",
-        "vm-kernel-reload-mac-debug-simdbc64",
-        "vm-kernel-reload-mac-release-simdbc64"
+        "vm-kernel-reload-linux-release-x64c"
       ],
       "meta": {
         "description": "This is the configuration for the kernel hot reload builders."
@@ -883,21 +2333,26 @@
         {
           "name": "build dart",
           "script": "tools/build.py",
-          "arguments": ["runtime_kernel"]
+          "arguments": [
+            "runtime_kernel"
+          ]
         },
         {
           "name": "vm tests",
           "arguments": [
-            "-ndartk-reload-${system}-${mode}-${arch}"],
-            "fileset": "vm-kernel",
-            "shards": 10
-          }
+            "-ndartk-reload-${system}-${mode}-${arch}"
+          ],
+          "fileset": "vm-kernel",
+          "shards": 10
+        }
       ]
     },
     {
       "builders": [
         "vm-kernel-reload-rollback-linux-debug-x64",
-        "vm-kernel-reload-rollback-linux-release-x64"
+        "vm-kernel-reload-rollback-linux-debug-x64c",
+        "vm-kernel-reload-rollback-linux-release-x64",
+        "vm-kernel-reload-rollback-linux-release-x64c"
       ],
       "meta": {
         "description": "This is the configuration for kernel reload rollback builders."
@@ -906,15 +2361,18 @@
         {
           "name": "build dart",
           "script": "tools/build.py",
-          "arguments": ["runtime_kernel"]
+          "arguments": [
+            "runtime_kernel"
+          ]
         },
         {
           "name": "vm tests",
           "arguments": [
-            "-ndartk-reload-rollback-linux-${mode}-x64"],
-            "fileset": "vm-kernel",
-            "shards": 10
-          }
+            "-ndartk-reload-rollback-linux-${mode}-${arch}"
+          ],
+          "fileset": "vm-kernel",
+          "shards": 10
+        }
       ]
     },
     {
@@ -928,13 +2386,32 @@
         {
           "name": "build dart",
           "script": "tools/build.py",
-          "arguments": ["create_sdk"]
+          "arguments": [
+            "create_sdk"
+          ]
+        },
+        {
+          "name": "dart2js modular tests",
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "testRunner": true,
+          "arguments": [
+            "pkg/compiler/tool/modular_test_suite.dart",
+            "-nunittest-asserts-no-sdk-linux",
+            "--verbose",
+            "--use-sdk"
+          ]
+        },
+        {
+          "name": "js_runtime unit tests",
+          "arguments": [
+            "-nunittest-asserts-no-sdk-linux",
+            "pkg//js_runtime/"
+          ]
         },
         {
           "name": "dart2js unit tests",
           "arguments": [
             "-nunittest-asserts-no-sdk-linux",
-            "dart2js",
             "pkg//compiler/"
           ]
         }
@@ -951,7 +2428,9 @@
         {
           "name": "build dart",
           "script": "tools/build.py",
-          "arguments": ["dart2js_bot"]
+          "arguments": [
+            "dart2js_bot"
+          ]
         },
         {
           "name": "dart2js tests",
@@ -961,7 +2440,7 @@
             "--exclude_suite=observatory_ui"
           ],
           "shards": 6,
-          "fileset": "dart2js_hostasserts"
+          "fileset": "web_platform_hostasserts"
         },
         {
           "name": "dart2js co19_2 tests",
@@ -971,7 +2450,7 @@
             "co19_2"
           ],
           "shards": 6,
-          "fileset": "dart2js_hostasserts"
+          "fileset": "web_platform_hostasserts"
         },
         {
           "name": "dart2js package tests",
@@ -984,7 +2463,7 @@
         {
           "name": "dart2js observatory-ui tests",
           "arguments": [
-            "-ndart2js-hostasserts-linux-ia32-d8",
+            "-ndart2js-hostasserts-linux-ia32-d8-unsound",
             "--dart2js-batch",
             "observatory_ui"
           ]
@@ -994,8 +2473,7 @@
           "arguments": [
             "-ndart2js-hostasserts-linux-ia32-d8",
             "--dart2js-batch",
-            "dart2js_extra",
-            "dart2js_native"
+            "web_2"
           ]
         }
       ]
@@ -1018,7 +2496,9 @@
         {
           "name": "build dart",
           "script": "tools/build.py",
-          "arguments": ["create_sdk"]
+          "arguments": [
+            "create_sdk"
+          ]
         },
         {
           "name": "dart2js tests",
@@ -1029,7 +2509,7 @@
             "--exclude_suite=observatory_ui"
           ],
           "shards": 6,
-          "fileset": "dart2js"
+          "fileset": "web_platform"
         },
         {
           "name": "dart2js co19_2 tests",
@@ -1040,7 +2520,7 @@
             "co19_2"
           ],
           "shards": 6,
-          "fileset": "dart2js"
+          "fileset": "web_platform"
         },
         {
           "name": "dart2js package tests",
@@ -1054,7 +2534,7 @@
         {
           "name": "dart2js observatory-ui tests",
           "arguments": [
-            "-ndart2js-${system}-${runtime}",
+            "-ndart2js-${system}-${runtime}-unsound",
             "--dart2js-batch",
             "--reset-browser-configuration",
             "observatory_ui"
@@ -1066,86 +2546,15 @@
             "-ndart2js-${system}-${runtime}",
             "--dart2js-batch",
             "--reset-browser-configuration",
-            "dart2js_extra",
-            "dart2js_native"
+            "web_2"
           ]
         }
       ]
     },
     {
       "builders": [
-        "dart2js-strong-faststartup-linux-x64-chrome",
-        "dart2js-strong-faststartup-linux-x64-firefox",
-        "dart2js-strong-faststartup-mac-x64-chrome",
-        "dart2js-strong-faststartup-mac-x64-safari",
-        "dart2js-strong-faststartup-win-x64-chrome",
-        "dart2js-strong-faststartup-win-x64-edge",
-        "dart2js-strong-faststartup-win-x64-firefox",
-        "dart2js-strong-faststartup-win-x64-ie11"
+        "dart2js-minified-strong-linux-x64-d8"
       ],
-      "meta": {
-        "description": "dart2js browser tests using the fast-startup emitter for Dart 2.0."
-      },
-      "steps": [
-        {
-          "name": "build dart",
-          "script": "tools/build.py",
-          "arguments": ["create_sdk"]
-        },
-        {
-          "name": "dart2js fast-startup tests",
-          "arguments": [
-            "-ndart2js-faststartup-${system}-${runtime}",
-            "--dart2js-batch",
-            "--reset-browser-configuration",
-            "--exclude_suite=observatory_ui"
-          ],
-          "shards": 6,
-          "fileset": "dart2js"
-        },
-        {
-          "name": "dart2js fast-startup co19_2 tests",
-          "arguments": [
-            "-ndart2js-faststartup-${system}-${runtime}",
-            "--dart2js-batch",
-            "--reset-browser-configuration",
-            "co19_2"
-          ],
-          "shards": 6,
-          "fileset": "dart2js"
-        },
-        {
-          "name": "dart2js fast-startup package tests",
-          "arguments": [
-            "-ndart2js-faststartup-${system}-${runtime}",
-            "--dart2js-batch",
-            "--reset-browser-configuration",
-            "pkg"
-          ]
-        },
-        {
-          "name": "dart2js fast-startup observatory-ui tests",
-          "arguments": [
-            "-ndart2js-faststartup-${system}-${runtime}",
-            "--dart2js-batch",
-            "--reset-browser-configuration",
-            "observatory_ui"
-          ]
-        },
-        {
-          "name": "dart2js fast-startup extra tests",
-          "arguments": [
-            "-ndart2js-faststartup-${system}-${runtime}",
-            "--dart2js-batch",
-            "--reset-browser-configuration",
-            "dart2js_extra",
-            "dart2js_native"
-          ]
-        }
-      ]
-    },
-    {
-      "builders": ["dart2js-minified-strong-linux-x64-d8"],
       "meta": {
         "description": "dart2js tests for Dart 2.0."
       },
@@ -1153,7 +2562,9 @@
         {
           "name": "build dart",
           "script": "tools/build.py",
-          "arguments": ["create_sdk"]
+          "arguments": [
+            "create_sdk"
+          ]
         },
         {
           "name": "dart2js tests",
@@ -1163,17 +2574,7 @@
             "--exclude_suite=observatory_ui"
           ],
           "shards": 6,
-          "fileset": "dart2js"
-        },
-        {
-          "name": "dart2js fast-startup tests",
-          "arguments": [
-            "-ndart2js-minified-faststartup-linux-d8",
-            "--dart2js-batch",
-            "--exclude_suite=observatory_ui"
-          ],
-          "shards": 6,
-          "fileset": "dart2js"
+          "fileset": "web_platform"
         },
         {
           "name": "dart2js package tests",
@@ -1186,7 +2587,7 @@
         {
           "name": "dart2js observatory-ui tests",
           "arguments": [
-            "-ndart2js-minified-linux-d8",
+            "-ndart2js-minified-linux-d8-unsound",
             "--dart2js-batch",
             "observatory_ui"
           ]
@@ -1196,39 +2597,59 @@
           "arguments": [
             "-ndart2js-minified-linux-d8",
             "--dart2js-batch",
-            "dart2js_extra",
-            "dart2js_native"
+            "web_2"
           ]
         },
         {
-          "name": "dart2js fast-startup package tests",
+          "name": "dart2js production tests",
           "arguments": [
-            "-ndart2js-minified-faststartup-linux-d8",
+            "-ndart2js-production-linux-d8",
             "--dart2js-batch",
-            "pkg"
+            "--exclude_suite=observatory_ui"
+          ],
+          "shards": 6,
+          "fileset": "web_platform"
+        },
+        {
+          "name": "dart2js production extra tests",
+          "arguments": [
+            "-ndart2js-production-linux-d8",
+            "--dart2js-batch",
+            "web_2"
           ]
         },
         {
-          "name": "dart2js fast-startup observatory-ui tests",
+          "name": "dart2js -O0 smoke tests",
           "arguments": [
-            "-ndart2js-minified-faststartup-linux-d8",
+            "-ndart2js-o0-linux-d8",
             "--dart2js-batch",
-            "observatory_ui"
+            "web_2"
           ]
         },
         {
-          "name": "dart2js fast-startup extra tests",
+          "name": "dart2js --canary smoke tests",
           "arguments": [
-            "-ndart2js-minified-faststartup-linux-d8",
+            "-ndart2js-modern-linux-d8",
             "--dart2js-batch",
-            "dart2js_extra",
-            "dart2js_native"
+            "web_2"
           ]
+        },
+        {
+          "name": "dart2js d8 fragment merging tests",
+          "arguments": [
+            "-ndart2js-minified-hostasserts-weak-max-fragments-linux-x64-d8",
+            "--dart2js-batch",
+            "web/deferred/"
+          ],
+          "shards": 1,
+          "fileset": "web_platform_hostasserts"
         }
       ]
     },
     {
-      "builders": ["dart2js-csp-minified-linux-x64-chrome"],
+      "builders": [
+        "dart2js-csp-minified-linux-x64-chrome"
+      ],
       "meta": {
         "description": "dart2js tests in csp and minified mode."
       },
@@ -1236,7 +2657,9 @@
         {
           "name": "build dart",
           "script": "tools/build.py",
-          "arguments": ["create_sdk"]
+          "arguments": [
+            "create_sdk"
+          ]
         },
         {
           "name": "dart2js tests",
@@ -1247,18 +2670,7 @@
             "--exclude_suite=observatory_ui"
           ],
           "shards": 4,
-          "fileset": "dart2js"
-        },
-        {
-          "name": "dart2js fast-startup tests",
-          "arguments": [
-            "-ndart2js-minified-faststartup-csp-linux-chrome",
-            "--dart2js-batch",
-            "--reset-browser-configuration",
-            "--exclude_suite=observatory_ui"
-          ],
-          "shards": 4,
-          "fileset": "dart2js"
+          "fileset": "web_platform"
         },
         {
           "name": "dart2js package tests",
@@ -1272,7 +2684,7 @@
         {
           "name": "dart2js observatory-ui tests",
           "arguments": [
-            "-ndart2js-minified-csp-linux-chrome",
+            "-ndart2js-minified-csp-linux-chrome-unsound",
             "--dart2js-batch",
             "--reset-browser-configuration",
             "observatory_ui"
@@ -1283,36 +2695,142 @@
           "arguments": [
             "-ndart2js-minified-csp-linux-chrome",
             "--dart2js-batch",
-            "dart2js_extra",
-            "dart2js_native"
+            "web_2"
           ]
         },
         {
-          "name": "dart2js fast-startup package tests",
+          "name": "dart2js d8 fragment merging tests",
           "arguments": [
-            "-ndart2js-minified-faststartup-csp-linux-chrome",
+            "-ndart2js-minified-csp-max-fragments-linux-chrome",
             "--dart2js-batch",
-            "--reset-browser-configuration",
-            "pkg"
+            "web/deferred/"
+          ]
+        }
+      ]
+    },
+    {
+      "builders": [
+        "dart2js-nnbd-linux-x64-chrome"
+      ],
+      "meta": {
+        "description": "dart2js tests for NNBD."
+      },
+      "steps": [
+        {
+          "name": "build dart",
+          "script": "tools/build.py",
+          "arguments": [
+            "create_sdk",
+            "dart2js_bot"
           ]
         },
         {
-          "name": "dart2js fast-startup observatory-ui tests",
+          "name": "dart2js nnbd weak d8 tests",
           "arguments": [
-            "-ndart2js-minified-faststartup-csp-linux-chrome",
+            "-ndart2js-hostasserts-weak-linux-x64-d8",
             "--dart2js-batch",
-            "--reset-browser-configuration",
-            "observatory_ui"
-          ]
+            "language",
+            "corelib"
+          ],
+          "shards": 6,
+          "fileset": "web_platform_hostasserts_nnbd"
         },
         {
-          "name": "dart2js fast-startup extra tests",
+          "name": "dart2js nnbd weak d8 fragment merging tests",
           "arguments": [
-            "-ndart2js-minified-faststartup-csp-linux-chrome",
+            "-ndart2js-hostasserts-weak-max-fragments-linux-x64-d8",
             "--dart2js-batch",
-            "--reset-browser-configuration",
-            "dart2js_extra",
-            "dart2js_native"
+            "web/deferred/"
+          ],
+          "shards": 1,
+          "fileset": "web_platform_hostasserts_nnbd"
+        },
+        {
+          "name": "dart2js nnbd weak chrome tests",
+          "arguments": [
+            "-ndart2js-hostasserts-weak-linux-x64-chrome",
+            "--dart2js-batch",
+            "web"
+          ],
+          "shards": 3,
+          "fileset": "web_platform_hostasserts_nnbd"
+        },
+        {
+          "name": "dart2js nnbd weak lib tests",
+          "arguments": [
+            "-ndart2js-hostasserts-weak-linux-x64-chrome",
+            "--dart2js-batch",
+            "lib"
+          ],
+          "shards": 3,
+          "fileset": "web_platform_hostasserts_nnbd"
+        },
+        {
+          "name": "dart2js nnbd weak co19 tests",
+          "arguments": [
+            "-ndart2js-hostasserts-weak-linux-x64-chrome",
+            "--dart2js-batch",
+            "co19"
+          ],
+          "shards": 6,
+          "fileset": "web_platform_hostasserts_nnbd"
+        },
+        {
+          "name": "dart2js nnbd strong d8 tests",
+          "arguments": [
+            "-ndart2js-hostasserts-strong-linux-x64-d8",
+            "--dart2js-batch",
+            "language",
+            "corelib"
+          ],
+          "shards": 6,
+          "fileset": "web_platform_hostasserts_nnbd"
+        },
+        {
+          "name": "dart2js nnbd strong d8 fragment merging tests",
+          "arguments": [
+            "-ndart2js-hostasserts-strong-max-fragments-linux-x64-d8",
+            "--dart2js-batch",
+            "web/deferred/"
+          ],
+          "shards": 1,
+          "fileset": "web_platform_hostasserts_nnbd"
+        },
+        {
+          "name": "dart2js nnbd strong chrome tests",
+          "arguments": [
+            "-ndart2js-hostasserts-strong-linux-x64-chrome",
+            "--dart2js-batch",
+            "web"
+          ],
+          "shards": 3,
+          "fileset": "web_platform_hostasserts_nnbd"
+        },
+        {
+          "name": "dart2js nnbd strong lib tests",
+          "arguments": [
+            "-ndart2js-hostasserts-strong-linux-x64-chrome",
+            "--dart2js-batch",
+            "lib"
+          ],
+          "shards": 3,
+          "fileset": "web_platform_hostasserts_nnbd"
+        },
+        {
+          "name": "dart2js nnbd strong co19 tests",
+          "arguments": [
+            "-ndart2js-hostasserts-strong-linux-x64-chrome",
+            "--dart2js-batch",
+            "co19"
+          ],
+          "shards": 6,
+          "fileset": "web_platform_hostasserts_nnbd"
+        },
+        {
+          "name": "dart2js nnbd unit tests",
+          "arguments": [
+            "-nunittest-weak-asserts-no-sdk-linux",
+            "pkg//compiler/"
           ]
         }
       ]
@@ -1327,47 +2845,104 @@
       "steps": [
         {
           "name": "build dart",
+          "script": "tools/build.py",
+          "arguments": [
+            "--arch=ia32,x64,arm,arm64",
+            "--mode=release",
+            "--check-clean",
+            "create_sdk"
+          ]
+        },
+        {
+          "name": "upload sdk",
           "script": "tools/bots/dart_sdk.py",
-          "arguments": [],
-          "environment": {"BUILDBOT_BUILDERNAME": "dart-sdk-linux"}
-
+          "arguments": [
+            "--arch=ia32,x64,arm,arm64"
+          ]
         },
         {
           "name": "build api docs",
           "script": "tools/bots/dart_sdk.py",
-          "arguments": [ "api_docs" ],
-          "environment": {"BUILDBOT_BUILDERNAME": "dart-sdk-linux"}
-
+          "arguments": [
+            "api_docs"
+          ]
         }
       ]
     },
     {
-      "builders": ["dart-sdk-mac"],
+      "builders": [
+        "dart-sdk-mac",
+        "dart-sdk-mac-arm64"
+      ],
       "meta": {
-        "description": "This configuration is used by the sdk-builder for mac."
+        "description": "This configuration is used by the sdk-builders for MacOS."
       },
       "steps": [
         {
           "name": "build dart",
+          "script": "tools/build.py",
+          "arguments": [
+            "--mode=release",
+            "--check-clean",
+            "create_sdk"
+          ],
+          "environment": {
+            "DART_GN_ARGS": "mac_use_goma_rbe=true"
+          }
+        },
+        {
+          "name": "upload sdk",
           "script": "tools/bots/dart_sdk.py",
-          "arguments": [],
-          "environment": {"BUILDBOT_BUILDERNAME": "dart-sdk-mac"}
-
+          "arguments": [
+            "--arch=${arch}"
+          ]
         }
       ]
     },
     {
-      "builders": ["dart-sdk-win"],
+      "builders": [
+        "dart-sdk-win"
+      ],
       "meta": {
-        "description": "This configuration is used by the sdk-builder for windows."
+        "description": "This configuration is used by the sdk-builders for Windows. It also adds CQ coverage for building on Windows."
       },
       "steps": [
         {
           "name": "build dart",
+          "script": "tools/build.py",
+          "arguments": [
+            "--arch=ia32,x64",
+            "--mode=release",
+            "create_sdk",
+            "runtime_kernel"
+          ]
+        },
+        {
+          "name": "upload sdk",
           "script": "tools/bots/dart_sdk.py",
-          "arguments": [],
-          "environment": {"BUILDBOT_BUILDERNAME": "dart-sdk-win"}
-
+          "arguments": [
+            "--arch=ia32,x64"
+          ]
+        }
+      ]
+    },
+    {
+      "builders": [
+        "debianpackage-linux"
+      ],
+      "meta": {
+        "description": "This configuration is used by the debianpackage-builder."
+      },
+      "steps": [
+        {
+          "name": "build debian package",
+          "script": "tools/linux_dist_support/run_debian_build.sh",
+          "arguments": []
+        },
+        {
+          "name": "upload debian packages",
+          "script": "tools/linux_dist_support/upload_debian_packages.py",
+          "arguments": []
         }
       ]
     },
@@ -1375,11 +2950,7 @@
       "builders": [
         "analyzer-linux-release",
         "analyzer-mac-release",
-        "analyzer-win-release",
-        "analyzer-linux-release-analyzer",
-        "analyzer-linux-release-analyzer-new",
-        "analyzer-mac-release-analyzer",
-        "analyzer-win-release-analyzer"
+        "analyzer-win-release"
       ],
       "meta": {
         "description": "This configuration is used by the analyzer builders."
@@ -1388,12 +2959,14 @@
         {
           "name": "build dart",
           "script": "tools/build.py",
-          "arguments": ["create_sdk"]
+          "arguments": [
+            "create_sdk"
+          ]
         },
         {
           "name": "analyzer unit tests",
           "arguments": [
-            "-nunittest-asserts-${system}",
+            "-nanalyzer-unittest-asserts-${mode}-${system}",
             "pkg/analyzer"
           ],
           "shards": 2,
@@ -1402,7 +2975,7 @@
         {
           "name": "analysis_server unit tests",
           "arguments": [
-            "-nunittest-asserts-${system}",
+            "-nanalyzer-unittest-asserts-${mode}-${system}",
             "pkg/analysis_server"
           ],
           "shards": 2,
@@ -1411,7 +2984,8 @@
         {
           "name": "analyze tests enable-asserts",
           "arguments": [
-            "-nanalyzer-asserts-${system}"]
+            "-nanalyzer-asserts-${system}"
+          ]
         },
         {
           "name": "analyze pkg tests enable-asserts",
@@ -1423,21 +2997,30 @@
         {
           "name": "analyzer_cli unit tests",
           "arguments": [
-            "-nunittest-asserts-${system}",
+            "-nanalyzer-unittest-asserts-${mode}-${system}",
             "pkg/analyzer_cli"
           ]
         },
         {
           "name": "analyzer_plugin unit tests",
           "arguments": [
-            "-nunittest-asserts-${system}",
+            "-nanalyzer-unittest-asserts-${mode}-${system}",
             "pkg/analyzer_plugin"
           ]
         },
         {
+          "name": "nnbd_migration unit tests",
+          "arguments": [
+            "-nanalyzer-unittest-asserts-${mode}-${system}",
+            "pkg/nnbd_migration"
+          ],
+          "shards": 2,
+          "fileset": "analyzer_unit_tests"
+        },
+        {
           "name": "analyze tests co19_2",
           "arguments": [
-            "-nanalyzer-${system}",
+            "-nanalyzer-asserts-${system}",
             "co19_2"
           ]
         }
@@ -1445,163 +3028,363 @@
     },
     {
       "builders": [
-        "analyzer-analysis-server-linux",
-        "analyzer-analysis-server-linux-analyzer"
+        "analyzer-nnbd-linux-release",
+        "analyzer-nnbd-mac-release",
+        "analyzer-nnbd-win-release"
       ],
       "meta": {
-        "description": "Analyze analyzer related packages."
+        "description": "This configuration is used by the nnbd analyzer builders."
       },
       "steps": [
         {
           "name": "build dart",
           "script": "tools/build.py",
-          "arguments": ["create_sdk"]
+          "arguments": [
+            "create_sdk"
+          ]
         },
-
+        {
+          "name": "analyze nnbd strong tests enable-asserts",
+          "arguments": [
+            "-nanalyzer-asserts-strong-${system}",
+            "corelib",
+            "ffi",
+            "language",
+            "lib",
+            "standalone"
+          ]
+        },
+        {
+          "name": "analyze nnbd weak tests enable-asserts",
+          "arguments": [
+            "-nanalyzer-asserts-weak-${system}",
+            "corelib",
+            "ffi",
+            "language",
+            "lib",
+            "service",
+            "standalone"
+          ]
+        },
+        {
+          "name": "analyze nnbd strong co19 tests",
+          "arguments": [
+            "-nanalyzer-asserts-strong-${system}",
+            "co19"
+          ]
+        },
+        {
+          "name": "analyze nnbd weak co19 tests",
+          "arguments": [
+            "-nanalyzer-asserts-weak-${system}",
+            "co19"
+          ]
+        }
+      ]
+    },
+    {
+      "builders": [
+        "analyzer-analysis-server-linux"
+      ],
+      "meta": {
+        "description": "Analyze repository packages."
+      },
+      "steps": [
+        {
+          "name": "build dart",
+          "script": "tools/build.py",
+          "arguments": [
+            "create_sdk"
+          ]
+        },
+        {
+          "name": "analyze runtime/tools/dartfuzz",
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "runtime/tools/dartfuzz"
+          ]
+        },
+        {
+          "name": "analyze runtime/tests/concurrency/generate_stress_test.dart",
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "runtime/tests/concurrency/generate_stress_test.dart"
+          ]
+        },
+        {
+          "name": "analyze runtime/tests/concurrency/run_stress_test_shards.dart",
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "runtime/tests/concurrency/run_stress_test_shards.dart"
+          ]
+        },
         {
           "name": "analyze pkg/analysis_server",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
-          "arguments": ["--fatal-warnings", "pkg/analysis_server"]
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "--fatal-infos",
+            "pkg/analysis_server"
+          ]
         },
         {
           "name": "analyze pkg/analysis_server_client",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
-          "arguments": ["--fatal-warnings", "pkg/analysis_server_client"]
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "--fatal-infos",
+            "pkg/analysis_server_client"
+          ]
         },
         {
           "name": "analyze pkg/analyzer",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
-          "arguments": ["--fatal-warnings", "pkg/analyzer"]
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "--fatal-infos",
+            "pkg/analyzer"
+          ]
         },
         {
           "name": "analyze pkg/analyzer_cli",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
-          "arguments": ["--fatal-warnings", "pkg/analyzer_cli"]
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "--fatal-infos",
+            "pkg/analyzer_cli"
+          ]
         },
         {
           "name": "analyze pkg/analyzer_plugin",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
-          "arguments": ["--fatal-warnings", "pkg/analyzer_plugin"]
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "--fatal-infos",
+            "pkg/analyzer_plugin"
+          ]
         },
         {
           "name": "analyze pkg/async_helper",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
-          "arguments": ["--fatal-warnings", "pkg/async_helper"]
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "pkg/async_helper"
+          ]
         },
         {
           "name": "analyze pkg/build_integration",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
-          "arguments": ["--fatal-warnings", "pkg/build_integration"]
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "pkg/build_integration"
+          ]
         },
         {
           "name": "analyze pkg/compiler",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
-          "arguments": ["--fatal-warnings", "pkg/compiler"]
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "pkg/compiler"
+          ]
+        },
+        {
+          "name": "analyze pkg/dartdev",
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "--fatal-infos",
+            "pkg/dartdev"
+          ]
         },
         {
           "name": "analyze pkg/dart2js_tools",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
-          "arguments": ["--fatal-warnings", "pkg/dart2js_tools"]
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "pkg/dart2js_tools"
+          ]
         },
         {
           "name": "analyze pkg/dart_internal",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
-          "arguments": ["--fatal-warnings", "pkg/dart_internal"]
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "--fatal-infos",
+            "pkg/dart_internal"
+          ]
         },
         {
           "name": "analyze pkg/dev_compiler",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
-          "arguments": ["--fatal-warnings", "pkg/dev_compiler"]
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "--fatal-infos",
+            "pkg/dev_compiler"
+          ]
         },
         {
           "name": "analyze pkg/expect",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
-          "arguments": ["--fatal-warnings", "pkg/expect"]
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "pkg/expect"
+          ]
         },
         {
           "name": "analyze pkg/front_end",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
-          "arguments": ["--fatal-warnings", "pkg/front_end"]
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "pkg/front_end"
+          ]
         },
         {
           "name": "analyze pkg/js",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
-          "arguments": ["--fatal-warnings", "pkg/js"]
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "pkg/js"
+          ]
         },
         {
           "name": "analyze pkg/js_ast",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
-          "arguments": ["--fatal-warnings", "pkg/js_ast"]
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "pkg/js_ast"
+          ]
         },
         {
           "name": "analyze pkg/kernel",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
-          "arguments": ["--fatal-warnings", "pkg/kernel"]
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "pkg/kernel"
+          ]
         },
         {
           "name": "analyze pkg/meta",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
-          "arguments": ["--fatal-warnings", "pkg/meta"]
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "--fatal-infos",
+            "pkg/meta"
+          ]
         },
         {
-          "name": "analyze pkg/microlytics",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
-          "arguments": ["--fatal-warnings", "pkg/microlytics"]
+          "name": "analyze pkg/native_stack_traces",
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "pkg/native_stack_traces"
+          ]
         },
         {
           "name": "analyze pkg/smith",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
-          "arguments": ["--fatal-warnings", "pkg/smith"]
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "--fatal-infos",
+            "pkg/smith"
+          ]
         },
         {
           "name": "analyze pkg/sourcemap_testing",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
-          "arguments": ["--fatal-warnings", "pkg/sourcemap_testing"]
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "--fatal-infos",
+            "pkg/sourcemap_testing"
+          ]
         },
         {
           "name": "analyze pkg/status_file",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
-          "arguments": ["--fatal-warnings", "pkg/status_file"]
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "--fatal-infos",
+            "pkg/status_file"
+          ]
         },
         {
           "name": "analyze pkg/telemetry",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
-          "arguments": ["--fatal-warnings", "pkg/telemetry"]
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "--fatal-infos",
+            "pkg/telemetry"
+          ]
+        },
+        {
+          "name": "analyze pkg/test_runner",
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "--fatal-infos",
+            "pkg/test_runner"
+          ]
         },
         {
           "name": "analyze pkg/testing",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
-          "arguments": ["--fatal-warnings", "pkg/testing"]
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "--fatal-infos",
+            "pkg/testing"
+          ]
         },
         {
           "name": "analyze pkg/vm",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
-          "arguments": ["--fatal-warnings", "pkg/vm"]
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "--fatal-infos",
+            "pkg/vm"
+          ]
+        },
+        {
+          "name": "analyze pkg/vm_service",
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "--fatal-infos",
+            "pkg/vm_service"
+          ]
+        },
+        {
+          "name": "analyze pkg/vm_snapshot_analysis",
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "--fatal-infos",
+            "pkg/vm_snapshot_analysis"
+          ]
+        },
+        {
+          "name": "analyze pkg/dds",
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "analyze",
+            "--fatal-infos",
+            "pkg/dds"
+          ]
         },
         {
           "name": "analyze runtime/observatory",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
           "arguments": [
-            "--fatal-warnings",
-            "--packages=runtime/observatory/.packages",
+            "analyze",
             "runtime/observatory"
           ]
         },
         {
-          "name": "analyze tools/gardening",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
-          "arguments": ["--fatal-warnings", "tools/gardening"]
-        },
-        {
-          "name": "analyze tools/testing/dart",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
-          "arguments": ["--fatal-warnings", "tools/testing/dart"]
-        },
-
-        {
           "name": "dartanalyzer --batch tests",
           "arguments": [
-            "-nanalyzer-${system}"]
+            "-nanalyzer-${system}"
+          ]
         },
         {
           "name": "dartanalyzer --batch pkg tests",
@@ -1613,108 +3396,165 @@
       ]
     },
     {
-      "builders": ["analyzer-use-fasta-parser-linux"],
+      "builders": [
+        "pkg-linux-release",
+        "pkg-win-release",
+        "pkg-mac-release"
+      ],
       "meta": {
-        "description": "Run the analyzer using the Fasta parser."
+        "description": "This configuration is used by the release pkg builders."
       },
       "steps": [
         {
-          "name": "build dart",
-          "script": "tools/build.py",
-          "arguments": ["create_sdk"]
-        },
-        {
-          "name": "analyze pkg/analyzer --use-fasta-parser",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
+          "name": "validate pkg/ pubspec files",
+          "script": "tools/sdks/dart-sdk/bin/dart",
           "arguments": [
-            "--use-fasta-parser",
-            "pkg/analyzer"
+            "tools/package_deps/bin/package_deps.dart"
           ]
         },
         {
-          "name": "analyze pkg/analyzer --no-use-fasta-parser",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
+          "name": "validate .dart_tool/package_config.json",
+          "script": "tools/sdks/dart-sdk/bin/dart",
           "arguments": [
-            "--no-use-fasta-parser",
-            "pkg/analyzer"
+            "tools/generate_package_config.dart",
+            "--check"
           ]
         },
-        {
-          "name": "analyze pkg/analyzer_cli --use-fasta-parser",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
-          "arguments": [
-            "--use-fasta-parser",
-            "pkg/analyzer_cli"
-          ]
-        },
-        {
-          "name": "run language2 tests",
-          "arguments": [
-            "-nanalyzer-fasta_parser-linux",
-            "language_2"
-          ]
-        },
-        {
-          "name": "analyze pkg/analyzer_cli --no-use-fasta-parser",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
-          "arguments": [
-            "--no-use-fasta-parser",
-            "pkg/analyzer_cli"
-          ]
-        },
-        {
-          "name": "analyze pkg/analysis_server --use-fasta-parser",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
-          "arguments": [
-            "--use-fasta-parser",
-            "pkg/analysis_server"
-          ]
-        },
-        {
-          "name": "analyze pkg/analysis_server --no-use-fasta-parser",
-          "script": "out/ReleaseX64/dart-sdk/bin/dartanalyzer",
-          "arguments": [
-            "--no-use-fasta-parser",
-            "pkg/analysis_server"
-          ]
-        }
-      ]
-    },
-    {
-      "builders": ["pkg-linux-release",
-                   "pkg-win-release",
-                   "pkg-mac-release"],
-      "meta": {
-        "description": "This configuration is used by the pkg builders."
-      },
-      "steps": [
         {
           "name": "build dart",
           "script": "tools/build.py",
-          "arguments": ["create_sdk"]
+          "arguments": [
+            "create_sdk",
+            "dartdevc_test"
+          ]
+        },
+        {
+          "name": "validate SDK API docs",
+          "script": "out/ReleaseX64/dart-sdk/bin/dartdoc",
+          "arguments": [
+            "--exclude",
+            "dart:ffi,dart:html,dart:web_sql,dart:web_audio,dart:svg,dart:indexed_db",
+            "--sdk-docs",
+            "--no-generate-docs"
+          ],
+          "comments1": "TODO(devoncarew): add --errors=unresolved-doc-reference above to fail on unresolved doc references",
+          "comments2": "ambiguous-doc-reference, ambiguous-reexport, broken-link, deprecated, no-library-level-docs, unknown-directive, unknown-macro"
+        },
+        {
+          "name": "validate SDK API data-driven fixes",
+          "script": "out/ReleaseX64/dart-sdk/bin/dart",
+          "arguments": [
+            "fix",
+            "--compare-to-golden",
+            "tests/lib/fix_data_tests"
+          ]
         },
         {
           "name": "package unit tests",
           "arguments": [
-            "-nunittest-asserts-${system}",
-            "pkg"
+            "-nunittest-asserts-${mode}-${system}",
+            "pkg/pkg/(?!(analyzer*|analysis_server|compiler|js_runtime|front_end|kernel|nnbd_migration)/)"
           ]
         },
         {
           "name": "third_party pkg_tested unit tests",
           "arguments": [
-            "-nunittest-asserts-${system}",
+            "-nunittest-asserts-${mode}-${system}",
             "pkg_tested"
           ]
         },
         {
           "name": "pub integration tests",
-          "script": "tools/bots/pub_integration_test.py"
+          "script": "tools/bots/pub_integration_test.py",
+          "arguments": [
+            "--mode=release"
+          ]
         }
       ]
     },
     {
-      "builders": ["benchmark-linux"],
+      "builders": [
+        "pkg-mac-release-arm64"
+      ],
+      "meta": {
+        "description": "This configuration is used by the macOS arm64 pkg builders."
+      },
+      "steps": [
+        {
+          "name": "build dart",
+          "script": "tools/build.py",
+          "arguments": [
+            "create_sdk",
+            "dartdevc_test"
+          ]
+        },
+        {
+          "name": "package unit tests",
+          "arguments": [
+            "-nunittest-asserts-${mode}-${system}-arm64",
+            "pkg/pkg/(?!(analyzer*|analysis_server|compiler|js_runtime|front_end|kernel|nnbd_migration)/)"
+          ]
+        },
+        {
+          "name": "third_party pkg_tested unit tests",
+          "arguments": [
+            "-nunittest-asserts-${mode}-${system}-arm64",
+            "pkg_tested"
+          ]
+        },
+        {
+          "name": "pub integration tests",
+          "script": "tools/bots/pub_integration_test.py",
+          "arguments": [
+            "--mode=release",
+            "--arch=arm64"
+          ]
+        }
+      ]
+    },
+    {
+      "builders": [
+        "pkg-linux-debug"
+      ],
+      "meta": {
+        "description": "This configuration is used by the debug pkg builders."
+      },
+      "steps": [
+        {
+          "name": "build dart",
+          "script": "tools/build.py",
+          "arguments": [
+            "create_sdk",
+            "dartdevc_test"
+          ]
+        },
+        {
+          "name": "package unit tests",
+          "arguments": [
+            "-nunittest-asserts-${mode}-${system}",
+            "pkg/pkg/(?!(analyzer*|analysis_server|compiler|js_runtime|front_end|kernel|nnbd_migration)/)"
+          ]
+        },
+        {
+          "name": "third_party pkg_tested unit tests",
+          "arguments": [
+            "-nunittest-asserts-${mode}-${system}",
+            "pkg_tested"
+          ]
+        },
+        {
+          "name": "pub integration tests",
+          "script": "tools/bots/pub_integration_test.py",
+          "arguments": [
+            "--mode=debug"
+          ]
+        }
+      ]
+    },
+    {
+      "builders": [
+        "benchmark-linux"
+      ],
       "meta": {
         "description": "Verify benchmarks build and run correctly.",
         "owner": "sortie@google.com"
@@ -1723,39 +3563,93 @@
         {
           "name": "see this step for details on what this bot does",
           "script": "tools/bots/try_benchmarks.sh",
-          "arguments": ["noop"]
+          "arguments": [
+            "noop"
+          ]
         },
         {
-          "name": "remove out directory to do a clean build",
+          "name": "remove out directory to do a clean linux-ia32 build",
           "script": "tools/bots/try_benchmarks.sh",
-          "arguments": ["clean"]
+          "arguments": [
+            "clean"
+          ]
         },
         {
           "name": "build linux-ia32 for benchmarking",
+          "script": "tools/build.py",
+          "arguments": [
+            "--mode=release",
+            "--arch=ia32",
+            "create_sdk",
+            "runtime",
+            "dart2js_platform.dill",
+            "dart2js_nnbd_strong_platform.dill",
+            "kernel-service.dart.snapshot"
+          ]
+        },
+        {
+          "name": "archive linux-ia32 for benchmarking",
           "script": "tools/bots/try_benchmarks.sh",
-          "arguments": ["linux-ia32-build"]
+          "arguments": [
+            "linux-ia32-archive"
+          ]
         },
         {
           "name": "try linux-ia32 benchmarking",
           "script": "tools/bots/try_benchmarks.sh",
-          "arguments": ["linux-ia32-benchmark"]
+          "arguments": [
+            "linux-ia32-benchmark"
+          ]
+        },
+        {
+          "name": "remove out directory to do a clean linux-x64 build",
+          "script": "tools/bots/try_benchmarks.sh",
+          "arguments": [
+            "clean"
+          ]
         },
         {
           "name": "build linux-x64 for benchmarking",
+          "script": "tools/build.py",
+          "arguments": [
+            "--mode=release",
+            "--arch=x64",
+            "create_sdk",
+            "runtime",
+            "gen_snapshot",
+            "dart_precompiled_runtime",
+            "dart2js_platform.dill",
+            "dart2js_nnbd_strong_platform.dill",
+            "kernel-service.dart.snapshot",
+            "dartdevc_test"
+          ]
+        },
+        {
+          "name": "archive linux-x64 for benchmarking",
           "script": "tools/bots/try_benchmarks.sh",
-          "arguments": ["linux-x64-build"]
+          "arguments": [
+            "linux-x64-archive"
+          ]
         },
         {
           "name": "try linux-x64 benchmarking",
           "script": "tools/bots/try_benchmarks.sh",
-          "arguments": ["linux-x64-benchmark"]
+          "arguments": [
+            "linux-x64-benchmark"
+          ]
+        },
+        {
+          "name": "remove out directory",
+          "script": "tools/bots/try_benchmarks.sh",
+          "arguments": [
+            "clean"
+          ]
         }
       ]
     },
     {
       "builders": [
-        "flutter-analyze",
-        "flutter-analyze-analyzer"
+        "flutter-analyze"
       ],
       "meta": {
         "description": "This configuration is used for analyzing flutter."
@@ -1771,13 +3665,76 @@
           ]
         },
         {
-          "name": "analyze flutter",
-          "script": "tools/bots/flutter/analyze_flutter.sh"
+          "name": "analyze flutter/engine",
+          "script": "tools/bots/flutter/analyze_flutter_engine.sh"
+        },
+        {
+          "name": "analyze flutter/flutter",
+          "script": "tools/bots/flutter/analyze_flutter_flutter.sh"
+        },
+        {
+          "name": "analyze flutter/plugins",
+          "script": "tools/bots/flutter/analyze_flutter_plugins.sh"
         }
       ]
     },
     {
-      "builders": ["fuzz-linux"],
+      "builders": [
+        "flutter-frontend"
+      ],
+      "meta": {
+        "description": "This configuration is used for running frontend tests on flutter code."
+      },
+      "steps": [
+        {
+          "name": "build dart",
+          "script": "tools/build.py",
+          "arguments": [
+            "--mode=release",
+            "--arch=x64",
+            "create_sdk"
+          ]
+        },
+        {
+          "name": "compile flutter tests",
+          "script": "tools/bots/flutter/compile_flutter.sh",
+          "testRunner": true,
+          "arguments": [
+            "-nflutter-frontend"
+          ]
+        }
+      ]
+    },
+    {
+      "builders": [
+        "frontend-weekly"
+      ],
+      "meta": {
+        "description": "This configuration is used for running slow frontend tests for instance weekly."
+      },
+      "steps": [
+        {
+          "name": "build dart",
+          "script": "tools/build.py",
+          "arguments": [
+            "--mode=release",
+            "--arch=x64",
+            "create_sdk"
+          ]
+        },
+        {
+          "name": "run tests",
+          "script": "tools/bots/flutter/compile_flutter.sh",
+          "arguments": [
+            "--weeklyTest"
+          ]
+        }
+      ]
+    },
+    {
+      "builders": [
+        "fuzz-linux"
+      ],
       "meta": {
         "description": "This configuration is used for fuzz testing."
       },
@@ -1787,7 +3744,7 @@
           "script": "tools/build.py",
           "arguments": [
             "--mode=debug,release",
-            "--arch=x64,simarm64",
+            "--arch=x64,x64c,simarm64,simarm64c",
             "runtime",
             "dart_precompiled_runtime"
           ]
@@ -1797,7 +3754,7 @@
           "script": "tools/build.py",
           "arguments": [
             "--mode=debug,release",
-            "--arch=ia32,simarm,simdbc,simdbc64",
+            "--arch=ia32,simarm",
             "runtime"
           ]
         },
@@ -1812,10 +3769,210 @@
             "--time",
             "2700"
           ],
-          "shards": 10,
+          "shards": 100,
           "fileset": "fuzzer"
         }
       ]
+    },
+    {
+      "builders": [
+        "iso-stress-linux"
+      ],
+      "meta": {
+        "description": "This configuration is used for isolate stress testing."
+      },
+      "steps": [
+        {
+          "name": "Build Dart VM - JIT and AOT",
+          "script": "tools/build.py",
+          "arguments": [
+            "--mode=debug,release",
+            "--arch=x64",
+            "runtime_kernel",
+            "dart_precompiled_runtime"
+          ]
+        },
+        {
+          "name": "Build Dart VM - JIT and AOT (Release TSAN)",
+          "script": "tools/build.py",
+          "arguments": [
+            "--mode=release",
+            "--arch=x64",
+            "--sanitizer=tsan",
+            "runtime_kernel",
+            "dart_precompiled_runtime"
+          ]
+        },
+        {
+          "name": "Generate Isolate Stress Test",
+          "script": "out/ReleaseX64/dart",
+          "arguments": [
+            "runtime/tests/concurrency/generate_stress_test.dart"
+          ]
+        },
+        {
+          "name": "Generate Isolate Stress Test - JIT Dill",
+          "script": "out/ReleaseX64/dart",
+          "arguments": [
+            "pkg/vm/bin/gen_kernel.dart",
+            "--platform=out/ReleaseX64/vm_platform_strong.dill",
+            "--no-aot",
+            "--no-sound-null-safety",
+            "-o", "runtime/tests/concurrency/generated_stress_test.dart.jit.dill",
+            "runtime/tests/concurrency/generated_stress_test.dart"
+          ]
+        },
+        {
+          "name": "Generate Isolate Stress Test - JIT Dill NNBD",
+          "script": "out/ReleaseX64/dart",
+          "arguments": [
+            "pkg/vm/bin/gen_kernel.dart",
+            "--platform=out/ReleaseX64/vm_platform_strong.dill",
+            "--no-aot",
+            "-o", "runtime/tests/concurrency/generated_stress_test_nnbd.dart.jit.dill",
+            "runtime/tests/concurrency/generated_stress_test_nnbd.dart"
+          ]
+        },
+        {
+          "name": "Generate Isolate Stress Test - AOT Dill",
+          "script": "out/ReleaseX64/dart",
+          "arguments": [
+            "pkg/vm/bin/gen_kernel.dart",
+            "--platform=out/ReleaseX64/vm_platform_strong.dill",
+            "--aot",
+            "--no-sound-null-safety",
+            "-o", "runtime/tests/concurrency/generated_stress_test.dart.aot.dill",
+            "runtime/tests/concurrency/generated_stress_test.dart"
+          ]
+        },
+        {
+          "name": "Generate Isolate Stress Test - AOT Dill NNBD",
+          "script": "out/ReleaseX64/dart",
+          "arguments": [
+            "pkg/vm/bin/gen_kernel.dart",
+            "--platform=out/ReleaseX64/vm_platform_strong.dill",
+            "--aot",
+            "-o", "runtime/tests/concurrency/generated_stress_test_nnbd.dart.aot.dill",
+            "runtime/tests/concurrency/generated_stress_test_nnbd.dart"
+          ]
+        },
+        {
+          "name": "Run Isolate Stress Tests",
+          "script": "out/ReleaseX64/dart",
+          "arguments": [
+            "runtime/tests/concurrency/run_stress_test_shards.dart"
+          ],
+          "shards": 10,
+          "fileset": "vm-kernel"
+        }
+      ]
+    },
+    {
+      "builders": [
+        "vm-kernel-precomp-linux-debug-simarm_x64",
+        "vm-kernel-precomp-linux-release-simarm_x64"
+      ],
+      "meta": {
+        "description": "This configuration runs tests for the simarm_x64 architecture."
+      },
+      "steps": [
+        {
+          "name": "build dart for simarm_x64",
+          "script": "tools/build.py",
+          "arguments": [
+            "gen_snapshot"
+          ]
+        },
+        {
+          "name": "build dart for simarm",
+          "script": "tools/build.py",
+          "arguments": [
+            "--arch=simarm",
+            "dart_precompiled_runtime",
+            "vm_platform"
+          ]
+        },
+        {
+          "name": "vm tests",
+          "arguments": [
+            "-ndartkp-${system}-${mode}-simarm-crossword"
+          ],
+          "fileset": "vm-kernel",
+          "shards": 10
+        }
+      ]
+    },
+    {
+      "builders": [
+        "vm-kernel-precomp-nnbd-linux-debug-simarm_x64",
+        "vm-kernel-precomp-nnbd-linux-release-simarm_x64"
+      ],
+      "meta": {
+        "description": "This configuration runs tests for the simarm_x64 architecture."
+      },
+      "steps": [
+        {
+          "name": "build dart for simarm_x64",
+          "script": "tools/build.py",
+          "arguments": [
+            "gen_snapshot"
+          ]
+        },
+        {
+          "name": "build dart for simarm",
+          "script": "tools/build.py",
+          "arguments": [
+            "--arch=simarm",
+            "dart_precompiled_runtime",
+            "vm_platform"
+          ]
+        },
+        {
+          "name": "vm weak tests",
+          "arguments": [
+            "-ndartkp-weak-asserts-${system}-${mode}-simarm-crossword",
+            "benchmark_smoke",
+            "corelib",
+            "ffi",
+            "language",
+            "lib",
+            "samples",
+            "standalone",
+            "utils",
+            "vm"
+          ],
+          "fileset": "vm-kernel",
+          "shards": 10
+        },
+        {
+          "name": "vm tests",
+          "arguments": [
+            "-ndartkp-strong-${system}-${mode}-simarm-crossword",
+            "benchmark_smoke",
+            "corelib",
+            "ffi",
+            "language",
+            "lib",
+            "samples",
+            "standalone",
+            "utils",
+            "vm"
+          ],
+          "fileset": "vm-kernel",
+          "shards": 10
+        }
+      ]
     }
-  ]
+  ],
+  "sanitizer_options": {
+    "ASAN_OPTIONS": "check_initialization_order=true:handle_segv=0:detect_leaks=1:detect_stack_use_after_return=0:disable_coredump=0:abort_on_error=1",
+    "LSAN_OPTIONS": "check_initialization_order=true:handle_segv=0:detect_leaks=1:detect_stack_use_after_return=0:disable_coredump=0:abort_on_error=1",
+    "MSAN_OPTIONS": "check_initialization_order=true:handle_segv=0:detect_leaks=1:detect_stack_use_after_return=0:disable_coredump=0:abort_on_error=1",
+    "TSAN_OPTIONS": "handle_segv=0:disable_coredump=0:abort_on_error=1:report_thread_leaks=0",
+    "UBSAN_OPTIONS": "handle_segv=0:disable_coredump=0:halt_on_error=1:print_stacktrace=1"
+  },
+  "sanitizer_symbolizer": {
+    "linux": "buildtools/linux-x64/clang/bin/llvm-symbolizer",
+    "macos": "buildtools/mac-x64/clang/bin/llvm-symbolizer"
+  }
 }

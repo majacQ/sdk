@@ -2,8 +2,6 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'dart:async';
-
 import 'package:front_end/src/api_unstable/build_integration.dart';
 
 /// A [FileSystem] that resolves custom URIs to entities under a specified root
@@ -64,7 +62,15 @@ class SingleRootFileSystemEntity implements FileSystemEntity {
   Future<bool> exists() async => delegate.exists();
 
   @override
+  Future<bool> existsAsyncIfPossible() async =>
+      delegate.existsAsyncIfPossible();
+
+  @override
   Future<List<int>> readAsBytes() async => delegate.readAsBytes();
+
+  @override
+  Future<List<int>> readAsBytesAsyncIfPossible() async =>
+      delegate.readAsBytesAsyncIfPossible();
 
   @override
   Future<String> readAsString() async => delegate.readAsString();

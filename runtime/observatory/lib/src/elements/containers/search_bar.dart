@@ -6,7 +6,7 @@ import 'dart:async';
 import 'dart:html';
 import 'dart:math' as math;
 import 'package:observatory/src/elements/helpers/rendering_scheduler.dart';
-import 'package:observatory/src/elements/helpers/tag.dart';
+import 'package:observatory/src/elements/helpers/custom_element.dart';
 
 class SearchResultSelected {
   final SearchBarElement element;
@@ -16,10 +16,8 @@ class SearchResultSelected {
 
 typedef Iterable<dynamic> SearchBarSearchCallback(Pattern pattern);
 
-class SearchBarElement extends HtmlElement implements Renderable {
-  static const tag = const Tag<SearchBarElement>('search-bar');
-
-  RenderingScheduler<SearchBarElement> _r;
+class SearchBarElement extends CustomElement implements Renderable {
+  late RenderingScheduler<SearchBarElement> _r;
 
   StreamController<SearchResultSelected> _onSearchResultSelected =
       new StreamController<SearchResultSelected>.broadcast();
@@ -28,11 +26,11 @@ class SearchBarElement extends HtmlElement implements Renderable {
   Stream<SearchResultSelected> get onSearchResultSelected =>
       _onSearchResultSelected.stream;
 
-  StreamSubscription _onKeyDownSubscription;
+  late StreamSubscription _onKeyDownSubscription;
 
-  Element _workspace;
-  SearchBarSearchCallback _search;
-  bool _isOpen;
+  Element? _workspace;
+  late SearchBarSearchCallback _search;
+  late bool _isOpen;
   bool _focusRequested = false;
   String _lastValue = '';
   List _results = const [];
@@ -43,7 +41,7 @@ class SearchBarElement extends HtmlElement implements Renderable {
 
   set isOpen(bool value) {
     if (!value) {
-      _input.value = '';
+      _input!.value = '';
       _lastValue = '';
       if (_results.isNotEmpty) {
         _results = const [];
@@ -55,10 +53,10 @@ class SearchBarElement extends HtmlElement implements Renderable {
   }
 
   factory SearchBarElement(SearchBarSearchCallback search,
-      {bool isOpen: false, Element workspace, RenderingQueue queue}) {
+      {bool isOpen: false, Element? workspace, RenderingQueue? queue}) {
     assert(search != null);
     assert(isOpen != null);
-    SearchBarElement e = document.createElement(tag.name);
+    SearchBarElement e = new SearchBarElement.created();
     e._r = new RenderingScheduler<SearchBarElement>(e, queue: queue);
     e._search = search;
     e._isOpen = isOpen;
@@ -66,7 +64,7 @@ class SearchBarElement extends HtmlElement implements Renderable {
     return e;
   }
 
-  SearchBarElement.created() : super.created();
+  SearchBarElement.created() : super.created('search-bar');
 
   @override
   attached() {
@@ -74,11 +72,11 @@ class SearchBarElement extends HtmlElement implements Renderable {
     _r.enable();
     _workspace?.tabIndex = 1;
     _onKeyDownSubscription = (_workspace ?? window).onKeyDown.listen((e) {
-      if (e.key.toLowerCase() == 'f' &&
+      if (e.key!.toLowerCase() == 'f' &&
           !e.shiftKey &&
           !e.altKey &&
           e.ctrlKey != e.metaKey) {
-        if (e.metaKey == window.navigator.platform.startsWith('Mac')) {
+        if (e.metaKey == window.navigator.platform!.startsWith('Mac')) {
           e.stopPropagation();
           e.preventDefault();
           isOpen = true;
@@ -96,15 +94,15 @@ class SearchBarElement extends HtmlElement implements Renderable {
     _onKeyDownSubscription.cancel();
   }
 
-  TextInputElement _input;
-  SpanElement _resultsArea;
+  TextInputElement? _input;
+  SpanElement? _resultsArea;
 
   void render() {
     if (_input == null) {
       _input = new TextInputElement()
         ..onKeyPress.listen((e) {
           if (e.keyCode == KeyCode.ENTER) {
-            if (_input.value == '') {
+            if (_input!.value == '') {
               _lastValue = '';
               if (_results.isNotEmpty) {
                 _results = const [];
@@ -112,9 +110,9 @@ class SearchBarElement extends HtmlElement implements Renderable {
                 _triggerSearchResultSelected();
                 _r.dirty();
               }
-            } else if (_input.value != _lastValue) {
-              _lastValue = _input.value;
-              _results = _doSearch(_input.value);
+            } else if (_input!.value != _lastValue) {
+              _lastValue = _input!.value!;
+              _results = _doSearch(_input!.value!);
               _current = 0;
               _triggerSearchResultSelected();
               _r.dirty();
@@ -129,8 +127,8 @@ class SearchBarElement extends HtmlElement implements Renderable {
         });
       _resultsArea = new SpanElement();
       children = <Element>[
-        _input,
-        _resultsArea,
+        _input!,
+        _resultsArea!,
         new ButtonElement()
           ..text = '❌'
           ..onClick.listen((_) {
@@ -138,7 +136,7 @@ class SearchBarElement extends HtmlElement implements Renderable {
           })
       ];
     }
-    _resultsArea.nodes = [
+    _resultsArea!.nodes = [
       new ButtonElement()
         ..text = '▲'
         ..disabled = _results.isEmpty
@@ -152,7 +150,7 @@ class SearchBarElement extends HtmlElement implements Renderable {
     ];
     style.visibility = isOpen ? null : 'collapse';
     if (_focusRequested) {
-      _input.focus();
+      _input!.focus();
       _focusRequested = false;
     }
   }
@@ -202,6 +200,6 @@ class _CaseInsensitivePatternString implements Pattern {
   Iterable<Match> allMatches(String string, [int start = 0]) =>
       _pattern.allMatches(string.toLowerCase(), start);
 
-  Match matchAsPrefix(String string, [int start = 0]) =>
+  Match? matchAsPrefix(String string, [int start = 0]) =>
       _pattern.matchAsPrefix(string.toLowerCase(), start);
 }

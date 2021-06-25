@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 // OtherResources=stdio_implicit_close_script.dart
 
 import "package:async_helper/async_helper.dart";
@@ -13,15 +15,14 @@ void test({bool closeStdout, bool closeStderr}) {
   var scriptFile = "stdio_implicit_close_script.dart";
   var script = Platform.script.resolve(scriptFile).toFilePath();
 
-  var arguments = [
-    script,
-  ];
+  var arguments = <String>[]
+    ..addAll(Platform.executableArguments)
+    ..add(script);
   if (closeStdout) arguments.add("stdout");
   if (closeStderr) arguments.add("stderr");
 
   asyncStart();
-  Process
-      .run(Platform.executable, arguments,
+  Process.run(Platform.executable, arguments,
           stdoutEncoding: ascii, stderrEncoding: ascii)
       .then((result) {
     print(result.stdout);

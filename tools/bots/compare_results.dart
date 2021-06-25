@@ -7,50 +7,25 @@
 // The output contains additional details in the verbose mode. There is a human
 // readable mode that explains the results and how they changed.
 
+// @dart = 2.9
+
 import 'dart:collection';
 import 'dart:io';
 
 import 'package:args/args.dart';
-
-import 'results.dart';
-
-class Result {
-  final String configuration;
-  final String name;
-  final String outcome;
-  final String expectation;
-  final bool matches;
-  final bool flaked;
-
-  Result(this.configuration, this.name, this.outcome, this.expectation,
-      this.matches, this.flaked);
-
-  Result.fromMap(Map<String, dynamic> map, Map<String, dynamic> flakinessData)
-      : configuration = map["configuration"],
-        name = map["name"],
-        outcome = map["result"],
-        expectation = map["expected"],
-        matches = map["matches"],
-        flaked = flakinessData != null &&
-            flakinessData["outcomes"].contains(map["result"]);
-
-  String get key => "$configuration:$name";
-}
+import 'package:test_runner/bot_results.dart';
 
 class Event {
   final Result before;
   final Result after;
-  final Result approved;
 
-  Event(this.before, this.after, this.approved);
+  Event(this.before, this.after);
 
   bool get isNew => before == null;
   bool get isNewPassing => before == null && after.matches;
   bool get isNewFailing => before == null && !after.matches;
   bool get changed => !unchanged;
   bool get unchanged => before != null && before.outcome == after.outcome;
-  bool get isApproved => approved != null && approved.outcome == after.outcome;
-  bool get isUnapproved => !isApproved;
   bool get remainedPassing => before.matches && after.matches;
   bool get remainedFailing => !before.matches && !after.matches;
   bool get flaked => after.flaked;
@@ -81,7 +56,6 @@ bool firstSection = true;
 bool search(
     String description,
     String searchForStatus,
-    String searchForApproval,
     List<Event> events,
     ArgResults options,
     Map<String, Map<String, dynamic>> logs,
@@ -101,12 +75,6 @@ bool search(
     }
     if (searchForStatus == "failing" &&
         (event.after.flaked || event.after.matches)) {
-      continue;
-    }
-    if (searchForApproval == "approved" && !event.isApproved) {
-      continue;
-    }
-    if (searchForApproval == "unapproved" && !event.isUnapproved) {
       continue;
     }
     if (options["unchanged"] && !event.unchanged) continue;
@@ -148,7 +116,7 @@ bool search(
           output = "$name ${event.description} "
               "(${event.after.outcome}${expect})";
         } else {
-          output = "name ${event.description} "
+          output = "$name ${event.description} "
               "(${event.before?.outcome} -> ${event.after.outcome}${expect})";
         }
       } else {
@@ -157,10 +125,13 @@ bool search(
             "${before?.matches} ${after.matches} "
             "${before?.flaked} ${after.flaked}";
       }
+    } else {
+      output = name;
     }
-    if (logs != null) {
-      final log = logs[event.after.key];
-      if (log != null) logSection?.add("\n\nLog for $output\n${log["log"]}");
+    final log = logs[event.after.key];
+    final bar = '=' * (output.length + 2);
+    if (log != null) {
+      logSection?.add("\n\n/$bar\\\n| $output |\n\\$bar/\n\n${log["log"]}");
     }
     if (!options["logs-only"]) {
       print(output);
@@ -172,8 +143,6 @@ bool search(
 
 main(List<String> args) async {
   final parser = new ArgParser();
-  parser.addFlag("approved",
-      abbr: 'A', negatable: false, help: "Show approved tests.");
   parser.addFlag("changed",
       abbr: 'c',
       negatable: false,
@@ -192,14 +161,9 @@ main(List<String> args) async {
   parser.addFlag("flaky",
       abbr: 'F', negatable: false, help: "Show flaky tests.");
   parser.addFlag("help", help: "Show the program usage.", negatable: false);
-  parser.addFlag("human",
-      abbr: "h",
-      help: "Prove you can't read machine readable output.",
-      negatable: false);
+  parser.addFlag("human", abbr: "h", negatable: false);
   parser.addFlag("passing",
       abbr: 'p', negatable: false, help: "Show passing tests.");
-  parser.addFlag("unapproved",
-      abbr: 'U', negatable: false, help: "Show unapproved tests.");
   parser.addFlag("unchanged",
       abbr: 'u',
       negatable: false,
@@ -209,17 +173,16 @@ main(List<String> args) async {
       help: "Show the old and new result for each test",
       negatable: false);
   parser.addOption("logs",
-      abbr: "l", help: "Path to file holding logs of failing tests.");
+      abbr: "l", help: "Path to file holding logs of failing and flaky tests.");
   parser.addFlag("logs-only",
-      help: "Only print logs of failing tests, no other output",
+      help: "Only print logs of failing and flaky tests, no other output",
       negatable: false);
 
   final options = parser.parse(args);
   if (options["help"]) {
     print("""
-Usage: compare_results.dart [OPTION]... BEFORE AFTER [APPROVED]
+Usage: compare_results.dart [OPTION]... BEFORE AFTER
 Compare the old and new test results and list tests that pass the filters.
-Three-way compare with the approved results if provided.
 All tests are listed if no filters are given.
 
 The options are as follows:
@@ -236,9 +199,9 @@ ${parser.usage}""");
   }
 
   final parameters = options.rest;
-  if (parameters.length != 2 && parameters.length != 3) {
-    print("error: Expected two or three parameters "
-        "(results before, results after, and (optionally) approved results)");
+  if (parameters.length != 2) {
+    print("error: Expected two parameters "
+        "(results before, results after)");
     exitCode = 2;
     return;
   }
@@ -246,9 +209,6 @@ ${parser.usage}""");
   // Load the input and the flakiness data if specified.
   final before = await loadResultsMap(parameters[0]);
   final after = await loadResultsMap(parameters[1]);
-  final approved = 3 <= parameters.length
-      ? await loadResultsMap(parameters[2])
-      : <String, Map<String, dynamic>>{};
   final logs = options['logs'] == null
       ? <String, Map<String, dynamic>>{}
       : await loadResultsMap(options['logs']);
@@ -263,15 +223,11 @@ ${parser.usage}""");
   for (final name in names) {
     final mapBefore = before[name];
     final mapAfter = after[name];
-    final mapApproved = approved[name];
     final resultBefore = mapBefore != null
         ? new Result.fromMap(mapBefore, flakinessData[name])
         : null;
     final resultAfter = new Result.fromMap(mapAfter, flakinessData[name]);
-    final resultApproved = mapApproved != null
-        ? new Result.fromMap(mapApproved, flakinessData[name])
-        : null;
-    final event = new Event(resultBefore, resultAfter, resultApproved);
+    final event = new Event(resultBefore, resultAfter);
     events.add(event);
   }
 
@@ -291,7 +247,7 @@ ${parser.usage}""");
       "changed": "began failing",
       null: "failed",
     },
-    null: {
+    "any": {
       "unchanged": "had the same result",
       "changed": "changed result",
       null: "ran",
@@ -301,54 +257,26 @@ ${parser.usage}""");
   final searchForStatuses =
       ["passing", "flaky", "failing"].where((option) => options[option]);
 
-  final approvalDescriptions = {
-    "passing": {
-      "approved": " (approved)",
-      "unapproved": " (should be approved)",
-      null: "",
-    },
-    "flaky": {
-      "approved": " (approved result)",
-      "unapproved": " (unapproved result)",
-      null: "",
-    },
-    "failing": {
-      "approved": " (approved)",
-      "unapproved": " (needs approval)",
-      null: "",
-    },
-    null: {
-      "approved": " (approved)",
-      "unapproved": " (needs approval)",
-      null: "",
-    },
-  };
-
-  final searchForApprovals =
-      ["approved", "unapproved"].where((option) => options[option]);
-
   // Report tests matching the filters.
   final logSection = <String>[];
   bool judgement = false;
   for (final searchForStatus
-      in searchForStatuses.isNotEmpty ? searchForStatuses : <String>[null]) {
-    for (final searchForApproval in searchForApprovals.isNotEmpty
-        ? searchForApprovals
-        : <String>[null]) {
-      final searchForChanged = options["unchanged"]
-          ? "unchanged"
-          : options["changed"] ? "changed" : null;
-      final aboutStatus = filterDescriptions[searchForStatus][searchForChanged];
-      final aboutApproval =
-          approvalDescriptions[searchForStatus][searchForApproval];
-      final sectionHeader = "The following tests $aboutStatus$aboutApproval:";
-      final logSectionArg = searchForStatus == "failing" ? logSection : null;
-      bool possibleJudgement = search(sectionHeader, searchForStatus,
-          searchForApproval, events, options, logs, logSectionArg);
-      if ((searchForStatus == null || searchForStatus == "failing") &&
-          (searchForApproval == null || searchForApproval == "unapproved")) {
-        judgement = possibleJudgement;
-      }
+      in searchForStatuses.isNotEmpty ? searchForStatuses : <String>["any"]) {
+    final searchForChanged = options["unchanged"]
+        ? "unchanged"
+        : options["changed"]
+            ? "changed"
+            : null;
+    final aboutStatus = filterDescriptions[searchForStatus][searchForChanged];
+    final sectionHeader = "The following tests $aboutStatus:";
+    final logSectionArg =
+        searchForStatus == "failing" || searchForStatus == "flaky"
+            ? logSection
+            : null;
+    bool possibleJudgement = search(
+        sectionHeader, searchForStatus, events, options, logs, logSectionArg);
+    if ((searchForStatus == null || searchForStatus == "failing")) {
+      judgement = possibleJudgement;
     }
   }
 
@@ -360,8 +288,11 @@ ${parser.usage}""");
     if (options["human"] && !options["logs-only"] && !firstSection) {
       print("");
     }
-    String oldNew =
-        options["unchanged"] ? "old " : options["changed"] ? "new " : "";
+    String oldNew = options["unchanged"]
+        ? "old "
+        : options["changed"]
+            ? "new "
+            : "";
     if (judgement) {
       if (options["human"] && !options["logs-only"]) {
         print("There were ${oldNew}test failures.");

@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'fix_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(RemoveParametersInGetterDeclarationTest);
   });
@@ -19,8 +19,8 @@ class RemoveParametersInGetterDeclarationTest extends FixProcessorTest {
   @override
   FixKind get kind => DartFixKind.REMOVE_PARAMETERS_IN_GETTER_DECLARATION;
 
-  test_emptyList() async {
-    await resolveTestUnit('''
+  Future<void> test_emptyList() async {
+    await resolveTestCode('''
 class A {
   int get foo() => 0;
 }
@@ -32,8 +32,8 @@ class A {
 ''');
   }
 
-  test_nonEmptyList() async {
-    await resolveTestUnit('''
+  Future<void> test_nonEmptyList() async {
+    await resolveTestCode('''
 class A {
   int get foo(int a) => 0;
 }

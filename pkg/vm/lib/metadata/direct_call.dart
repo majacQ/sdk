@@ -5,6 +5,7 @@
 library vm.metadata.direct_call;
 
 import 'package:kernel/ast.dart';
+import 'package:kernel/src/printer.dart';
 
 /// Metadata for annotating method invocations converted to direct calls.
 class DirectCallMetadata {
@@ -12,7 +13,8 @@ class DirectCallMetadata {
   final bool checkReceiverForNull;
 
   DirectCallMetadata(Member target, bool checkReceiverForNull)
-      : this.byReference(getMemberReference(target), checkReceiverForNull);
+      : this.byReference(
+            getMemberReferenceGetter(target), checkReceiverForNull);
 
   DirectCallMetadata.byReference(
       this._targetReference, this.checkReceiverForNull);
@@ -20,14 +22,17 @@ class DirectCallMetadata {
   Member get target => _targetReference.asMember;
 
   @override
-  String toString() => "${target}${checkReceiverForNull ? '??' : ''}";
+  String toString() => "${target.toText(astTextStrategyForTesting)}"
+      "${checkReceiverForNull ? '??' : ''}";
 }
 
 /// Repository for [DirectCallMetadata].
 class DirectCallMetadataRepository
     extends MetadataRepository<DirectCallMetadata> {
+  static const repositoryTag = 'vm.direct-call.metadata';
+
   @override
-  final String tag = 'vm.direct-call.metadata';
+  String get tag => repositoryTag;
 
   @override
   final Map<TreeNode, DirectCallMetadata> mapping =
@@ -35,13 +40,15 @@ class DirectCallMetadataRepository
 
   @override
   void writeToBinary(DirectCallMetadata metadata, Node node, BinarySink sink) {
-    sink.writeCanonicalNameReference(getCanonicalNameOfMember(metadata.target));
+    sink.writeNullAllowedCanonicalNameReference(
+        getCanonicalNameOfMemberGetter(metadata.target));
     sink.writeByte(metadata.checkReceiverForNull ? 1 : 0);
   }
 
   @override
   DirectCallMetadata readFromBinary(Node node, BinarySource source) {
-    final targetReference = source.readCanonicalNameReference()?.getReference();
+    final targetReference =
+        source.readNullableCanonicalNameReference()?.reference;
     if (targetReference == null) {
       throw 'DirectCallMetadata should have a non-null target';
     }

@@ -2,17 +2,16 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 // Test that the default PRNG does uniformly distribute values when not using
 // a power of 2.
-
-// Library tag to allow Dartium to run the test.
-library low_test;
 
 import "package:expect/expect.dart";
 import 'dart:math';
 
 void main() {
-  var n = (2 * (1 << 32)) ~/ 3;
+  var n = (2 * 0x100000000) ~/ 3;
   var n2 = n ~/ 2;
 
   var iterations = 200000;

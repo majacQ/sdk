@@ -1,7 +1,7 @@
 // Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-
+// @dart=2.9
 /*@testedFeatures=inference*/
 library test;
 
@@ -32,19 +32,28 @@ class G {
 }
 
 void test1(G g) {
-  g. /*@target=G::target*/ target *= /*@typeArgs=dynamic*/ f();
-  var /*@type=C*/ x =
-      g. /*@target=G::target*/ target *= /*@typeArgs=dynamic*/ f();
+  /*@ type=G* */ g. /*@target=G.target*/ /*@target=G.target*/ target
+      /*@target=A.**/ *=
+      /*@ typeArgs=D* */ f();
+  var /*@ type=C* */ x =
+      /*@ type=G* */ g. /*@target=G.target*/ /*@target=G.target*/ target
+          /*@target=A.**/ *=
+          /*@ typeArgs=D* */ f();
 }
 
 void test2(G g) {
-  ++g. /*@target=G::target*/ target;
-  var /*@type=C*/ x = ++g. /*@target=G::target*/ target;
+  /*@target=A.+*/ ++ /*@ type=G* */ g
+      . /*@target=G.target*/ /*@target=G.target*/ target;
+  var /*@ type=C* */ x = /*@target=A.+*/ ++ /*@ type=G* */ g
+      . /*@target=G.target*/ /*@target=G.target*/ target;
 }
 
 void test3(G g) {
-  g. /*@target=G::target*/ target++;
-  var /*@type=A*/ x = g. /*@target=G::target*/ target++;
+  /*@ type=G* */ g
+      . /*@target=G.target*/ /*@target=G.target*/ target /*@target=A.+*/ ++;
+  var /*@ type=A* */ x = /*@ type=G* */ g. /*@ type=A* */ /*@target=G.target*/
+          /*@target=G.target*/ /*@ type=C* */ target
+      /*@target=A.+*/ ++;
 }
 
 main() {}

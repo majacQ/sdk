@@ -7,6 +7,8 @@
 // VMOptions=--short_socket_write
 // VMOptions=--short_socket_read --short_socket_write
 
+// @dart = 2.9
+
 import "dart:async";
 import "dart:io";
 
@@ -18,7 +20,12 @@ void main() {
   // without listening on the stream.
   asyncStart();
   ServerSocket.bind(InternetAddress.loopbackIPv4, 0).then((server) {
-    server.listen((_) {});
+    Socket ref;
+    server.listen((socket) {
+      // Create a reference to the connected socket so it's not prematurely
+      // collected.
+      ref = socket;
+    });
     Socket.connect("127.0.0.1", server.port).then((socket) {
       socket.add([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
       socket.close();

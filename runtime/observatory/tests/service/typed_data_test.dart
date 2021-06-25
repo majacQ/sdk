@@ -6,28 +6,45 @@ library typed_data_test;
 
 import 'dart:typed_data';
 import 'package:observatory/service_io.dart';
-import 'package:unittest/unittest.dart';
+import 'package:test/test.dart';
 import 'test_helper.dart';
 
+@pragma("vm:entry-point") // Prevent obfuscation
 var int8List;
+@pragma("vm:entry-point") // Prevent obfuscation
 var int16List;
+@pragma("vm:entry-point") // Prevent obfuscation
 var int32List;
+@pragma("vm:entry-point") // Prevent obfuscation
 var int64List;
 
+@pragma("vm:entry-point") // Prevent obfuscation
 var uint8List;
+@pragma("vm:entry-point") // Prevent obfuscation
 var uint16List;
+@pragma("vm:entry-point") // Prevent obfuscation
 var uint32List;
+@pragma("vm:entry-point") // Prevent obfuscation
 var uint64List;
+@pragma("vm:entry-point") // Prevent obfuscation
 var uint8ClampedList;
 
+@pragma("vm:entry-point") // Prevent obfuscation
 var float32List;
+@pragma("vm:entry-point") // Prevent obfuscation
 var float64List;
 
+@pragma("vm:entry-point") // Prevent obfuscation
 var int32x4;
+@pragma("vm:entry-point") // Prevent obfuscation
 var float32x4;
+@pragma("vm:entry-point") // Prevent obfuscation
 var float64x2;
+@pragma("vm:entry-point") // Prevent obfuscation
 var int32x4List;
+@pragma("vm:entry-point") // Prevent obfuscation
 var float32x4List;
+@pragma("vm:entry-point") // Prevent obfuscation
 var float64x2List;
 
 void script() {
@@ -78,18 +95,18 @@ void script() {
 var tests = <IsolateTest>[
   (Isolate isolate) async {
     script();
-    Library lib = await isolate.rootLibrary.load();
+    Library lib = await isolate.rootLibrary.load() as Library;
 
     // Pre-load all the fields so we don't use await below and get better
     // stacktraces.
     for (var v in lib.variables) {
       await v.load();
-      await v.staticValue.load();
+      await v.staticValue!.load();
     }
 
     expectTypedData(name, expectedValue) {
       var variable = lib.variables.singleWhere((v) => v.name == name);
-      var actualValue = (variable.staticValue as Instance).typedElements;
+      var actualValue = (variable.staticValue as Instance).typedElements!;
       if (expectedValue is Int32x4List) {
         expect(actualValue.length, equals(expectedValue.length));
         for (var i = 0; i < actualValue.length; i++) {

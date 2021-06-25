@@ -2,11 +2,11 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-// VMOptions=--optimization-filter=triggerBug --no-background-compilation --enable-inlining-annotations --optimization-counter-threshold=2
+// @dart = 2.9
 
-const String NeverInline = 'NeverInline';
+// VMOptions=--optimization-filter=triggerBug --no-background-compilation --optimization-counter-threshold=2
 
-@NeverInline
+@pragma('vm:never-inline')
 dynamic triggerGC() {
   var a = [];
   for (int i = 0; i < 100; ++i) {
@@ -15,12 +15,12 @@ dynamic triggerGC() {
   return a;
 }
 
-@NeverInline
+@pragma('vm:never-inline')
 void fillLowerStackWithReturnAddresses() {
   recursive(20);
 }
 
-@NeverInline
+@pragma('vm:never-inline')
 dynamic recursive(dynamic n) {
   if (n > 0) {
     recursive(n - 1);
@@ -29,7 +29,7 @@ dynamic recursive(dynamic n) {
 }
 
 class Box {
-  @NeverInline
+  @pragma('vm:never-inline')
   Box get value => global;
 }
 
@@ -39,7 +39,7 @@ main() {
   bool isTrue = true;
   bool hasProblem = true;
 
-  @NeverInline
+  @pragma('vm:never-inline')
   void triggerBug(Box box) {
     triggerGC();
 

@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import "dart:mirrors";
 import "package:expect/expect.dart";
 
@@ -26,13 +28,13 @@ void testInstance() {
   ClassMirror bar = reflect(new Bar()).type;
   ClassMirror baz = reflect(new Baz()).type;
   ClassMirror hOfBaz = reflect(new H<Baz>()).type;
-  VariableMirror field = foo.declarations[#field];
-  MethodMirror getter = foo.declarations[#bar];
-  MethodMirror setter = foo.declarations[const Symbol('bar=')];
-  MethodMirror m = foo.declarations[#m];
-  MethodMirror n = foo.declarations[#n];
-  MethodMirror o = foo.declarations[#o];
-  MethodMirror p = foo.declarations[#p];
+  VariableMirror field = foo.declarations[#field] as VariableMirror;
+  MethodMirror getter = foo.declarations[#bar] as MethodMirror;
+  MethodMirror setter = foo.declarations[const Symbol('bar=')] as MethodMirror;
+  MethodMirror m = foo.declarations[#m] as MethodMirror;
+  MethodMirror n = foo.declarations[#n] as MethodMirror;
+  MethodMirror o = foo.declarations[#o] as MethodMirror;
+  MethodMirror p = foo.declarations[#p] as MethodMirror;
 
   Expect.equals(foo, field.owner);
   Expect.equals(foo, getter.owner);
@@ -57,15 +59,15 @@ void testInstance() {
 void testOriginalDeclaration() {
   ClassMirror foo = reflectClass(Foo);
 
-  VariableMirror field = foo.declarations[#field];
-  MethodMirror getter = foo.declarations[#bar];
-  MethodMirror setter = foo.declarations[const Symbol('bar=')];
-  MethodMirror m = foo.declarations[#m];
-  MethodMirror n = foo.declarations[#n];
-  MethodMirror o = foo.declarations[#o];
-  MethodMirror p = foo.declarations[#p];
-  TypeVariableMirror w = foo.typeVariables[0];
-  TypeVariableMirror v = foo.typeVariables[1];
+  VariableMirror field = foo.declarations[#field] as VariableMirror;
+  MethodMirror getter = foo.declarations[#bar] as MethodMirror;
+  MethodMirror setter = foo.declarations[const Symbol('bar=')] as MethodMirror;
+  MethodMirror m = foo.declarations[#m] as MethodMirror;
+  MethodMirror n = foo.declarations[#n] as MethodMirror;
+  MethodMirror o = foo.declarations[#o] as MethodMirror;
+  MethodMirror p = foo.declarations[#p] as MethodMirror;
+  TypeVariableMirror w = foo.typeVariables[0] as TypeVariableMirror;
+  TypeVariableMirror v = foo.typeVariables[1] as TypeVariableMirror;
 
   Expect.equals(foo, field.owner);
   Expect.equals(foo, getter.owner);

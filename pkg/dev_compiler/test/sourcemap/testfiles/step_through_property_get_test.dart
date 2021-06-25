@@ -2,15 +2,17 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-main() {
-  Bar bar = Bar();
+// @dart = 2.9
+
+void main() {
+  var bar = Bar();
   bar.doStuff();
 }
 
 class Foo {
   final List<String> /*s:7*/ /*s:9*/ /*s:12*/ /*s:14*/ data1;
 
-  Foo() : data1 = ["a", "b", "c"];
+  Foo() : data1 = ['a', 'b', 'c'];
 
   void doStuff() {
     print(data1);
@@ -22,10 +24,11 @@ class Bar extends Foo {
   final List<String> /*s:2*/ /*s:4*/ data2;
   Foo data3;
 
-  Bar() : data2 = ["d", "e", "f"] {
+  Bar() : data2 = ['d', 'e', 'f'] {
     data3 = this;
   }
 
+  @override
   void doStuff() {
     /* bl */
     /*s:1*/ print(data2);

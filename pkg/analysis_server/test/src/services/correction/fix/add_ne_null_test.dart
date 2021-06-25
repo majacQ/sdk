@@ -7,39 +7,24 @@ import 'package:analyzer/src/error/codes.dart';
 import 'package:analyzer_plugin/utilities/fixes/fixes.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
+import '../../../../abstract_context.dart';
 import 'fix_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
+    defineReflectiveTests(AddNeNullMultiTest);
     defineReflectiveTests(AddNeNullTest);
   });
 }
 
 @reflectiveTest
-class AddNeNullTest extends FixProcessorTest {
+class AddNeNullMultiTest extends FixProcessorTest with WithNullSafetyMixin {
   @override
-  FixKind get kind => DartFixKind.ADD_NE_NULL;
+  FixKind get kind => DartFixKind.ADD_NE_NULL_MULTI;
 
-  test_nonBoolCondition() async {
-    await resolveTestUnit('''
-main(String p) {
-  if (p) {
-    print(p);
-  }
-}
-''');
-    await assertHasFix('''
-main(String p) {
-  if (p != null) {
-    print(p);
-  }
-}
-''');
-  }
-
-  test_nonBoolCondition_all() async {
-    await resolveTestUnit('''
-main(String p, String q) {
+  Future<void> test_nonBoolCondition_all_nonNullable() async {
+    await resolveTestCode('''
+f(String p, String q) {
   if (p) {
     print(p);
   }
@@ -48,13 +33,61 @@ main(String p, String q) {
   }
 }
 ''');
-    await assertHasFixAllFix(StaticTypeWarningCode.NON_BOOL_CONDITION, '''
-main(String p, String q) {
+    await assertNoFixAllFix(CompileTimeErrorCode.NON_BOOL_CONDITION);
+  }
+
+  Future<void> test_nonBoolCondition_all_nullable() async {
+    await resolveTestCode('''
+f(String? p, String? q) {
+  if (p) {
+    print(p);
+  }
+  if (q) {
+    print(q);
+  }
+}
+''');
+    await assertHasFixAllFix(CompileTimeErrorCode.NON_BOOL_CONDITION, '''
+f(String? p, String? q) {
   if (p != null) {
     print(p);
   }
   if (q != null) {
     print(q);
+  }
+}
+''');
+  }
+}
+
+@reflectiveTest
+class AddNeNullTest extends FixProcessorTest with WithNullSafetyMixin {
+  @override
+  FixKind get kind => DartFixKind.ADD_NE_NULL;
+
+  Future<void> test_nonBoolCondition_nonNullable() async {
+    await resolveTestCode('''
+f(String p) {
+  if (p) {
+    print(p);
+  }
+}
+''');
+    await assertNoFix();
+  }
+
+  Future<void> test_nonBoolCondition_nullable() async {
+    await resolveTestCode('''
+f(String? p) {
+  if (p) {
+    print(p);
+  }
+}
+''');
+    await assertHasFix('''
+f(String? p) {
+  if (p != null) {
+    print(p);
   }
 }
 ''');

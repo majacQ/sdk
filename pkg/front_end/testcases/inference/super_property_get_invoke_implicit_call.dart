@@ -1,7 +1,7 @@
 // Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-
+// @dart=2.9
 /*@testedFeatures=inference*/
 library test;
 
@@ -10,13 +10,13 @@ class CallableClass {
 }
 
 class C {
-  var /*@topType=CallableClass*/ f = new CallableClass();
+  var f = new CallableClass();
 }
 
 class D extends C {
   void g() {
-    var /*@type=int*/ y =
-        super. /*@target=C::f*/ f /*@target=CallableClass::call*/ ();
+    var /*@ type=int* */ y =
+        super. /*@target=C.f*/ f /*@target=CallableClass.call*/ ();
   }
 }
 

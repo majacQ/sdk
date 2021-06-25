@@ -4,28 +4,16 @@
 
 #include "vm/compiler/method_recognizer.h"
 
+#include "vm/log.h"
 #include "vm/object.h"
 #include "vm/reusable_handles.h"
 #include "vm/symbols.h"
 
 namespace dart {
 
-MethodRecognizer::Kind MethodRecognizer::RecognizeKind(
-    const Function& function) {
-  return function.recognized_kind();
-}
-
-bool MethodRecognizer::AlwaysInline(const Function& function) {
-  return function.always_inline();
-}
-
-bool MethodRecognizer::PolymorphicTarget(const Function& function) {
-  return function.is_polymorphic_target();
-}
-
 intptr_t MethodRecognizer::NumArgsCheckedForStaticCall(
     const Function& function) {
-  switch (RecognizeKind(function)) {
+  switch (function.recognized_kind()) {
     case MethodRecognizer::kDoubleFromInteger:
     case MethodRecognizer::kMathMin:
     case MethodRecognizer::kMathMax:
@@ -37,57 +25,50 @@ intptr_t MethodRecognizer::NumArgsCheckedForStaticCall(
 
 intptr_t MethodRecognizer::ResultCidFromPragma(
     const Object& function_or_field) {
-  // TODO(vm-team): The caller should only call us if the
-  // function_or_field.has_pragma(). If this method turns out to be a
-  // performance problem nonetheless, we could consider adding a cache.
   auto T = Thread::Current();
   auto Z = T->zone();
-  auto& klass = Class::Handle(Z);
-  if (function_or_field.IsFunction()) {
-    auto& function = Function::Cast(function_or_field);
-    ASSERT(function.has_pragma());
-    klass = function.Owner();
-  } else {
-    auto& field = Field::Cast(function_or_field);
-    ASSERT(field.has_pragma());
-    klass = field.Owner();
-  }
-  auto& library = Library::Handle(Z, klass.library());
-  const bool can_use_pragma = library.IsAnyCoreLibrary();
-  if (can_use_pragma) {
-    auto& option = Object::Handle(Z);
-    if (library.FindPragma(T, function_or_field,
-                           Symbols::vm_exact_result_type(), &option)) {
-      if (option.IsType()) {
-        return Type::Cast(option).type_class_id();
-      } else if (option.IsString()) {
-        auto& str = String::Cast(option);
-        // 'str' should match the pattern '([^#]+)#([^#\?]+)' where group 1
-        // is the library URI and group 2 is the class name.
-        bool parse_failure = false;
-        intptr_t library_end = -1;
-        for (intptr_t i = 0; i < str.Length(); ++i) {
-          if (str.CharAt(i) == '#') {
-            if (library_end != -1) {
-              parse_failure = true;
-              break;
-            } else {
-              library_end = i;
-            }
+  auto& option = Object::Handle(Z);
+  if (Library::FindPragma(T, /*only_core=*/true, function_or_field,
+                          Symbols::vm_exact_result_type(),
+                          /*multiple=*/false, &option)) {
+    if (option.IsType()) {
+      return Type::Cast(option).type_class_id();
+    } else if (option.IsString()) {
+      auto& str = String::Cast(option);
+      // 'str' should match the pattern '([^#]+)#([^#\?]+)' where group 1
+      // is the library URI and group 2 is the class name.
+      bool parse_failure = false;
+      intptr_t library_end = -1;
+      for (intptr_t i = 0; i < str.Length(); ++i) {
+        if (str.CharAt(i) == '#') {
+          if (library_end != -1) {
+            parse_failure = true;
+            break;
+          } else {
+            library_end = i;
           }
         }
-        if (!parse_failure && library_end > 0) {
-          auto& tmp = String::Handle(Z);
-          tmp = String::SubString(str, 0, library_end, Heap::kOld);
-          library = Library::LookupLibrary(Thread::Current(), tmp);
-          if (!library.IsNull()) {
-            tmp = String::SubString(str, library_end + 1,
-                                    str.Length() - library_end - 1, Heap::kOld);
-            klass = library.LookupClassAllowPrivate(tmp);
-            if (!klass.IsNull()) {
-              return klass.id();
-            }
+      }
+      if (!parse_failure && library_end > 0) {
+        auto& tmp =
+            String::Handle(String::SubString(str, 0, library_end, Heap::kOld));
+        const auto& library = Library::Handle(Library::LookupLibrary(T, tmp));
+        if (!library.IsNull()) {
+          tmp = String::SubString(str, library_end + 1,
+                                  str.Length() - library_end - 1, Heap::kOld);
+          const auto& klass =
+              Class::Handle(library.LookupClassAllowPrivate(tmp));
+          if (!klass.IsNull()) {
+            return klass.id();
           }
+        }
+      }
+    } else if (option.IsArray()) {
+      const Array& array = Array::Cast(option);
+      if (array.Length() > 0) {
+        const Object& type = Object::Handle(Array::Cast(option).At(0));
+        if (type.IsType()) {
+          return Type::Cast(type).type_class_id();
         }
       }
     }
@@ -100,24 +81,11 @@ bool MethodRecognizer::HasNonNullableResultTypeFromPragma(
     const Object& function_or_field) {
   auto T = Thread::Current();
   auto Z = T->zone();
-  auto& klass = Class::Handle(Z);
-  if (function_or_field.IsFunction()) {
-    auto& function = Function::Cast(function_or_field);
-    ASSERT(function.has_pragma());
-    klass = function.Owner();
-  } else {
-    auto& field = Field::Cast(function_or_field);
-    ASSERT(field.has_pragma());
-    klass = field.Owner();
-  }
-  auto& library = Library::Handle(Z, klass.library());
-  const bool can_use_pragma = library.IsAnyCoreLibrary();
-  if (can_use_pragma) {
-    auto& option = Object::Handle(Z);
-    if (library.FindPragma(T, function_or_field,
-                           Symbols::vm_non_nullable_result_type(), &option)) {
-      return true;
-    }
+  auto& option = Object::Handle(Z);
+  if (Library::FindPragma(T, /*only_core=*/true, function_or_field,
+                          Symbols::vm_non_nullable_result_type(),
+                          /*multiple=*/false, &option)) {
+    return true;
   }
 
   // If nothing said otherwise, the return type is nullable.
@@ -210,63 +178,106 @@ intptr_t MethodRecognizer::MethodKindToReceiverCid(Kind kind) {
   return kIllegalCid;
 }
 
-#define KIND_TO_STRING(class_name, function_name, enum_name, fp) #enum_name,
-static const char* recognized_list_method_name[] = {
-    "Unknown", RECOGNIZED_LIST(KIND_TO_STRING)};
-#undef KIND_TO_STRING
+static const struct {
+  const char* const class_name;
+  const char* const function_name;
+  const char* const enum_name;
+  const uint32_t fp;
+} recognized_methods[MethodRecognizer::kNumRecognizedMethods] = {
+    {"", "", "Unknown", 0},
+#define RECOGNIZE_METHOD(class_name, function_name, enum_name, fp)             \
+  {"" #class_name, "" #function_name, #enum_name, fp},
+    RECOGNIZED_LIST(RECOGNIZE_METHOD)
+#undef RECOGNIZE_METHOD
+};
 
 const char* MethodRecognizer::KindToCString(Kind kind) {
-  if (kind > kUnknown && kind < kNumRecognizedMethods)
-    return recognized_list_method_name[kind];
+  if (kind >= kUnknown && kind < kNumRecognizedMethods)
+    return recognized_methods[kind].enum_name;
   return "?";
 }
 
-#if !defined(DART_PRECOMPILED_RUNTIME)
+// Is this method marked with the vm:recognized pragma?
+bool MethodRecognizer::IsMarkedAsRecognized(const Function& function,
+                                            const char* kind) {
+  const Function* functionp =
+      function.IsDynamicInvocationForwarder()
+          ? &Function::Handle(function.ForwardingTarget())
+          : &function;
+  Object& options = Object::Handle();
+  bool is_recognized = Library::FindPragma(
+      Thread::Current(), /*only_core=*/true, *functionp,
+      Symbols::vm_recognized(), /*multiple=*/false, &options);
+  if (!is_recognized) return false;
+  if (kind == nullptr) return true;
+
+  ASSERT(options.IsString());
+  ASSERT(String::Cast(options).Equals("asm-intrinsic") ||
+         String::Cast(options).Equals("graph-intrinsic") ||
+         String::Cast(options).Equals("other"));
+  return String::Cast(options).Equals(kind);
+}
+
 void MethodRecognizer::InitializeState() {
   GrowableArray<Library*> libs(3);
   Libraries(&libs);
   Function& func = Function::Handle();
+  bool fingerprints_match = true;
 
-#define SET_RECOGNIZED_KIND(class_name, function_name, enum_name, fp)          \
-  func = Library::GetFunction(libs, #class_name, #function_name);              \
-  if (!func.IsNull()) {                                                        \
-    CHECK_FINGERPRINT3(func, class_name, function_name, enum_name, fp);        \
-    func.set_recognized_kind(k##enum_name);                                    \
-  } else if (!FLAG_precompiled_mode) {                                         \
-    OS::PrintErr("Missing %s::%s\n", #class_name, #function_name);             \
-    UNREACHABLE();                                                             \
+  for (intptr_t i = 1; i < MethodRecognizer::kNumRecognizedMethods; i++) {
+    const MethodRecognizer::Kind kind = static_cast<MethodRecognizer::Kind>(i);
+    func = Library::GetFunction(libs, recognized_methods[i].class_name,
+                                recognized_methods[i].function_name);
+    if (!func.IsNull()) {
+      fingerprints_match =
+          func.CheckSourceFingerprint(recognized_methods[i].fp) &&
+          fingerprints_match;
+      func.set_recognized_kind(kind);
+      switch (kind) {
+#define RECOGNIZE_METHOD(class_name, function_name, enum_name, fp)             \
+  case MethodRecognizer::k##enum_name:                                         \
+    func.reset_unboxed_parameters_and_return();                                \
+    break;
+        ALL_INTRINSICS_LIST(RECOGNIZE_METHOD)
+#undef RECOGNIZE_METHOD
+        default:
+          break;
+      }
+    } else if (!FLAG_precompiled_mode) {
+      fingerprints_match = false;
+      OS::PrintErr("Missing %s::%s\n", recognized_methods[i].class_name,
+                   recognized_methods[i].function_name);
+    }
   }
-
-  RECOGNIZED_LIST(SET_RECOGNIZED_KIND);
 
 #define SET_FUNCTION_BIT(class_name, function_name, dest, fp, setter, value)   \
   func = Library::GetFunction(libs, #class_name, #function_name);              \
   if (!func.IsNull()) {                                                        \
-    CHECK_FINGERPRINT3(func, class_name, function_name, dest, fp);             \
+    fingerprints_match =                                                       \
+        func.CheckSourceFingerprint(fp) && fingerprints_match;                 \
     func.setter(value);                                                        \
   } else if (!FLAG_precompiled_mode) {                                         \
     OS::PrintErr("Missing %s::%s\n", #class_name, #function_name);             \
-    UNREACHABLE();                                                             \
+    fingerprints_match = false;                                                \
   }
-
-#define SET_IS_ALWAYS_INLINE(class_name, function_name, dest, fp)              \
-  SET_FUNCTION_BIT(class_name, function_name, dest, fp, set_always_inline, true)
-
-#define SET_IS_NEVER_INLINE(class_name, function_name, dest, fp)               \
-  SET_FUNCTION_BIT(class_name, function_name, dest, fp, set_is_inlinable, false)
 
 #define SET_IS_POLYMORPHIC_TARGET(class_name, function_name, dest, fp)         \
   SET_FUNCTION_BIT(class_name, function_name, dest, fp,                        \
                    set_is_polymorphic_target, true)
 
-  INLINE_WHITE_LIST(SET_IS_ALWAYS_INLINE);
-  INLINE_BLACK_LIST(SET_IS_NEVER_INLINE);
   POLYMORPHIC_TARGET_LIST(SET_IS_POLYMORPHIC_TARGET);
 
 #undef SET_RECOGNIZED_KIND
-#undef SET_IS_ALWAYS_INLINE
 #undef SET_IS_POLYMORPHIC_TARGET
 #undef SET_FUNCTION_BIT
+
+  if (!fingerprints_match) {
+    FATAL(
+        "FP mismatch while recognizing methods. If the behavior of "
+        "these functions has changed, then changes are also needed in "
+        "the VM's compiler. Otherwise the fingerprint can simply be "
+        "updated in recognized_methods_list.h\n");
+  }
 }
 
 void MethodRecognizer::Libraries(GrowableArray<Library*>* libs) {
@@ -274,76 +285,53 @@ void MethodRecognizer::Libraries(GrowableArray<Library*>* libs) {
   libs->Add(&Library::ZoneHandle(Library::CollectionLibrary()));
   libs->Add(&Library::ZoneHandle(Library::MathLibrary()));
   libs->Add(&Library::ZoneHandle(Library::TypedDataLibrary()));
+  libs->Add(&Library::ZoneHandle(Library::ConvertLibrary()));
   libs->Add(&Library::ZoneHandle(Library::InternalLibrary()));
   libs->Add(&Library::ZoneHandle(Library::DeveloperLibrary()));
   libs->Add(&Library::ZoneHandle(Library::AsyncLibrary()));
+  libs->Add(&Library::ZoneHandle(Library::FfiLibrary()));
 }
 
-RawGrowableObjectArray* MethodRecognizer::QueryRecognizedMethods(Zone* zone) {
-  const GrowableObjectArray& methods =
-      GrowableObjectArray::Handle(zone, GrowableObjectArray::New());
-  Function& func = Function::Handle(zone);
-
-  GrowableArray<Library*> libs(3);
-  Libraries(&libs);
-
-#define ADD_RECOGNIZED_METHOD(class_name, function_name, enum_name, fp)        \
-  func = Library::GetFunction(libs, #class_name, #function_name);              \
-  methods.Add(func);
-
-  RECOGNIZED_LIST(ADD_RECOGNIZED_METHOD);
-#undef ADD_RECOGNIZED_METHOD
-
-  return methods.raw();
-}
-#endif  // !defined(DART_PRECOMPILED_RUNTIME)
-
-Token::Kind MethodTokenRecognizer::RecognizeTokenKind(const String& name_) {
-  Thread* thread = Thread::Current();
-  REUSABLE_STRING_HANDLESCOPE(thread);
-  String& name = thread->StringHandle();
-  name = name_.raw();
-  ASSERT(name.IsSymbol());
-  if (Function::IsDynamicInvocationForwaderName(name)) {
-    name = Function::DemangleDynamicInvocationForwarderName(name);
-  }
-  if (name.raw() == Symbols::Plus().raw()) {
+static Token::Kind RecognizeTokenKindHelper(const String& name) {
+  if (name.ptr() == Symbols::Plus().ptr()) {
     return Token::kADD;
-  } else if (name.raw() == Symbols::Minus().raw()) {
+  } else if (name.ptr() == Symbols::Minus().ptr()) {
     return Token::kSUB;
-  } else if (name.raw() == Symbols::Star().raw()) {
+  } else if (name.ptr() == Symbols::Star().ptr()) {
     return Token::kMUL;
-  } else if (name.raw() == Symbols::Slash().raw()) {
+  } else if (name.ptr() == Symbols::Slash().ptr()) {
     return Token::kDIV;
-  } else if (name.raw() == Symbols::TruncDivOperator().raw()) {
+  } else if (name.ptr() == Symbols::TruncDivOperator().ptr()) {
     return Token::kTRUNCDIV;
-  } else if (name.raw() == Symbols::Percent().raw()) {
+  } else if (name.ptr() == Symbols::Percent().ptr()) {
     return Token::kMOD;
-  } else if (name.raw() == Symbols::BitOr().raw()) {
+  } else if (name.ptr() == Symbols::BitOr().ptr()) {
     return Token::kBIT_OR;
-  } else if (name.raw() == Symbols::Ampersand().raw()) {
+  } else if (name.ptr() == Symbols::Ampersand().ptr()) {
     return Token::kBIT_AND;
-  } else if (name.raw() == Symbols::Caret().raw()) {
+  } else if (name.ptr() == Symbols::Caret().ptr()) {
     return Token::kBIT_XOR;
-  } else if (name.raw() == Symbols::LeftShiftOperator().raw()) {
+  } else if (name.ptr() == Symbols::LeftShiftOperator().ptr()) {
     return Token::kSHL;
-  } else if (name.raw() == Symbols::RightShiftOperator().raw()) {
+  } else if (name.ptr() == Symbols::RightShiftOperator().ptr()) {
     return Token::kSHR;
-  } else if (name.raw() == Symbols::Tilde().raw()) {
+  } else if (name.ptr() == Symbols::UnsignedRightShiftOperator().ptr()) {
+    return Token::kUSHR;
+  } else if (name.ptr() == Symbols::Tilde().ptr()) {
     return Token::kBIT_NOT;
-  } else if (name.raw() == Symbols::UnaryMinus().raw()) {
+  } else if (name.ptr() == Symbols::UnaryMinus().ptr()) {
     return Token::kNEGATE;
-  } else if (name.raw() == Symbols::EqualOperator().raw()) {
+  } else if (name.ptr() == Symbols::EqualOperator().ptr()) {
     return Token::kEQ;
-  } else if (name.raw() == Symbols::Token(Token::kNE).raw()) {
+  } else if (name.ptr() == Symbols::Token(Token::kNE).ptr()) {
     return Token::kNE;
-  } else if (name.raw() == Symbols::LAngleBracket().raw()) {
+  } else if (name.ptr() == Symbols::LAngleBracket().ptr()) {
     return Token::kLT;
-  } else if (name.raw() == Symbols::RAngleBracket().raw()) {
+  } else if (name.ptr() == Symbols::RAngleBracket().ptr()) {
     return Token::kGT;
-  } else if (name.raw() == Symbols::LessEqualOperator().raw()) {
+  } else if (name.ptr() == Symbols::LessEqualOperator().ptr()) {
     return Token::kLTE;
-  } else if (name.raw() == Symbols::GreaterEqualOperator().raw()) {
+  } else if (name.ptr() == Symbols::GreaterEqualOperator().ptr()) {
     return Token::kGTE;
   } else if (Field::IsGetterName(name)) {
     return Token::kGET;
@@ -353,16 +341,28 @@ Token::Kind MethodTokenRecognizer::RecognizeTokenKind(const String& name_) {
   return Token::kILLEGAL;
 }
 
+Token::Kind MethodTokenRecognizer::RecognizeTokenKind(const String& name) {
+  ASSERT(name.IsSymbol());
+  if (Function::IsDynamicInvocationForwarderName(name)) {
+    Thread* thread = Thread::Current();
+    const auto& demangled_name = String::Handle(
+        thread->zone(), Function::DemangleDynamicInvocationForwarderName(name));
+    return RecognizeTokenKindHelper(demangled_name);
+  } else {
+    return RecognizeTokenKindHelper(name);
+  }
+}
+
 #define RECOGNIZE_FACTORY(symbol, class_name, constructor_name, cid, fp)       \
   {Symbols::k##symbol##Id, cid, fp, #symbol ", " #cid},  // NOLINT
 
-static struct {
-  intptr_t symbol_id;
-  intptr_t cid;
-  intptr_t finger_print;
-  const char* name;
+static const struct {
+  const intptr_t symbol_id;
+  const intptr_t cid;
+  const uint32_t finger_print;
+  const char* const name;
 } factory_recognizer_list[] = {RECOGNIZED_LIST_FACTORY_LIST(RECOGNIZE_FACTORY){
-    Symbols::kIllegal, -1, -1, NULL}};
+    Symbols::kIllegal, -1, 0, NULL}};
 
 #undef RECOGNIZE_FACTORY
 
@@ -370,8 +370,8 @@ intptr_t FactoryRecognizer::ResultCid(const Function& factory) {
   ASSERT(factory.IsFactory());
   const Class& function_class = Class::Handle(factory.Owner());
   const Library& lib = Library::Handle(function_class.library());
-  ASSERT((lib.raw() == Library::CoreLibrary()) ||
-         (lib.raw() == Library::TypedDataLibrary()));
+  ASSERT((lib.ptr() == Library::CoreLibrary()) ||
+         (lib.ptr() == Library::TypedDataLibrary()));
   const String& factory_name = String::Handle(factory.name());
   for (intptr_t i = 0;
        factory_recognizer_list[i].symbol_id != Symbols::kIllegal; i++) {
@@ -382,6 +382,32 @@ intptr_t FactoryRecognizer::ResultCid(const Function& factory) {
     }
   }
   return kDynamicCid;
+}
+
+intptr_t FactoryRecognizer::GetResultCidOfListFactory(Zone* zone,
+                                                      const Function& function,
+                                                      intptr_t argument_count) {
+  if (!function.IsFactory()) {
+    return kDynamicCid;
+  }
+
+  const Class& owner = Class::Handle(zone, function.Owner());
+  if ((owner.library() != Library::CoreLibrary()) &&
+      (owner.library() != Library::TypedDataLibrary())) {
+    return kDynamicCid;
+  }
+
+  if (owner.Name() == Symbols::List().ptr()) {
+    if (function.name() == Symbols::ListFactory().ptr()) {
+      ASSERT(argument_count == 1 || argument_count == 2);
+      return (argument_count == 1) ? kGrowableObjectArrayCid : kArrayCid;
+    } else if (function.name() == Symbols::ListFilledFactory().ptr()) {
+      ASSERT(argument_count == 3 || argument_count == 4);
+      return (argument_count == 3) ? kArrayCid : kDynamicCid;
+    }
+  }
+
+  return ResultCid(function);
 }
 
 }  // namespace dart

@@ -3,7 +3,7 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:observatory/service_io.dart';
-import 'package:unittest/unittest.dart';
+import 'package:test/test.dart';
 import 'test_helper.dart';
 import 'service_test_common.dart';
 import 'dart:developer';
@@ -44,20 +44,20 @@ var tests = <IsolateTest>[
 
     var expectedRange = {
       'scriptIndex': 0,
-      'startPos': ifKernel(392, 26),
-      'endPos': ifKernel(442, 38),
+      'startPos': 384,
+      'endPos': 434,
       'compiled': true,
       'coverage': {
-        'hits': ifKernel([], []),
-        'misses': ifKernel([392], [26])
+        'hits': [],
+        'misses': [384]
       }
     };
 
     var params = {
       'reports': ['Coverage'],
-      'scriptId': func.location.script.id,
-      'tokenPos': func.location.tokenPos,
-      'endTokenPos': func.location.endTokenPos,
+      'scriptId': func.location!.script.id,
+      'tokenPos': func.location!.tokenPos,
+      'endTokenPos': func.location!.endTokenPos,
       'forceCompile': true
     };
     var report = await isolate.invokeRpcNoUpgrade('getSourceReport', params);
@@ -85,20 +85,20 @@ var tests = <IsolateTest>[
 
     var expectedRange = {
       'scriptIndex': 0,
-      'startPos': ifKernel(392, 26),
-      'endPos': ifKernel(442, 38),
+      'startPos': 384,
+      'endPos': 434,
       'compiled': true,
       'coverage': {
-        'hits': ifKernel([392], [26]),
-        'misses': ifKernel([], [])
+        'hits': [384],
+        'misses': []
       }
     };
 
     var params = {
       'reports': ['Coverage'],
-      'scriptId': func.location.script.id,
-      'tokenPos': func.location.tokenPos,
-      'endTokenPos': func.location.endTokenPos,
+      'scriptId': func.location!.script.id,
+      'tokenPos': func.location!.tokenPos,
+      'endTokenPos': func.location!.endTokenPos,
       'forceCompile': true
     };
     var report = await isolate.invokeRpcNoUpgrade('getSourceReport', params);

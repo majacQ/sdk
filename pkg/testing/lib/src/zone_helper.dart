@@ -5,13 +5,13 @@
 /// Helper functions for running code in a Zone.
 library testing.zone_helper;
 
-import 'dart:async' show Completer, Future, ZoneSpecification, runZoned;
+import 'dart:async' show Completer, Future, ZoneSpecification, runZonedGuarded;
 
 import 'dart:io' show exit, stderr;
 
 import 'dart:isolate' show Capability, Isolate, ReceivePort;
 
-import 'log.dart' show logUncaughtError;
+import 'log.dart' show StdoutLogger;
 
 Future runGuarded(Future f(),
     {void printLineOnStdout(line),
@@ -26,7 +26,7 @@ Future runGuarded(Future f(),
   Completer completer = new Completer();
 
   handleUncaughtError(error, StackTrace stackTrace) {
-    logUncaughtError(error, stackTrace);
+    StdoutLogger().logUncaughtError(error, stackTrace);
     if (!completer.isCompleted) {
       completer.completeError(error, stackTrace);
     } else if (handleLateError != null) {
@@ -63,8 +63,11 @@ Future runGuarded(Future f(),
   Isolate.current.setErrorsFatal(false);
   Isolate.current.addErrorListener(errorPort.sendPort);
   return acknowledgeControlMessages(Isolate.current).then((_) {
-    runZoned(() => new Future(f).then(completer.complete),
-        zoneSpecification: specification, onError: handleUncaughtError);
+    runZonedGuarded(
+      () => new Future(f).then(completer.complete),
+      handleUncaughtError,
+      zoneSpecification: specification,
+    );
 
     return completer.future.whenComplete(() {
       errorPort.close();

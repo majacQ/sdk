@@ -12,11 +12,11 @@ import 'package:kernel/binary/ast_from_binary.dart' show BinaryBuilder;
 
 import '../diagnostics/diagnostic_listener.dart';
 import '../environment.dart';
+import '../inferrer/abstract_value_domain.dart';
+import '../inferrer/types.dart';
 import '../js_model/js_world.dart';
 import '../options.dart';
 import '../source_file_provider.dart';
-import '../types/abstract_value_domain.dart';
-import '../types/types.dart';
 import '../util/sink_adapter.dart';
 import 'serialization.dart';
 import 'task.dart';
@@ -24,13 +24,18 @@ import 'task.dart';
 abstract class SerializationStrategy<T> {
   const SerializationStrategy();
 
-  List<int> serializeComponent(GlobalTypeInferenceResults results) {
+  List<int> unpackAndSerializeComponent(GlobalTypeInferenceResults results) {
     JsClosedWorld closedWorld = results.closedWorld;
     ir.Component component = closedWorld.elementMap.programEnv.mainComponent;
-    return ir.serializeComponent(component);
+    return serializeComponent(component);
   }
 
-  List<T> serializeData(GlobalTypeInferenceResults results);
+  List<T> serializeGlobalTypeInferenceResults(
+      GlobalTypeInferenceResults results);
+
+  List<int> serializeComponent(ir.Component component) {
+    return ir.serializeComponent(component);
+  }
 
   ir.Component deserializeComponent(List<int> data) {
     ir.Component component = new ir.Component();
@@ -38,7 +43,18 @@ abstract class SerializationStrategy<T> {
     return component;
   }
 
-  GlobalTypeInferenceResults deserializeData(
+  GlobalTypeInferenceResults deserializeGlobalTypeInferenceResults(
+      CompilerOptions options,
+      DiagnosticReporter reporter,
+      Environment environment,
+      AbstractValueStrategy abstractValueStrategy,
+      ir.Component component,
+      List<T> closedWorldData,
+      List<T> globalTypeInferenceResultsData);
+
+  List<T> serializeClosedWorld(JsClosedWorld closedWorld);
+
+  JsClosedWorld deserializeClosedWorld(
       CompilerOptions options,
       DiagnosticReporter reporter,
       Environment environment,
@@ -53,15 +69,55 @@ class BytesInMemorySerializationStrategy extends SerializationStrategy<int> {
   const BytesInMemorySerializationStrategy({this.useDataKinds: false});
 
   @override
-  List<int> serializeData(GlobalTypeInferenceResults results) {
+  List<int> serializeGlobalTypeInferenceResults(
+      GlobalTypeInferenceResults results) {
     ByteSink byteSink = new ByteSink();
     DataSink sink = new BinarySink(byteSink, useDataKinds: useDataKinds);
-    serializeGlobalTypeInferenceResults(results, sink);
+    serializeGlobalTypeInferenceResultsToSink(results, sink);
     return byteSink.builder.takeBytes();
   }
 
   @override
-  GlobalTypeInferenceResults deserializeData(
+  GlobalTypeInferenceResults deserializeGlobalTypeInferenceResults(
+      CompilerOptions options,
+      DiagnosticReporter reporter,
+      Environment environment,
+      AbstractValueStrategy abstractValueStrategy,
+      ir.Component component,
+      List<int> closedWorldData,
+      List<int> globalTypeInferenceResultsData) {
+    DataSource closedWorldSource =
+        BinarySourceImpl(closedWorldData, useDataKinds: useDataKinds);
+    DataSource globalTypeInferenceResultsSource = BinarySourceImpl(
+        globalTypeInferenceResultsData,
+        useDataKinds: useDataKinds);
+    JsClosedWorld closedWorld = deserializeClosedWorldFromSource(
+        options,
+        reporter,
+        environment,
+        abstractValueStrategy,
+        component,
+        closedWorldSource);
+    return deserializeGlobalTypeInferenceResultsFromSource(
+        options,
+        reporter,
+        environment,
+        abstractValueStrategy,
+        component,
+        closedWorld,
+        globalTypeInferenceResultsSource);
+  }
+
+  @override
+  List<int> serializeClosedWorld(JsClosedWorld closedWorld) {
+    ByteSink byteSink = new ByteSink();
+    DataSink sink = new BinarySink(byteSink, useDataKinds: useDataKinds);
+    serializeClosedWorldToSink(closedWorld, sink);
+    return byteSink.builder.takeBytes();
+  }
+
+  @override
+  JsClosedWorld deserializeClosedWorld(
       CompilerOptions options,
       DiagnosticReporter reporter,
       Environment environment,
@@ -69,7 +125,7 @@ class BytesInMemorySerializationStrategy extends SerializationStrategy<int> {
       ir.Component component,
       List<int> data) {
     DataSource source = new BinarySourceImpl(data, useDataKinds: useDataKinds);
-    return deserializeGlobalTypeInferenceResults(options, reporter, environment,
+    return deserializeClosedWorldFromSource(options, reporter, environment,
         abstractValueStrategy, component, source);
   }
 }
@@ -80,17 +136,59 @@ class BytesOnDiskSerializationStrategy extends SerializationStrategy<int> {
   const BytesOnDiskSerializationStrategy({this.useDataKinds: false});
 
   @override
-  List<int> serializeData(GlobalTypeInferenceResults results) {
+  List<int> serializeGlobalTypeInferenceResults(
+      GlobalTypeInferenceResults results) {
     Uri uri = Uri.base.resolve('world.data');
     DataSink sink = new BinarySink(
         new BinaryOutputSinkAdapter(new RandomAccessBinaryOutputSink(uri)),
         useDataKinds: useDataKinds);
-    serializeGlobalTypeInferenceResults(results, sink);
+    serializeGlobalTypeInferenceResultsToSink(results, sink);
     return new File.fromUri(uri).readAsBytesSync();
   }
 
   @override
-  GlobalTypeInferenceResults deserializeData(
+  GlobalTypeInferenceResults deserializeGlobalTypeInferenceResults(
+      CompilerOptions options,
+      DiagnosticReporter reporter,
+      Environment environment,
+      AbstractValueStrategy abstractValueStrategy,
+      ir.Component component,
+      List<int> closedWorldData,
+      List<int> globalTypeInferenceResultsData) {
+    DataSource closedWorldSource =
+        BinarySourceImpl(closedWorldData, useDataKinds: useDataKinds);
+    DataSource globalTypeInferenceResultsSource = BinarySourceImpl(
+        globalTypeInferenceResultsData,
+        useDataKinds: useDataKinds);
+    JsClosedWorld closedWorld = deserializeClosedWorldFromSource(
+        options,
+        reporter,
+        environment,
+        abstractValueStrategy,
+        component,
+        closedWorldSource);
+    return deserializeGlobalTypeInferenceResultsFromSource(
+        options,
+        reporter,
+        environment,
+        abstractValueStrategy,
+        component,
+        closedWorld,
+        globalTypeInferenceResultsSource);
+  }
+
+  @override
+  List<int> serializeClosedWorld(JsClosedWorld closedWorld) {
+    Uri uri = Uri.base.resolve('closed_world.data');
+    DataSink sink = new BinarySink(
+        new BinaryOutputSinkAdapter(new RandomAccessBinaryOutputSink(uri)),
+        useDataKinds: useDataKinds);
+    serializeClosedWorldToSink(closedWorld, sink);
+    return new File.fromUri(uri).readAsBytesSync();
+  }
+
+  @override
+  JsClosedWorld deserializeClosedWorld(
       CompilerOptions options,
       DiagnosticReporter reporter,
       Environment environment,
@@ -98,7 +196,7 @@ class BytesOnDiskSerializationStrategy extends SerializationStrategy<int> {
       ir.Component component,
       List<int> data) {
     DataSource source = new BinarySourceImpl(data, useDataKinds: useDataKinds);
-    return deserializeGlobalTypeInferenceResults(options, reporter, environment,
+    return deserializeClosedWorldFromSource(options, reporter, environment,
         abstractValueStrategy, component, source);
   }
 }
@@ -110,15 +208,55 @@ class ObjectsInMemorySerializationStrategy
   const ObjectsInMemorySerializationStrategy({this.useDataKinds: true});
 
   @override
-  List<Object> serializeData(GlobalTypeInferenceResults results) {
+  List<Object> serializeGlobalTypeInferenceResults(
+      GlobalTypeInferenceResults results) {
     List<Object> data = [];
     DataSink sink = new ObjectSink(data, useDataKinds: useDataKinds);
-    serializeGlobalTypeInferenceResults(results, sink);
+    serializeGlobalTypeInferenceResultsToSink(results, sink);
     return data;
   }
 
   @override
-  GlobalTypeInferenceResults deserializeData(
+  GlobalTypeInferenceResults deserializeGlobalTypeInferenceResults(
+      CompilerOptions options,
+      DiagnosticReporter reporter,
+      Environment environment,
+      AbstractValueStrategy abstractValueStrategy,
+      ir.Component component,
+      List<Object> closedWorldData,
+      List<Object> globalTypeInferenceResultsData) {
+    DataSource closedWorldSource =
+        ObjectSource(closedWorldData, useDataKinds: useDataKinds);
+    DataSource globalTypeInferenceResultsSource = ObjectSource(
+        globalTypeInferenceResultsData,
+        useDataKinds: useDataKinds);
+    JsClosedWorld closedWorld = deserializeClosedWorldFromSource(
+        options,
+        reporter,
+        environment,
+        abstractValueStrategy,
+        component,
+        closedWorldSource);
+    return deserializeGlobalTypeInferenceResultsFromSource(
+        options,
+        reporter,
+        environment,
+        abstractValueStrategy,
+        component,
+        closedWorld,
+        globalTypeInferenceResultsSource);
+  }
+
+  @override
+  List<Object> serializeClosedWorld(JsClosedWorld closedWorld) {
+    List<Object> data = [];
+    DataSink sink = new ObjectSink(data, useDataKinds: useDataKinds);
+    serializeClosedWorldToSink(closedWorld, sink);
+    return data;
+  }
+
+  @override
+  JsClosedWorld deserializeClosedWorld(
       CompilerOptions options,
       DiagnosticReporter reporter,
       Environment environment,
@@ -126,7 +264,7 @@ class ObjectsInMemorySerializationStrategy
       ir.Component component,
       List<Object> data) {
     DataSource source = new ObjectSource(data, useDataKinds: useDataKinds);
-    return deserializeGlobalTypeInferenceResults(options, reporter, environment,
+    return deserializeClosedWorldFromSource(options, reporter, environment,
         abstractValueStrategy, component, source);
   }
 }

@@ -6,7 +6,7 @@
 // To regenerate the file, use the script
 // "pkg/analysis_server/tool/spec/generate_files".
 
-const String PROTOCOL_VERSION = '1.21.1';
+const String PROTOCOL_VERSION = '1.32.7';
 
 const String ANALYSIS_NOTIFICATION_ANALYZED_FILES = 'analysis.analyzedFiles';
 const String ANALYSIS_NOTIFICATION_ANALYZED_FILES_DIRECTORIES = 'directories';
@@ -72,7 +72,6 @@ const String ANALYSIS_REQUEST_GET_SIGNATURE = 'analysis.getSignature';
 const String ANALYSIS_REQUEST_GET_SIGNATURE_FILE = 'file';
 const String ANALYSIS_REQUEST_GET_SIGNATURE_OFFSET = 'offset';
 const String ANALYSIS_REQUEST_REANALYZE = 'analysis.reanalyze';
-const String ANALYSIS_REQUEST_REANALYZE_ROOTS = 'roots';
 const String ANALYSIS_REQUEST_SET_ANALYSIS_ROOTS = 'analysis.setAnalysisRoots';
 const String ANALYSIS_REQUEST_SET_ANALYSIS_ROOTS_EXCLUDED = 'excluded';
 const String ANALYSIS_REQUEST_SET_ANALYSIS_ROOTS_INCLUDED = 'included';
@@ -111,9 +110,27 @@ const String ANALYTICS_REQUEST_SEND_TIMING = 'analytics.sendTiming';
 const String ANALYTICS_REQUEST_SEND_TIMING_EVENT = 'event';
 const String ANALYTICS_REQUEST_SEND_TIMING_MILLIS = 'millis';
 const String ANALYTICS_RESPONSE_IS_ENABLED_ENABLED = 'enabled';
+const String COMPLETION_NOTIFICATION_AVAILABLE_SUGGESTIONS =
+    'completion.availableSuggestions';
+const String COMPLETION_NOTIFICATION_AVAILABLE_SUGGESTIONS_CHANGED_LIBRARIES =
+    'changedLibraries';
+const String COMPLETION_NOTIFICATION_AVAILABLE_SUGGESTIONS_REMOVED_LIBRARIES =
+    'removedLibraries';
+const String COMPLETION_NOTIFICATION_EXISTING_IMPORTS =
+    'completion.existingImports';
+const String COMPLETION_NOTIFICATION_EXISTING_IMPORTS_FILE = 'file';
+const String COMPLETION_NOTIFICATION_EXISTING_IMPORTS_IMPORTS = 'imports';
 const String COMPLETION_NOTIFICATION_RESULTS = 'completion.results';
 const String COMPLETION_NOTIFICATION_RESULTS_ID = 'id';
+const String COMPLETION_NOTIFICATION_RESULTS_INCLUDED_ELEMENT_KINDS =
+    'includedElementKinds';
+const String
+    COMPLETION_NOTIFICATION_RESULTS_INCLUDED_SUGGESTION_RELEVANCE_TAGS =
+    'includedSuggestionRelevanceTags';
+const String COMPLETION_NOTIFICATION_RESULTS_INCLUDED_SUGGESTION_SETS =
+    'includedSuggestionSets';
 const String COMPLETION_NOTIFICATION_RESULTS_IS_LAST = 'isLast';
+const String COMPLETION_NOTIFICATION_RESULTS_LIBRARY_FILE = 'libraryFile';
 const String COMPLETION_NOTIFICATION_RESULTS_REPLACEMENT_LENGTH =
     'replacementLength';
 const String COMPLETION_NOTIFICATION_RESULTS_REPLACEMENT_OFFSET =
@@ -122,13 +139,38 @@ const String COMPLETION_NOTIFICATION_RESULTS_RESULTS = 'results';
 const String COMPLETION_REQUEST_GET_SUGGESTIONS = 'completion.getSuggestions';
 const String COMPLETION_REQUEST_GET_SUGGESTIONS_FILE = 'file';
 const String COMPLETION_REQUEST_GET_SUGGESTIONS_OFFSET = 'offset';
+const String COMPLETION_REQUEST_GET_SUGGESTION_DETAILS =
+    'completion.getSuggestionDetails';
+const String COMPLETION_REQUEST_GET_SUGGESTION_DETAILS_FILE = 'file';
+const String COMPLETION_REQUEST_GET_SUGGESTION_DETAILS_ID = 'id';
+const String COMPLETION_REQUEST_GET_SUGGESTION_DETAILS_LABEL = 'label';
+const String COMPLETION_REQUEST_GET_SUGGESTION_DETAILS_OFFSET = 'offset';
+const String COMPLETION_REQUEST_REGISTER_LIBRARY_PATHS =
+    'completion.registerLibraryPaths';
+const String COMPLETION_REQUEST_REGISTER_LIBRARY_PATHS_PATHS = 'paths';
+const String COMPLETION_REQUEST_SET_SUBSCRIPTIONS =
+    'completion.setSubscriptions';
+const String COMPLETION_REQUEST_SET_SUBSCRIPTIONS_SUBSCRIPTIONS =
+    'subscriptions';
 const String COMPLETION_RESPONSE_GET_SUGGESTIONS_ID = 'id';
+const String COMPLETION_RESPONSE_GET_SUGGESTION_DETAILS_CHANGE = 'change';
+const String COMPLETION_RESPONSE_GET_SUGGESTION_DETAILS_COMPLETION =
+    'completion';
 const String DIAGNOSTIC_REQUEST_GET_DIAGNOSTICS = 'diagnostic.getDiagnostics';
 const String DIAGNOSTIC_REQUEST_GET_SERVER_PORT = 'diagnostic.getServerPort';
 const String DIAGNOSTIC_RESPONSE_GET_DIAGNOSTICS_CONTEXTS = 'contexts';
 const String DIAGNOSTIC_RESPONSE_GET_SERVER_PORT_PORT = 'port';
+const String EDIT_REQUEST_BULK_FIXES = 'edit.bulkFixes';
+const String EDIT_REQUEST_BULK_FIXES_INCLUDED = 'included';
+const String EDIT_REQUEST_BULK_FIXES_IN_TEST_MODE = 'inTestMode';
 const String EDIT_REQUEST_DARTFIX = 'edit.dartfix';
+const String EDIT_REQUEST_DARTFIX_EXCLUDED_FIXES = 'excludedFixes';
 const String EDIT_REQUEST_DARTFIX_INCLUDED = 'included';
+const String EDIT_REQUEST_DARTFIX_INCLUDED_FIXES = 'includedFixes';
+const String EDIT_REQUEST_DARTFIX_INCLUDE_PEDANTIC_FIXES =
+    'includePedanticFixes';
+const String EDIT_REQUEST_DARTFIX_OUTPUT_DIR = 'outputDir';
+const String EDIT_REQUEST_DARTFIX_PORT = 'port';
 const String EDIT_REQUEST_FORMAT = 'edit.format';
 const String EDIT_REQUEST_FORMAT_FILE = 'file';
 const String EDIT_REQUEST_FORMAT_LINE_LENGTH = 'lineLength';
@@ -143,6 +185,7 @@ const String EDIT_REQUEST_GET_AVAILABLE_REFACTORINGS =
 const String EDIT_REQUEST_GET_AVAILABLE_REFACTORINGS_FILE = 'file';
 const String EDIT_REQUEST_GET_AVAILABLE_REFACTORINGS_LENGTH = 'length';
 const String EDIT_REQUEST_GET_AVAILABLE_REFACTORINGS_OFFSET = 'offset';
+const String EDIT_REQUEST_GET_DARTFIX_INFO = 'edit.getDartfixInfo';
 const String EDIT_REQUEST_GET_FIXES = 'edit.getFixes';
 const String EDIT_REQUEST_GET_FIXES_FILE = 'file';
 const String EDIT_REQUEST_GET_FIXES_OFFSET = 'offset';
@@ -164,6 +207,7 @@ const String EDIT_REQUEST_GET_STATEMENT_COMPLETION_OFFSET = 'offset';
 const String EDIT_REQUEST_IMPORT_ELEMENTS = 'edit.importElements';
 const String EDIT_REQUEST_IMPORT_ELEMENTS_ELEMENTS = 'elements';
 const String EDIT_REQUEST_IMPORT_ELEMENTS_FILE = 'file';
+const String EDIT_REQUEST_IMPORT_ELEMENTS_OFFSET = 'offset';
 const String EDIT_REQUEST_IS_POSTFIX_COMPLETION_APPLICABLE =
     'edit.isPostfixCompletionApplicable';
 const String EDIT_REQUEST_IS_POSTFIX_COMPLETION_APPLICABLE_FILE = 'file';
@@ -175,15 +219,21 @@ const String EDIT_REQUEST_ORGANIZE_DIRECTIVES = 'edit.organizeDirectives';
 const String EDIT_REQUEST_ORGANIZE_DIRECTIVES_FILE = 'file';
 const String EDIT_REQUEST_SORT_MEMBERS = 'edit.sortMembers';
 const String EDIT_REQUEST_SORT_MEMBERS_FILE = 'file';
+const String EDIT_RESPONSE_BULK_FIXES_DETAILS = 'details';
+const String EDIT_RESPONSE_BULK_FIXES_EDITS = 'edits';
+const String EDIT_RESPONSE_DARTFIX_DETAILS = 'details';
 const String EDIT_RESPONSE_DARTFIX_EDITS = 'edits';
 const String EDIT_RESPONSE_DARTFIX_HAS_ERRORS = 'hasErrors';
 const String EDIT_RESPONSE_DARTFIX_OTHER_SUGGESTIONS = 'otherSuggestions';
+const String EDIT_RESPONSE_DARTFIX_PORT = 'port';
 const String EDIT_RESPONSE_DARTFIX_SUGGESTIONS = 'suggestions';
+const String EDIT_RESPONSE_DARTFIX_URLS = 'urls';
 const String EDIT_RESPONSE_FORMAT_EDITS = 'edits';
 const String EDIT_RESPONSE_FORMAT_SELECTION_LENGTH = 'selectionLength';
 const String EDIT_RESPONSE_FORMAT_SELECTION_OFFSET = 'selectionOffset';
 const String EDIT_RESPONSE_GET_ASSISTS_ASSISTS = 'assists';
 const String EDIT_RESPONSE_GET_AVAILABLE_REFACTORINGS_KINDS = 'kinds';
+const String EDIT_RESPONSE_GET_DARTFIX_INFO_FIXES = 'fixes';
 const String EDIT_RESPONSE_GET_FIXES_FIXES = 'fixes';
 const String EDIT_RESPONSE_GET_POSTFIX_COMPLETION_CHANGE = 'change';
 const String EDIT_RESPONSE_GET_REFACTORING_CHANGE = 'change';
@@ -231,20 +281,19 @@ const String EXECUTION_RESPONSE_MAP_URI_FILE = 'file';
 const String EXECUTION_RESPONSE_MAP_URI_URI = 'uri';
 const String FLUTTER_NOTIFICATION_OUTLINE = 'flutter.outline';
 const String FLUTTER_NOTIFICATION_OUTLINE_FILE = 'file';
-const String FLUTTER_NOTIFICATION_OUTLINE_INSTRUMENTED_CODE =
-    'instrumentedCode';
 const String FLUTTER_NOTIFICATION_OUTLINE_OUTLINE = 'outline';
-const String FLUTTER_REQUEST_GET_CHANGE_ADD_FOR_DESIGN_TIME_CONSTRUCTOR =
-    'flutter.getChangeAddForDesignTimeConstructor';
-const String FLUTTER_REQUEST_GET_CHANGE_ADD_FOR_DESIGN_TIME_CONSTRUCTOR_FILE =
-    'file';
-const String FLUTTER_REQUEST_GET_CHANGE_ADD_FOR_DESIGN_TIME_CONSTRUCTOR_OFFSET =
-    'offset';
+const String FLUTTER_REQUEST_GET_WIDGET_DESCRIPTION =
+    'flutter.getWidgetDescription';
+const String FLUTTER_REQUEST_GET_WIDGET_DESCRIPTION_FILE = 'file';
+const String FLUTTER_REQUEST_GET_WIDGET_DESCRIPTION_OFFSET = 'offset';
 const String FLUTTER_REQUEST_SET_SUBSCRIPTIONS = 'flutter.setSubscriptions';
 const String FLUTTER_REQUEST_SET_SUBSCRIPTIONS_SUBSCRIPTIONS = 'subscriptions';
-const String
-    FLUTTER_RESPONSE_GET_CHANGE_ADD_FOR_DESIGN_TIME_CONSTRUCTOR_CHANGE =
-    'change';
+const String FLUTTER_REQUEST_SET_WIDGET_PROPERTY_VALUE =
+    'flutter.setWidgetPropertyValue';
+const String FLUTTER_REQUEST_SET_WIDGET_PROPERTY_VALUE_ID = 'id';
+const String FLUTTER_REQUEST_SET_WIDGET_PROPERTY_VALUE_VALUE = 'value';
+const String FLUTTER_RESPONSE_GET_WIDGET_DESCRIPTION_PROPERTIES = 'properties';
+const String FLUTTER_RESPONSE_SET_WIDGET_PROPERTY_VALUE_CHANGE = 'change';
 const String KYTHE_REQUEST_GET_KYTHE_ENTRIES = 'kythe.getKytheEntries';
 const String KYTHE_REQUEST_GET_KYTHE_ENTRIES_FILE = 'file';
 const String KYTHE_RESPONSE_GET_KYTHE_ENTRIES_ENTRIES = 'entries';
@@ -289,12 +338,13 @@ const String SEARCH_RESPONSE_GET_TYPE_HIERARCHY_HIERARCHY_ITEMS =
     'hierarchyItems';
 const String SERVER_NOTIFICATION_CONNECTED = 'server.connected';
 const String SERVER_NOTIFICATION_CONNECTED_PID = 'pid';
-const String SERVER_NOTIFICATION_CONNECTED_SESSION_ID = 'sessionId';
 const String SERVER_NOTIFICATION_CONNECTED_VERSION = 'version';
 const String SERVER_NOTIFICATION_ERROR = 'server.error';
 const String SERVER_NOTIFICATION_ERROR_IS_FATAL = 'isFatal';
 const String SERVER_NOTIFICATION_ERROR_MESSAGE = 'message';
 const String SERVER_NOTIFICATION_ERROR_STACK_TRACE = 'stackTrace';
+const String SERVER_NOTIFICATION_LOG = 'server.log';
+const String SERVER_NOTIFICATION_LOG_ENTRY = 'entry';
 const String SERVER_NOTIFICATION_STATUS = 'server.status';
 const String SERVER_NOTIFICATION_STATUS_ANALYSIS = 'analysis';
 const String SERVER_NOTIFICATION_STATUS_PUB = 'pub';

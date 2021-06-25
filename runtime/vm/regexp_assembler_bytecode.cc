@@ -44,7 +44,7 @@ void BytecodeRegExpMacroAssembler::BindBlock(BlockLabel* l) {
       *reinterpret_cast<uint32_t*>(buffer_->data() + fixup) = pc_;
     }
   }
-  l->bind_to(pc_);
+  l->BindTo(pc_);
 }
 
 void BytecodeRegExpMacroAssembler::EmitOrLink(BlockLabel* l) {
@@ -56,7 +56,7 @@ void BytecodeRegExpMacroAssembler::EmitOrLink(BlockLabel* l) {
     if (l->is_linked()) {
       pos = l->pos();
     }
-    l->link_to(pc_);
+    l->LinkTo(pc_);
     Emit32(pos);
   }
 }
@@ -246,8 +246,9 @@ void BytecodeRegExpMacroAssembler::CheckAtStart(BlockLabel* on_at_start) {
 }
 
 void BytecodeRegExpMacroAssembler::CheckNotAtStart(
+    intptr_t cp_offset,
     BlockLabel* on_not_at_start) {
-  Emit(BC_CHECK_NOT_AT_START, 0);
+  Emit(BC_CHECK_NOT_AT_START, cp_offset);
   EmitOrLink(on_not_at_start);
 }
 
@@ -336,19 +337,27 @@ void BytecodeRegExpMacroAssembler::CheckBitInTable(const TypedData& table,
 
 void BytecodeRegExpMacroAssembler::CheckNotBackReference(
     intptr_t start_reg,
+    bool read_backward,
     BlockLabel* on_not_equal) {
   ASSERT(start_reg >= 0);
   ASSERT(start_reg <= kMaxRegister);
-  Emit(BC_CHECK_NOT_BACK_REF, start_reg);
+  Emit(read_backward ? BC_CHECK_NOT_BACK_REF_BACKWARD : BC_CHECK_NOT_BACK_REF,
+       start_reg);
   EmitOrLink(on_not_equal);
 }
 
 void BytecodeRegExpMacroAssembler::CheckNotBackReferenceIgnoreCase(
     intptr_t start_reg,
+    bool read_backward,
+    bool unicode,
     BlockLabel* on_not_equal) {
   ASSERT(start_reg >= 0);
   ASSERT(start_reg <= kMaxRegister);
-  Emit(BC_CHECK_NOT_BACK_REF_NO_CASE, start_reg);
+  Emit(read_backward ? (unicode ? BC_CHECK_NOT_BACK_REF_NO_CASE_UNICODE_BACKWARD
+                                : BC_CHECK_NOT_BACK_REF_NO_CASE_BACKWARD)
+                     : (unicode ? BC_CHECK_NOT_BACK_REF_NO_CASE_UNICODE
+                                : BC_CHECK_NOT_BACK_REF_NO_CASE),
+       start_reg);
   EmitOrLink(on_not_equal);
 }
 
@@ -381,7 +390,7 @@ void BytecodeRegExpMacroAssembler::IfRegisterEqPos(intptr_t register_index,
   EmitOrLink(on_eq);
 }
 
-RawTypedData* BytecodeRegExpMacroAssembler::GetBytecode() {
+TypedDataPtr BytecodeRegExpMacroAssembler::GetBytecode() {
   BindBlock(&backtrack_);
   Emit(BC_POP_BT, 0);
 
@@ -392,7 +401,7 @@ RawTypedData* BytecodeRegExpMacroAssembler::GetBytecode() {
   NoSafepointScope no_safepoint;
   memmove(bytecode.DataAddr(0), buffer_->data(), len);
 
-  return bytecode.raw();
+  return bytecode.ptr();
 }
 
 intptr_t BytecodeRegExpMacroAssembler::length() {
@@ -419,23 +428,22 @@ static intptr_t Prepare(const RegExp& regexp,
 
   if (regexp.bytecode(is_one_byte, sticky) == TypedData::null()) {
     const String& pattern = String::Handle(zone, regexp.pattern());
-#if !defined(PRODUCT)
-    TimelineDurationScope tds(Thread::Current(), Timeline::GetCompilerStream(),
-                              "CompileIrregexpBytecode");
-    if (tds.enabled()) {
-      tds.SetNumArguments(1);
-      tds.CopyArgument(0, "pattern", pattern.ToCString());
+#if defined(SUPPORT_TIMELINE)
+    TimelineBeginEndScope tbes(Thread::Current(), Timeline::GetCompilerStream(),
+                               "CompileIrregexpBytecode");
+    if (tbes.enabled()) {
+      tbes.SetNumArguments(1);
+      tbes.CopyArgument(0, "pattern", pattern.ToCString());
     }
 #endif  // !defined(PRODUCT)
 
-    const bool multiline = regexp.is_multi_line();
     RegExpCompileData* compile_data = new (zone) RegExpCompileData();
-    if (!RegExpParser::ParseRegExp(pattern, multiline, compile_data)) {
-      // Parsing failures are handled in the RegExp factory constructor.
-      UNREACHABLE();
-    }
+
+    // Parsing failures are handled in the RegExp factory constructor.
+    RegExpParser::ParseRegExp(pattern, regexp.flags(), compile_data);
 
     regexp.set_num_bracket_expressions(compile_data->capture_count);
+    regexp.set_capture_name_map(compile_data->capture_name_map);
     if (compile_data->simple) {
       regexp.set_is_simple();
     } else {
@@ -444,17 +452,20 @@ static intptr_t Prepare(const RegExp& regexp,
 
     RegExpEngine::CompilationResult result = RegExpEngine::CompileBytecode(
         compile_data, regexp, is_one_byte, sticky, zone);
+    if (result.error_message != nullptr) {
+      Exceptions::ThrowUnsupportedError(result.error_message);
+    }
     ASSERT(result.bytecode != NULL);
-    ASSERT((regexp.num_registers() == -1) ||
-           (regexp.num_registers() == result.num_registers));
-    regexp.set_num_registers(result.num_registers);
+    ASSERT(regexp.num_registers(is_one_byte) == -1 ||
+           regexp.num_registers(is_one_byte) == result.num_registers);
+    regexp.set_num_registers(is_one_byte, result.num_registers);
     regexp.set_bytecode(is_one_byte, sticky, *(result.bytecode));
   }
 
-  ASSERT(regexp.num_registers() != -1);
+  ASSERT(regexp.num_registers(is_one_byte) != -1);
 
-  return regexp.num_registers() +
-         (Smi::Value(regexp.num_bracket_expressions()) + 1) * 2;
+  return regexp.num_registers(is_one_byte) +
+         (regexp.num_bracket_expressions() + 1) * 2;
 }
 
 static IrregexpInterpreter::IrregexpResult ExecRaw(const RegExp& regexp,
@@ -467,12 +478,9 @@ static IrregexpInterpreter::IrregexpResult ExecRaw(const RegExp& regexp,
   bool is_one_byte =
       subject.IsOneByteString() || subject.IsExternalOneByteString();
 
-  ASSERT(regexp.num_bracket_expressions() != Smi::null());
-
   // We must have done EnsureCompiledIrregexp, so we can get the number of
   // registers.
-  int number_of_capture_registers =
-      (Smi::Value(regexp.num_bracket_expressions()) + 1) * 2;
+  int number_of_capture_registers = (regexp.num_bracket_expressions() + 1) * 2;
   int32_t* raw_output = &output[number_of_capture_registers];
 
   // We do not touch the actual capture result registers until we know there
@@ -494,20 +502,20 @@ static IrregexpInterpreter::IrregexpResult ExecRaw(const RegExp& regexp,
   }
   if (result == IrregexpInterpreter::RE_EXCEPTION) {
     Thread* thread = Thread::Current();
-    Isolate* isolate = thread->isolate();
+    auto isolate_group = thread->isolate_group();
     const Instance& exception =
-        Instance::Handle(isolate->object_store()->stack_overflow());
+        Instance::Handle(isolate_group->object_store()->stack_overflow());
     Exceptions::Throw(thread, exception);
     UNREACHABLE();
   }
   return result;
 }
 
-RawInstance* BytecodeRegExpMacroAssembler::Interpret(const RegExp& regexp,
-                                                     const String& subject,
-                                                     const Smi& start_index,
-                                                     bool sticky,
-                                                     Zone* zone) {
+InstancePtr BytecodeRegExpMacroAssembler::Interpret(const RegExp& regexp,
+                                                    const String& subject,
+                                                    const Smi& start_index,
+                                                    bool sticky,
+                                                    Zone* zone) {
   intptr_t required_registers = Prepare(regexp, subject, sticky, zone);
   if (required_registers < 0) {
     // Compiling failed with an exception.
@@ -522,7 +530,7 @@ RawInstance* BytecodeRegExpMacroAssembler::Interpret(const RegExp& regexp,
               required_registers, zone);
 
   if (result == IrregexpInterpreter::RE_SUCCESS) {
-    intptr_t capture_count = Smi::Value(regexp.num_bracket_expressions());
+    intptr_t capture_count = regexp.num_bracket_expressions();
     intptr_t capture_register_count = (capture_count + 1) * 2;
     ASSERT(required_registers >= capture_register_count);
 
@@ -543,7 +551,7 @@ RawInstance* BytecodeRegExpMacroAssembler::Interpret(const RegExp& regexp,
               capture_register_count * sizeof(int32_t));
     }
 
-    return result.raw();
+    return result.ptr();
   }
   if (result == IrregexpInterpreter::RE_EXCEPTION) {
     UNREACHABLE();

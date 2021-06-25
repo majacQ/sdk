@@ -13,10 +13,66 @@
 #include "vm/constants_arm.h"
 #elif defined(TARGET_ARCH_ARM64)
 #include "vm/constants_arm64.h"
-#elif defined(TARGET_ARCH_DBC)
-#include "vm/constants_dbc.h"
 #else
 #error Unknown architecture.
 #endif
+
+namespace dart {
+
+// An architecture independent ABI for the InstantiateType stub.
+//
+// We re-use registers from another ABI to avoid duplicating this ABI across 4
+// architectures.
+struct InstantiateTypeABI {
+  static const Register kTypeReg =
+      InstantiationABI::kUninstantiatedTypeArgumentsReg;
+  static const Register kInstantiatorTypeArgumentsReg =
+      InstantiationABI::kInstantiatorTypeArgumentsReg;
+  static const Register kFunctionTypeArgumentsReg =
+      InstantiationABI::kFunctionTypeArgumentsReg;
+  static const Register kResultTypeReg = InstantiationABI::kResultTypeReg;
+};
+
+class RegisterNames {
+ public:
+  static const char* RegisterName(Register reg) {
+    ASSERT((0 <= reg) && (reg < kNumberOfCpuRegisters));
+    return cpu_reg_names[reg];
+  }
+  static const char* FpuRegisterName(FpuRegister reg) {
+    ASSERT((0 <= reg) && (reg < kNumberOfFpuRegisters));
+    return fpu_reg_names[reg];
+  }
+#if defined(TARGET_ARCH_ARM)
+  static const char* FpuSRegisterName(SRegister reg) {
+    ASSERT((0 <= reg) && (reg < kNumberOfSRegisters));
+    return fpu_s_reg_names[reg];
+  }
+  static const char* FpuDRegisterName(DRegister reg) {
+    ASSERT((0 <= reg) && (reg < kNumberOfDRegisters));
+    return fpu_d_reg_names[reg];
+  }
+#endif  // defined(TARGET_ARCH_ARM)
+};
+
+static constexpr bool IsArgumentRegister(Register reg) {
+  return ((1 << reg) & CallingConventions::kArgumentRegisters) != 0;
+}
+
+static constexpr bool IsFpuArgumentRegister(FpuRegister reg) {
+  return ((1 << reg) & CallingConventions::kFpuArgumentRegisters) != 0;
+}
+
+static constexpr bool IsCalleeSavedRegister(Register reg) {
+  return ((1 << reg) & CallingConventions::kCalleeSaveCpuRegisters) != 0;
+}
+
+#if !defined(TARGET_ARCH_IA32)
+constexpr bool IsAbiPreservedRegister(Register reg) {
+  return (kAbiPreservedCpuRegs & (1 << reg)) != 0;
+}
+#endif
+
+}  // namespace dart
 
 #endif  // RUNTIME_VM_CONSTANTS_H_

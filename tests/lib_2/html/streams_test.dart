@@ -1,3 +1,5 @@
+
+// @dart = 2.9
 import 'dart:async';
 import 'dart:html';
 
@@ -189,7 +191,7 @@ main() {
   });
 
   test('reduce', () {
-    stream.reduce((a, b) => null).then((_) {});
+    stream.reduce((a, b) => a).then((_) {});
   });
 
   test('fold', () {

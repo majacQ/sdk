@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 @JS()
 library js_typed_interop_type_test;
 
@@ -51,32 +53,32 @@ class F {
   F(this.foo);
 }
 
-@NoInline()
+@pragma('dart2js:noInline')
 testA(A o) {
   return o.foo;
 }
 
-@NoInline()
+@pragma('dart2js:noInline')
 testB(B o) {
   return o.foo;
 }
 
-@NoInline()
+@pragma('dart2js:noInline')
 testC(C o) {
   return o.foo;
 }
 
-@NoInline()
+@pragma('dart2js:noInline')
 testD(D o) {
   return o.foo;
 }
 
-@NoInline()
+@pragma('dart2js:noInline')
 testE(E o) {
   return o.foo;
 }
 
-@NoInline()
+@pragma('dart2js:noInline')
 testF(F o) {
   return o.foo;
 }

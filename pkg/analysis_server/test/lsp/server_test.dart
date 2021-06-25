@@ -3,12 +3,13 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:analysis_server/lsp_protocol/protocol_generated.dart';
+import 'package:analysis_server/lsp_protocol/protocol_special.dart';
 import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'server_abstract.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(ServerTest);
   });
@@ -16,36 +17,72 @@ main() {
 
 @reflectiveTest
 class ServerTest extends AbstractLspAnalysisServerTest {
-  test_shutdown_initialized() async {
+  Future<void> test_inconsistentStateError() async {
     await initialize();
-    final request = makeRequest(Method.shutdown, null);
-    final response = await channel.sendRequestToServer(request);
-    expect(response.id, equals(request.id));
-    expect(response.error, isNull);
-    expect(response.result, isNull);
+    await openFile(mainFileUri, '');
+    // Attempt to make an illegal modification to the file. This indicates the
+    // client and server are out of sync and we expect the server to shut down.
+    final error = await expectErrorNotification(() async {
+      await changeFile(222, mainFileUri, [
+        Either2<TextDocumentContentChangeEvent1,
+                TextDocumentContentChangeEvent2>.t1(
+            TextDocumentContentChangeEvent1(
+                range: Range(
+                    start: Position(line: 99, character: 99),
+                    end: Position(line: 99, character: 99)),
+                text: ' ')),
+      ]);
+    });
+
+    expect(error, isNotNull);
+    expect(error.message, contains('Invalid line'));
+
+    // Wait for up to 10 seconds for the server to shutdown.
+    await server.exited.timeout(const Duration(seconds: 10));
   }
 
-  test_shutdown_uninitialized() async {
-    final request = makeRequest(Method.shutdown, null);
-    final response = await channel.sendRequestToServer(request);
-    expect(response.id, equals(request.id));
-    expect(response.error, isNull);
-    expect(response.result, isNull);
+  Future<void> test_shutdown_initialized() async {
+    await initialize();
+    final response = await sendShutdown();
+    expect(response, isNull);
   }
 
-  test_unknownNotifications_silentlyDropped() async {
+  Future<void> test_shutdown_uninitialized() async {
+    final response = await sendShutdown();
+    expect(response, isNull);
+  }
+
+  Future<void> test_unknownNotifications_logError() async {
+    await initialize();
+
+    final notification =
+        makeNotification(Method.fromJson(r'some/randomNotification'), null);
+
+    final notificationParams = await expectErrorNotification(
+      () => channel.sendNotificationToServer(notification),
+    );
+    expect(notificationParams, isNotNull);
+    expect(
+      notificationParams.message,
+      contains('Unknown method some/randomNotification'),
+    );
+  }
+
+  Future<void> test_unknownOptionalNotifications_silentlyDropped() async {
     await initialize();
     final notification =
-        makeNotification(new Method.fromJson(r'$/randomNotification'), null);
-    final firstError = channel.errorNotificationsFromServer.first;
+        makeNotification(Method.fromJson(r'$/randomNotification'), null);
+    final firstError = errorNotificationsFromServer.first;
     channel.sendNotificationToServer(notification);
 
     // Wait up to 1sec to ensure no error/log notifications were sent back.
     var didTimeout = false;
-    final notificationFromServer = await firstError.timeout(
+    final notificationFromServer =
+        await firstError.then<NotificationMessage?>((error) => error).timeout(
       const Duration(seconds: 1),
       onTimeout: () {
         didTimeout = true;
+        return null;
       },
     );
 
@@ -53,21 +90,23 @@ class ServerTest extends AbstractLspAnalysisServerTest {
     expect(didTimeout, isTrue);
   }
 
-  test_unknownRequest_rejected() async {
+  Future<void> test_unknownOptionalRequest_rejected() async {
     await initialize();
-    final request = makeRequest(new Method.fromJson('randomRequest'), null);
+    final request = makeRequest(Method.fromJson(r'$/randomRequest'), null);
     final response = await channel.sendRequestToServer(request);
     expect(response.id, equals(request.id));
     expect(response.error, isNotNull);
-    expect(response.error.code, equals(ErrorCodes.MethodNotFound));
+    expect(response.error!.code, equals(ErrorCodes.MethodNotFound));
     expect(response.result, isNull);
   }
 
-  @failingTest
-  test_unknownRequest_silentlyDropped /*??*/ () async {
-    // TODO(dantup): Fix this test up when we know how we're supposed to handle
-    // unknown $/ requests.
-    // https://github.com/Microsoft/language-server-protocol/issues/607
-    fail('TODO(dantup)');
+  Future<void> test_unknownRequest_rejected() async {
+    await initialize();
+    final request = makeRequest(Method.fromJson('randomRequest'), null);
+    final response = await channel.sendRequestToServer(request);
+    expect(response.id, equals(request.id));
+    expect(response.error, isNotNull);
+    expect(response.error!.code, equals(ErrorCodes.MethodNotFound));
+    expect(response.result, isNull);
   }
 }

@@ -2,8 +2,6 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-#if !defined(DART_PRECOMPILED_RUNTIME)
-
 #include "vm/compiler/backend/locations.h"
 
 #include "vm/compiler/assembler/assembler.h"
@@ -13,14 +11,135 @@
 
 namespace dart {
 
+#define REP_IN_SET_CLAUSE(name, __, ___)                                       \
+  case k##name:                                                                \
+    return true;
+#define REP_SIZEOF_CLAUSE(name, __, type)                                      \
+  case k##name:                                                                \
+    return sizeof(type);
+#define REP_IS_UNSIGNED_CLAUSE(name, unsigned, ___)                            \
+  case k##name:                                                                \
+    return unsigned;
+
+bool RepresentationUtils::IsUnboxedInteger(Representation rep) {
+  switch (rep) {
+    FOR_EACH_INTEGER_REPRESENTATION_KIND(REP_IN_SET_CLAUSE)
+    default:
+      return false;
+  }
+}
+
+bool RepresentationUtils::IsUnboxed(Representation rep) {
+  switch (rep) {
+    FOR_EACH_UNBOXED_REPRESENTATION_KIND(REP_IN_SET_CLAUSE)
+    default:
+      return false;
+  }
+}
+
+size_t RepresentationUtils::ValueSize(Representation rep) {
+  switch (rep) {
+    FOR_EACH_SIMPLE_REPRESENTATION_KIND(REP_SIZEOF_CLAUSE)
+    default:
+      UNREACHABLE();
+      return compiler::target::kWordSize;
+  }
+}
+
+bool RepresentationUtils::IsUnsigned(Representation rep) {
+  switch (rep) {
+    FOR_EACH_SIMPLE_REPRESENTATION_KIND(REP_IS_UNSIGNED_CLAUSE)
+    default:
+      UNREACHABLE();
+      return false;
+  }
+}
+
+#undef REP_IS_UNSIGNED_CLAUSE
+#undef REP_SIZEOF_CLAUSE
+#undef REP_IN_SET_CLAUSE
+
+compiler::OperandSize RepresentationUtils::OperandSize(Representation rep) {
+  if (rep == kTagged || rep == kUntagged) {
+    return compiler::kObjectBytes;
+  }
+  ASSERT(IsUnboxedInteger(rep));
+  switch (ValueSize(rep)) {
+    case 8:
+      ASSERT(!IsUnsigned(rep));
+      ASSERT_EQUAL(compiler::target::kWordSize, 8);
+      return compiler::kEightBytes;
+    case 4:
+      return IsUnsigned(rep) ? compiler::kUnsignedFourBytes
+                             : compiler::kFourBytes;
+    case 2:
+      // No kUnboxedInt16 yet.
+      if (!IsUnsigned(rep)) {
+        UNIMPLEMENTED();
+      }
+      return compiler::kUnsignedTwoBytes;
+    case 1:
+      if (!IsUnsigned(rep)) {
+        // No kUnboxedInt8 yet.
+        UNIMPLEMENTED();
+      }
+      return compiler::kUnsignedByte;
+  }
+  UNREACHABLE();
+  return compiler::kObjectBytes;
+}
+
+const char* Location::RepresentationToCString(Representation repr) {
+  switch (repr) {
+#define REPR_CASE(Name, __, ___)                                               \
+  case k##Name:                                                                \
+    return #Name;
+    FOR_EACH_REPRESENTATION_KIND(REPR_CASE)
+#undef KIND_CASE
+    default:
+      UNREACHABLE();
+  }
+  return nullptr;
+}
+
+bool Location::ParseRepresentation(const char* str, Representation* out) {
+  ASSERT(str != nullptr && out != nullptr);
+#define KIND_CASE(Name, __, ___)                                               \
+  if (strcmp(str, #Name) == 0) {                                               \
+    *out = k##Name;                                                            \
+    return true;                                                               \
+  }
+  FOR_EACH_REPRESENTATION_KIND(KIND_CASE)
+#undef KIND_CASE
+  return false;
+}
+
 intptr_t RegisterSet::RegisterCount(intptr_t registers) {
   // Brian Kernighan's algorithm for counting the bits set.
   intptr_t count = 0;
   while (registers != 0) {
     ++count;
-    registers &= (registers - 1);  // Clear the least significant bit set.
+    // Clear the least significant bit set.
+    registers &= (static_cast<uintptr_t>(registers) - 1);
   }
   return count;
+}
+
+void RegisterSet::DebugPrint() {
+  for (intptr_t i = 0; i < kNumberOfCpuRegisters; i++) {
+    Register r = static_cast<Register>(i);
+    if (ContainsRegister(r)) {
+      THR_Print("%s %s\n", RegisterNames::RegisterName(r),
+                IsTagged(r) ? "tagged" : "untagged");
+    }
+  }
+
+  for (intptr_t i = 0; i < kNumberOfFpuRegisters; i++) {
+    FpuRegister r = static_cast<FpuRegister>(i);
+    if (ContainsFpuRegister(r)) {
+      THR_Print("%s\n", RegisterNames::FpuRegisterName(r));
+    }
+  }
 }
 
 LocationSummary::LocationSummary(Zone* zone,
@@ -29,6 +148,7 @@ LocationSummary::LocationSummary(Zone* zone,
                                  LocationSummary::ContainsCall contains_call)
     : num_inputs_(input_count),
       num_temps_(temp_count),
+      output_location_(),  // out(0)->IsInvalid() unless later set.
       stack_bitmap_(NULL),
       contains_call_(contains_call),
       live_registers_() {
@@ -53,6 +173,43 @@ LocationSummary* LocationSummary::Make(
   return summary;
 }
 
+static bool ValidOutputForAlwaysCalls(const Location& loc) {
+  return loc.IsMachineRegister() || loc.IsInvalid() || loc.IsPairLocation();
+}
+
+void LocationSummary::set_in(intptr_t index, Location loc) {
+  ASSERT(index >= 0);
+  ASSERT(index < num_inputs_);
+#if defined(DEBUG)
+  // See FlowGraphAllocator::ProcessOneInstruction for explanation of these
+  // restrictions.
+  if (always_calls()) {
+    if (loc.IsUnallocated()) {
+      ASSERT(loc.policy() == Location::kAny ||
+             loc.policy() == Location::kRequiresStackSlot);
+    } else if (loc.IsPairLocation()) {
+      ASSERT(!loc.AsPairLocation()->At(0).IsUnallocated() ||
+             loc.AsPairLocation()->At(0).policy() == Location::kAny);
+      ASSERT(!loc.AsPairLocation()->At(0).IsUnallocated() ||
+             loc.AsPairLocation()->At(0).policy() == Location::kAny);
+    }
+    if (index == 0 && out(0).IsUnallocated() &&
+        out(0).policy() == Location::kSameAsFirstInput) {
+      ASSERT(ValidOutputForAlwaysCalls(loc));
+    }
+  }
+#endif
+  input_locations_[index] = loc;
+}
+
+void LocationSummary::set_out(intptr_t index, Location loc) {
+  ASSERT(index == 0);
+  ASSERT(!always_calls() || ValidOutputForAlwaysCalls(loc) ||
+         (loc.IsUnallocated() && loc.policy() == Location::kSameAsFirstInput &&
+          num_inputs_ > 0 && ValidOutputForAlwaysCalls(in(0))));
+  output_location_ = loc;
+}
+
 Location Location::Pair(Location first, Location second) {
   PairLocation* pair_location = new PairLocation();
   ASSERT((reinterpret_cast<intptr_t>(pair_location) & kLocationTagMask) == 0);
@@ -67,57 +224,63 @@ PairLocation* Location::AsPairLocation() const {
   return reinterpret_cast<PairLocation*>(value_ & ~kLocationTagMask);
 }
 
-Location Location::RegisterOrConstant(Value* value) {
+Location Location::Component(intptr_t i) const {
+  return AsPairLocation()->At(i);
+}
+
+Location LocationRegisterOrConstant(Value* value) {
   ConstantInstr* constant = value->definition()->AsConstant();
-  return ((constant != NULL) && Assembler::IsSafe(constant->value()))
+  return ((constant != NULL) && compiler::Assembler::IsSafe(constant->value()))
              ? Location::Constant(constant)
              : Location::RequiresRegister();
 }
 
-Location Location::RegisterOrSmiConstant(Value* value) {
+Location LocationRegisterOrSmiConstant(Value* value) {
   ConstantInstr* constant = value->definition()->AsConstant();
-  return ((constant != NULL) && Assembler::IsSafeSmi(constant->value()))
+  return ((constant != NULL) &&
+          compiler::Assembler::IsSafeSmi(constant->value()))
              ? Location::Constant(constant)
              : Location::RequiresRegister();
 }
 
-Location Location::WritableRegisterOrSmiConstant(Value* value) {
+Location LocationWritableRegisterOrSmiConstant(Value* value) {
   ConstantInstr* constant = value->definition()->AsConstant();
-  return ((constant != NULL) && Assembler::IsSafeSmi(constant->value()))
+  return ((constant != NULL) &&
+          compiler::Assembler::IsSafeSmi(constant->value()))
              ? Location::Constant(constant)
              : Location::WritableRegister();
 }
 
-Location Location::FixedRegisterOrConstant(Value* value, Register reg) {
+Location LocationFixedRegisterOrConstant(Value* value, Register reg) {
+  ASSERT(((1 << reg) & kDartAvailableCpuRegs) != 0);
   ConstantInstr* constant = value->definition()->AsConstant();
-  return ((constant != NULL) && Assembler::IsSafe(constant->value()))
+  return ((constant != NULL) && compiler::Assembler::IsSafe(constant->value()))
              ? Location::Constant(constant)
              : Location::RegisterLocation(reg);
 }
 
-Location Location::FixedRegisterOrSmiConstant(Value* value, Register reg) {
+Location LocationFixedRegisterOrSmiConstant(Value* value, Register reg) {
+  ASSERT(((1 << reg) & kDartAvailableCpuRegs) != 0);
   ConstantInstr* constant = value->definition()->AsConstant();
-  return ((constant != NULL) && Assembler::IsSafeSmi(constant->value()))
+  return ((constant != NULL) &&
+          compiler::Assembler::IsSafeSmi(constant->value()))
              ? Location::Constant(constant)
              : Location::RegisterLocation(reg);
 }
 
-Location Location::AnyOrConstant(Value* value) {
+Location LocationAnyOrConstant(Value* value) {
   ConstantInstr* constant = value->definition()->AsConstant();
-  return ((constant != NULL) && Assembler::IsSafe(constant->value()))
+  return ((constant != NULL) && compiler::Assembler::IsSafe(constant->value()))
              ? Location::Constant(constant)
              : Location::Any();
 }
 
-// DBC does not have an notion of 'address' in its instruction set.
-#if !defined(TARGET_ARCH_DBC)
-Address Location::ToStackSlotAddress() const {
-  return Address(base_reg(), ToStackSlotOffset());
+compiler::Address LocationToStackSlotAddress(Location loc) {
+  return compiler::Address(loc.base_reg(), loc.ToStackSlotOffset());
 }
-#endif
 
 intptr_t Location::ToStackSlotOffset() const {
-  return stack_index() * kWordSize;
+  return stack_index() * compiler::target::kWordSize;
 }
 
 const Object& Location::constant() const {
@@ -129,9 +292,9 @@ const char* Location::Name() const {
     case kInvalid:
       return "?";
     case kRegister:
-      return Assembler::RegisterName(reg());
+      return RegisterNames::RegisterName(reg());
     case kFpuRegister:
-      return Assembler::FpuRegisterName(fpu_reg());
+      return RegisterNames::FpuRegisterName(fpu_reg());
     case kStackSlot:
       return "S";
     case kDoubleStackSlot:
@@ -148,25 +311,14 @@ const char* Location::Name() const {
           return "R";
         case kRequiresFpuRegister:
           return "DR";
+        case kRequiresStackSlot:
+          return "RS";
         case kWritableRegister:
           return "WR";
         case kSameAsFirstInput:
           return "0";
       }
       UNREACHABLE();
-#if TARGET_ARCH_DBC
-    case kSpecialDbcRegister:
-      switch (payload()) {
-        case kArgsDescriptorReg:
-          return "ArgDescReg";
-        case kExceptionReg:
-          return "ExceptionReg";
-        case kStackTraceReg:
-          return "StackTraceReg";
-        default:
-          UNREACHABLE();
-      }
-#endif
     default:
       if (IsConstant()) {
         return "C";
@@ -178,24 +330,24 @@ const char* Location::Name() const {
   return "?";
 }
 
-void Location::PrintTo(BufferFormatter* f) const {
+void Location::PrintTo(BaseTextBuffer* f) const {
   if (!FLAG_support_il_printer) {
     return;
   }
   if (kind() == kStackSlot) {
-    f->Print("S%+" Pd "", stack_index());
+    f->Printf("S%+" Pd "", stack_index());
   } else if (kind() == kDoubleStackSlot) {
-    f->Print("DS%+" Pd "", stack_index());
+    f->Printf("DS%+" Pd "", stack_index());
   } else if (kind() == kQuadStackSlot) {
-    f->Print("QS%+" Pd "", stack_index());
+    f->Printf("QS%+" Pd "", stack_index());
   } else if (IsPairLocation()) {
-    f->Print("(");
+    f->AddString("(");
     AsPairLocation()->At(0).PrintTo(f);
-    f->Print(", ");
+    f->AddString(", ");
     AsPairLocation()->At(1).PrintTo(f);
-    f->Print(")");
+    f->AddString(")");
   } else {
-    f->Print("%s", Name());
+    f->Printf("%s", Name());
   }
 }
 
@@ -226,39 +378,56 @@ Location Location::Copy() const {
   }
 }
 
-Location Location::RemapForSlowPath(Definition* def,
-                                    intptr_t* cpu_reg_slots,
-                                    intptr_t* fpu_reg_slots) const {
-  if (IsRegister()) {
-    intptr_t index = cpu_reg_slots[reg()];
+Location LocationArgumentsDescriptorLocation() {
+  return Location::RegisterLocation(ARGS_DESC_REG);
+}
+
+Location LocationExceptionLocation() {
+  return Location::RegisterLocation(kExceptionObjectReg);
+}
+
+Location LocationStackTraceLocation() {
+  return Location::RegisterLocation(kStackTraceObjectReg);
+}
+
+Location LocationRemapForSlowPath(Location loc,
+                                  Definition* def,
+                                  intptr_t* cpu_reg_slots,
+                                  intptr_t* fpu_reg_slots) {
+  if (loc.IsRegister()) {
+    intptr_t index = cpu_reg_slots[loc.reg()];
     ASSERT(index >= 0);
     return Location::StackSlot(
-        compiler_frame_layout.FrameSlotForVariableIndex(-index));
-  } else if (IsFpuRegister()) {
-    intptr_t index = fpu_reg_slots[fpu_reg()];
+        compiler::target::frame_layout.FrameSlotForVariableIndex(-index),
+        FPREG);
+  } else if (loc.IsFpuRegister()) {
+    intptr_t index = fpu_reg_slots[loc.fpu_reg()];
     ASSERT(index >= 0);
     switch (def->representation()) {
-      case kUnboxedDouble:
+      case kUnboxedDouble:  // SlowPathEnvironmentFor sees _one_ register
+      case kUnboxedFloat:   // both for doubles and floats.
         return Location::DoubleStackSlot(
-            compiler_frame_layout.FrameSlotForVariableIndex(-index));
+            compiler::target::frame_layout.FrameSlotForVariableIndex(-index),
+            FPREG);
 
       case kUnboxedFloat32x4:
       case kUnboxedInt32x4:
       case kUnboxedFloat64x2:
         return Location::QuadStackSlot(
-            compiler_frame_layout.FrameSlotForVariableIndex(-index));
+            compiler::target::frame_layout.FrameSlotForVariableIndex(-index),
+            FPREG);
 
       default:
         UNREACHABLE();
     }
-  } else if (IsPairLocation()) {
+  } else if (loc.IsPairLocation()) {
     ASSERT(def->representation() == kUnboxedInt64);
-    PairLocation* value_pair = AsPairLocation();
+    PairLocation* value_pair = loc.AsPairLocation();
     intptr_t index_lo;
     intptr_t index_hi;
 
     if (value_pair->At(0).IsRegister()) {
-      index_lo = compiler_frame_layout.FrameSlotForVariableIndex(
+      index_lo = compiler::target::frame_layout.FrameSlotForVariableIndex(
           -cpu_reg_slots[value_pair->At(0).reg()]);
     } else {
       ASSERT(value_pair->At(0).IsStackSlot());
@@ -266,51 +435,51 @@ Location Location::RemapForSlowPath(Definition* def,
     }
 
     if (value_pair->At(1).IsRegister()) {
-      index_hi = compiler_frame_layout.FrameSlotForVariableIndex(
+      index_hi = compiler::target::frame_layout.FrameSlotForVariableIndex(
           -cpu_reg_slots[value_pair->At(1).reg()]);
     } else {
       ASSERT(value_pair->At(1).IsStackSlot());
       index_hi = value_pair->At(1).stack_index();
     }
 
-    return Location::Pair(Location::StackSlot(index_lo),
-                          Location::StackSlot(index_hi));
-  } else if (IsInvalid() && def->IsMaterializeObject()) {
+    return Location::Pair(Location::StackSlot(index_lo, FPREG),
+                          Location::StackSlot(index_hi, FPREG));
+  } else if (loc.IsInvalid() && def->IsMaterializeObject()) {
     def->AsMaterializeObject()->RemapRegisters(cpu_reg_slots, fpu_reg_slots);
-    return *this;
+    return loc;
   }
 
-  return *this;
+  return loc;
 }
 
-void LocationSummary::PrintTo(BufferFormatter* f) const {
+void LocationSummary::PrintTo(BaseTextBuffer* f) const {
   if (!FLAG_support_il_printer) {
     return;
   }
   if (input_count() > 0) {
-    f->Print(" (");
+    f->AddString(" (");
     for (intptr_t i = 0; i < input_count(); i++) {
-      if (i != 0) f->Print(", ");
+      if (i != 0) f->AddString(", ");
       in(i).PrintTo(f);
     }
-    f->Print(")");
+    f->AddString(")");
   }
 
   if (temp_count() > 0) {
-    f->Print(" [");
+    f->AddString(" [");
     for (intptr_t i = 0; i < temp_count(); i++) {
-      if (i != 0) f->Print(", ");
+      if (i != 0) f->AddString(", ");
       temp(i).PrintTo(f);
     }
-    f->Print("]");
+    f->AddString("]");
   }
 
   if (!out(0).IsInvalid()) {
-    f->Print(" => ");
+    f->AddString(" => ");
     out(0).PrintTo(f);
   }
 
-  if (always_calls()) f->Print(" C");
+  if (always_calls()) f->AddString(" C");
 }
 
 #if defined(DEBUG)
@@ -342,5 +511,3 @@ void LocationSummary::CheckWritableInputs() {
 #endif
 
 }  // namespace dart
-
-#endif  // !defined(DART_PRECOMPILED_RUNTIME)

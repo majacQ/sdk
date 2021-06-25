@@ -24,12 +24,7 @@ import '../testing.dart'
 import 'analyze.dart' show Analyze;
 
 import 'log.dart'
-    show
-        enableVerboseOutput,
-        isVerbose,
-        logMessage,
-        logNumberedLines,
-        splitLines;
+    show enableVerboseOutput, isVerbose, Logger, splitLines, StdoutLogger;
 
 import 'suite.dart' show Dart, Suite;
 
@@ -53,22 +48,26 @@ Future<TestRoot> computeTestRoot(String configurationPath, Uri base) {
 ///
 /// The optional argument [configurationPath] should be used when
 /// `testing.json` isn't located in the current working directory and is a path
-/// relative to `Platform.script`.
+/// relative to [me] which defaults to `Platform.script`.
 Future<Null> runMe(List<String> arguments, CreateContext f,
-    [String configurationPath]) {
+    {String configurationPath,
+    Uri me,
+    int shards = 1,
+    int shard = 0,
+    Logger logger: const StdoutLogger()}) {
+  me ??= Platform.script;
   return withErrorHandling(() async {
-    TestRoot testRoot =
-        await computeTestRoot(configurationPath, Platform.script);
+    TestRoot testRoot = await computeTestRoot(configurationPath, me);
     CommandLine cl = CommandLine.parse(arguments);
     if (cl.verbose) enableVerboseOutput();
     for (Chain suite in testRoot.toolChains) {
-      if (Platform.script == suite.source) {
-        print("Running suite ${suite.name}...");
+      if (me == suite.source) {
         ChainContext context = await f(suite, cl.environment);
-        await context.run(suite, new Set<String>.from(cl.selectors));
+        await context.run(suite, new Set<String>.from(cl.selectors),
+            shards: shards, shard: shard, logger: logger);
       }
     }
-  });
+  }, logger: logger);
 }
 
 /// This is called from a `_test.dart` file, and helps integration in other
@@ -116,8 +115,8 @@ Future<Null> run(List<String> arguments, List<String> suiteNames,
 }
 
 Future<Null> runProgram(String program, Uri packages) async {
-  logMessage("Running:");
-  logNumberedLines(program);
+  const StdoutLogger().logMessage("Running:");
+  const StdoutLogger().logNumberedLines(program);
   Uri dataUri = new Uri.dataFromString(program);
   ReceivePort exitPort = new ReceivePort();
   Isolate isolate = await Isolate.spawnUri(dataUri, <String>[], null,
@@ -197,6 +196,8 @@ class SuiteRunner {
     if (!hasRunnableTests) return null;
 
     return """
+// @dart=2.9
+
 library testing.generated;
 
 import 'dart:async' show Future;

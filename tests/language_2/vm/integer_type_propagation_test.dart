@@ -2,13 +2,13 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 // Test various optimizations and deoptimizations of optimizing compiler..
-// VMOptions=--enable-inlining-annotations --no-background-compilation --optimization-counter-threshold=1000
+// VMOptions=--no-background-compilation --optimization-counter-threshold=1000
+
+// @dart = 2.9
 
 import "package:expect/expect.dart";
 
-const noInline = "NeverInline";
-
-@noInline
+@pragma('vm:never-inline')
 testuint32(y) {
   int x = y;
   if (x != null) {

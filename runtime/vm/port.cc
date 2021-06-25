@@ -4,6 +4,8 @@
 
 #include "vm/port.h"
 
+#include <utility>
+
 #include "platform/utils.h"
 #include "vm/dart_api_impl.h"
 #include "vm/dart_entry.h"
@@ -15,57 +17,9 @@
 namespace dart {
 
 Mutex* PortMap::mutex_ = NULL;
-PortMap::Entry* PortMap::map_ = NULL;
+PortSet<PortMap::Entry>* PortMap::ports_ = NULL;
 MessageHandler* PortMap::deleted_entry_ = reinterpret_cast<MessageHandler*>(1);
-intptr_t PortMap::capacity_ = 0;
-intptr_t PortMap::used_ = 0;
-intptr_t PortMap::deleted_ = 0;
 Random* PortMap::prng_ = NULL;
-
-intptr_t PortMap::FindPort(Dart_Port port) {
-  // ILLEGAL_PORT (0) is used as a sentinel value in Entry.port. The loop below
-  // could return the index to a deleted port when we are searching for
-  // port id ILLEGAL_PORT. Return -1 immediately to indicate the port
-  // does not exist.
-  if (port == ILLEGAL_PORT) {
-    return -1;
-  }
-  ASSERT(port != ILLEGAL_PORT);
-  intptr_t index = port % capacity_;
-  intptr_t start_index = index;
-  Entry entry = map_[index];
-  while (entry.handler != NULL) {
-    if (entry.port == port) {
-      return index;
-    }
-    index = (index + 1) % capacity_;
-    // Prevent endless loops.
-    ASSERT(index != start_index);
-    entry = map_[index];
-  }
-  return -1;
-}
-
-void PortMap::Rehash(intptr_t new_capacity) {
-  Entry* new_ports = new Entry[new_capacity];
-  memset(new_ports, 0, new_capacity * sizeof(Entry));
-
-  for (intptr_t i = 0; i < capacity_; i++) {
-    Entry entry = map_[i];
-    // Skip free and deleted entries.
-    if (entry.port != 0) {
-      intptr_t new_index = entry.port % new_capacity;
-      while (new_ports[new_index].port != 0) {
-        new_index = (new_index + 1) % new_capacity;
-      }
-      new_ports[new_index] = entry;
-    }
-  }
-  delete[] map_;
-  map_ = new_ports;
-  capacity_ = new_capacity;
-  deleted_ = 0;
-}
 
 const char* PortMap::PortStateString(PortState kind) {
   switch (kind) {
@@ -75,6 +29,8 @@ const char* PortMap::PortStateString(PortState kind) {
       return "live";
     case kControlPort:
       return "control";
+    case kInactivePort:
+      return "inactive";
     default:
       UNREACHABLE();
       return "UNKNOWN";
@@ -82,29 +38,47 @@ const char* PortMap::PortStateString(PortState kind) {
 }
 
 Dart_Port PortMap::AllocatePort() {
-  const Dart_Port kMASK = 0x3fffffff;
-  Dart_Port result = prng_->NextUInt32() & kMASK;
+  Dart_Port result;
 
   // Keep getting new values while we have an illegal port number or the port
   // number is already in use.
-  while ((result == 0) || (FindPort(result) >= 0)) {
-    result = prng_->NextUInt32() & kMASK;
-  }
+  do {
+    // Ensure port ids are representable in JavaScript for the benefit of
+    // vm-service clients such as Observatory.
+    const Dart_Port kMask1 = 0xFFFFFFFFFFFFF;
+    // Ensure port ids are never valid object pointers so that reinterpreting
+    // an object pointer as a port id never produces a used port id.
+    const Dart_Port kMask2 = 0x3;
+    result = (prng_->NextUInt64() & kMask1) | kMask2;
+
+    // The two special marker ports are used for the hashset implementation and
+    // cannot be used as actual ports.
+    if (result == PortSet<Entry>::kFreePort ||
+        result == PortSet<Entry>::kDeletedPort) {
+      continue;
+    }
+
+    ASSERT(!static_cast<ObjectPtr>(static_cast<uword>(result))->IsWellFormed());
+  } while (ports_->Contains(result));
 
   ASSERT(result != 0);
-  ASSERT(FindPort(result) < 0);
+  ASSERT(!ports_->Contains(result));
   return result;
 }
 
 void PortMap::SetPortState(Dart_Port port, PortState state) {
   MutexLocker ml(mutex_);
-  intptr_t index = FindPort(port);
-  ASSERT(index >= 0);
-  PortState old_state = map_[index].state;
-  ASSERT(old_state == kNewPort);
-  map_[index].state = state;
+
+  auto it = ports_->TryLookup(port);
+  ASSERT(it != ports_->end());
+
+  Entry& entry = *it;
+  PortState old_state = entry.state;
+  entry.state = state;
   if (state == kLivePort) {
-    map_[index].handler->increment_live_ports();
+    entry.handler->increment_live_ports();
+  } else if (state == kInactivePort && old_state == kLivePort) {
+    entry.handler->decrement_live_ports();
   }
   if (FLAG_trace_isolates) {
     OS::PrintErr(
@@ -112,19 +86,7 @@ void PortMap::SetPortState(Dart_Port port, PortState state) {
         "\thandler:    %s\n"
         "\tport:       %" Pd64 "\n",
         PortStateString(old_state), PortStateString(state),
-        map_[index].handler->name(), port);
-  }
-}
-
-void PortMap::MaintainInvariants() {
-  intptr_t empty = capacity_ - used_ - deleted_;
-  if (used_ > ((capacity_ / 4) * 3)) {
-    // Grow the port map.
-    Rehash(capacity_ * 2);
-  } else if (empty < deleted_) {
-    // Rehash without growing the table to flush the deleted slots out of the
-    // map.
-    Rehash(capacity_);
+        entry.handler->name(), port);
   }
 }
 
@@ -135,37 +97,19 @@ Dart_Port PortMap::CreatePort(MessageHandler* handler) {
   handler->CheckAccess();
 #endif
 
+  const Dart_Port port = AllocatePort();
+
+  // The MessageHandler::ports_ is only accessed by [PortMap], it is guarded
+  // by the [PortMap::mutex_] we already hold.
+  MessageHandler::PortSetEntry isolate_entry;
+  isolate_entry.port = port;
+  handler->ports_.Insert(isolate_entry);
+
   Entry entry;
-  entry.port = AllocatePort();
+  entry.port = port;
   entry.handler = handler;
   entry.state = kNewPort;
-
-  // Search for the first unused slot. Make use of the knowledge that here is
-  // currently no port with this id in the port map.
-  ASSERT(FindPort(entry.port) < 0);
-  intptr_t index = entry.port % capacity_;
-  Entry cur = map_[index];
-  // Stop the search at the first found unused (free or deleted) slot.
-  while (cur.port != 0) {
-    index = (index + 1) % capacity_;
-    cur = map_[index];
-  }
-
-  // Insert the newly created port at the index.
-  ASSERT(index >= 0);
-  ASSERT(index < capacity_);
-  ASSERT(map_[index].port == 0);
-  ASSERT((map_[index].handler == NULL) ||
-         (map_[index].handler == deleted_entry_));
-  if (map_[index].handler == deleted_entry_) {
-    // Consuming a deleted entry.
-    deleted_--;
-  }
-  map_[index] = entry;
-
-  // Increment number of used slots and grow if necessary.
-  used_++;
-  MaintainInvariants();
+  ports_->Insert(entry);
 
   if (FLAG_trace_isolates) {
     OS::PrintErr(
@@ -182,31 +126,33 @@ bool PortMap::ClosePort(Dart_Port port) {
   MessageHandler* handler = NULL;
   {
     MutexLocker ml(mutex_);
-    intptr_t index = FindPort(port);
-    if (index < 0) {
+    auto it = ports_->TryLookup(port);
+    if (it == ports_->end()) {
       return false;
     }
-    ASSERT(index < capacity_);
-    ASSERT(map_[index].port != 0);
-    ASSERT(map_[index].handler != deleted_entry_);
-    ASSERT(map_[index].handler != NULL);
+    Entry entry = *it;
+    handler = entry.handler;
+    ASSERT(handler != nullptr);
 
-    handler = map_[index].handler;
 #if defined(DEBUG)
     handler->CheckAccess();
 #endif
-    // Before releasing the lock mark the slot in the map as deleted. This makes
-    // it possible to release the port map lock before flushing all of its
-    // pending messages below.
-    map_[index].port = 0;
-    map_[index].handler = deleted_entry_;
-    if (map_[index].state == kLivePort) {
+
+    if (entry.state == kLivePort) {
       handler->decrement_live_ports();
     }
 
-    used_--;
-    deleted_++;
-    MaintainInvariants();
+    // Delete the port entry before releasing the lock to avoid holding the lock
+    // while flushing the messages below.
+    it.Delete();
+    ports_->Rebalance();
+
+    // The MessageHandler::ports_ is only accessed by [PortMap], it is guarded
+    // by the [PortMap::mutex_] we already hold.
+    auto isolate_it = handler->ports_.TryLookup(port);
+    ASSERT(isolate_it != handler->ports_.end());
+    isolate_it.Delete();
+    handler->ports_.Rebalance();
   }
   handler->ClosePort(port);
   if (!handler->HasLivePorts() && handler->OwnedByPortMap()) {
@@ -219,119 +165,138 @@ bool PortMap::ClosePort(Dart_Port port) {
 void PortMap::ClosePorts(MessageHandler* handler) {
   {
     MutexLocker ml(mutex_);
-    for (intptr_t i = 0; i < capacity_; i++) {
-      if (map_[i].handler == handler) {
-        // Mark the slot as deleted.
-        map_[i].port = 0;
-        map_[i].handler = deleted_entry_;
-        if (map_[i].state == kLivePort) {
-          handler->decrement_live_ports();
-        }
-        used_--;
-        deleted_++;
+    // The MessageHandler::ports_ is only accessed by [PortMap], it is guarded
+    // by the [PortMap::mutex_] we already hold.
+    for (auto isolate_it = handler->ports_.begin();
+         isolate_it != handler->ports_.end(); ++isolate_it) {
+      auto it = ports_->TryLookup((*isolate_it).port);
+      ASSERT(it != ports_->end());
+      Entry entry = *it;
+      ASSERT(entry.port == (*isolate_it).port);
+      ASSERT(entry.handler == handler);
+      if (entry.state == kLivePort) {
+        handler->decrement_live_ports();
       }
+      it.Delete();
+      isolate_it.Delete();
     }
-    MaintainInvariants();
+    ASSERT(handler->ports_.IsEmpty());
+    ports_->Rebalance();
   }
   handler->CloseAllPorts();
 }
 
-bool PortMap::PostMessage(Message* message) {
+bool PortMap::PostMessage(std::unique_ptr<Message> message,
+                          bool before_events) {
   MutexLocker ml(mutex_);
-  intptr_t index = FindPort(message->dest_port());
-  if (index < 0) {
-    delete message;
+  auto it = ports_->TryLookup(message->dest_port());
+  if (it == ports_->end()) {
+    // Ownership of external data remains with the poster.
+    message->DropFinalizers();
     return false;
   }
-  ASSERT(index >= 0);
-  ASSERT(index < capacity_);
-  MessageHandler* handler = map_[index].handler;
-  ASSERT(map_[index].port != 0);
-  ASSERT((handler != NULL) && (handler != deleted_entry_));
-  handler->PostMessage(message);
+  MessageHandler* handler = (*it).handler;
+  ASSERT(handler != nullptr);
+  handler->PostMessage(std::move(message), before_events);
   return true;
 }
 
 bool PortMap::IsLocalPort(Dart_Port id) {
   MutexLocker ml(mutex_);
-  intptr_t index = FindPort(id);
-  if (index < 0) {
+  auto it = ports_->TryLookup(id);
+  if (it == ports_->end()) {
     // Port does not exist.
     return false;
   }
 
-  MessageHandler* handler = map_[index].handler;
+  MessageHandler* handler = (*it).handler;
+  ASSERT(handler != nullptr);
   return handler->IsCurrentIsolate();
+}
+
+bool PortMap::IsLivePort(Dart_Port id) {
+  MutexLocker ml(mutex_);
+  auto it = ports_->TryLookup(id);
+  if (it == ports_->end()) {
+    // Port does not exist.
+    return false;
+  }
+
+  PortState state = (*it).state;
+  return (state == kLivePort || state == kControlPort);
 }
 
 Isolate* PortMap::GetIsolate(Dart_Port id) {
   MutexLocker ml(mutex_);
-  intptr_t index = FindPort(id);
-  if (index < 0) {
+  auto it = ports_->TryLookup(id);
+  if (it == ports_->end()) {
     // Port does not exist.
-    return NULL;
+    return nullptr;
   }
 
-  MessageHandler* handler = map_[index].handler;
+  MessageHandler* handler = (*it).handler;
   return handler->isolate();
 }
 
+bool PortMap::IsReceiverInThisIsolateGroup(Dart_Port receiver,
+                                           IsolateGroup* group) {
+  MutexLocker ml(mutex_);
+  auto it = ports_->TryLookup(receiver);
+  if (it == ports_->end()) return false;
+  return (*it).handler->isolate()->group() == group;
+}
+
 void PortMap::Init() {
+  // TODO(bkonyi): don't keep ports_ after Dart_Cleanup.
   if (mutex_ == NULL) {
     mutex_ = new Mutex();
   }
   ASSERT(mutex_ != NULL);
-  prng_ = new Random();
-
-  static const intptr_t kInitialCapacity = 8;
-  // TODO(iposva): Verify whether we want to keep exponentially growing.
-  ASSERT(Utils::IsPowerOfTwo(kInitialCapacity));
-  if (map_ == NULL) {
-    // TODO(bkonyi): don't keep map_ after Dart_Cleanup.
-    map_ = new Entry[kInitialCapacity];
-    capacity_ = kInitialCapacity;
+  if (prng_ == nullptr) {
+    prng_ = new Random();
   }
-  memset(map_, 0, capacity_ * sizeof(Entry));
-  used_ = 0;
-  deleted_ = 0;
+  if (ports_ == nullptr) {
+    ports_ = new PortSet<Entry>();
+  }
 }
 
 void PortMap::Cleanup() {
-  ASSERT(map_ != NULL);
+  ASSERT(ports_ != nullptr);
   ASSERT(prng_ != NULL);
-  for (intptr_t i = 0; i < capacity_; ++i) {
-    auto handler = map_[i].handler;
-    if (handler != NULL && handler != deleted_entry_) {
-      ClosePorts(handler);
-      delete handler;
+  for (auto it = ports_->begin(); it != ports_->end(); ++it) {
+    const auto& entry = *it;
+    ASSERT(entry.handler != nullptr);
+    if (entry.state == kLivePort) {
+      entry.handler->decrement_live_ports();
     }
+    delete entry.handler;
+    it.Delete();
   }
+  ports_->Rebalance();
+
   delete prng_;
   prng_ = NULL;
   // TODO(bkonyi): find out why deleting map_ sometimes causes crashes.
-  // delete[] map_;
-  // map_ = NULL;
+  // delete ports_;
+  // ports_ = nullptr;
 }
 
 void PortMap::PrintPortsForMessageHandler(MessageHandler* handler,
                                           JSONStream* stream) {
 #ifndef PRODUCT
-  if (!FLAG_support_service) {
-    return;
-  }
   JSONObject jsobj(stream);
   jsobj.AddProperty("type", "_Ports");
   Object& msg_handler = Object::Handle();
   {
     JSONArray ports(&jsobj, "ports");
     SafepointMutexLocker ml(mutex_);
-    for (intptr_t i = 0; i < capacity_; i++) {
-      if (map_[i].handler == handler) {
-        if (map_[i].state == kLivePort) {
+    for (auto& entry : *ports_) {
+      if (entry.handler == handler) {
+        if (entry.state == kLivePort) {
           JSONObject port(&ports);
           port.AddProperty("type", "_Port");
-          port.AddPropertyF("name", "Isolate Port (%" Pd64 ")", map_[i].port);
-          msg_handler = DartLibraryCalls::LookupHandler(map_[i].port);
+          port.AddPropertyF("name", "Isolate Port (%" Pd64 ")", entry.port);
+          msg_handler = DartLibraryCalls::LookupHandler(entry.port);
           port.AddProperty("handler", msg_handler);
         }
       }
@@ -343,11 +308,11 @@ void PortMap::PrintPortsForMessageHandler(MessageHandler* handler,
 void PortMap::DebugDumpForMessageHandler(MessageHandler* handler) {
   SafepointMutexLocker ml(mutex_);
   Object& msg_handler = Object::Handle();
-  for (intptr_t i = 0; i < capacity_; i++) {
-    if (map_[i].handler == handler) {
-      if (map_[i].state == kLivePort) {
-        OS::PrintErr("Live Port = %" Pd64 "\n", map_[i].port);
-        msg_handler = DartLibraryCalls::LookupHandler(map_[i].port);
+  for (auto& entry : *ports_) {
+    if (entry.handler == handler) {
+      if (entry.state == kLivePort) {
+        OS::PrintErr("Live Port = %" Pd64 "\n", entry.port);
+        msg_handler = DartLibraryCalls::LookupHandler(entry.port);
         OS::PrintErr("Handler = %s\n", msg_handler.ToCString());
       }
     }

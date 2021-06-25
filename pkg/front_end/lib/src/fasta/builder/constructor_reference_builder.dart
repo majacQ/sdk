@@ -2,20 +2,22 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library fasta.constructor_reference_builder;
 
 import '../messages.dart' show noLength, templateConstructorNotFound;
 
-import 'builder.dart'
-    show
-        ClassBuilder,
-        Declaration,
-        LibraryBuilder,
-        PrefixBuilder,
-        QualifiedName,
-        Scope,
-        TypeBuilder,
-        flattenName;
+import '../identifiers.dart' show QualifiedName, flattenName;
+
+import '../scope.dart';
+
+import 'builder.dart';
+import 'class_builder.dart';
+import 'library_builder.dart';
+import 'prefix_builder.dart';
+import 'type_alias_builder.dart';
+import 'type_builder.dart';
 
 class ConstructorReferenceBuilder {
   final int charOffset;
@@ -29,10 +31,10 @@ class ConstructorReferenceBuilder {
   /// This is the name of a named constructor. As `bar` in `new Foo<T>.bar()`.
   final String suffix;
 
-  Declaration target;
+  Builder target;
 
   ConstructorReferenceBuilder(this.name, this.typeArguments, this.suffix,
-      Declaration parent, this.charOffset)
+      Builder parent, this.charOffset)
       : fileUri = parent.fileUri;
 
   String get fullNameForErrors {
@@ -41,12 +43,16 @@ class ConstructorReferenceBuilder {
   }
 
   void resolveIn(Scope scope, LibraryBuilder accessingLibrary) {
-    final name = this.name;
-    Declaration declaration;
+    final Object name = this.name;
+    Builder declaration;
     if (name is QualifiedName) {
       String prefix = name.qualifier;
       String middle = name.name;
       declaration = scope.lookup(prefix, charOffset, fileUri);
+      if (declaration is TypeAliasBuilder) {
+        TypeAliasBuilder aliasBuilder = declaration;
+        declaration = aliasBuilder.unaliasDeclaration(typeArguments);
+      }
       if (declaration is PrefixBuilder) {
         PrefixBuilder prefix = declaration;
         declaration = prefix.lookup(middle, name.charOffset, fileUri);
@@ -61,6 +67,10 @@ class ConstructorReferenceBuilder {
       }
     } else {
       declaration = scope.lookup(name, charOffset, fileUri);
+      if (declaration is TypeAliasBuilder) {
+        TypeAliasBuilder aliasBuilder = declaration;
+        declaration = aliasBuilder.unaliasDeclaration(typeArguments);
+      }
     }
     if (declaration is ClassBuilder) {
       target = declaration.findConstructorOrFactory(

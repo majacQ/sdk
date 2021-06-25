@@ -6,30 +6,39 @@ library fasta.kernel_variable_builder;
 
 import 'package:kernel/ast.dart' show VariableDeclaration;
 
-import 'kernel_builder.dart' show Declaration;
+import '../builder/builder.dart';
+import '../builder/variable_builder.dart';
 
-class KernelVariableBuilder extends Declaration {
+class VariableBuilderImpl extends BuilderImpl implements VariableBuilder {
   @override
-  final Declaration parent;
+  final Builder parent;
 
   @override
   final Uri fileUri;
 
+  @override
   final VariableDeclaration variable;
 
-  KernelVariableBuilder(this.variable, this.parent, this.fileUri);
+  VariableBuilderImpl(this.variable, this.parent, this.fileUri);
 
   @override
   int get charOffset => variable.fileOffset;
 
+  @override
   bool get isLocal => true;
 
+  @override
   bool get isConst => variable.isConst;
 
+  @override
   bool get isFinal => variable.isFinal;
 
-  VariableDeclaration get target => variable;
+  @override
+  bool get isAssignable => variable.isAssignable;
 
   @override
   String get fullNameForErrors => variable.name ?? "<unnamed>";
+
+  @override
+  String toString() => 'VariableBuilderImpl($fullNameForErrors)';
 }

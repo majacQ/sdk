@@ -2,8 +2,6 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'dart:async';
-
 import 'package:analysis_server/lsp_protocol/protocol_generated.dart';
 import 'package:analysis_server/lsp_protocol/protocol_special.dart';
 import 'package:analysis_server/protocol/protocol_generated.dart';
@@ -15,23 +13,30 @@ import 'package:analysis_server/src/lsp/mapping.dart';
 import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/source/line_info.dart';
 
-class HoverHandler extends MessageHandler<TextDocumentPositionParams, Hover> {
+class HoverHandler extends MessageHandler<TextDocumentPositionParams, Hover?> {
   HoverHandler(LspAnalysisServer server) : super(server);
+  @override
   Method get handlesMessage => Method.textDocument_hover;
 
   @override
-  TextDocumentPositionParams convertParams(Map<String, dynamic> json) =>
-      TextDocumentPositionParams.fromJson(json);
+  LspJsonHandler<TextDocumentPositionParams> get jsonHandler =>
+      TextDocumentPositionParams.jsonHandler;
 
-  Future<ErrorOr<Hover>> handle(TextDocumentPositionParams params) async {
+  @override
+  Future<ErrorOr<Hover?>> handle(
+      TextDocumentPositionParams params, CancellationToken token) async {
+    if (!isDartDocument(params.textDocument)) {
+      return success(null);
+    }
+
     final pos = params.position;
-    final path = pathOf(params.textDocument);
-    final unit = await path.mapResult(requireUnit);
+    final path = pathOfDoc(params.textDocument);
+    final unit = await path.mapResult(requireResolvedUnit);
     final offset = await unit.mapResult((unit) => toOffset(unit.lineInfo, pos));
     return offset.mapResult((offset) => _getHover(unit.result, offset));
   }
 
-  Hover toHover(LineInfo lineInfo, HoverInformation hover) {
+  Hover? toHover(LineInfo lineInfo, HoverInformation? hover) {
     if (hover == null) {
       return null;
     }
@@ -42,43 +47,49 @@ class HoverHandler extends MessageHandler<TextDocumentPositionParams, Hover> {
       return null;
     }
 
-    final content = new StringBuffer();
+    final content = StringBuffer();
+    const divider = '---';
 
     // Description.
     if (hover.elementDescription != null) {
       content.writeln('```dart');
-      if (hover.isDeprecated) {
+      if (hover.isDeprecated ?? false) {
         content.write('(deprecated) ');
       }
-      content..writeln(hover.elementDescription)..writeln('```')..writeln();
+      content..writeln(hover.elementDescription)..writeln('```');
     }
 
     // Source library.
-    if (hover.containingLibraryName != null &&
-        hover.containingLibraryName.isNotEmpty) {
-      content..writeln('*${hover.containingLibraryName}*')..writeln();
-    } else if (hover.containingLibraryPath != null) {
-      // TODO(dantup): Support displaying the package name (probably by adding
-      // containingPackageName to the main hover?) once the analyzer work to
-      // support this (inc Bazel/Gn) is done.
-      // content..writeln('*${hover.containingPackageName}*')..writeln();
+    final containingLibraryName = hover.containingLibraryName;
+    if (containingLibraryName != null && containingLibraryName.isNotEmpty) {
+      content..writeln('*$containingLibraryName*')..writeln();
     }
 
     // Doc comments.
     if (hover.dartdoc != null) {
+      if (content.length != 0) {
+        content.writeln(divider);
+      }
       content.writeln(cleanDartdoc(hover.dartdoc));
     }
 
-    final formats =
-        server?.clientCapabilities?.textDocument?.hover?.contentFormat;
-    return new Hover(
-      asStringOrMarkupContent(formats, content.toString().trimRight()),
-      toRange(lineInfo, hover.offset, hover.length),
+    final formats = server.clientCapabilities?.hoverContentFormats;
+    return Hover(
+      contents:
+          asStringOrMarkupContent(formats, content.toString().trimRight()),
+      range: toRange(lineInfo, hover.offset, hover.length),
     );
   }
 
-  ErrorOr<Hover> _getHover(ResolvedUnitResult unit, int offset) {
-    final hover = new DartUnitHoverComputer(unit.unit, offset).compute();
+  ErrorOr<Hover?> _getHover(ResolvedUnitResult unit, int offset) {
+    final compilationUnit = unit.unit;
+    if (compilationUnit == null) {
+      return success(null);
+    }
+
+    final computer = DartUnitHoverComputer(
+        server.getDartdocDirectiveInfoFor(unit), compilationUnit, offset);
+    final hover = computer.compute();
     return success(toHover(unit.lineInfo, hover));
   }
 }

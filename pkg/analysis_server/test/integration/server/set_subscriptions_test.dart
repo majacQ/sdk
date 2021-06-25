@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -10,7 +10,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import '../support/integration_tests.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(SetSubscriptionsTest);
   });
@@ -28,7 +28,7 @@ void _fail(String message) {
 @reflectiveTest
 class SetSubscriptionsTest extends AbstractAnalysisServerIntegrationTest {
   @failingTest
-  test_setSubscriptions() {
+  Future<void> test_setSubscriptions() async {
     // This test times out on the bots and has been disabled to keep them green.
     // We need to discover the cause and re-enable it.
 
@@ -36,8 +36,8 @@ class SetSubscriptionsTest extends AbstractAnalysisServerIntegrationTest {
         'This test times out on the bots and has been disabled to keep them green.'
         'We need to discover the cause and re-enable it.');
 
-    bool statusReceived = false;
-    Completer analysisBegun = new Completer();
+    var statusReceived = false;
+    var analysisBegun = Completer();
     onServerStatus.listen((_) {
       statusReceived = true;
     });
@@ -46,28 +46,28 @@ class SetSubscriptionsTest extends AbstractAnalysisServerIntegrationTest {
         analysisBegun.complete();
       }
     });
-    return sendServerSetSubscriptions([]).then((_) {
-      String pathname = sourcePath('test.dart');
-      writeFile(pathname, '''
+    await sendServerSetSubscriptions([]);
+
+    var pathname = sourcePath('test.dart');
+    writeFile(pathname, '''
 main() {
   var x;
 }''');
-      standardAnalysisSetup(subscribeStatus: false);
-      // Analysis should begin, but no server.status notification should be
-      // received.
-      return analysisBegun.future.then((_) {
-        expect(statusReceived, isFalse);
-        return sendServerSetSubscriptions([ServerService.STATUS]).then((_) {
-          // Tickle test.dart just in case analysis has already completed.
-          writeFile(pathname, '''
+    standardAnalysisSetup(subscribeStatus: false);
+    // Analysis should begin, but no server.status notification should be
+    // received.
+    await analysisBegun.future;
+
+    expect(statusReceived, isFalse);
+    await sendServerSetSubscriptions([ServerService.STATUS]);
+
+    // Tickle test.dart just in case analysis has already completed.
+    writeFile(pathname, '''
 main() {
   var y;
 }''');
-          // Analysis should eventually complete, and we should be notified
-          // about it.
-          return analysisFinished;
-        });
-      });
-    });
+    // Analysis should eventually complete, and we should be notified
+    // about it.
+    await analysisFinished;
   }
 }

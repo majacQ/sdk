@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import "package:expect/expect.dart";
 
 check(DateTime expected, String str) {
@@ -17,10 +19,14 @@ main() {
   check(new DateTime(2012, 02, 27, 13, 27), "2012-02-27 13:27:00");
   if (supportsMicroseconds) {
     check(new DateTime.utc(2012, 02, 27, 13, 27, 0, 123, 456),
-        "2012-02-27 13:27:00.123456z");
-  } else {
+        "2012-02-27 13:27:00.1234567891234z");
     check(new DateTime.utc(2012, 02, 27, 13, 27, 0, 123, 456),
-        "2012-02-27 13:27:00.123z");
+        "2012-02-27 13:27:00,1234567891234z");
+  } else {
+    check(new DateTime.utc(2012, 02, 27, 13, 27, 0, 123, 0),
+        "2012-02-27 13:27:00.1234567891234z");
+    check(new DateTime.utc(2012, 02, 27, 13, 27, 0, 123, 0),
+        "2012-02-27 13:27:00,1234567891234z");
   }
   check(new DateTime(2012, 02, 27, 13, 27), "20120227 13:27:00");
   check(new DateTime(2012, 02, 27, 13, 27), "20120227T132700");

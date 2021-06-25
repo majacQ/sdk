@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import 'dart:collection';
 import 'dart:html';
 import 'dart:svg' as svg;
@@ -139,7 +141,7 @@ main() {
   test('listAdd', () {
     var elements = elementsSetup();
     var added = elements.classes.add('lassie');
-    expect(added, isNull);
+    expect(added, isFalse);
 
     expect(view(elements.classes), '[classy, foo, lassie, quux, qux, yes]');
     expect(

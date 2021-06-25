@@ -2,17 +2,16 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library FormDataTest;
 
-import 'package:unittest/unittest.dart';
-import 'package:unittest/html_individual_config.dart';
+import 'package:async_helper/async_minitest.dart';
 import 'dart:html';
 
 void main() {
   // TODO(efortuna): This is a bad test. Revisit when we have tests that can run
   // both a server and fire up a browser.
-  useHtmlIndividualConfiguration();
-
   group('supported', () {
     test('supported', () {
       expect(FormData.supported, isTrue);
@@ -71,7 +70,7 @@ void main() {
             '${window.location.protocol}//${window.location.host}/echo');
 
         xhr.onLoad.listen(expectAsync((e) {
-          expect(xhr.responseText, contains(blobString));
+          expect(xhr.responseText.contains(blobString), isTrue);
         }));
         xhr.onError.listen((e) {
           fail('$e');

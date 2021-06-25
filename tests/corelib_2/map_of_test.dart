@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library map.from.test;
 
 import "package:expect/expect.dart";
@@ -34,9 +36,7 @@ main() {
       ..[3] = 13,
   ]) {
     expectThrows(void operation()) {
-      // Allow CastError as well as TypeError. Dart2js creates a CastError
-      // here for some reason, and it's not wront.
-      Expect.throws(operation, (e) => e is TypeError || e is CastError);
+      Expect.throwsTypeError(operation);
     }
 
     var sourceType = map.runtimeType.toString();

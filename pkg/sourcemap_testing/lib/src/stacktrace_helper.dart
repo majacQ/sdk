@@ -6,13 +6,12 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:convert' show jsonDecode;
 
+import 'package:_fe_analyzer_shared/src/testing/annotated_code_helper.dart';
 import 'package:expect/expect.dart';
 import 'package:source_maps/source_maps.dart';
 import 'package:source_maps/src/utils.dart';
 import 'package:source_span/source_span.dart';
 import 'package:dart2js_tools/src/dart2js_mapping.dart';
-
-import 'annotated_code_helper.dart';
 
 const String INPUT_FILE_NAME = 'input.dart';
 

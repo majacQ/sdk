@@ -55,7 +55,10 @@ class CommandLineOptions {
     arguments_ = NULL;
   }
 
+  void Reset() { count_ = 0; }
+
   int count() const { return count_; }
+  int max_count() const { return max_count_; }
   const char** arguments() const { return arguments_; }
 
   const char* GetArgument(int index) const {
@@ -69,6 +72,17 @@ class CommandLineOptions {
       abort();  // We should never get into this situation.
     }
   }
+
+  void AddArguments(const char** argv, int argc) {
+    if (count_ + argc >= max_count_) {
+      abort();  // We should never get into this situation.
+    }
+    for (int i = 0; i < argc; ++i) {
+      arguments_[count_++] = argv[i];
+    }
+  }
+
+  Dart_Handle CreateRuntimeOptions();
 
   void operator delete(void* pointer) { abort(); }
 
@@ -151,9 +165,8 @@ class DartUtils {
   static Dart_Handle MakeUint8Array(const uint8_t* buffer, intptr_t length);
   static Dart_Handle PrepareForScriptLoading(bool is_service_isolate,
                                              bool trace_loading);
-  static Dart_Handle SetupServiceLoadPort();
-  static Dart_Handle SetupPackageRoot(const char* package_root,
-                                      const char* packages_file);
+  static Dart_Handle SetupPackageConfig(const char* packages_file);
+
   static Dart_Handle SetupIOLibrary(const char* namespc_path,
                                     const char* script_uri,
                                     bool disable_exit);
@@ -176,17 +189,21 @@ class DartUtils {
                                                  const char* exception_name,
                                                  const char* message);
   static Dart_Handle NewDartArgumentError(const char* message);
+  static Dart_Handle NewDartFormatException(const char* message);
   static Dart_Handle NewDartUnsupportedError(const char* message);
   static Dart_Handle NewDartIOException(const char* exception_name,
                                         const char* message,
                                         Dart_Handle os_error);
 
-  // Create a new Dart String object from a C String.
+  // Create a new Dart String object from a UTF8 encoded C String.
   static Dart_Handle NewString(const char* str) {
     ASSERT(str != NULL);
     return Dart_NewStringFromUTF8(reinterpret_cast<const uint8_t*>(str),
                                   strlen(str));
   }
+
+  // Create a new Dart String object from a formatted string.
+  static Dart_Handle NewStringFormatted(const char* format, ...);
 
   // Allocate length bytes for a C string with Dart_ScopeAllocate.
   static char* ScopedCString(intptr_t length) {
@@ -330,13 +347,13 @@ class CObject {
   static Dart_CObject* NewArray(intptr_t length);
   static Dart_CObject* NewUint8Array(intptr_t length);
   static Dart_CObject* NewUint32Array(intptr_t length);
-  static Dart_CObject* NewExternalUint8Array(
-      intptr_t length,
-      uint8_t* data,
-      void* peer,
-      Dart_WeakPersistentHandleFinalizer callback);
+  static Dart_CObject* NewExternalUint8Array(intptr_t length,
+                                             uint8_t* data,
+                                             void* peer,
+                                             Dart_HandleFinalizer callback);
 
   static Dart_CObject* NewIOBuffer(int64_t length);
+  static void ShrinkIOBuffer(Dart_CObject* cobject, int64_t new_length);
   static void FreeIOBufferData(Dart_CObject* object);
 
   Dart_CObject* AsApiCObject() { return cobject_; }
@@ -552,12 +569,9 @@ class CObjectExternalUint8Array : public CObject {
   intptr_t Length() const {
     return cobject_->value.as_external_typed_data.length;
   }
-  void SetLength(intptr_t length) {
-    cobject_->value.as_external_typed_data.length = length;
-  }
   uint8_t* Data() const { return cobject_->value.as_external_typed_data.data; }
   void* Peer() const { return cobject_->value.as_external_typed_data.peer; }
-  Dart_WeakPersistentHandleFinalizer Callback() const {
+  Dart_HandleFinalizer Callback() const {
     return cobject_->value.as_external_typed_data.callback;
   }
 

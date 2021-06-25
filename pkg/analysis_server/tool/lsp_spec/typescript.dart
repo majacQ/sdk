@@ -4,11 +4,22 @@
 
 import 'typescript_parser.dart';
 
-String cleanComment(String comment) {
-  if (comment == null) {
-    return null;
+/// Removes types that are in the spec that we don't want in other signatures.
+bool allowTypeInSignatures(TypeBase type) {
+  // Don't allow arrays of MarkedStrings, but do allow simple MarkedStrings.
+  // The only place that uses these are Hovers and we only send one value
+  // (to match the MarkupString equiv) so the array just makes the types
+  // unnecessarily complicated.
+  if (type is ArrayType) {
+    final elementType = type.elementType;
+    if (elementType is Type && elementType.name == 'MarkedString') {
+      return false;
+    }
   }
+  return true;
+}
 
+String cleanComment(String comment) {
   // Remove the start/end comment markers.
   if (comment.startsWith('/**') && comment.endsWith('*/')) {
     comment = comment.substring(3, comment.length - 2);
@@ -16,9 +27,9 @@ String cleanComment(String comment) {
     comment = comment.substring(2);
   }
 
-  final _commentLinePrefixes = new RegExp(r'\n\s*\* ?');
-  final _nonConcurrentNewlines = new RegExp(r'\n(?![\n\s\-*])');
-  final _newLinesThatRequireReinserting = new RegExp(r'\n (\w)');
+  final _commentLinePrefixes = RegExp(r'\n\s*\* ?');
+  final _nonConcurrentNewlines = RegExp(r'\n(?![\n\s\-*])');
+  final _newLinesThatRequireReinserting = RegExp(r'\n (\w)');
   // Remove any Windows newlines from the source.
   comment = comment.replaceAll('\r', '');
   // Remove the * prefixes.
@@ -32,44 +43,90 @@ String cleanComment(String comment) {
   return comment.trim();
 }
 
-/// Fixes up some enum types that are not as specific as they could be in the
-/// spec. For example, Diagnostic.severity is typed "number" but can be mapped
-/// to the DiagnosticSeverity enum class.
-String getImprovedType(String interfaceName, String fieldName) {
-  const Map<String, Map<String, String>> _improvedTypeMappings = {
-    "Diagnostic": {
-      "severity": "DiagnosticSeverity",
-      "code": "String",
+/// Improves comments in generated code to support where types may have been
+/// altered (for ex. with [getImprovedType] above).
+String? getImprovedComment(String interfaceName, String fieldName) {
+  const _improvedComments = <String, Map<String, String>>{
+    'ResponseError': {
+      'data':
+          '// A string that contains additional information about the error. Can be omitted.',
     },
-    "TextDocumentSyncOptions": {
-      "change": "TextDocumentSyncKind",
+  };
+
+  final interface = _improvedComments[interfaceName];
+
+  return interface != null ? interface[fieldName] : null;
+}
+
+/// Improves types in generated code, including:
+///
+/// - Fixes up some enum types that are not as specific as they could be in the
+///   spec. For example, Diagnostic.severity is typed "number" but can be mapped
+///   to the DiagnosticSeverity enum class.
+///
+/// - Narrows unions to single types where they're only generated on the server
+///   and we know we always use a specific type. This avoids wrapping a lot
+///   of code in `EitherX<Y,Z>.tX()` and simplifies the testing of them.
+String? getImprovedType(String interfaceName, String? fieldName) {
+  const _improvedTypeMappings = <String, Map<String, String>>{
+    'Diagnostic': {
+      'severity': 'DiagnosticSeverity',
+      'code': 'String',
+      'data': 'object',
     },
-    "FileSystemWatcher": {
-      "kind": "WatchKind",
+    'TextDocumentSyncOptions': {
+      'change': 'TextDocumentSyncKind',
     },
-    "CompletionItem": {
-      "kind": "CompletionItemKind",
+    'TextDocumentChangeRegistrationOptions': {
+      'syncKind': 'TextDocumentSyncKind',
     },
-    "DocumentHighlight": {
-      "kind": "DocumentHighlightKind",
+    'FileSystemWatcher': {
+      'kind': 'WatchKind',
     },
-    "FoldingRange": {
-      "kind": "FoldingRangeKind",
+    'CompletionItem': {
+      'kind': 'CompletionItemKind',
+      'data': 'CompletionItemResolutionInfo',
     },
-    "ResponseError": {
-      "code": "ErrorCodes",
+    'CallHierarchyItem': {
+      'data': 'object',
     },
-    "NotificationMessage": {
-      "method": "Method",
-      "params": "object",
+    'DocumentHighlight': {
+      'kind': 'DocumentHighlightKind',
     },
-    "RequestMessage": {
-      "method": "Method",
-      "params": "object",
+    'FoldingRange': {
+      'kind': 'FoldingRangeKind',
     },
-    "SymbolInformation": {
-      "kind": "SymbolKind",
+    'ResponseError': {
+      'code': 'ErrorCodes',
+      // This is dynamic normally, but since this class can be serialised
+      // we will crash if it data is set to something that can't be converted to
+      // JSON (for ex. Uri) so this forces anyone setting this to convert to a
+      // String.
+      'data': 'String',
     },
+    'NotificationMessage': {
+      'method': 'Method',
+      'params': 'object',
+    },
+    'RequestMessage': {
+      'method': 'Method',
+      'params': 'object',
+    },
+    'SymbolInformation': {
+      'kind': 'SymbolKind',
+    },
+    'ParameterInformation': {
+      'label': 'String',
+    },
+    'ProgressParams': {
+      'value': 'object',
+    },
+    'ServerCapabilities': {
+      'changeNotifications': 'bool',
+    },
+    'TextDocumentEdit': {
+      'edits': 'TextDocumentEditEdits',
+    }
   };
 
   final interface = _improvedTypeMappings[interfaceName];
@@ -96,19 +153,4 @@ bool includeTypeDefinitionInOutput(AstNode node) {
       // when getting the .dartType for it.
       // .startsWith() because there are inline types that will be generated.
       !node.name.startsWith('MarkedString');
-}
-
-/// Removes types that are in the spec that we don't want in other signatures.
-bool allowTypeInSignatures(TypeBase type) {
-  // Don't allow arrays of MarkedStrings, but do allow simple MarkedStrings.
-  // The only place that uses these are Hovers and we only send one value
-  // (to match the MarkupString equiv) so the array just makes the types
-  // unnecessarily complicated.
-  if (type is ArrayType) {
-    final elementType = type.elementType;
-    if (elementType is Type && elementType.name == 'MarkedString') {
-      return false;
-    }
-  }
-  return true;
 }

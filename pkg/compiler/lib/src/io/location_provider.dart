@@ -40,7 +40,8 @@ class LocationCollector extends CodeOutputListener implements LocationProvider {
   @override
   Location getLocation(int offset) {
     RangeError.checkValueInInterval(offset, 0, length, 'offset');
-    return new Source(lineStarts, null).getLocation(null, offset);
+    return new Source(lineStarts, const <int>[], null, null)
+        .getLocation(null, offset);
   }
 
   @override
@@ -49,6 +50,7 @@ class LocationCollector extends CodeOutputListener implements LocationProvider {
     this.length = length;
   }
 
+  @override
   String toString() {
     return 'lineStarts=$lineStarts,length=$length';
   }

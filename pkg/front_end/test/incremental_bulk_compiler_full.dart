@@ -2,7 +2,7 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'dart:async' show Future;
+// @dart = 2.9
 
 import 'package:expect/expect.dart' show Expect;
 
@@ -29,7 +29,7 @@ import 'package:testing/testing.dart'
 import 'incremental_utils.dart' as util;
 
 main([List<String> arguments = const []]) =>
-    runMe(arguments, createContext, "../testing.json");
+    runMe(arguments, createContext, configurationPath: "../testing.json");
 
 Future<Context> createContext(
     Chain suite, Map<String, String> environment) async {
@@ -51,20 +51,16 @@ class Context extends ChainContext {
   IncrementalCompiler compiler;
 }
 
-CompilerOptions getOptions(bool strong) {
+CompilerOptions getOptions() {
   final Uri sdkRoot = computePlatformBinariesLocation(forceBuildDir: true);
   var options = new CompilerOptions()
     ..sdkRoot = sdkRoot
     ..librariesSpecificationUri = Uri.base.resolve("sdk/lib/libraries.json")
+    ..omitPlatform = true
     ..onDiagnostic = (DiagnosticMessage message) {
       // Ignored.
-    }
-    ..legacyMode = !strong;
-  if (strong) {
-    options.sdkSummary = sdkRoot.resolve("vm_platform_strong.dill");
-  } else {
-    options.sdkSummary = sdkRoot.resolve("vm_platform.dill");
-  }
+    };
+  options.sdkSummary = sdkRoot.resolve("vm_platform_strong.dill");
   return options;
 }
 
@@ -82,7 +78,7 @@ class RunTest extends Step<TestDescription, TestDescription, Context> {
     List<int> oneShotSerialized;
     try {
       IncrementalCompiler compiler =
-          new IncrementalKernelGenerator(getOptions(true), uri);
+          new IncrementalKernelGenerator(getOptions(), uri);
       oneShotSerialized = util.postProcess(await compiler.computeDelta());
     } catch (e) {
       oneShotFailed = true;
@@ -94,11 +90,10 @@ class RunTest extends Step<TestDescription, TestDescription, Context> {
     try {
       globalDebuggingNames = new NameSystem();
       if (context.compiler == null) {
-        context.compiler =
-            new IncrementalKernelGenerator(getOptions(true), uri);
+        context.compiler = new IncrementalKernelGenerator(getOptions(), uri);
       }
       Component bulkCompiledComponent = await context.compiler
-          .computeDelta(entryPoint: uri, fullComponent: true);
+          .computeDelta(entryPoints: [uri], fullComponent: true);
       bulkSerialized = util.postProcess(bulkCompiledComponent);
     } catch (e) {
       bulkFailed = true;
@@ -110,11 +105,10 @@ class RunTest extends Step<TestDescription, TestDescription, Context> {
     try {
       globalDebuggingNames = new NameSystem();
       if (context.compiler == null) {
-        context.compiler =
-            new IncrementalKernelGenerator(getOptions(true), uri);
+        context.compiler = new IncrementalKernelGenerator(getOptions(), uri);
       }
       Component bulkCompiledComponent = await context.compiler
-          .computeDelta(entryPoint: uri, fullComponent: true);
+          .computeDelta(entryPoints: [uri], fullComponent: true);
       bulkSerialized2 = util.postProcess(bulkCompiledComponent);
     } catch (e) {
       bulk2Failed = true;
@@ -132,7 +126,7 @@ class RunTest extends Step<TestDescription, TestDescription, Context> {
     if (bulkFailed || bulk2Failed) {
       if (bulkFailed != bulk2Failed) {
         throw "Bulk-compiler failed: $bulkFailed; "
-            "second bulk-comile failed: $bulk2Failed";
+            "second bulk-compile failed: $bulk2Failed";
       }
     } else {
       checkIsEqual(bulkSerialized, bulkSerialized2);

@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICESNE file.
 
+// @dart = 2.9
+
 library mirrors.reader;
 
 import 'dart:mirrors';
@@ -88,7 +90,7 @@ class MirrorsReader extends MirrorsVisitor {
 
   /// Evaluates the function [f]. Subclasses can override this to handle
   /// specific exceptions.
-  evaluate(f()) => f();
+  dynamic evaluate(dynamic f) => f();
 
   visit(var receiver, String tag, var value) {
     if (value is Function) {

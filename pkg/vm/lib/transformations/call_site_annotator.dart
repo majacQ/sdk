@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart=2.12
+
 // This transformation annotates call sites with the receiver type.
 // This is done to avoid reimplementing [Expression.getStaticType] in
 // C++.
@@ -12,14 +14,16 @@ library vm.transformations.call_site_annotator;
 import 'package:kernel/ast.dart';
 import 'package:kernel/class_hierarchy.dart' show ClassHierarchy;
 import 'package:kernel/core_types.dart' show CoreTypes;
-import 'package:kernel/type_environment.dart' show TypeEnvironment;
+import 'package:kernel/type_environment.dart'
+    show StaticTypeContext, TypeEnvironment;
 
 import '../metadata/call_site_attributes.dart';
 
 CallSiteAttributesMetadataRepository addRepositoryTo(Component component) {
   return component.metadata.putIfAbsent(
-      CallSiteAttributesMetadataRepository.repositoryTag,
-      () => new CallSiteAttributesMetadataRepository());
+          CallSiteAttributesMetadataRepository.repositoryTag,
+          () => new CallSiteAttributesMetadataRepository())
+      as CallSiteAttributesMetadataRepository;
 }
 
 void transformLibraries(Component component, List<Library> libraries,
@@ -29,60 +33,92 @@ void transformLibraries(Component component, List<Library> libraries,
   libraries.forEach(transformer.visitLibrary);
 }
 
-class AnnotateWithStaticTypes extends RecursiveVisitor<Null> {
+class AnnotateWithStaticTypes extends RecursiveVisitor {
   final CallSiteAttributesMetadataRepository _metadata;
   final TypeEnvironment env;
+  StaticTypeContext? _staticTypeContext;
 
   AnnotateWithStaticTypes(
       Component component, CoreTypes coreTypes, ClassHierarchy hierarchy)
       : _metadata = addRepositoryTo(component),
-        env = new TypeEnvironment(coreTypes, hierarchy, strongMode: true);
+        env = new TypeEnvironment(coreTypes, hierarchy);
 
   @override
-  visitProcedure(Procedure proc) {
-    if (!proc.isStatic) {
-      env.thisType = proc.enclosingClass?.thisType;
-    }
-    super.visitProcedure(proc);
-    env.thisType = null;
+  defaultMember(Member node) {
+    _staticTypeContext = new StaticTypeContext(node, env);
+    super.defaultMember(node);
+    _staticTypeContext = null;
+  }
+
+  void annotateWithReceiver(TreeNode node, Expression receiver) {
+    annotateWithReceiverType(node, receiver.getStaticType(_staticTypeContext!));
+  }
+
+  void annotateWithReceiverType(TreeNode node, DartType receiverType) {
+    _metadata.mapping[node] =
+        new CallSiteAttributesMetadata(receiverType: receiverType);
   }
 
   @override
-  visitConstructor(Constructor proc) {
-    env.thisType = proc.enclosingClass?.thisType;
-    super.visitConstructor(proc);
-    env.thisType = null;
-  }
-
-  void annotateWithType(TreeNode node, Expression receiver) {
-    try {
-      _metadata.mapping[node] = new CallSiteAttributesMetadata(
-          receiverType: receiver.getStaticType(env));
-    } catch (e) {
-      // TODO(dartbug.com/34496) Currently getStaticType is unreliable due to
-      // various issues with AST welltypedness. As a workaround we just
-      // swallow the exception.
-    }
-  }
+  visitPropertyGet(PropertyGet node) =>
+      throw 'Unexpected node ${node.runtimeType}: $node at ${node.location}';
 
   @override
-  visitPropertySet(PropertySet node) {
-    super.visitPropertySet(node);
+  visitPropertySet(PropertySet node) =>
+      throw 'Unexpected node ${node.runtimeType}: $node at ${node.location}';
+
+  @override
+  visitMethodInvocation(MethodInvocation node) =>
+      throw 'Unexpected node ${node.runtimeType}: $node at ${node.location}';
+
+  @override
+  visitInstanceSet(InstanceSet node) {
+    super.visitInstanceSet(node);
 
     if (hasGenericCovariantParameters(node.interfaceTarget)) {
-      annotateWithType(node, node.receiver);
+      annotateWithReceiver(node, node.receiver);
     }
   }
 
   @override
-  visitMethodInvocation(MethodInvocation node) {
-    super.visitMethodInvocation(node);
+  visitInstanceInvocation(InstanceInvocation node) {
+    super.visitInstanceInvocation(node);
+
+    final DartType receiverType =
+        node.receiver.getStaticType(_staticTypeContext!);
+    if (receiverType is FunctionType && node.name.text == 'call') {
+      throw 'Node ${node.runtimeType}: $node at ${node.location} has receiver'
+          ' static type $receiverType and selector \'call\'';
+    }
 
     // TODO(34162): We don't need to save the type here for calls, just whether
     // or not it's a statically-checked call.
-    if (node.name.name == 'call' ||
-        hasGenericCovariantParameters(node.interfaceTarget)) {
-      annotateWithType(node, node.receiver);
+    if (hasGenericCovariantParameters(node.interfaceTarget)) {
+      annotateWithReceiverType(node, receiverType);
+    }
+  }
+
+  @override
+  visitFunctionInvocation(FunctionInvocation node) {
+    super.visitFunctionInvocation(node);
+
+    final DartType receiverType =
+        node.receiver.getStaticType(_staticTypeContext!);
+    if (receiverType is FunctionType &&
+        node.kind == FunctionAccessKind.Function) {
+      throw 'Node ${node.runtimeType}: $node at ${node.location} has receiver'
+          ' static type $receiverType, but kind ${node.kind}';
+    }
+  }
+
+  @override
+  visitEqualsCall(EqualsCall node) {
+    super.visitEqualsCall(node);
+
+    // TODO(34162): We don't need to save the type here for calls, just whether
+    // or not it's a statically-checked call.
+    if (hasGenericCovariantParameters(node.interfaceTarget)) {
+      annotateWithReceiver(node, node.left);
     }
   }
 
@@ -93,7 +129,7 @@ class AnnotateWithStaticTypes extends RecursiveVisitor<Null> {
 
   /// Returns [true] if the given [member] has any parameters annotated with
   /// generic-covariant-impl attribute.
-  static bool hasGenericCovariantParameters(Member member) {
+  static bool hasGenericCovariantParameters(Member? member) {
     if (member is Procedure) {
       return containsGenericCovariantImpl(
               member.function.positionalParameters) ||

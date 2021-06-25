@@ -10,7 +10,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'fix_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(CreateMixinTest);
   });
@@ -21,8 +21,8 @@ class CreateMixinTest extends FixProcessorTest {
   @override
   FixKind get kind => DartFixKind.CREATE_MIXIN;
 
-  test_hasUnresolvedPrefix() async {
-    await resolveTestUnit('''
+  Future<void> test_hasUnresolvedPrefix() async {
+    await resolveTestCode('''
 main() {
   prefix.Test v = null;
   print(v);
@@ -31,17 +31,17 @@ main() {
     await assertNoFix();
   }
 
-  test_inLibraryOfPrefix() async {
-    String libCode = r'''
+  Future<void> test_inLibraryOfPrefix() async {
+    var libCode = r'''
 class A {}
 ''';
     addSource('/home/test/lib/lib.dart', libCode);
-    await resolveTestUnit('''
+    await resolveTestCode('''
 import 'lib.dart' as lib;
 
 main() {
-  lib.A a = null;
-  lib.Test t = null;
+  lib.A? a = null;
+  lib.Test? t = null;
   print('\$a \$t');
 }
 ''');
@@ -54,8 +54,8 @@ mixin Test {
     expect(change.linkedEditGroups, hasLength(1));
   }
 
-  test_innerLocalFunction() async {
-    await resolveTestUnit('''
+  Future<void> test_innerLocalFunction() async {
+    await resolveTestCode('''
 f() {
   g() {
     Test v = null;
@@ -79,8 +79,8 @@ mixin Test {
     assertLinkedGroup(change.linkedEditGroups[0], ['Test v =', 'Test {']);
   }
 
-  test_instanceCreation_withNew() async {
-    await resolveTestUnit('''
+  Future<void> test_instanceCreation_withNew() async {
+    await resolveTestCode('''
 main() {
   new Test();
 }
@@ -88,8 +88,8 @@ main() {
     await assertNoFix();
   }
 
-  test_instanceCreation_withoutNew() async {
-    await resolveTestUnit('''
+  Future<void> test_instanceCreation_withoutNew() async {
+    await resolveTestCode('''
 main() {
   Test();
 }
@@ -97,8 +97,8 @@ main() {
     await assertNoFix();
   }
 
-  test_itemOfList() async {
-    await resolveTestUnit('''
+  Future<void> test_itemOfList() async {
+    await resolveTestCode('''
 main() {
   var a = [Test];
   print(a);
@@ -116,8 +116,8 @@ mixin Test {
     assertLinkedGroup(change.linkedEditGroups[0], ['Test];', 'Test {']);
   }
 
-  test_itemOfList_inAnnotation() async {
-    await resolveTestUnit('''
+  Future<void> test_itemOfList_inAnnotation() async {
+    await resolveTestCode('''
 class MyAnnotation {
   const MyAnnotation(a, b);
 }
@@ -134,13 +134,13 @@ main() {}
 mixin Test {
 }
 ''', errorFilter: (error) {
-      return error.errorCode == StaticWarningCode.UNDEFINED_IDENTIFIER;
+      return error.errorCode == CompileTimeErrorCode.UNDEFINED_IDENTIFIER;
     });
     assertLinkedGroup(change.linkedEditGroups[0], ['Test])', 'Test {']);
   }
 
-  test_simple() async {
-    await resolveTestUnit('''
+  Future<void> test_simple() async {
+    await resolveTestCode('''
 main() {
   Test v = null;
   print(v);

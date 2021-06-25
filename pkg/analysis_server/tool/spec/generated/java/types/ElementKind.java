@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, the Dart project authors. Please see the AUTHORS file
+ * Copyright (c) 2019, the Dart project authors. Please see the AUTHORS file
  * for details. All rights reserved. Use of this source code is governed by a
  * BSD-style license that can be found in the LICENSE file.
  *
@@ -28,6 +28,8 @@ public class ElementKind {
   public static final String ENUM = "ENUM";
 
   public static final String ENUM_CONSTANT = "ENUM_CONSTANT";
+
+  public static final String EXTENSION = "EXTENSION";
 
   public static final String FIELD = "FIELD";
 
@@ -58,6 +60,8 @@ public class ElementKind {
   public static final String SETTER = "SETTER";
 
   public static final String TOP_LEVEL_VARIABLE = "TOP_LEVEL_VARIABLE";
+
+  public static final String TYPE_ALIAS = "TYPE_ALIAS";
 
   public static final String TYPE_PARAMETER = "TYPE_PARAMETER";
 

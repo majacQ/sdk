@@ -4,22 +4,21 @@
 
 part of masks;
 
-/**
- * A [MapTypeMask] is a [TypeMask] for a specific allocation
- * site of a map (currently only internal Map class) that will get specialized
- * once the [TypeGraphInferrer] phase finds a key and/or value type for it.
- */
+/// A [MapTypeMask] is a [TypeMask] for a specific allocation
+/// site of a map (currently only internal Map class) that will get specialized
+/// once the [TypeGraphInferrer] phase finds a key and/or value type for it.
 class MapTypeMask extends AllocationTypeMask {
   /// Tag used for identifying serialized [MapTypeMask] objects in a
   /// debugging data stream.
   static const String tag = 'map-type-mask';
 
+  @override
   final TypeMask forwardTo;
 
-  // The [Node] where this type mask was created.
-  final ir.TreeNode allocationNode;
+  @override
+  final ir.Node allocationNode;
 
-  // The [MemberEntity] where this type mask was created.
+  @override
   final MemberEntity allocationElement;
 
   // The value type of this map.
@@ -33,19 +32,20 @@ class MapTypeMask extends AllocationTypeMask {
 
   /// Deserializes a [MapTypeMask] object from [source].
   factory MapTypeMask.readFromDataSource(
-      DataSource source, JClosedWorld closedWorld) {
+      DataSource source, CommonMasks domain) {
     source.begin(tag);
-    TypeMask forwardTo = new TypeMask.readFromDataSource(source, closedWorld);
+    TypeMask forwardTo = new TypeMask.readFromDataSource(source, domain);
     ir.TreeNode allocationNode = source.readTreeNodeOrNull();
     MemberEntity allocationElement = source.readMemberOrNull();
-    TypeMask keyType = new TypeMask.readFromDataSource(source, closedWorld);
-    TypeMask valueType = new TypeMask.readFromDataSource(source, closedWorld);
+    TypeMask keyType = new TypeMask.readFromDataSource(source, domain);
+    TypeMask valueType = new TypeMask.readFromDataSource(source, domain);
     source.end(tag);
     return new MapTypeMask(
         forwardTo, allocationNode, allocationElement, keyType, valueType);
   }
 
   /// Serializes this [MapTypeMask] to [sink].
+  @override
   void writeToDataSink(DataSink sink) {
     sink.writeEnum(TypeMaskKind.map);
     sink.begin(tag);
@@ -57,6 +57,7 @@ class MapTypeMask extends AllocationTypeMask {
     sink.end(tag);
   }
 
+  @override
   TypeMask nullable() {
     return isNullable
         ? this
@@ -64,6 +65,7 @@ class MapTypeMask extends AllocationTypeMask {
             allocationElement, keyType, valueType);
   }
 
+  @override
   TypeMask nonNullable() {
     return isNullable
         ? new MapTypeMask(forwardTo.nonNullable(), allocationNode,
@@ -71,10 +73,14 @@ class MapTypeMask extends AllocationTypeMask {
         : this;
   }
 
+  @override
   bool get isContainer => false;
+  @override
   bool get isMap => true;
+  @override
   bool get isExact => true;
 
+  @override
   bool equalsDisregardNull(other) {
     if (other is! MapTypeMask) return false;
     return super.equalsDisregardNull(other) &&
@@ -83,13 +89,15 @@ class MapTypeMask extends AllocationTypeMask {
         valueType == other.valueType;
   }
 
-  TypeMask intersection(TypeMask other, JClosedWorld closedWorld) {
-    TypeMask forwardIntersection = forwardTo.intersection(other, closedWorld);
+  @override
+  TypeMask intersection(TypeMask other, CommonMasks domain) {
+    TypeMask forwardIntersection = forwardTo.intersection(other, domain);
     if (forwardIntersection.isEmptyOrNull) return forwardIntersection;
     return forwardIntersection.isNullable ? nullable() : nonNullable();
   }
 
-  TypeMask union(dynamic other, JClosedWorld closedWorld) {
+  @override
+  TypeMask union(dynamic other, CommonMasks domain) {
     if (this == other) {
       return this;
     } else if (equalsDisregardNull(other)) {
@@ -101,9 +109,9 @@ class MapTypeMask extends AllocationTypeMask {
         other.keyType != null &&
         valueType != null &&
         other.valueType != null) {
-      TypeMask newKeyType = keyType.union(other.keyType, closedWorld);
-      TypeMask newValueType = valueType.union(other.valueType, closedWorld);
-      TypeMask newForwardTo = forwardTo.union(other.forwardTo, closedWorld);
+      TypeMask newKeyType = keyType.union(other.keyType, domain);
+      TypeMask newValueType = valueType.union(other.valueType, domain);
+      TypeMask newForwardTo = forwardTo.union(other.forwardTo, domain);
       return new MapTypeMask(
           newForwardTo, null, null, newKeyType, newValueType);
     } else if (other.isDictionary) {
@@ -111,11 +119,11 @@ class MapTypeMask extends AllocationTypeMask {
       // doesn't need the compiler.
       assert(other.keyType ==
           new TypeMask.nonNullExact(
-              closedWorld.commonElements.jsStringClass, closedWorld));
-      TypeMask newKeyType = keyType.union(other.keyType, closedWorld);
+              domain.commonElements.jsStringClass, domain._closedWorld));
+      TypeMask newKeyType = keyType.union(other.keyType, domain);
       TypeMask newValueType =
-          other.typeMap.values.fold(keyType, (p, n) => p.union(n, closedWorld));
-      TypeMask newForwardTo = forwardTo.union(other.forwardTo, closedWorld);
+          other.typeMap.values.fold(keyType, (p, n) => p.union(n, domain));
+      TypeMask newForwardTo = forwardTo.union(other.forwardTo, domain);
       MapTypeMask newMapTypeMask = new MapTypeMask(
           newForwardTo,
           allocationNode == other.allocationNode ? allocationNode : null,
@@ -126,17 +134,20 @@ class MapTypeMask extends AllocationTypeMask {
           newValueType);
       return newMapTypeMask;
     } else {
-      return forwardTo.union(other, closedWorld);
+      return forwardTo.union(other, domain);
     }
   }
 
+  @override
   bool operator ==(other) => super == other;
 
+  @override
   int get hashCode {
     return computeHashCode(
         allocationNode, isNullable, keyType, valueType, forwardTo);
   }
 
+  @override
   String toString() {
     return 'Map($forwardTo, key: $keyType, value: $valueType)';
   }

@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE.md file.
 
+// @dart = 2.9
+
 library fasta.test.incremental_dynamic_test;
 
 import 'package:async_helper/async_helper.dart' show asyncTest;
@@ -35,9 +37,10 @@ void diagnosticMessageHandler(DiagnosticMessage message) {
 test({bool sdkFromSource}) async {
   final CompilerOptions optionBuilder = new CompilerOptions()
     ..packagesFileUri = Uri.base.resolve(".packages")
-    ..target = new VmTarget(new TargetFlags(legacyMode: true))
-    ..legacyMode = true
-    ..onDiagnostic = diagnosticMessageHandler;
+    ..target = new VmTarget(new TargetFlags())
+    ..omitPlatform = true
+    ..onDiagnostic = diagnosticMessageHandler
+    ..environmentDefines = const {};
 
   if (sdkFromSource) {
     optionBuilder.librariesSpecificationUri =
@@ -45,10 +48,11 @@ test({bool sdkFromSource}) async {
   } else {
     optionBuilder.sdkSummary =
         computePlatformBinariesLocation(forceBuildDir: true)
-            .resolve("vm_platform.dill");
+            .resolve("vm_platform_strong.dill");
   }
 
-  final Uri helloDart = Uri.base.resolve("pkg/front_end/testcases/hello.dart");
+  final Uri helloDart =
+      Uri.base.resolve("pkg/front_end/testcases/general/hello.dart");
 
   final ProcessedOptions options =
       new ProcessedOptions(options: optionBuilder, inputs: [helloDart]);
@@ -71,12 +75,12 @@ test({bool sdkFromSource}) async {
 
   compiler.invalidate(helloDart);
 
-  component = await compiler.computeDelta(entryPoint: helloDart);
+  component = await compiler.computeDelta(entryPoints: [helloDart]);
   // Expect that the new component contains exactly hello.dart
   Expect.isTrue(
       component.libraries.length == 1, "${component.libraries.length} != 1");
 
-  component = await compiler.computeDelta(entryPoint: helloDart);
+  component = await compiler.computeDelta(entryPoints: [helloDart]);
   Expect.isTrue(component.libraries.isEmpty);
 }
 

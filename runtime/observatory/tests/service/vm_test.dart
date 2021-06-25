@@ -3,19 +3,22 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:observatory/service_io.dart';
-import 'package:unittest/unittest.dart';
+import 'package:test/test.dart';
 import 'test_helper.dart';
 
 var tests = <IsolateTest>[
-  (Isolate isolate) {
-    VM vm = isolate.owner;
+  (Isolate isolate) async {
+    VM vm = isolate.owner as VM;
     expect(vm.targetCPU, isNotNull);
     expect(vm.architectureBits == 32 || vm.architectureBits == 64, isTrue);
     expect(vm.embedder, equals("Dart VM"));
+    expect(vm.currentMemory, isNotNull);
+    expect(vm.currentMemory, greaterThan(0));
     expect(vm.currentRSS, isNotNull);
     expect(vm.currentRSS, greaterThan(0));
     expect(vm.maxRSS, isNotNull);
     expect(vm.maxRSS, greaterThan(0));
+    expect(vm.maxRSS, greaterThanOrEqualTo(vm.currentRSS));
   },
 ];
 

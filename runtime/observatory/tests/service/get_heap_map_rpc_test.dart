@@ -3,7 +3,7 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:observatory/service_io.dart';
-import 'package:unittest/unittest.dart';
+import 'package:test/test.dart';
 
 import 'test_helper.dart';
 
@@ -17,7 +17,7 @@ var tests = <IsolateTest>[
     expect(result['pageSizeBytes'], isPositive);
     expect(result['classList'], isNotNull);
     expect(result['pages'].length, isPositive);
-    expect(result['pages'][0]['objectStart'], new isInstanceOf<String>());
+    expect(result['pages'][0]['objectStart'], isA<String>());
     expect(result['pages'][0]['objects'].length, isPositive);
     expect(result['pages'][0]['objects'][0], isPositive);
   },
@@ -30,7 +30,7 @@ var tests = <IsolateTest>[
     expect(result['pageSizeBytes'], isPositive);
     expect(result['classList'], isNotNull);
     expect(result['pages'].length, isPositive);
-    expect(result['pages'][0]['objectStart'], new isInstanceOf<String>());
+    expect(result['pages'][0]['objectStart'], isA<String>());
     expect(result['pages'][0]['objects'].length, isPositive);
     expect(result['pages'][0]['objects'][0], isPositive);
   },
@@ -43,7 +43,7 @@ var tests = <IsolateTest>[
     expect(result['pageSizeBytes'], isPositive);
     expect(result['classList'], isNotNull);
     expect(result['pages'].length, isPositive);
-    expect(result['pages'][0]['objectStart'], new isInstanceOf<String>());
+    expect(result['pages'][0]['objectStart'], isA<String>());
     expect(result['pages'][0]['objects'].length, isPositive);
     expect(result['pages'][0]['objects'][0], isPositive);
   },
@@ -56,7 +56,7 @@ var tests = <IsolateTest>[
     expect(result['pageSizeBytes'], isPositive);
     expect(result['classList'], isNotNull);
     expect(result['pages'].length, isPositive);
-    expect(result['pages'][0]['objectStart'], new isInstanceOf<String>());
+    expect(result['pages'][0]['objectStart'], isA<String>());
     expect(result['pages'][0]['objects'].length, isPositive);
     expect(result['pages'][0]['objects'][0], isPositive);
   },

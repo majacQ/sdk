@@ -5,11 +5,12 @@
 part of dart.core;
 
 /// Prints a string representation of the object to the console.
-void print(Object object) {
-  String line = "$object";
-  if (printToZone == null) {
+void print(Object? object) {
+  String line = object.toString();
+  var toZone = printToZone;
+  if (toZone == null) {
     printToConsole(line);
   } else {
-    printToZone(line);
+    toZone(line);
   }
 }

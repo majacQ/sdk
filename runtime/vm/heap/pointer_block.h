@@ -7,44 +7,47 @@
 
 #include "platform/assert.h"
 #include "vm/globals.h"
+#include "vm/os_thread.h"
+#include "vm/tagged_pointer.h"
 
 namespace dart {
 
 // Forward declarations.
 class Isolate;
-class Mutex;
-class RawObject;
 class ObjectPointerVisitor;
 
-// A set of RawObject*. Must be emptied before destruction (using Pop/Reset).
+// A set of ObjectPtr. Must be emptied before destruction (using Pop/Reset).
 template <int Size>
-class PointerBlock {
+class PointerBlock : public MallocAllocated {
  public:
   enum { kSize = Size };
 
   void Reset() {
     top_ = 0;
-    next_ = NULL;
+    next_ = nullptr;
   }
 
   PointerBlock<Size>* next() const { return next_; }
+  void set_next(PointerBlock<Size>* next) { next_ = next; }
 
   intptr_t Count() const { return top_; }
   bool IsFull() const { return Count() == kSize; }
   bool IsEmpty() const { return Count() == 0; }
 
-  void Push(RawObject* obj) {
+  void Push(ObjectPtr obj) {
     ASSERT(!IsFull());
     pointers_[top_++] = obj;
   }
 
-  RawObject* Pop() {
+  ObjectPtr Pop() {
     ASSERT(!IsEmpty());
     return pointers_[--top_];
   }
 
 #if defined(TESTING)
-  bool Contains(RawObject* obj) const {
+  bool Contains(ObjectPtr obj) const {
+    // Generated code appends to store buffers; tell MemorySanitizer.
+    MSAN_UNPOISON(this, sizeof(*this));
     for (intptr_t i = 0; i < Count(); i++) {
       if (pointers_[i] == obj) {
         return true;
@@ -62,14 +65,14 @@ class PointerBlock {
   void VisitObjectPointers(ObjectPointerVisitor* visitor);
 
  private:
-  PointerBlock() : next_(NULL), top_(0) {}
+  PointerBlock() : next_(nullptr), top_(0) {}
   ~PointerBlock() {
     ASSERT(IsEmpty());  // Guard against unintentionally discarding pointers.
   }
 
   PointerBlock<Size>* next_;
   int32_t top_;
-  RawObject* pointers_[kSize];
+  ObjectPtr pointers_[kSize];
 
   template <int>
   friend class BlockStack;
@@ -98,22 +101,24 @@ class BlockStack {
   Block* PopNonEmptyBlock();
 
   // Pops and returns all non-empty blocks as a linked list (owned by caller).
-  Block* Blocks();
+  Block* TakeBlocks();
 
   // Discards the contents of all non-empty blocks.
   void Reset();
 
   bool IsEmpty();
 
+  Block* WaitForWork(RelaxedAtomic<uintptr_t>* num_busy);
+
  protected:
   class List {
    public:
-    List() : head_(NULL), length_(0) {}
+    List() : head_(nullptr), length_(0) {}
     ~List();
     void Push(Block* block);
     Block* Pop();
     intptr_t length() const { return length_; }
-    bool IsEmpty() const { return head_ == NULL; }
+    bool IsEmpty() const { return head_ == nullptr; }
     Block* PopAll();
     Block* Peek() { return head_; }
 
@@ -123,6 +128,8 @@ class BlockStack {
     DISALLOW_COPY_AND_ASSIGN(List);
   };
 
+  bool IsEmptyLocked();
+
   // Adds and transfers ownership of the block to the buffer.
   void PushBlockImpl(Block* block);
 
@@ -131,7 +138,7 @@ class BlockStack {
 
   List full_;
   List partial_;
-  Mutex* mutex_;
+  Monitor monitor_;
 
   // Note: This is shared on the basis of block size.
   static const intptr_t kMaxGlobalEmpty = 100;
@@ -140,6 +147,98 @@ class BlockStack {
 
  private:
   DISALLOW_COPY_AND_ASSIGN(BlockStack);
+};
+
+template <typename Stack>
+class BlockWorkList : public ValueObject {
+ public:
+  typedef typename Stack::Block Block;
+
+  explicit BlockWorkList(Stack* stack) : stack_(stack) {
+    local_output_ = stack_->PopEmptyBlock();
+    local_input_ = stack_->PopEmptyBlock();
+  }
+
+  ~BlockWorkList() {
+    ASSERT(local_output_ == nullptr);
+    ASSERT(local_input_ == nullptr);
+    ASSERT(stack_ == nullptr);
+  }
+
+  // Returns nullptr if no more work was found.
+  ObjectPtr Pop() {
+    ASSERT(local_input_ != nullptr);
+    if (UNLIKELY(local_input_->IsEmpty())) {
+      if (!local_output_->IsEmpty()) {
+        auto temp = local_output_;
+        local_output_ = local_input_;
+        local_input_ = temp;
+      } else {
+        Block* new_work = stack_->PopNonEmptyBlock();
+        if (new_work == nullptr) {
+          return nullptr;
+        }
+        stack_->PushBlock(local_input_);
+        local_input_ = new_work;
+        // Generated code appends to marking stacks; tell MemorySanitizer.
+        MSAN_UNPOISON(local_input_, sizeof(*local_input_));
+      }
+    }
+    return local_input_->Pop();
+  }
+
+  void Push(ObjectPtr raw_obj) {
+    if (UNLIKELY(local_output_->IsFull())) {
+      stack_->PushBlock(local_output_);
+      local_output_ = stack_->PopEmptyBlock();
+    }
+    local_output_->Push(raw_obj);
+  }
+
+  bool WaitForWork(RelaxedAtomic<uintptr_t>* num_busy) {
+    ASSERT(local_input_->IsEmpty());
+    Block* new_work = stack_->WaitForWork(num_busy);
+    if (new_work == NULL) {
+      return false;
+    }
+    stack_->PushBlock(local_input_);
+    local_input_ = new_work;
+    return true;
+  }
+
+  void Finalize() {
+    ASSERT(local_output_->IsEmpty());
+    stack_->PushBlock(local_output_);
+    local_output_ = nullptr;
+    ASSERT(local_input_->IsEmpty());
+    stack_->PushBlock(local_input_);
+    local_input_ = nullptr;
+    // Fail fast on attempts to mark after finalizing.
+    stack_ = nullptr;
+  }
+
+  void AbandonWork() {
+    stack_->PushBlock(local_output_);
+    local_output_ = nullptr;
+    stack_->PushBlock(local_input_);
+    local_input_ = nullptr;
+    stack_ = nullptr;
+  }
+
+  bool IsEmpty() {
+    if (!local_input_->IsEmpty()) {
+      return false;
+    }
+    if (!local_output_->IsEmpty()) {
+      return false;
+    }
+    return stack_->IsEmpty();
+  }
+
+ private:
+  Block* local_output_;
+  Block* local_input_;
+  Stack* stack_;
 };
 
 static const int kStoreBufferBlockSize = 1024;
@@ -174,6 +273,19 @@ class MarkingStack : public BlockStack<kMarkingStackBlockSize> {
 };
 
 typedef MarkingStack::Block MarkingStackBlock;
+typedef BlockWorkList<MarkingStack> MarkerWorkList;
+
+static const int kPromotionStackBlockSize = 64;
+class PromotionStack : public BlockStack<kPromotionStackBlockSize> {
+ public:
+  // Adds and transfers ownership of the block to the buffer.
+  void PushBlock(Block* block) {
+    BlockStack<Block::kSize>::PushBlockImpl(block);
+  }
+};
+
+typedef PromotionStack::Block PromotionStackBlock;
+typedef BlockWorkList<PromotionStack> PromotionWorkList;
 
 }  // namespace dart
 

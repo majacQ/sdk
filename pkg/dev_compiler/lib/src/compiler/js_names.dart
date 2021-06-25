@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import 'dart:collection';
 
 import '../js_ast/js_ast.dart';
@@ -29,7 +31,9 @@ class TemporaryId extends Identifier {
   //
   // However we may need to fix this if we want hover to work well for things
   // like library prefixes and field-initializing formals.
-  get sourceInformation => null;
+  @override
+  dynamic get sourceInformation => null;
+  @override
   set sourceInformation(Object obj) {}
 
   TemporaryId(String name) : super(name);
@@ -60,11 +64,25 @@ class MaybeQualifiedId extends Expression {
     }
   }
 
+  @override
   int get precedenceLevel => _expr.precedenceLevel;
 
+  @override
   T accept<T>(NodeVisitor<T> visitor) => _expr.accept(visitor);
 
+  @override
   void visitChildren(NodeVisitor visitor) => _expr.visitChildren(visitor);
+}
+
+/// Provides a mechanism to listen for naming choices when `Identifier` nodes
+/// are compiled into an actual name in the JavaScript.
+class NameListener {
+  /// A mapping of all name selections that were made.
+  final identifierNames = <Identifier, String>{};
+
+  /// Signals that [name] was selected to represent [identifier].
+  void nameSelected(Identifier identifier, String name) =>
+      identifierNames[identifier] = name;
 }
 
 /// This class has two purposes:
@@ -81,18 +99,28 @@ class MaybeQualifiedId extends Expression {
 class TemporaryNamer extends LocalNamer {
   _FunctionScope scope;
 
-  TemporaryNamer(Node node) : scope = _RenameVisitor.build(node).rootScope;
+  /// Listener to be notified when a name is selected (rename or not) for an
+  /// `Identifier`.
+  ///
+  /// Can be `null` when there is no listener attached.
+  final NameListener _nameListener;
 
+  TemporaryNamer(Node node, [this._nameListener])
+      : scope = _RenameVisitor.build(node).rootScope;
+
+  @override
   String getName(Identifier node) {
-    var rename = scope.renames[identifierKey(node)];
-    if (rename != null) return rename;
-    return node.name;
+    var name = scope.renames[identifierKey(node)] ?? node.name;
+    _nameListener?.nameSelected(node, name);
+    return name;
   }
 
+  @override
   void enterScope(Node node) {
     scope = scope.childScopes[node];
   }
 
+  @override
   void leaveScope() {
     scope = scope.parent;
   }
@@ -115,7 +143,7 @@ class _FunctionScope {
 
   /// Nested scopes, these are visited after everything else so the names
   /// they might need are in scope.
-  final childScopes = Map<Node, _FunctionScope>();
+  final childScopes = <Node, _FunctionScope>{};
 
   /// New names assigned for temps and identifiers.
   final renames = HashMap<Object, String>();
@@ -125,7 +153,7 @@ class _FunctionScope {
 
 /// Collects all names used in the visited tree.
 class _RenameVisitor extends VariableDeclarationVisitor {
-  final pendingRenames = Map<Object, Set<_FunctionScope>>();
+  final pendingRenames = <Object, Set<_FunctionScope>>{};
 
   final _FunctionScope globalScope = _FunctionScope(null);
   final _FunctionScope rootScope = _FunctionScope(null);
@@ -138,7 +166,8 @@ class _RenameVisitor extends VariableDeclarationVisitor {
     _finishNames();
   }
 
-  declare(Identifier node) {
+  @override
+  void declare(Identifier node) {
     var id = identifierKey(node);
     var notAlreadyDeclared = scope.declared.add(id);
     // Normal identifiers can be declared multiple times, because we don't
@@ -147,7 +176,8 @@ class _RenameVisitor extends VariableDeclarationVisitor {
     _markUsed(node, id, scope);
   }
 
-  visitIdentifier(Identifier node) {
+  @override
+  void visitIdentifier(Identifier node) {
     var id = identifierKey(node);
 
     // Find where the node was declared.
@@ -163,10 +193,10 @@ class _RenameVisitor extends VariableDeclarationVisitor {
     _markUsed(node, id, declScope);
   }
 
-  _markUsed(Identifier node, Object id, _FunctionScope declScope) {
+  void _markUsed(Identifier node, Object id, _FunctionScope declScope) {
     // If it needs rename, we can't add it to the used name set yet, instead we
     // will record all scopes it is visible in.
-    Set<_FunctionScope> usedIn = null;
+    Set<_FunctionScope> usedIn;
     var rename = declScope != globalScope && needsRename(node);
     if (rename) {
       usedIn = pendingRenames.putIfAbsent(id, () => HashSet());
@@ -180,12 +210,14 @@ class _RenameVisitor extends VariableDeclarationVisitor {
     }
   }
 
-  visitFunctionExpression(FunctionExpression node) {
+  @override
+  void visitFunctionExpression(FunctionExpression node) {
     // Visit nested functions after all identifiers are declared.
     scope.childScopes[node] = _FunctionScope(scope);
   }
 
-  visitClassExpression(ClassExpression node) {
+  @override
+  void visitClassExpression(ClassExpression node) {
     scope.childScopes[node] = _FunctionScope(scope);
   }
 
@@ -195,7 +227,7 @@ class _RenameVisitor extends VariableDeclarationVisitor {
       if (node is FunctionExpression) {
         super.visitFunctionExpression(node);
       } else {
-        super.visitClassExpression(node);
+        super.visitClassExpression(node as ClassExpression);
       }
       _finishScopes();
       scope = scope.parent;
@@ -232,11 +264,11 @@ class _RenameVisitor extends VariableDeclarationVisitor {
       // If collisions become common we need a better search.
       // TODO(jmesserly): what's the most readable scheme here? Maybe 1-letter
       // names in some cases?
-      candidate = name == 'function' ? 'func' : '${name}\$';
-      for (int i = 0;
+      candidate = name == 'function' ? 'func' : '$name\$';
+      for (var i = 0;
           scopes.any((scope) => scope.used.contains(candidate));
           i++) {
-        candidate = '${name}\$$i';
+        candidate = '$name\$$i';
       }
     }
     return candidate;
@@ -254,56 +286,55 @@ Object /*String|TemporaryId*/ identifierKey(Identifier node) =>
 bool invalidVariableName(String keyword, {bool strictMode = true}) {
   switch (keyword) {
     // http://www.ecma-international.org/ecma-262/6.0/#sec-future-reserved-words
-    case "await":
+    case 'await':
 
-    case "break":
-    case "case":
-    case "catch":
-    case "class":
-    case "const":
-    case "continue":
-    case "debugger":
-    case "default":
-    case "delete":
-    case "do":
-    case "else":
-    case "enum":
-    case "export":
-    case "extends":
-    case "finally":
-    case "for":
-    case "function":
-    case "if":
-    case "import":
-    case "in":
-    case "instanceof":
-    case "let":
-    case "new":
-    case "return":
-    case "super":
-    case "switch":
-    case "this":
-    case "throw":
-    case "try":
-    case "typeof":
-    case "var":
-    case "void":
-    case "while":
-    case "with":
+    case 'break':
+    case 'case':
+    case 'catch':
+    case 'class':
+    case 'const':
+    case 'continue':
+    case 'debugger':
+    case 'default':
+    case 'delete':
+    case 'do':
+    case 'else':
+    case 'enum':
+    case 'export':
+    case 'extends':
+    case 'finally':
+    case 'for':
+    case 'function':
+    case 'if':
+    case 'import':
+    case 'in':
+    case 'instanceof':
+    case 'new':
+    case 'return':
+    case 'super':
+    case 'switch':
+    case 'this':
+    case 'throw':
+    case 'try':
+    case 'typeof':
+    case 'var':
+    case 'void':
+    case 'while':
+    case 'with':
       return true;
-    case "arguments":
-    case "eval":
+    case 'arguments':
+    case 'eval':
     // http://www.ecma-international.org/ecma-262/6.0/#sec-future-reserved-words
     // http://www.ecma-international.org/ecma-262/6.0/#sec-identifiers-static-semantics-early-errors
-    case "implements":
-    case "interface":
-    case "let":
-    case "package":
-    case "private":
-    case "protected":
-    case "public":
-    case "static":
-    case "yield":
+    case 'implements':
+    case 'interface':
+    case 'let':
+    case 'package':
+    case 'private':
+    case 'protected':
+    case 'public':
+    case 'static':
+    case 'yield':
       return strictMode;
   }
   return false;
@@ -318,11 +349,11 @@ bool invalidVariableName(String keyword, {bool strictMode = true}) {
 /// class syntax.
 bool isFunctionPrototypeGetter(String name) {
   switch (name) {
-    case "arguments":
-    case "caller":
-    case "callee":
-    case "name":
-    case "length":
+    case 'arguments':
+    case 'caller':
+    case 'callee':
+    case 'name':
+    case 'length':
       return true;
   }
   return false;
@@ -332,20 +363,20 @@ bool isFunctionPrototypeGetter(String name) {
 ///
 /// http://www.ecma-international.org/ecma-262/6.0/#sec-properties-of-the-object-prototype-object
 /// http://www.ecma-international.org/ecma-262/6.0/#sec-additional-properties-of-the-object.prototype-object
-final objectProperties = <String>[
-  "constructor",
-  "toString",
-  "toLocaleString",
-  "valueOf",
-  "hasOwnProperty",
-  "isPrototypeOf",
-  "propertyIsEnumerable",
-  "__defineGetter__",
-  "__lookupGetter__",
-  "__defineSetter__",
-  "__lookupSetter__",
-  "__proto__"
-].toSet();
+final objectProperties = <String>{
+  'constructor',
+  'toString',
+  'toLocaleString',
+  'valueOf',
+  'hasOwnProperty',
+  'isPrototypeOf',
+  'propertyIsEnumerable',
+  '__defineGetter__',
+  '__lookupGetter__',
+  '__defineSetter__',
+  '__lookupSetter__',
+  '__proto__'
+};
 
 /// Returns the JS member name for a public Dart instance member, before it
 /// is symbolized; generally you should use [_emitMemberName] or
@@ -386,6 +417,7 @@ final friendlyNameForDartOperator = {
   '&': 'bitAnd',
   '<<': 'leftShift',
   '>>': 'rightShift',
+  '>>>': 'tripleShift',
   '~': 'bitNot',
   // These ones are always renamed, hence the choice of `_` to avoid conflict
   // with Dart names. See _emitMemberName.
@@ -394,3 +426,32 @@ final friendlyNameForDartOperator = {
   '[]=': '_set',
   'unary-': '_negate',
 };
+
+// Invalid characters for identifiers, which would need to be escaped.
+final invalidCharInIdentifier = RegExp(r'[^A-Za-z_$0-9]');
+
+/// Escape [name] to make it into a valid identifier.
+String toJSIdentifier(String name) {
+  if (name.isEmpty) return r'$';
+
+  // Escape any invalid characters
+  StringBuffer buffer;
+  for (var i = 0; i < name.length; i++) {
+    var ch = name[i];
+    var needsEscape = ch == r'$' || invalidCharInIdentifier.hasMatch(ch);
+    if (needsEscape && buffer == null) {
+      buffer = StringBuffer(name.substring(0, i));
+    }
+    if (buffer != null) {
+      buffer.write(needsEscape ? '\$${ch.codeUnits.join("")}' : ch);
+    }
+  }
+
+  var result = buffer != null ? '$buffer' : name;
+  // Ensure the identifier first character is not numeric and that the whole
+  // identifier is not a keyword.
+  if (result.startsWith(RegExp('[0-9]')) || invalidVariableName(result)) {
+    return '\$$result';
+  }
+  return result;
+}

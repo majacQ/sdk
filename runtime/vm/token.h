@@ -14,7 +14,7 @@ namespace dart {
 //
 //  14  multiplicative  * / ~/ %
 //  13  additive        + -
-//  12  shift           << >>
+//  12  shift           << >> >>>
 //  11  bitwise and     &
 //  10  bitwise xor     ^
 //   9  bitwise or      |
@@ -24,7 +24,7 @@ namespace dart {
 //   5  logical or      ||
 //   4  null check      ??
 //   3  conditional     ?
-//   2  assignment      = *= /= ~/= %= += -= <<= >>= &= ^= |= ??=
+//   2  assignment      = *= /= ~/= %= += -= <<= >>= >>>= &= ^= |= ??=
 //   1  comma           ,
 
 // Token definitions.
@@ -57,6 +57,7 @@ namespace dart {
   TOK(kASSIGN_AND, "&=", 2, kNoAttribute)                                      \
   TOK(kASSIGN_SHL, "<<=", 2, kNoAttribute)                                     \
   TOK(kASSIGN_SHR, ">>=", 2, kNoAttribute)                                     \
+  TOK(kASSIGN_USHR, ">>>=", 2, kNoAttribute)                                   \
   TOK(kASSIGN_ADD, "+=", 2, kNoAttribute)                                      \
   TOK(kASSIGN_SUB, "-=", 2, kNoAttribute)                                      \
   TOK(kASSIGN_MUL, "*=", 2, kNoAttribute)                                      \
@@ -79,6 +80,7 @@ namespace dart {
   /* Shift operators. */                                                       \
   TOK(kSHL, "<<", 12, kNoAttribute)                                            \
   TOK(kSHR, ">>", 12, kNoAttribute)                                            \
+  TOK(kUSHR, ">>>", 12, kNoAttribute)                                          \
                                                                                \
   /* Additive operators. */                                                    \
   TOK(kADD, "+", 13, kNoAttribute)                                             \
@@ -259,6 +261,19 @@ class Token {
     return tok_str_[tok];
   }
 
+  static bool FromStr(const char* str, Kind* out) {
+    ASSERT(str != nullptr && out != nullptr);
+#define TOK_CASE(t, s, p, a)                                                   \
+  if (strcmp(str, tok_str_[(t)]) == 0) {                                       \
+    *out = (t);                                                                \
+    return true;                                                               \
+  }
+    DART_TOKEN_LIST(TOK_CASE)
+    DART_KEYWORD_LIST(TOK_CASE)
+#undef TOK_CASE
+    return false;
+  }
+
   static int Precedence(Kind tok) {
     ASSERT(tok < kNumTokens);
     return precedence_[tok];
@@ -272,8 +287,8 @@ class Token {
   static bool CanBeOverloaded(Kind tok) {
     ASSERT(tok < kNumTokens);
     return IsRelationalOperator(tok) || (tok == kEQ) ||
-           (tok >= kADD && tok <= kMOD) ||     // Arithmetic operations.
-           (tok >= kBIT_OR && tok <= kSHR) ||  // Bit operations.
+           (tok >= kADD && tok <= kMOD) ||      // Arithmetic operations.
+           (tok >= kBIT_OR && tok <= kUSHR) ||  // Bit operations.
            (tok == kINDEX) || (tok == kASSIGN_INDEX);
   }
 
@@ -322,9 +337,35 @@ class Token {
     }
   }
 
+  // For a comparison operation return an operation for the equivalent flipped
+  // comparison: a (op) b === b (op') a.
+  static Token::Kind FlipComparison(Token::Kind op) {
+    switch (op) {
+      case Token::kEQ:
+        return Token::kEQ;
+      case Token::kNE:
+        return Token::kNE;
+      case Token::kLT:
+        return Token::kGT;
+      case Token::kGT:
+        return Token::kLT;
+      case Token::kLTE:
+        return Token::kGTE;
+      case Token::kGTE:
+        return Token::kLTE;
+      case Token::kEQ_STRICT:
+        return Token::kEQ_STRICT;
+      case Token::kNE_STRICT:
+        return Token::kNE_STRICT;
+      default:
+        UNREACHABLE();
+        return Token::kILLEGAL;
+    }
+  }
+
  private:
-  static const char* name_[];
-  static const char* tok_str_[];
+  static const char* const name_[];
+  static const char* const tok_str_[];
   static const uint8_t precedence_[];
   static const Attribute attributes_[];
 };

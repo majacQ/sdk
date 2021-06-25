@@ -1,7 +1,8 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+import 'package:analyzer/dart/analysis/features.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/src/dart/error/syntactic_errors.dart';
 import 'package:test/test.dart';
@@ -16,13 +17,12 @@ main() {
     defineReflectiveTests(ModifiersTest);
     defineReflectiveTests(MultipleTypeTest);
     defineReflectiveTests(PunctuationTest);
+    defineReflectiveTests(VarianceModifierTest);
   });
 }
 
-/**
- * Test how well the parser recovers when annotations are included in places
- * where they are not allowed.
- */
+/// Test how well the parser recovers when annotations are included in places
+/// where they are not allowed.
 @reflectiveTest
 class AnnotationTest extends AbstractRecoveryTest {
   void test_typeArgument() {
@@ -32,7 +32,7 @@ class A<E> {}
 class C {
   m() => new A<@annotation C>();
 }
-''', [ParserErrorCode.UNEXPECTED_TOKEN], '''
+''', [ParserErrorCode.ANNOTATION_ON_TYPE_ARGUMENT], '''
 const annotation = null;
 class A<E> {}
 class C {
@@ -42,9 +42,7 @@ class C {
   }
 }
 
-/**
- * Test how well the parser recovers in other cases.
- */
+/// Test how well the parser recovers in other cases.
 @reflectiveTest
 class MiscellaneousTest extends AbstractRecoveryTest {
   void test_classTypeAlias_withBody() {
@@ -66,9 +64,8 @@ int get g(x) => 0;
         codes: [ParserErrorCode.GETTER_WITH_PARAMETERS]);
     validateTokenStream(unit.beginToken);
 
-    FunctionDeclaration g = unit.declarations.first;
-    var parameters = g.functionExpression.parameters;
-    expect(parameters, isNotNull);
+    var g = unit.declarations.first as FunctionDeclaration;
+    var parameters = g.functionExpression.parameters!;
     expect(parameters.parameters, hasLength(1));
   }
 
@@ -151,9 +148,7 @@ final Map v = {
   }
 }
 
-/**
- * Test how well the parser recovers when extra modifiers are provided.
- */
+/// Test how well the parser recovers when extra modifiers are provided.
 @reflectiveTest
 class ModifiersTest extends AbstractRecoveryTest {
   @failingTest
@@ -198,10 +193,8 @@ set foo(v) => 499;
   }
 }
 
-/**
- * Test how well the parser recovers when multiple type annotations are
- * provided.
- */
+/// Test how well the parser recovers when multiple type annotations are
+/// provided.
 @reflectiveTest
 class MultipleTypeTest extends AbstractRecoveryTest {
   @failingTest
@@ -217,9 +210,7 @@ String bar() { }
   }
 }
 
-/**
- * Test how well the parser recovers when there is extra punctuation.
- */
+/// Test how well the parser recovers when there is extra punctuation.
 @reflectiveTest
 class PunctuationTest extends AbstractRecoveryTest {
   @failingTest
@@ -305,5 +296,21 @@ bar() {}
 foo() {}
 bar() {}
 ''');
+  }
+}
+
+/// Test how well the parser recovers when there is extra variance modifiers.
+@reflectiveTest
+class VarianceModifierTest extends AbstractRecoveryTest {
+  void test_extraModifier_inClass() {
+    testRecovery('''
+class A<in out X> {}
+''', [ParserErrorCode.MULTIPLE_VARIANCE_MODIFIERS], '''
+class A<in X> {}
+''',
+        featureSet: FeatureSet.forTesting(
+          sdkVersion: '2.5.0',
+          additionalFeatures: [Feature.variance],
+        ));
   }
 }

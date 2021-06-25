@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import 'package:kernel/ast.dart'
     show EmptyStatement, Component, ReturnStatement, StaticInvocation;
 
@@ -11,7 +13,6 @@ import 'package:test/test.dart'
         greaterThan,
         group,
         isEmpty,
-        isFalse,
         isNotEmpty,
         isNotNull,
         isTrue,
@@ -43,8 +44,9 @@ main() {
         ..compileSdk = true // To prevent FE from loading an sdk-summary.
         ..onDiagnostic = errors.add;
 
-      var component =
-          await compileScript('main() => print("hi");', options: options);
+      Component component =
+          (await compileScript('main() => print("hi");', options: options))
+              ?.component;
       expect(component, isNotNull);
       expect(errors, isNotEmpty);
     });
@@ -56,8 +58,9 @@ main() {
             Uri.parse('org-dartlang-test:///not_existing_summary_file')
         ..onDiagnostic = errors.add;
 
-      var component =
-          await compileScript('main() => print("hi");', options: options);
+      Component component =
+          (await compileScript('main() => print("hi");', options: options))
+              ?.component;
       expect(component, isNotNull);
       expect(errors, isNotEmpty);
     });
@@ -69,10 +72,11 @@ main() {
         // contains broken URIs to ensure we do not attempt to lookup for
         // sources of the sdk directly.
         ..librariesSpecificationUri = invalidCoreLibsSpecUri;
-      var component =
-          await compileScript('main() => print("hi");', options: options);
+      Component component =
+          (await compileScript('main() => print("hi");', options: options))
+              ?.component;
       var core = component.libraries.firstWhere(isDartCoreLibrary);
-      var printMember = core.members.firstWhere((m) => m.name.name == 'print');
+      var printMember = core.members.firstWhere((m) => m.name.text == 'print');
 
       // Note: summaries created by the SDK today contain empty statements as
       // method bodies.
@@ -87,61 +91,16 @@ main() {
     });
 
     test('generated program contains source-info', () async {
-      var component = await compileScript('a() => print("hi"); main() {}',
-          fileName: 'a.dart');
+      Component component = (await compileScript(
+              'a() => print("hi"); main() {}',
+              fileName: 'a.dart'))
+          ?.component;
       // Kernel always store an empty '' key in the map, so there is always at
       // least one. Having more means that source-info is added.
       expect(component.uriToSource.keys.length, greaterThan(1));
       expect(
           component.uriToSource[Uri.parse('org-dartlang-test:///a/b/c/a.dart')],
           isNotNull);
-    });
-
-    test('code from summary dependencies are marked external', () async {
-      var component = await compileScript('a() => print("hi"); main() {}',
-          fileName: 'a.dart');
-      for (var lib in component.libraries) {
-        if (lib.importUri.scheme == 'dart') {
-          expect(lib.isExternal, isTrue);
-        }
-      }
-
-      // Pretend that the compiled code is a summary
-      var bytes = serializeComponent(component);
-      component = await compileScript(
-          {
-            'b.dart': 'import "a.dart" as m; b() => m.a(); main() {}',
-            'summary.dill': bytes
-          },
-          fileName: 'b.dart',
-          inputSummaries: ['summary.dill']);
-
-      var aLib = component.libraries
-          .firstWhere((lib) => lib.importUri.path == '/a/b/c/a.dart');
-      expect(aLib.isExternal, isTrue);
-    });
-
-    test('code from linked dependencies are not marked external', () async {
-      var component = await compileScript('a() => print("hi"); main() {}',
-          fileName: 'a.dart');
-      for (var lib in component.libraries) {
-        if (lib.importUri.scheme == 'dart') {
-          expect(lib.isExternal, isTrue);
-        }
-      }
-
-      var bytes = serializeComponent(component);
-      component = await compileScript(
-          {
-            'b.dart': 'import "a.dart" as m; b() => m.a(); main() {}',
-            'link.dill': bytes
-          },
-          fileName: 'b.dart',
-          linkedDependencies: ['link.dill']);
-
-      var aLib = component.libraries
-          .firstWhere((lib) => lib.importUri.path == '/a/b/c/a.dart');
-      expect(aLib.isExternal, isFalse);
     });
 
     // TODO(sigmund): add tests discovering libraries.json
@@ -181,7 +140,7 @@ main() {
       sources['a.dill'] = serializeComponent(unitA);
 
       var unitBC = await compileUnit(['b.dart', 'c.dart'], sources,
-          inputSummaries: ['a.dill']);
+          additionalDills: ['a.dill']);
 
       // Pretend that the compiled code is a summary
       sources['bc.dill'] = serializeComponent(unitBC);
@@ -198,11 +157,11 @@ main() {
       }
 
       var unitD1 = await compileUnit(['d.dart'], sources,
-          inputSummaries: ['a.dill', 'bc.dill']);
+          additionalDills: ['a.dill', 'bc.dill']);
       checkDCallsC(unitD1);
 
       var unitD2 = await compileUnit(['d.dart'], sources,
-          inputSummaries: ['bc.dill', 'a.dill']);
+          additionalDills: ['bc.dill', 'a.dill']);
       checkDCallsC(unitD2);
     });
 

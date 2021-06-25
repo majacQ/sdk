@@ -11,13 +11,15 @@ part of 'serialization.dart';
 class ObjectSink extends AbstractDataSink {
   List<dynamic> _data;
 
-  ObjectSink(this._data, {bool useDataKinds})
-      : super(useDataKinds: useDataKinds);
+  ObjectSink(this._data, {bool useDataKinds, Map<String, int> tagFrequencyMap})
+      : super(useDataKinds: useDataKinds, tagFrequencyMap: tagFrequencyMap);
 
+  @override
   void _begin(String tag) {
     _data.add(new Tag('begin:$tag'));
   }
 
+  @override
   void _end(String tag) {
     _data.add(new Tag('end:$tag'));
   }

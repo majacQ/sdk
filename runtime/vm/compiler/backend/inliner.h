@@ -5,8 +5,13 @@
 #ifndef RUNTIME_VM_COMPILER_BACKEND_INLINER_H_
 #define RUNTIME_VM_COMPILER_BACKEND_INLINER_H_
 
+#if defined(DART_PRECOMPILED_RUNTIME)
+#error "AOT runtime should not use compiler sources (including header files)"
+#endif  // defined(DART_PRECOMPILED_RUNTIME)
+
 #include "vm/allocation.h"
 #include "vm/growable_array.h"
+#include "vm/token_position.h"
 
 namespace dart {
 
@@ -20,27 +25,29 @@ class GraphEntryInstr;
 class ICData;
 class InstanceCallInstr;
 class Instruction;
+struct InstructionSource;
 class Precompiler;
 class StaticCallInstr;
 class TargetEntryInstr;
 
 class SpeculativeInliningPolicy {
  public:
-  explicit SpeculativeInliningPolicy(bool enable_blacklist, intptr_t limit = -1)
-      : enable_blacklist_(enable_blacklist), remaining_(limit) {}
+  explicit SpeculativeInliningPolicy(bool enable_suppression,
+                                     intptr_t limit = -1)
+      : enable_suppression_(enable_suppression), remaining_(limit) {}
 
   bool AllowsSpeculativeInlining() const {
-    return !enable_blacklist_ || remaining_ > 0;
+    return !enable_suppression_ || remaining_ > 0;
   }
 
   bool IsAllowedForInlining(intptr_t call_deopt_id) const {
-    // If we are not blacklisting, we always enable optimistic inlining.
-    if (!enable_blacklist_) {
+    // If we are not supressing, we always enable optimistic inlining.
+    if (!enable_suppression_) {
       return true;
     }
 
-    // If we have already blacklisted the deopt-id we don't allow inlining it.
-    if (IsBlacklisted(call_deopt_id)) {
+    // If we have already suppressed the deopt-id we don't allow inlining it.
+    if (IsSuppressed(call_deopt_id)) {
       return false;
     }
 
@@ -49,37 +56,37 @@ class SpeculativeInliningPolicy {
   }
 
   bool AddBlockedDeoptId(intptr_t id) {
-    ASSERT(enable_blacklist_);
+    ASSERT(enable_suppression_);
 #if defined(DEBUG)
-    ASSERT(!IsBlacklisted(id));
+    ASSERT(!IsSuppressed(id));
 #endif
 
-    // If we exhausted the number of blacklist entries there is no point
-    // in adding entries to the blacklist.
+    // If we exhausted the number of suppression entries there is no point
+    // in adding entries to the list.
     if (remaining_ <= 0) return false;
 
-    inlining_blacklist_.Add(id);
+    inlining_suppressions_.Add(id);
     remaining_ -= 1;
     return true;
   }
 
-  intptr_t length() const { return inlining_blacklist_.length(); }
+  intptr_t length() const { return inlining_suppressions_.length(); }
 
  private:
-  bool IsBlacklisted(intptr_t id) const {
-    for (intptr_t i = 0; i < inlining_blacklist_.length(); ++i) {
-      if (inlining_blacklist_[i] == id) return true;
+  bool IsSuppressed(intptr_t id) const {
+    for (intptr_t i = 0; i < inlining_suppressions_.length(); ++i) {
+      if (inlining_suppressions_[i] == id) return true;
     }
     return false;
   }
 
-  // Whether we enable blacklisting deopt-ids.
-  const bool enable_blacklist_;
+  // Whether we enable supressing inlining at specific deopt-ids.
+  const bool enable_suppression_;
 
-  // After we reach [remaining_] number of deopt-ids in [inlining_blacklist_]
-  // in the black list, we'll disable speculative inlining entirely.
+  // After we reach [remaining_] number of deopt-ids in [inlining_suppressions_]
+  // list, we'll disable speculative inlining entirely.
   intptr_t remaining_;
-  GrowableArray<intptr_t> inlining_blacklist_;
+  GrowableArray<intptr_t> inlining_suppressions_;
 };
 
 class FlowGraphInliner : ValueObject {
@@ -95,16 +102,31 @@ class FlowGraphInliner : ValueObject {
   // depth that we inlined.
   int Inline();
 
-  // Compute graph info if it was not already computed or if 'force' is true.
-  static void CollectGraphInfo(FlowGraph* flow_graph, bool force = false);
+  // Computes graph information (instruction and call site count).
+  // For the non-specialized cases (num_constants_args == 0), the
+  // method uses a cache to avoid recomputing the counts (the cached
+  // value may still be approximate but close). The 'force' flag is
+  // used to update the cached value at the end of running the full pipeline
+  // on non-specialized cases. Specialized cases (num_constants_args > 0)
+  // always recompute the counts without caching.
+  //
+  // TODO(ajcbik): cache for specific constant argument combinations too?
+  static void CollectGraphInfo(FlowGraph* flow_graph,
+                               intptr_t num_constant_args,
+                               bool force,
+                               intptr_t* instruction_count,
+                               intptr_t* call_site_count);
+
   static void SetInliningId(FlowGraph* flow_graph, intptr_t inlining_id);
 
   bool AlwaysInline(const Function& function);
 
+  static bool FunctionHasPreferInlinePragma(const Function& function);
+  static bool FunctionHasNeverInlinePragma(const Function& function);
+
   FlowGraph* flow_graph() const { return flow_graph_; }
   intptr_t NextInlineId(const Function& function,
-                        TokenPosition tp,
-                        intptr_t caller_id);
+                        const InstructionSource& source);
 
   bool trace_inlining() const { return trace_inlining_; }
 
@@ -134,11 +156,12 @@ class FlowGraphInliner : ValueObject {
                                         const Function& target,
                                         Definition* call,
                                         Definition* receiver,
-                                        TokenPosition token_pos,
+                                        const InstructionSource& source,
                                         const ICData* ic_data,
                                         GraphEntryInstr* graph_entry,
                                         FunctionEntryInstr** entry,
                                         Instruction** last,
+                                        Definition** result,
                                         SpeculativeInliningPolicy* policy,
                                         ExactnessInfo* exactness = nullptr);
 

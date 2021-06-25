@@ -22,6 +22,10 @@ Socket::Socket(intptr_t fd)
       port_(ILLEGAL_PORT),
       udp_receive_buffer_(NULL) {}
 
+void Socket::CloseFd() {
+  SetClosedFd();
+}
+
 void Socket::SetClosedFd() {
   fd_ = kClosedFd;
 }
@@ -40,6 +44,11 @@ static intptr_t Create(const RawAddr& addr) {
     FDUtils::SaveErrorAndClose(fd);
     return -1;
   }
+  // Don't raise SIGPIPE when attempting to write to a connection which has
+  // already closed.
+  int optval = 1;
+  VOID_NO_RETRY_EXPECTED(
+      setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &optval, sizeof(optval)));
   return fd;
 }
 
@@ -62,6 +71,14 @@ intptr_t Socket::CreateConnect(const RawAddr& addr) {
   return Connect(fd, addr);
 }
 
+intptr_t Socket::CreateUnixDomainConnect(const RawAddr& addr) {
+  intptr_t fd = Create(addr);
+  if (fd < 0) {
+    return fd;
+  }
+  return Connect(fd, addr);
+}
+
 intptr_t Socket::CreateBindConnect(const RawAddr& addr,
                                    const RawAddr& source_addr) {
   intptr_t fd = Create(addr);
@@ -71,7 +88,24 @@ intptr_t Socket::CreateBindConnect(const RawAddr& addr,
 
   intptr_t result = TEMP_FAILURE_RETRY(
       bind(fd, &source_addr.addr, SocketAddress::GetAddrLength(source_addr)));
-  if ((result != 0) && (errno != EINPROGRESS)) {
+  if (result != 0) {
+    FDUtils::SaveErrorAndClose(fd);
+    return -1;
+  }
+
+  return Connect(fd, addr);
+}
+
+intptr_t Socket::CreateUnixDomainBindConnect(const RawAddr& addr,
+                                             const RawAddr& source_addr) {
+  intptr_t fd = Create(addr);
+  if (fd < 0) {
+    return fd;
+  }
+
+  intptr_t result = TEMP_FAILURE_RETRY(
+      bind(fd, &source_addr.addr, SocketAddress::GetAddrLength(source_addr)));
+  if (result != 0) {
     FDUtils::SaveErrorAndClose(fd);
     return -1;
   }
@@ -95,6 +129,7 @@ intptr_t Socket::CreateBindDatagram(const RawAddr& addr,
     return -1;
   }
 
+
   if (reuseAddress) {
     int optval = 1;
     VOID_NO_RETRY_EXPECTED(
@@ -115,6 +150,12 @@ intptr_t Socket::CreateBindDatagram(const RawAddr& addr,
     FDUtils::SaveErrorAndClose(fd);
     return -1;
   }
+
+  // Don't raise SIGPIPE when attempting to write to a connection which has
+  // already closed.
+  int optval = 1;
+  VOID_NO_RETRY_EXPECTED(
+      setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &optval, sizeof(optval)));
 
   if (NO_RETRY_EXPECTED(
           bind(fd, &addr.addr, SocketAddress::GetAddrLength(addr))) < 0) {
@@ -148,6 +189,12 @@ intptr_t ServerSocket::CreateBindListen(const RawAddr& addr,
   VOID_NO_RETRY_EXPECTED(
       setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)));
 
+  // Don't raise SIGPIPE when attempting to write to a connection which has
+  // already closed.
+  optval = 1;
+  VOID_NO_RETRY_EXPECTED(
+      setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &optval, sizeof(optval)));
+
   if (addr.ss.ss_family == AF_INET6) {
     optval = v6_only ? 1 : 0;
     VOID_NO_RETRY_EXPECTED(
@@ -168,6 +215,37 @@ intptr_t ServerSocket::CreateBindListen(const RawAddr& addr,
     intptr_t new_fd = CreateBindListen(addr, backlog, v6_only);
     FDUtils::SaveErrorAndClose(fd);
     return new_fd;
+  }
+
+  if (NO_RETRY_EXPECTED(listen(fd, backlog > 0 ? backlog : SOMAXCONN)) != 0) {
+    FDUtils::SaveErrorAndClose(fd);
+    return -1;
+  }
+
+  if (!FDUtils::SetNonBlocking(fd)) {
+    FDUtils::SaveErrorAndClose(fd);
+    return -1;
+  }
+  return fd;
+}
+
+intptr_t ServerSocket::CreateUnixDomainBindListen(const RawAddr& addr,
+                                                  intptr_t backlog) {
+  intptr_t fd;
+  fd = NO_RETRY_EXPECTED(socket(addr.ss.ss_family, SOCK_STREAM, 0));
+  if (fd < 0) {
+    return -1;
+  }
+
+  if (!FDUtils::SetCloseOnExec(fd)) {
+    FDUtils::SaveErrorAndClose(fd);
+    return -1;
+  }
+
+  if (NO_RETRY_EXPECTED(
+          bind(fd, &addr.addr, SocketAddress::GetAddrLength(addr))) < 0) {
+    FDUtils::SaveErrorAndClose(fd);
+    return -1;
   }
 
   if (NO_RETRY_EXPECTED(listen(fd, backlog > 0 ? backlog : SOMAXCONN)) != 0) {

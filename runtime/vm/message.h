@@ -5,10 +5,14 @@
 #ifndef RUNTIME_VM_MESSAGE_H_
 #define RUNTIME_VM_MESSAGE_H_
 
+#include <memory>
+#include <utility>
+
 #include "platform/assert.h"
 #include "vm/allocation.h"
 #include "vm/finalizable_data.h"
 #include "vm/globals.h"
+#include "vm/tagged_pointer.h"
 
 // Duplicated from dart_api.h to avoid including the whole header.
 typedef int64_t Dart_Port;
@@ -16,7 +20,10 @@ typedef int64_t Dart_Port;
 namespace dart {
 
 class JSONStream;
-class RawObject;
+class PersistentHandle;
+class OldPage;
+class WeakTable;
+class FreeList;
 
 class Message {
  public:
@@ -40,7 +47,7 @@ class Message {
   } OOBMsgTag;
 
   // A port number which is never used.
-  static const Dart_Port kIllegalPort = 0;
+  static const Dart_Port kIllegalPort;
 
   // A new message to be sent between two isolates. The data handed to this
   // message will be disposed by calling free() once the message object is
@@ -55,17 +62,27 @@ class Message {
   // Message objects can also carry RawObject pointers for Smis and objects in
   // the VM heap. This is indicated by setting the len_ field to 0.
   Message(Dart_Port dest_port,
-          RawObject* raw_obj,
+          ObjectPtr raw_obj,
+          Priority priority,
+          Dart_Port delivery_failure_port = kIllegalPort);
+
+  Message(Dart_Port dest_port,
+          PersistentHandle* handle,
           Priority priority,
           Dart_Port delivery_failure_port = kIllegalPort);
 
   ~Message();
 
+  template <typename... Args>
+  static std::unique_ptr<Message> New(Args&&... args) {
+    return std::unique_ptr<Message>(new Message(std::forward<Args>(args)...));
+  }
+
   Dart_Port dest_port() const { return dest_port_; }
 
   uint8_t* snapshot() const {
-    ASSERT(!IsRaw());
-    return snapshot_;
+    ASSERT(IsSnapshot());
+    return payload_.snapshot_;
   }
   intptr_t snapshot_length() const { return snapshot_length_; }
 
@@ -79,30 +96,61 @@ class Message {
     return size;
   }
 
-  RawObject* raw_obj() const {
+  ObjectPtr raw_obj() const {
     ASSERT(IsRaw());
-    return reinterpret_cast<RawObject*>(snapshot_);
+    return payload_.raw_obj_;
+  }
+  PersistentHandle* persistent_handle() const {
+    ASSERT(IsPersistentHandle());
+    return payload_.persistent_handle_;
   }
   Priority priority() const { return priority_; }
 
+  // A message processed at any interrupt point (stack overflow check) instead
+  // of at the top of the message loop. Control messages from dart:isolate or
+  // vm-service requests.
   bool IsOOB() const { return priority_ == Message::kOOBPriority; }
+  bool IsSnapshot() const { return !IsRaw() && !IsPersistentHandle(); }
+  // A message whose object is an immortal object from the vm-isolate's heap.
   bool IsRaw() const { return snapshot_length_ == 0; }
+  // A message sent from SendPort.send or SendPort.sendAndExit where sender and
+  // receiver are in the same isolate group.
+  bool IsPersistentHandle() const {
+    return snapshot_length_ == kPersistentHandleSnapshotLen;
+  }
 
   bool RedirectToDeliveryFailurePort();
+
+  void DropFinalizers() {
+    if (finalizable_data_ != nullptr) {
+      finalizable_data_->DropFinalizers();
+    }
+  }
 
   intptr_t Id() const;
 
   static const char* PriorityAsString(Priority priority);
 
  private:
+  static intptr_t const kPersistentHandleSnapshotLen = -1;
+
   friend class MessageQueue;
 
-  Message* next_;
+  Message* next_ = nullptr;
   Dart_Port dest_port_;
   Dart_Port delivery_failure_port_;
-  uint8_t* snapshot_;
-  intptr_t snapshot_length_;
-  MessageFinalizableData* finalizable_data_;
+  union Payload {
+    Payload(uint8_t* snapshot) : snapshot_(snapshot) {}
+    Payload(ObjectPtr raw_obj) : raw_obj_(raw_obj) {}
+    Payload(PersistentHandle* persistent_handle)
+        : persistent_handle_(persistent_handle) {}
+
+    uint8_t* snapshot_;
+    ObjectPtr raw_obj_;
+    PersistentHandle* persistent_handle_;
+  } payload_;
+  intptr_t snapshot_length_ = 0;
+  MessageFinalizableData* finalizable_data_ = nullptr;
   Priority priority_;
 
   DISALLOW_COPY_AND_ASSIGN(Message);
@@ -114,11 +162,11 @@ class MessageQueue {
   MessageQueue();
   ~MessageQueue();
 
-  void Enqueue(Message* msg, bool before_events);
+  void Enqueue(std::unique_ptr<Message> msg, bool before_events);
 
   // Gets the next message from the message queue or NULL if no
   // message is available.  This function will not block.
-  Message* Dequeue();
+  std::unique_ptr<Message> Dequeue();
 
   bool IsEmpty() { return head_ == NULL; }
 

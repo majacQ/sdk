@@ -12,7 +12,7 @@ class ConstantMapView<K, V> extends UnmodifiableMapView<K, V>
 abstract class ConstantMap<K, V> implements Map<K, V> {
   // Used to create unmodifiable maps from other maps.
   factory ConstantMap.from(Map other) {
-    List keys = new List<K>.from(other.keys);
+    var keys = new List<K>.from(other.keys);
     bool allStrings = true;
     for (var k in keys) {
       if (k is! String) {
@@ -28,7 +28,7 @@ abstract class ConstantMap<K, V> implements Map<K, V> {
       for (var k in keys) {
         V v = other[k];
         if (k != '__proto__') {
-          if (!jsHasOwnProperty(object, k)) length++;
+          if (!jsHasOwnProperty(object, k as String)) length++;
           JS('void', '#[#] = #', object, k, v);
         } else {
           containsProto = true;
@@ -54,18 +54,30 @@ abstract class ConstantMap<K, V> implements Map<K, V> {
 
   String toString() => MapBase.mapToString(this);
 
-  static Null _throwUnmodifiable() {
+  static Never _throwUnmodifiable() {
     throw new UnsupportedError('Cannot modify unmodifiable Map');
   }
 
-  void operator []=(K key, V val) => _throwUnmodifiable();
-  V putIfAbsent(K key, V ifAbsent()) => _throwUnmodifiable();
-  V remove(Object key) => _throwUnmodifiable();
+  void operator []=(K key, V val) {
+    _throwUnmodifiable();
+  }
+
+  V putIfAbsent(K key, V ifAbsent()) {
+    _throwUnmodifiable();
+  }
+
+  V? remove(Object? key) {
+    _throwUnmodifiable();
+  }
+
   void clear() => _throwUnmodifiable();
   void addAll(Map<K, V> other) => _throwUnmodifiable();
 
   Iterable<MapEntry<K, V>> get entries sync* {
-    for (var key in keys) yield new MapEntry<K, V>(key, this[key]);
+    // `this[key]` has static type `V?` but is always `V`. Rather than `as V`,
+    // we use `as dynamic` so the upcast requires no checking and the implicit
+    // downcast to `V` will be discarded in production.
+    for (var key in keys) yield new MapEntry<K, V>(key, this[key] as dynamic);
   }
 
   void addEntries(Iterable<MapEntry<K, V>> entries) {
@@ -81,7 +93,7 @@ abstract class ConstantMap<K, V> implements Map<K, V> {
     return result;
   }
 
-  V update(K key, V update(V value), {V ifAbsent()}) {
+  V update(K key, V update(V value), {V ifAbsent()?}) {
     _throwUnmodifiable();
   }
 
@@ -109,17 +121,17 @@ class ConstantStringMap<K, V> extends ConstantMap<K, V> {
   int get length => JS('JSUInt31', '#', _length);
   List<K> get _keysArray => JS('JSUnmodifiableArray', '#', _keys);
 
-  bool containsValue(Object needle) {
+  bool containsValue(Object? needle) {
     return values.any((V value) => value == needle);
   }
 
-  bool containsKey(Object key) {
+  bool containsKey(Object? key) {
     if (key is! String) return false;
     if ('__proto__' == key) return false;
     return jsHasOwnProperty(_jsObject, key);
   }
 
-  V operator [](Object key) {
+  V? operator [](Object? key) {
     if (!containsKey(key)) return null;
     return JS('', '#', _fetch(key));
   }
@@ -155,7 +167,7 @@ class ConstantProtoMap<K, V> extends ConstantStringMap<K, V> {
 
   final V _protoValue;
 
-  bool containsKey(Object key) {
+  bool containsKey(Object? key) {
     if (key is! String) return false;
     if ('__proto__' == key) return true;
     return jsHasOwnProperty(_jsObject, key);
@@ -185,7 +197,7 @@ class GeneralConstantMap<K, V> extends ConstantMap<K, V> {
   // We cannot create the backing map on creation since hashCode interceptors
   // have not been defined when constants are created.
   Map<K, V> _getMap() {
-    LinkedHashMap<K, V> backingMap = JS('LinkedHashMap|Null', r'#.$map', this);
+    LinkedHashMap<K, V>? backingMap = JS('LinkedHashMap|Null', r'#.$map', this);
     if (backingMap == null) {
       backingMap = new JsLinkedHashMap<K, V>();
       fillLiteralMap(_jsData, backingMap);
@@ -194,15 +206,15 @@ class GeneralConstantMap<K, V> extends ConstantMap<K, V> {
     return backingMap;
   }
 
-  bool containsValue(Object needle) {
+  bool containsValue(Object? needle) {
     return _getMap().containsValue(needle);
   }
 
-  bool containsKey(Object key) {
+  bool containsKey(Object? key) {
     return _getMap().containsKey(key);
   }
 
-  V operator [](Object key) {
+  V? operator [](Object? key) {
     return _getMap()[key];
   }
 

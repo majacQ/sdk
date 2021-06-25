@@ -3,83 +3,90 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:analyzer/file_system/file_system.dart';
-import 'package:analyzer/src/context/builder.dart';
-import 'package:analyzer/src/generated/sdk.dart';
+import 'package:analyzer/src/context/packages.dart';
 import 'package:analyzer/src/generated/source.dart';
-import 'package:analyzer/src/source/package_map_resolver.dart';
-import 'package:analyzer/src/summary/package_bundle_reader.dart';
+import 'package:analyzer/src/workspace/simple.dart';
 import 'package:analyzer/src/workspace/workspace.dart';
-import 'package:package_config/packages.dart';
-import 'package:path/path.dart';
 
-/**
- * Information about a default Dart workspace.
- */
-class BasicWorkspace extends Workspace {
-  /**
-   * The [ResourceProvider] by which paths are converted into [Resource]s.
-   */
-  final ResourceProvider provider;
+/// Information about a default Dart workspace.
+///
+/// A BasicWorkspace should only be used when no other workspace type is valid.
+class BasicWorkspace extends SimpleWorkspace {
+  /// The singular package in this workspace.
+  ///
+  /// Each basic workspace is itself one package.
+  late final BasicWorkspacePackage _theOnlyPackage;
 
-  /**
-   * The absolute workspace root path.
-   */
-  final String root;
-
-  final ContextBuilder _builder;
-
-  Map<String, List<Folder>> _packageMap;
-
-  Packages _packages;
-
-  BasicWorkspace._(this.provider, this.root, this._builder);
-
-  @override
-  Map<String, List<Folder>> get packageMap {
-    _packageMap ??= _builder.convertPackagesToMap(packages);
-    return _packageMap;
-  }
-
-  Packages get packages {
-    _packages ??= _builder.createPackageMap(root);
-    return _packages;
+  BasicWorkspace._(
+    ResourceProvider provider,
+    Map<String, List<Folder>> packageMap,
+    String root,
+  ) : super(provider, packageMap, root) {
+    _theOnlyPackage = BasicWorkspacePackage(root, this);
   }
 
   @override
-  UriResolver get packageUriResolver =>
-      new PackageMapUriResolver(provider, packageMap);
-
-  @override
-  SourceFactory createSourceFactory(DartSdk sdk, SummaryDataStore summaryData) {
-    if (summaryData != null) {
-      throw new UnsupportedError(
-          'Summary files are not supported in a basic workspace.');
+  WorkspacePackage? findPackageFor(String filePath) {
+    final Folder folder = provider.getFolder(filePath);
+    if (provider.pathContext.isWithin(root, folder.path)) {
+      return _theOnlyPackage;
+    } else {
+      return null;
     }
-    List<UriResolver> resolvers = <UriResolver>[];
-    if (sdk != null) {
-      resolvers.add(new DartUriResolver(sdk));
-    }
-    resolvers.add(packageUriResolver);
-    resolvers.add(new ResourceUriResolver(provider));
-    return new SourceFactory(resolvers, packages, provider);
   }
 
-  /**
-   * Find the basic workspace that contains the given [path].
-   */
+  /// Find the basic workspace that contains the given [path].
+  ///
+  /// As a [BasicWorkspace] is not defined by any marker files or build
+  /// artifacts, this simply creates a BasicWorkspace with [path] as the [root]
+  /// (or [path]'s parent if [path] points to a file).
   static BasicWorkspace find(
-      ResourceProvider provider, String path, ContextBuilder builder) {
-    Context context = provider.pathContext;
-
-    // Ensure that the path is absolute and normalized.
-    if (!context.isAbsolute(path)) {
-      throw new ArgumentError('not absolute: $path');
-    }
-    path = context.normalize(path);
+    ResourceProvider provider,
+    Map<String, List<Folder>> packageMap,
+    String path,
+  ) {
     Resource resource = provider.getResource(path);
     if (resource is File) {
-      path = resource.parent.path;
+      path = resource.parent2.path;
     }
-    return new BasicWorkspace._(provider, path, builder);
+    return BasicWorkspace._(provider, packageMap, path);
+  }
+}
+
+/// Information about a package defined in a [BasicWorkspace].
+///
+/// Separate from [Packages] or package maps, this class is designed to simply
+/// understand whether arbitrary file paths represent libraries declared within
+/// a given package in a [BasicWorkspace].
+class BasicWorkspacePackage extends WorkspacePackage {
+  @override
+  final String root;
+
+  @override
+  final BasicWorkspace workspace;
+
+  BasicWorkspacePackage(this.root, this.workspace);
+
+  @override
+  bool contains(Source source) {
+    // When dealing with a BasicWorkspace, [source] will always have a valid
+    // fullName.
+    String filePath = source.fullName;
+    // There is a 1-1 relationship between [BasicWorkspace]s and
+    // [BasicWorkspacePackage]s. If a file is in a package's workspace, then it
+    // is in the package as well.
+    return workspace.provider.pathContext.isWithin(root, filePath);
+  }
+
+  @override
+  Map<String, List<Folder>> packagesAvailableTo(String libraryPath) =>
+      workspace.packageMap;
+
+  @override
+  bool sourceIsInPublicApi(Source source) {
+    // Since every source file in a BasicPackage is in the same directory, they
+    // are all in the public API of the package. A file in a subdirectory
+    // is in a separate package.
+    return true;
   }
 }

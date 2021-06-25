@@ -9,13 +9,11 @@
 
 namespace dart {
 
-// TODO(vegorov) this test is disabled on DBC because there is no PopRegister
-// method on DBC assembler.
-#if !defined(PRODUCT) && !defined(TARGET_ARCH_DBC)
+#if !defined(PRODUCT)
 
 ISOLATE_UNIT_TEST_CASE(Disassembler) {
-  ObjectPoolWrapper object_pool_wrapper;
-  Assembler assembler(&object_pool_wrapper);
+  compiler::ObjectPoolBuilder object_pool_builder;
+  compiler::Assembler assembler(&object_pool_builder);
 
   // The used instructions work on all platforms.
   Register reg = static_cast<Register>(0);

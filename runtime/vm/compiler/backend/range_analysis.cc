@@ -2,8 +2,6 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-#if !defined(DART_PRECOMPILED_RUNTIME)
-
 #include "vm/compiler/backend/range_analysis.h"
 
 #include "vm/bit_vector.h"
@@ -64,12 +62,8 @@ void RangeAnalysis::CollectValues() {
 
   for (intptr_t i = 0; i < graph_entry->SuccessorCount(); ++i) {
     auto successor = graph_entry->SuccessorAt(i);
-    if (successor->IsFunctionEntry() || successor->IsCatchBlockEntry()) {
-      auto function_entry = successor->AsFunctionEntry();
-      auto catch_entry = successor->AsCatchBlockEntry();
-      const auto& initial = function_entry != nullptr
-                                ? *function_entry->initial_definitions()
-                                : *catch_entry->initial_definitions();
+    if (auto entry = successor->AsBlockEntryWithInitialDefs()) {
+      const auto& initial = *entry->initial_definitions();
       for (intptr_t j = 0; j < initial.length(); ++j) {
         Definition* current = initial[j];
         if (IsIntegerDefinition(current)) {
@@ -107,32 +101,10 @@ void RangeAnalysis::CollectValues() {
           }
         }
       }
-      if (current->IsCheckArrayBound()) {
-        bounds_checks_.Add(current->AsCheckArrayBound());
+      if (auto check = current->AsCheckBoundBase()) {
+        bounds_checks_.Add(check);
       }
     }
-  }
-}
-
-// For a comparison operation return an operation for the equivalent flipped
-// comparison: a (op) b === b (op') a.
-static Token::Kind FlipComparison(Token::Kind op) {
-  switch (op) {
-    case Token::kEQ:
-      return Token::kEQ;
-    case Token::kNE:
-      return Token::kNE;
-    case Token::kLT:
-      return Token::kGT;
-    case Token::kGT:
-      return Token::kLT;
-    case Token::kLTE:
-      return Token::kGTE;
-    case Token::kGTE:
-      return Token::kLTE;
-    default:
-      UNREACHABLE();
-      return Token::kILLEGAL;
   }
 }
 
@@ -208,7 +180,7 @@ bool RangeAnalysis::ConstrainValueAfterBranch(Value* use, Definition* defn) {
       boundary = rel_op->InputAt(0)->definition();
       // InsertConstraintFor assumes that defn is left operand of a
       // comparison if it is right operand flip the comparison.
-      op_kind = FlipComparison(rel_op->kind());
+      op_kind = Token::FlipComparison(rel_op->kind());
     }
 
     // Constrain definition at the true successor.
@@ -237,31 +209,31 @@ bool RangeAnalysis::ConstrainValueAfterBranch(Value* use, Definition* defn) {
 void RangeAnalysis::InsertConstraintsFor(Definition* defn) {
   for (Value* use = defn->input_use_list(); use != NULL;
        use = use->next_use()) {
-    if (use->instruction()->IsBranch()) {
+    if (auto branch = use->instruction()->AsBranch()) {
       if (ConstrainValueAfterBranch(use, defn)) {
-        Value* other_value = use->instruction()->InputAt(1 - use->use_index());
+        Value* other_value = branch->InputAt(1 - use->use_index());
         if (!IsIntegerDefinition(other_value->definition())) {
           ConstrainValueAfterBranch(other_value, other_value->definition());
         }
       }
-    } else if (use->instruction()->IsCheckArrayBound()) {
-      ConstrainValueAfterCheckArrayBound(use, defn);
+    } else if (auto check = use->instruction()->AsCheckBoundBase()) {
+      ConstrainValueAfterCheckBound(use, check, defn);
     }
   }
 }
 
-void RangeAnalysis::ConstrainValueAfterCheckArrayBound(Value* use,
-                                                       Definition* defn) {
-  CheckArrayBoundInstr* check = use->instruction()->AsCheckArrayBound();
-  intptr_t use_index = use->use_index();
+void RangeAnalysis::ConstrainValueAfterCheckBound(Value* use,
+                                                  CheckBoundBase* check,
+                                                  Definition* defn) {
+  const intptr_t use_index = use->use_index();
 
   Range* constraint_range = NULL;
-  if (use_index == CheckArrayBoundInstr::kIndexPos) {
+  if (use_index == CheckBoundBase::kIndexPos) {
     Definition* length = check->length()->definition();
     constraint_range = new (Z) Range(RangeBoundary::FromConstant(0),
                                      RangeBoundary::FromDefinition(length, -1));
   } else {
-    ASSERT(use_index == CheckArrayBoundInstr::kLengthPos);
+    ASSERT(use_index == CheckBoundBase::kLengthPos);
     Definition* index = check->index()->definition();
     constraint_range = new (Z)
         Range(RangeBoundary::FromDefinition(index, 1), RangeBoundary::MaxSmi());
@@ -317,10 +289,34 @@ const Range* RangeAnalysis::GetIntRange(Value* value) const {
   return range;
 }
 
+const char* RangeBoundary::KindToCString(Kind kind) {
+  switch (kind) {
+#define KIND_CASE(name)                                                        \
+  case Kind::k##name:                                                          \
+    return #name;
+    FOR_EACH_RANGE_BOUNDARY_KIND(KIND_CASE)
+#undef KIND_CASE
+    default:
+      UNREACHABLE();
+      return nullptr;
+  }
+}
+
+bool RangeBoundary::ParseKind(const char* str, Kind* out) {
+#define KIND_CASE(name)                                                        \
+  if (strcmp(str, #name) == 0) {                                               \
+    *out = Kind::k##name;                                                      \
+    return true;                                                               \
+  }
+  FOR_EACH_RANGE_BOUNDARY_KIND(KIND_CASE)
+#undef KIND_CASE
+  return false;
+}
+
 static bool AreEqualDefinitions(Definition* a, Definition* b) {
   a = UnwrapConstraint(a);
   b = UnwrapConstraint(b);
-  return (a == b) || (a->AllowsCSE() && b->AllowsCSE() && a->Equals(b));
+  return (a == b) || (a->AllowsCSE() && b->AllowsCSE() && a->Equals(*b));
 }
 
 static bool DependOnSameSymbol(const RangeBoundary& a, const RangeBoundary& b) {
@@ -721,7 +717,6 @@ class Scheduler {
         last, instr, last->env(),
         instr->IsDefinition() ? FlowGraph::kValue : FlowGraph::kEffect);
     instr->CopyDeoptIdFrom(*last);
-    instr->env()->set_deopt_id(instr->deopt_id_);
 
     map_.Insert(instr);
     emitted_.Add(instr);
@@ -750,8 +745,7 @@ class BoundsCheckGeneralizer {
         flow_graph_(flow_graph),
         scheduler_(flow_graph) {}
 
-  void TryGeneralize(CheckArrayBoundInstr* check,
-                     const RangeBoundary& array_length) {
+  void TryGeneralize(CheckArrayBoundInstr* check) {
     Definition* upper_bound =
         ConstructUpperBound(check->index()->definition(), check);
     if (upper_bound == UnwrapConstraint(check->index()->definition())) {
@@ -841,10 +835,10 @@ class BoundsCheckGeneralizer {
     scheduler_.Start();
 
     // AOT should only see non-deopting GenericCheckBound.
-    ASSERT(!FLAG_precompiled_mode);
+    ASSERT(!CompilerState::Current().is_aot());
 
-    ConstantInstr* max_smi =
-        flow_graph_->GetConstant(Smi::Handle(Smi::New(Smi::kMaxValue)));
+    ConstantInstr* max_smi = flow_graph_->GetConstant(
+        Smi::Handle(Smi::New(compiler::target::kSmiMax)));
     for (intptr_t i = 0; i < non_positive_symbols.length(); i++) {
       CheckArrayBoundInstr* precondition = new CheckArrayBoundInstr(
           new Value(max_smi), new Value(non_positive_symbols[i]),
@@ -864,7 +858,7 @@ class BoundsCheckGeneralizer {
         new Value(UnwrapConstraint(check->length()->definition())),
         new Value(upper_bound), DeoptId::kNone);
     new_check->mark_generalized();
-    if (new_check->IsRedundant(array_length)) {
+    if (new_check->IsRedundant()) {
       if (FLAG_trace_range_analysis) {
         THR_Print("  => generalized check is redundant\n");
       }
@@ -962,26 +956,43 @@ class BoundsCheckGeneralizer {
     return nullptr;
   }
 
+  // Returns true if x is invariant and is either based on a Smi definition
+  // or is a Smi constant.
+  static bool IsSmiInvariant(const InductionVar* x) {
+    return InductionVar::IsInvariant(x) && Smi::IsValid(x->offset()) &&
+           Smi::IsValid(x->mult()) &&
+           (x->mult() == 0 || x->def()->Type()->ToCid() == kSmiCid);
+  }
+
   // Only accept smi linear induction with unit stride.
   InductionVar* GetSmiInduction(LoopInfo* loop, Definition* def) {
     if (loop != nullptr && def->Type()->ToCid() == kSmiCid) {
       InductionVar* induc = loop->LookupInduction(def);
-      if (induc != nullptr && induc->kind() == InductionVar::kLinear &&
-          induc->next()->offset() == 1 && induc->next()->mult() == 0) {
+      int64_t stride;
+      if (induc != nullptr && InductionVar::IsLinear(induc, &stride) &&
+          stride == 1 && IsSmiInvariant(induc->initial())) {
         return induc;
       }
     }
     return nullptr;
   }
 
-  // Reconstruct invariant (phi-init is always already in the graph).
+  // Reconstruct invariant.
   Definition* GenerateInvariant(InductionVar* induc) {
+    Definition* res = nullptr;
     if (induc->mult() == 0) {
-      return flow_graph_->GetConstant(
-          Smi::ZoneHandle(Smi::New(induc->offset())));
+      res =
+          flow_graph_->GetConstant(Smi::ZoneHandle(Smi::New(induc->offset())));
+    } else {
+      res = induc->def();
+      if (induc->mult() != 1) {
+        res = MakeBinaryOp(Token::kMUL, res, induc->mult());
+      }
+      if (induc->offset() != 0) {
+        res = MakeBinaryOp(Token::kADD, res, induc->offset());
+      }
     }
-    ASSERT(induc->offset() == 0 && induc->mult() == 1);
-    return induc->def();
+    return res;
   }
 
   // Construct symbolic bound for a value at the given point:
@@ -1039,8 +1050,8 @@ class BoundsCheckGeneralizer {
       return phi;
     }
     // Decide between direct or indirect bound.
-    Definition* bounded_phi = UnwrapConstraint(limit->value()->definition());
-    if (bounded_phi == phi) {
+    Definition* bounded_def = UnwrapConstraint(limit->value()->definition());
+    if (bounded_def == phi) {
       // Given a smi bounded loop with smi induction variable
       //
       //          x <- phi(x0, x + 1)
@@ -1059,7 +1070,7 @@ class BoundsCheckGeneralizer {
       //
       //          y <= y0 + (M - x0)
       //
-      InductionVar* bounded_induc = GetSmiInduction(loop, bounded_phi);
+      InductionVar* bounded_induc = GetSmiInduction(loop, bounded_def);
       Definition* x0 = GenerateInvariant(bounded_induc->initial());
       Definition* y0 = GenerateInvariant(induc->initial());
       Definition* m = RangeBoundaryToDefinition(limit->constraint()->max());
@@ -1102,7 +1113,7 @@ class BoundsCheckGeneralizer {
 
         c = left_const + right_const;
         if (Utils::WillAddOverflow(left_const, right_const) ||
-            !Smi::IsValid(c)) {
+            !compiler::target::IsSmi(c)) {
           return false;  // Abort.
         }
 
@@ -1147,7 +1158,7 @@ class BoundsCheckGeneralizer {
 
         c = (left_const - right_const);
         if (Utils::WillSubOverflow(left_const, right_const) ||
-            !Smi::IsValid(c)) {
+            !compiler::target::IsSmi(c)) {
           return false;  // Abort.
         }
 
@@ -1165,7 +1176,7 @@ class BoundsCheckGeneralizer {
         }
 
         if (left == NULL) {
-          left = flow_graph_->GetConstant(Smi::Handle(Smi::New(0)));
+          left = flow_graph_->GetConstant(Object::smi_zero());
         }
 
         if (right == NULL) {
@@ -1207,7 +1218,7 @@ class BoundsCheckGeneralizer {
       }
     } else if ((*defn)->IsConstant()) {
       ConstantInstr* constant_defn = (*defn)->AsConstant();
-      if ((constant != NULL) && constant_defn->value().IsSmi()) {
+      if ((constant != NULL) && constant_defn->IsSmi()) {
         *defn = NULL;
         *constant = Smi::Cast(constant_defn->value()).Value();
       }
@@ -1222,7 +1233,7 @@ class BoundsCheckGeneralizer {
                               Definition* defn) {
     if (defn->IsConstant()) {
       const Object& value = defn->AsConstant()->value();
-      return value.IsSmi() && (Smi::Cast(value).Value() >= 0);
+      return compiler::target::IsSmi(value) && (Smi::Cast(value).Value() >= 0);
     } else if (defn->HasSSATemp()) {
       if (!RangeUtils::IsPositive(defn->range())) {
         symbols->Add(defn);
@@ -1299,22 +1310,22 @@ class BoundsCheckGeneralizer {
   }
 
 #ifndef PRODUCT
-  static void PrettyPrintIndexBoundRecursively(BufferFormatter* f,
+  static void PrettyPrintIndexBoundRecursively(BaseTextBuffer* f,
                                                Definition* index_bound) {
     BinarySmiOpInstr* binary_op = index_bound->AsBinarySmiOp();
     if (binary_op != NULL) {
-      f->Print("(");
+      f->AddString("(");
       PrettyPrintIndexBoundRecursively(f, binary_op->left()->definition());
-      f->Print(" %s ", Token::Str(binary_op->op_kind()));
+      f->Printf(" %s ", Token::Str(binary_op->op_kind()));
       PrettyPrintIndexBoundRecursively(f, binary_op->right()->definition());
-      f->Print(")");
+      f->AddString(")");
     } else if (index_bound->IsConstant()) {
-      f->Print("%" Pd "",
-               Smi::Cast(index_bound->AsConstant()->value()).Value());
+      f->Printf("%" Pd "",
+                Smi::Cast(index_bound->AsConstant()->value()).Value());
     } else {
-      f->Print("v%" Pd "", index_bound->ssa_temp_index());
+      f->Printf("v%" Pd "", index_bound->ssa_temp_index());
     }
-    f->Print(" {%s}", Range::ToCString(index_bound->range()));
+    f->Printf(" {%s}", Range::ToCString(index_bound->range()));
   }
 
   static const char* IndexBoundToCString(Definition* index_bound) {
@@ -1334,23 +1345,20 @@ void RangeAnalysis::EliminateRedundantBoundsChecks() {
   if (FLAG_array_bounds_check_elimination) {
     const Function& function = flow_graph_->function();
     // Generalization only if we have not deoptimized on a generalized
-    // check earlier, or we're compiling precompiled code (no
-    // optimistic hoisting of checks possible)
+    // check earlier and we are not compiling precompiled code
+    // (no optimistic hoisting of checks possible)
     const bool try_generalization =
-        !function.ProhibitsBoundsCheckGeneralization() &&
-        !FLAG_precompiled_mode;
-
+        !CompilerState::Current().is_aot() &&
+        !function.ProhibitsBoundsCheckGeneralization();
     BoundsCheckGeneralizer generalizer(this, flow_graph_);
-
-    for (intptr_t i = 0; i < bounds_checks_.length(); i++) {
-      CheckArrayBoundInstr* check = bounds_checks_[i];
-      RangeBoundary array_length =
-          RangeBoundary::FromDefinition(check->length()->definition());
-      if (check->IsRedundant(array_length)) {
+    for (CheckBoundBase* check : bounds_checks_) {
+      if (check->IsRedundant(/*use_loops=*/true)) {
         check->ReplaceUsesWith(check->index()->definition());
         check->RemoveFromGraph();
       } else if (try_generalization) {
-        generalizer.TryGeneralize(check, array_length);
+        if (auto jit_check = check->AsCheckArrayBound()) {
+          generalizer.TryGeneralize(jit_check);
+        }
       }
     }
   }
@@ -1572,7 +1580,7 @@ bool IntegerInstructionSelector::CanBecomeUint32(Definition* def) {
   // because we need the high bits.
   if (def->IsShiftInt64Op() || def->IsSpeculativeShiftInt64Op()) {
     ShiftIntegerOpInstr* op = def->AsShiftIntegerOp();
-    if (op->op_kind() == Token::kSHR) {
+    if ((op->op_kind() == Token::kSHR) || (op->op_kind() == Token::kUSHR)) {
       Definition* shift_input = op->left()->definition();
       ASSERT(shift_input != NULL);
       Range* range = shift_input->range();
@@ -1654,7 +1662,8 @@ Definition* IntegerInstructionSelector::ConstructReplacementFor(
     UnboxInstr* unbox = def->AsUnboxInt64();
     Value* value = unbox->value()->CopyWithType();
     intptr_t deopt_id = unbox->DeoptimizationTarget();
-    return new (Z) UnboxUint32Instr(value, deopt_id, def->speculative_mode());
+    return new (Z)
+        UnboxUint32Instr(value, deopt_id, def->SpeculativeModeOfInputs());
   } else if (def->IsUnaryInt64Op()) {
     UnaryInt64OpInstr* op = def->AsUnaryInt64Op();
     Token::Kind op_kind = op->op_kind();
@@ -1691,12 +1700,11 @@ void IntegerInstructionSelector::ReplaceInstructions() {
                 replacement->ToCString());
     }
     defn->ReplaceWith(replacement, NULL);
-    ASSERT(flow_graph_->VerifyUseLists());
   }
 }
 
 RangeBoundary RangeBoundary::FromDefinition(Definition* defn, int64_t offs) {
-  if (defn->IsConstant() && defn->AsConstant()->value().IsSmi()) {
+  if (defn->IsConstant() && defn->AsConstant()->IsSmi()) {
     return FromConstant(Smi::Cast(defn->AsConstant()->value()).Value() + offs);
   }
   ASSERT(IsValidOffsetForSymbolicRangeBoundary(offs));
@@ -1814,10 +1822,12 @@ RangeBoundary RangeBoundary::Shl(const RangeBoundary& value_boundary,
   int64_t limit = 64 - shift_count;
   int64_t value = value_boundary.ConstantValue();
 
-  if ((value == 0) || (shift_count == 0) ||
-      ((limit > 0) && Utils::IsInt(static_cast<int>(limit), value))) {
+  if (value == 0) {
+    return RangeBoundary(0);
+  } else if (shift_count == 0 ||
+             (limit > 0 && Utils::IsInt(static_cast<int>(limit), value))) {
     // Result stays in 64 bit range.
-    int64_t result = value << shift_count;
+    const int64_t result = static_cast<uint64_t>(value) << shift_count;
     return RangeBoundary(result);
   }
 
@@ -2176,6 +2186,75 @@ void Range::Shr(const Range* left,
       left_max, left_max.ConstantValue() > 0 ? right_min : right_max);
 }
 
+static void ConvertRangeToUnsigned(int64_t a,
+                                   int64_t b,
+                                   uint64_t* ua,
+                                   uint64_t* ub) {
+  ASSERT(a <= b);
+  if ((a < 0) && (b >= 0)) {
+    // Range contains -1 and 0 and wraps-around as unsigned.
+    *ua = 0;
+    *ub = kMaxUint64;
+  } else {
+    // Range is fully in the negative or non-negative part
+    // and doesn't wrap-around if interpreted as unsigned.
+    *ua = static_cast<uint64_t>(a);
+    *ub = static_cast<uint64_t>(b);
+  }
+}
+
+static void ConvertRangeToSigned(uint64_t a,
+                                 uint64_t b,
+                                 int64_t* sa,
+                                 int64_t* sb) {
+  ASSERT(a <= b);
+  if ((a <= static_cast<uint64_t>(kMaxInt64)) &&
+      (b >= static_cast<uint64_t>(kMinInt64))) {
+    // Range contains kMinInt64 and kMaxInt64 and wraps-around as signed.
+    *sa = kMinInt64;
+    *sb = kMaxInt64;
+  } else {
+    // Range is fully in the negative or non-negative part
+    // and doesn't wrap-around if interpreted as signed.
+    *sa = static_cast<int64_t>(a);
+    *sb = static_cast<int64_t>(b);
+  }
+}
+
+void Range::Ushr(const Range* left,
+                 const Range* right,
+                 RangeBoundary* result_min,
+                 RangeBoundary* result_max) {
+  const int64_t left_max = Range::ConstantMax(left).ConstantValue();
+  const int64_t left_min = Range::ConstantMin(left).ConstantValue();
+  // A negative shift count always deoptimizes (and throws), so the minimum
+  // shift count is zero.
+  const int64_t right_max = Utils::Maximum(
+      Range::ConstantMax(right).ConstantValue(), static_cast<int64_t>(0));
+  const int64_t right_min = Utils::Maximum(
+      Range::ConstantMin(right).ConstantValue(), static_cast<int64_t>(0));
+
+  uint64_t unsigned_left_min, unsigned_left_max;
+  ConvertRangeToUnsigned(left_min, left_max, &unsigned_left_min,
+                         &unsigned_left_max);
+
+  const uint64_t unsigned_result_min =
+      (right_max >= kBitsPerInt64)
+          ? 0
+          : unsigned_left_min >> static_cast<uint64_t>(right_max);
+  const uint64_t unsigned_result_max =
+      (right_min >= kBitsPerInt64)
+          ? 0
+          : unsigned_left_max >> static_cast<uint64_t>(right_min);
+
+  int64_t signed_result_min, signed_result_max;
+  ConvertRangeToSigned(unsigned_result_min, unsigned_result_max,
+                       &signed_result_min, &signed_result_max);
+
+  *result_min = RangeBoundary(signed_result_min);
+  *result_max = RangeBoundary(signed_result_max);
+}
+
 void Range::And(const Range* left_range,
                 const Range* right_range,
                 RangeBoundary* result_min,
@@ -2223,14 +2302,6 @@ void Range::BitwiseOp(const Range* left_range,
       RangeBoundary::FromConstant((static_cast<uint64_t>(1) << bitsize) - 1);
 }
 
-static bool IsArrayLength(Definition* defn) {
-  if (defn == NULL) {
-    return false;
-  }
-  LoadFieldInstr* load = UnwrapConstraint(defn)->AsLoadField();
-  return (load != NULL) && load->IsImmutableLengthLoad();
-}
-
 void Range::Add(const Range* left_range,
                 const Range* right_range,
                 RangeBoundary* result_min,
@@ -2241,11 +2312,11 @@ void Range::Add(const Range* left_range,
   ASSERT(result_min != NULL);
   ASSERT(result_max != NULL);
 
-  RangeBoundary left_min = IsArrayLength(left_defn)
+  RangeBoundary left_min = Definition::IsArrayLength(left_defn)
                                ? RangeBoundary::FromDefinition(left_defn)
                                : left_range->min();
 
-  RangeBoundary left_max = IsArrayLength(left_defn)
+  RangeBoundary left_max = Definition::IsArrayLength(left_defn)
                                ? RangeBoundary::FromDefinition(left_defn)
                                : left_range->max();
 
@@ -2271,11 +2342,11 @@ void Range::Sub(const Range* left_range,
   ASSERT(result_min != NULL);
   ASSERT(result_max != NULL);
 
-  RangeBoundary left_min = IsArrayLength(left_defn)
+  RangeBoundary left_min = Definition::IsArrayLength(left_defn)
                                ? RangeBoundary::FromDefinition(left_defn)
                                : left_range->min();
 
-  RangeBoundary left_max = IsArrayLength(left_defn)
+  RangeBoundary left_max = Definition::IsArrayLength(left_defn)
                                ? RangeBoundary::FromDefinition(left_defn)
                                : left_range->max();
 
@@ -2302,7 +2373,8 @@ void Range::Mul(const Range* left_range,
 
   const int64_t left_max = ConstantAbsMax(left_range);
   const int64_t right_max = ConstantAbsMax(right_range);
-  if ((left_max <= -kSmiMin) && (right_max <= -kSmiMin) &&
+  if ((left_max <= -compiler::target::kSmiMin) &&
+      (right_max <= -compiler::target::kSmiMin) &&
       ((left_max == 0) || (right_max <= kMaxInt64 / left_max))) {
     // Product of left and right max values stays in 64 bit range.
     const int64_t mul_max = left_max * right_max;
@@ -2335,6 +2407,51 @@ void Range::Mul(const Range* left_range,
 
   *result_min = RangeBoundary::NegativeInfinity();
   *result_max = RangeBoundary::PositiveInfinity();
+}
+
+void Range::TruncDiv(const Range* left_range,
+                     const Range* right_range,
+                     RangeBoundary* result_min,
+                     RangeBoundary* result_max) {
+  ASSERT(left_range != nullptr);
+  ASSERT(right_range != nullptr);
+  ASSERT(result_min != nullptr);
+  ASSERT(result_max != nullptr);
+
+  if (left_range->OnlyGreaterThanOrEqualTo(0) &&
+      right_range->OnlyGreaterThanOrEqualTo(1)) {
+    const int64_t left_max = ConstantAbsMax(left_range);
+    const int64_t left_min = ConstantAbsMin(left_range);
+    const int64_t right_max = ConstantAbsMax(right_range);
+    const int64_t right_min = ConstantAbsMin(right_range);
+
+    *result_max = RangeBoundary::FromConstant(left_max / right_min);
+    *result_min = RangeBoundary::FromConstant(left_min / right_max);
+    return;
+  }
+
+  *result_min = RangeBoundary::NegativeInfinity();
+  *result_max = RangeBoundary::PositiveInfinity();
+}
+
+void Range::Mod(const Range* right_range,
+                RangeBoundary* result_min,
+                RangeBoundary* result_max) {
+  ASSERT(right_range != nullptr);
+  ASSERT(result_min != nullptr);
+  ASSERT(result_max != nullptr);
+  // Each modulo result is positive and bounded by one less than
+  // the maximum of the right-hand-side (it is unlikely that the
+  // left-hand-side further refines this in typical programs).
+  // Note that x % MinInt can be MaxInt and x % 0 always throws.
+  const int64_t kModMin = 0;
+  int64_t mod_max = kMaxInt64;
+  if (Range::ConstantMin(right_range).ConstantValue() != kMinInt64) {
+    const int64_t right_max = ConstantAbsMax(right_range);
+    mod_max = Utils::Maximum(right_max - 1, kModMin);
+  }
+  *result_min = RangeBoundary::FromConstant(kModMin);
+  *result_max = RangeBoundary::FromConstant(mod_max);
 }
 
 // Both the a and b ranges are >= 0.
@@ -2400,12 +2517,24 @@ void Range::BinaryOp(const Token::Kind op,
       Range::Mul(left_range, right_range, &min, &max);
       break;
 
+    case Token::kTRUNCDIV:
+      Range::TruncDiv(left_range, right_range, &min, &max);
+      break;
+
+    case Token::kMOD:
+      Range::Mod(right_range, &min, &max);
+      break;
+
     case Token::kSHL:
       Range::Shl(left_range, right_range, &min, &max);
       break;
 
     case Token::kSHR:
       Range::Shr(left_range, right_range, &min, &max);
+      break;
+
+    case Token::kUSHR:
+      Range::Ushr(left_range, right_range, &min, &max);
       break;
 
     case Token::kBIT_AND:
@@ -2424,6 +2553,10 @@ void Range::BinaryOp(const Token::Kind op,
   }
 
   ASSERT(!min.IsUnknown() && !max.IsUnknown());
+
+  // Sanity: avoid [l, u] with constants l > u.
+  ASSERT(!min.IsConstant() || !max.IsConstant() ||
+         min.ConstantValue() <= max.ConstantValue());
 
   *result = Range(min, max);
 }
@@ -2581,7 +2714,7 @@ void ConstantInstr::InferRange(RangeAnalysis* analysis, Range* range) {
                    RangeBoundary::FromConstant(value));
   } else {
     // Only Smi and Mint supported.
-    UNREACHABLE();
+    FATAL1("Unexpected constant: %s\n", value_.ToCString());
   }
 }
 
@@ -2605,21 +2738,48 @@ void ConstraintInstr::InferRange(RangeAnalysis* analysis, Range* range) {
   *range = result;
 }
 
+static RangeBoundary::RangeSize RepresentationToRangeSize(Representation r) {
+  switch (r) {
+    case kTagged:
+      return RangeBoundary::kRangeBoundarySmi;
+    case kUnboxedUint8:  // Overapproximate Uint8 as Int16.
+      return RangeBoundary::kRangeBoundaryInt16;
+    case kUnboxedInt32:
+    case kUnboxedUint16:  // Overapproximate Uint16 as Int32.
+      return RangeBoundary::kRangeBoundaryInt32;
+    case kUnboxedInt64:
+    case kUnboxedUint32:  // Overapproximate Uint32 as Int64.
+      return RangeBoundary::kRangeBoundaryInt64;
+    default:
+      UNREACHABLE();
+      return RangeBoundary::kRangeBoundarySmi;
+  }
+}
+
 void LoadFieldInstr::InferRange(RangeAnalysis* analysis, Range* range) {
   switch (slot().kind()) {
     case Slot::Kind::kArray_length:
     case Slot::Kind::kGrowableObjectArray_length:
-      *range = Range(RangeBoundary::FromConstant(0),
-                     RangeBoundary::FromConstant(Array::kMaxElements));
+      *range = Range(
+          RangeBoundary::FromConstant(0),
+          RangeBoundary::FromConstant(compiler::target::Array::kMaxElements));
       break;
 
-    case Slot::Kind::kTypedData_length:
+    case Slot::Kind::kTypedDataBase_length:
+    case Slot::Kind::kTypedDataView_offset_in_bytes:
       *range = Range(RangeBoundary::FromConstant(0), RangeBoundary::MaxSmi());
       break;
 
-    case Slot::Kind::kString_length:
+    case Slot::Kind::kTypeArguments_length:
       *range = Range(RangeBoundary::FromConstant(0),
-                     RangeBoundary::FromConstant(String::kMaxElements));
+                     RangeBoundary::FromConstant(
+                         compiler::target::TypeArguments::kMaxElements));
+      break;
+
+    case Slot::Kind::kString_length:
+      *range = Range(
+          RangeBoundary::FromConstant(0),
+          RangeBoundary::FromConstant(compiler::target::String::kMaxElements));
       break;
 
     case Slot::Kind::kDartField:
@@ -2633,13 +2793,44 @@ void LoadFieldInstr::InferRange(RangeAnalysis* analysis, Range* range) {
     case Slot::Kind::kGrowableObjectArray_data:
     case Slot::Kind::kContext_parent:
     case Slot::Kind::kTypeArguments:
+    case Slot::Kind::kArray_type_arguments:
     case Slot::Kind::kClosure_context:
     case Slot::Kind::kClosure_delayed_type_arguments:
     case Slot::Kind::kClosure_function:
     case Slot::Kind::kClosure_function_type_arguments:
     case Slot::Kind::kClosure_instantiator_type_arguments:
+    case Slot::Kind::kFunction_data:
+    case Slot::Kind::kFunction_signature:
+    case Slot::Kind::kFunctionType_parameter_names:
+    case Slot::Kind::kFunctionType_parameter_types:
+    case Slot::Kind::kFunctionType_type_parameters:
+    case Slot::Kind::kPointerBase_data_field:
+    case Slot::Kind::kTypedDataView_data:
+    case Slot::Kind::kType_arguments:
+    case Slot::Kind::kTypeArgumentsIndex:
+    case Slot::Kind::kTypeParameters_names:
+    case Slot::Kind::kTypeParameters_flags:
+    case Slot::Kind::kTypeParameters_bounds:
+    case Slot::Kind::kTypeParameters_defaults:
+    case Slot::Kind::kTypeParameter_bound:
+    case Slot::Kind::kUnhandledException_exception:
+    case Slot::Kind::kUnhandledException_stacktrace:
+    case Slot::Kind::kWeakProperty_key:
+    case Slot::Kind::kWeakProperty_value:
       // Not an integer valued field.
       UNREACHABLE();
+      break;
+
+    case Slot::Kind::kArrayElement:
+      // Should not be used in LoadField instructions.
+      UNREACHABLE();
+      break;
+
+#define UNBOXED_NATIVE_SLOT_CASE(Class, Untagged, Field, Rep, IsFinal)         \
+  case Slot::Kind::k##Class##_##Field:
+      UNBOXED_NATIVE_SLOTS_LIST(UNBOXED_NATIVE_SLOT_CASE)
+#undef UNBOXED_NATIVE_SLOT_CASE
+      *range = Range::Full(RepresentationToRangeSize(slot().representation()));
       break;
 
     case Slot::Kind::kClosure_hash:
@@ -2652,6 +2843,7 @@ void LoadFieldInstr::InferRange(RangeAnalysis* analysis, Range* range) {
     case Slot::Kind::kArgumentsDescriptor_type_args_len:
     case Slot::Kind::kArgumentsDescriptor_positional_count:
     case Slot::Kind::kArgumentsDescriptor_count:
+    case Slot::Kind::kArgumentsDescriptor_size:
       *range = Range(RangeBoundary::FromConstant(0), RangeBoundary::MaxSmi());
       break;
   }
@@ -2701,7 +2893,7 @@ void LoadIndexedInstr::InferRange(RangeAnalysis* analysis, Range* range) {
 }
 
 void LoadCodeUnitsInstr::InferRange(RangeAnalysis* analysis, Range* range) {
-  ASSERT(RawObject::IsStringClassId(class_id()));
+  ASSERT(IsStringClassId(class_id()));
   RangeBoundary zero = RangeBoundary::FromConstant(0);
   // Take the number of loaded characters into account when determining the
   // range of the result.
@@ -2725,25 +2917,17 @@ void LoadCodeUnitsInstr::InferRange(RangeAnalysis* analysis, Range* range) {
   }
 }
 
+void Utf8ScanInstr::InferRange(RangeAnalysis* analysis, Range* range) {
+  // The input bytes given to the Utf8Scan instruction are in non-negative Smi
+  // range and so is the resulting computed length.
+  *range = Range(RangeBoundary::FromConstant(0), RangeBoundary::MaxSmi());
+}
+
 void IfThenElseInstr::InferRange(RangeAnalysis* analysis, Range* range) {
   const intptr_t min = Utils::Minimum(if_true_, if_false_);
   const intptr_t max = Utils::Maximum(if_true_, if_false_);
   *range =
       Range(RangeBoundary::FromConstant(min), RangeBoundary::FromConstant(max));
-}
-
-static RangeBoundary::RangeSize RepresentationToRangeSize(Representation r) {
-  switch (r) {
-    case kTagged:
-      return RangeBoundary::kRangeBoundarySmi;
-    case kUnboxedInt32:
-      return RangeBoundary::kRangeBoundaryInt32;
-    case kUnboxedInt64:
-      return RangeBoundary::kRangeBoundaryInt64;
-    default:
-      UNREACHABLE();
-      return RangeBoundary::kRangeBoundarySmi;
-  }
 }
 
 void BinaryIntegerOpInstr::InferRangeHelper(const Range* left_range,
@@ -2787,32 +2971,34 @@ static void CacheRange(Range** slot,
   }
 }
 
+void BinaryIntegerOpInstr::InferRange(RangeAnalysis* analysis, Range* range) {
+  auto const left_size =
+      RepresentationToRangeSize(RequiredInputRepresentation(0));
+  auto const right_size =
+      RepresentationToRangeSize(RequiredInputRepresentation(1));
+  InferRangeHelper(GetInputRange(analysis, left_size, left()),
+                   GetInputRange(analysis, right_size, right()), range);
+}
+
 void BinarySmiOpInstr::InferRange(RangeAnalysis* analysis, Range* range) {
   const Range* right_smi_range = analysis->GetSmiRange(right());
   // TODO(vegorov) completely remove this once GetSmiRange is eliminated.
-  if (op_kind() == Token::kSHR || op_kind() == Token::kSHL ||
-      op_kind() == Token::kMOD || op_kind() == Token::kTRUNCDIV) {
+  if (op_kind() == Token::kSHL || op_kind() == Token::kSHR ||
+      op_kind() == Token::kUSHR || op_kind() == Token::kMOD ||
+      op_kind() == Token::kTRUNCDIV) {
     CacheRange(&right_range_, right_smi_range,
                RangeBoundary::kRangeBoundarySmi);
   }
   InferRangeHelper(analysis->GetSmiRange(left()), right_smi_range, range);
 }
 
-void BinaryInt32OpInstr::InferRange(RangeAnalysis* analysis, Range* range) {
-  InferRangeHelper(analysis->GetSmiRange(left()),
-                   analysis->GetSmiRange(right()), range);
-}
-
-void BinaryInt64OpInstr::InferRange(RangeAnalysis* analysis, Range* range) {
-  InferRangeHelper(left()->definition()->range(),
-                   right()->definition()->range(), range);
-}
-
 void ShiftIntegerOpInstr::InferRange(RangeAnalysis* analysis, Range* range) {
+  const Range* right_range = RequiredInputRepresentation(1) == kTagged
+                                 ? analysis->GetSmiRange(right())
+                                 : right()->definition()->range();
   CacheRange(&shift_range_, right()->definition()->range(),
              RangeBoundary::kRangeBoundaryInt64);
-  InferRangeHelper(left()->definition()->range(),
-                   right()->definition()->range(), range);
+  InferRangeHelper(left()->definition()->range(), right_range, range);
 }
 
 void BoxIntegerInstr::InferRange(RangeAnalysis* analysis, Range* range) {
@@ -2873,12 +3059,19 @@ void UnboxInt64Instr::InferRange(RangeAnalysis* analysis, Range* range) {
   }
 }
 
-void UnboxedIntConverterInstr::InferRange(RangeAnalysis* analysis,
-                                          Range* range) {
-  ASSERT((from() == kUnboxedInt32) || (from() == kUnboxedInt64) ||
-         (from() == kUnboxedUint32));
-  ASSERT((to() == kUnboxedInt32) || (to() == kUnboxedInt64) ||
-         (to() == kUnboxedUint32));
+void IntConverterInstr::InferRange(RangeAnalysis* analysis, Range* range) {
+  if (from() == kUntagged || to() == kUntagged) {
+    ASSERT((from() == kUntagged &&
+            (to() == kUnboxedIntPtr || to() == kUnboxedFfiIntPtr)) ||
+           ((from() == kUnboxedIntPtr || from() == kUnboxedFfiIntPtr) &&
+            to() == kUntagged));
+  } else {
+    ASSERT(from() == kUnboxedInt32 || from() == kUnboxedInt64 ||
+           from() == kUnboxedUint32);
+    ASSERT(to() == kUnboxedInt32 || to() == kUnboxedInt64 ||
+           to() == kUnboxedUint32);
+  }
+
   const Range* value_range = value()->definition()->range();
   if (Range::IsUnknown(value_range)) {
     return;
@@ -2897,20 +3090,19 @@ void UnboxedIntConverterInstr::InferRange(RangeAnalysis* analysis,
   }
 }
 
-bool CheckArrayBoundInstr::IsRedundant(const RangeBoundary& length) {
-  Range* index_range = index()->definition()->range();
-
+static bool IsRedundantBasedOnRangeInformation(Value* index, Value* length) {
   // Range of the index is unknown can't decide if the check is redundant.
-  if (index_range == NULL) {
-    if (!(index()->BindsToConstant() && index()->BoundConstant().IsSmi())) {
+  Range* index_range = index->definition()->range();
+  if (index_range == nullptr) {
+    if (!(index->BindsToConstant() &&
+          compiler::target::IsSmi(index->BoundConstant()))) {
       return false;
     }
-
     Range range;
-    index()->definition()->InferRange(NULL, &range);
+    index->definition()->InferRange(nullptr, &range);
     ASSERT(!Range::IsUnknown(&range));
-    index()->definition()->set_range(range);
-    index_range = index()->definition()->range();
+    index->definition()->set_range(range);
+    index_range = index->definition()->range();
   }
 
   // Range of the index is not positive. Check can't be redundant.
@@ -2918,11 +3110,11 @@ bool CheckArrayBoundInstr::IsRedundant(const RangeBoundary& length) {
     return false;
   }
 
-  RangeBoundary max = RangeBoundary::FromDefinition(index()->definition());
-
+  RangeBoundary max = RangeBoundary::FromDefinition(index->definition());
   RangeBoundary max_upper = max.UpperBound();
-  RangeBoundary length_lower = length.LowerBound();
-
+  RangeBoundary array_length =
+      RangeBoundary::FromDefinition(length->definition());
+  RangeBoundary length_lower = array_length.LowerBound();
   if (max_upper.OverflowedSmi() || length_lower.OverflowedSmi()) {
     return false;
   }
@@ -2933,7 +3125,7 @@ bool CheckArrayBoundInstr::IsRedundant(const RangeBoundary& length) {
   }
 
   RangeBoundary canonical_length =
-      CanonicalizeBoundary(length, RangeBoundary::PositiveInfinity());
+      CanonicalizeBoundary(array_length, RangeBoundary::PositiveInfinity());
   if (canonical_length.OverflowedSmi()) {
     return false;
   }
@@ -2950,6 +3142,19 @@ bool CheckArrayBoundInstr::IsRedundant(const RangeBoundary& length) {
   return false;
 }
 
-}  // namespace dart
+bool CheckBoundBase::IsRedundant(bool use_loops) {
+  // First, try to prove redundancy with the results of range analysis.
+  if (IsRedundantBasedOnRangeInformation(index(), length())) {
+    return true;
+  } else if (!use_loops) {
+    return false;
+  }
+  // Next, try to prove redundancy with the results of induction analysis.
+  LoopInfo* loop = GetBlock()->loop_info();
+  if (loop != nullptr) {
+    return loop->IsInRange(this, index(), length());
+  }
+  return false;
+}
 
-#endif  // !defined(DART_PRECOMPILED_RUNTIME)
+}  // namespace dart

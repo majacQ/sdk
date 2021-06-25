@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'assist_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(ConvertToNormalParameterTest);
   });
@@ -19,8 +19,8 @@ class ConvertToNormalParameterTest extends AssistProcessorTest {
   @override
   AssistKind get kind => DartAssistKind.CONVERT_TO_NORMAL_PARAMETER;
 
-  test_dynamic() async {
-    await resolveTestUnit('''
+  Future<void> test_dynamic() async {
+    await resolveTestCode('''
 class A {
   var test;
   A(this.test) {
@@ -36,8 +36,8 @@ class A {
 ''');
   }
 
-  test_firstInitializer() async {
-    await resolveTestUnit('''
+  Future<void> test_firstInitializer() async {
+    await resolveTestCode('''
 class A {
   int test;
   A(this.test) {
@@ -53,8 +53,8 @@ class A {
 ''');
   }
 
-  test_secondInitializer() async {
-    await resolveTestUnit('''
+  Future<void> test_secondInitializer() async {
+    await resolveTestCode('''
 class A {
   double aaa;
   int bbb;

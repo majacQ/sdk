@@ -8033,6 +8033,9 @@
       },
       "createWriter": {},
       "file": {},
+      "fileBlob": {
+        "support_level": "untriaged"
+      },
       "filesystem": {
         "support_level": "untriaged"
       },
@@ -8563,6 +8566,17 @@
       "watchPosition": {}
     },
     "support_level": "stable"
+  },
+  "GeolocationPosition": {
+    "members": {
+      "coords": {
+        "support_level": "untriaged"
+      },
+      "timestamp": {
+        "support_level": "untriaged"
+      }
+    },
+    "support_level": "untriaged"
   },
   "Geoposition": {
     "comment": "http://dev.w3.org/geo/api/spec-source.html#position",

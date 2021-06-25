@@ -2,28 +2,56 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import 'package:kernel/kernel.dart';
 import 'kernel_helpers.dart';
 
-/// Returns true if [library] represents any library from `package:js` or is the
-/// internal `dart:_js_helper` library.
-bool _isJSLibrary(Library library) {
+/// Returns true if [library] is one of the [candidates].
+/// The latter should be a list, e.g.,: ['dart:js', 'package:js'].
+bool _isLibrary(Library library, List<String> candidates) {
   if (library == null) return false;
   var uri = library.importUri;
   var scheme = uri.scheme;
-  return scheme == 'package' && uri.pathSegments[0] == 'js' ||
-      scheme == 'dart' &&
-          (uri.path == '_js_helper' || uri.path == '_foreign_helper');
+  var path = uri.pathSegments[0];
+  for (var candidate in candidates) {
+    var pair = candidate.split(':');
+    if (scheme == pair[0] && (path == pair[1] || pair[1] == '*')) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// Returns true if [library] represents any library from `package:js` or is the
+/// internal `dart:_js_helper` library.
+bool _isJSLibrary(Library library) => _isLibrary(library, [
+      'package:js',
+      'dart:_js_helper',
+      'dart:_foreign_helper',
+      'dart:_js_annotations'
+    ]);
+
+/// Whether [node] is a direct call to `allowInterop`.
+bool isAllowInterop(Expression node) {
+  if (node is StaticInvocation) {
+    var target = node.target;
+    return _isLibrary(target.enclosingLibrary, ['dart:js']) &&
+        target.name.text == 'allowInterop';
+  }
+  return false;
+}
+
+bool isJsMember(Member member) {
+  // TODO(vsm): If we ever use external outside the SDK for non-JS interop,
+  // we're need to fix this.
+  return !_isLibrary(member.enclosingLibrary, ['dart:*']) &&
+      member.isExternal &&
+      !isNative(member);
 }
 
 bool _annotationIsFromJSLibrary(String expectedName, Expression value) {
-  Class c;
-  if (value is ConstructorInvocation) {
-    c = value.target.enclosingClass;
-  } else if (value is StaticGet) {
-    var type = value.target.getterType;
-    if (type is InterfaceType) c = type.classNode;
-  }
+  var c = getAnnotationClass(value);
   return c != null &&
       c.name == expectedName &&
       _isJSLibrary(c.enclosingLibrary);
@@ -48,41 +76,34 @@ bool isPublicJSAnnotation(Expression value) =>
 bool _isJSAnonymousAnnotation(Expression value) =>
     _annotationIsFromJSLibrary('_Anonymous', value);
 
-bool _isBuiltinAnnotation(
-    Expression value, String libraryName, String annotationName) {
-  if (value is ConstructorInvocation) {
-    var c = value.target.enclosingClass;
-    if (c.name == annotationName) {
-      var uri = c.enclosingLibrary.importUri;
-      return uri.scheme == 'dart' && uri.pathSegments[0] == libraryName;
-    }
-  }
-  return false;
-}
-
 /// Whether [value] is a `@JSExportName` (internal annotation used in SDK
 /// instead of `@JS` from `package:js`).
 bool isJSExportNameAnnotation(Expression value) =>
-    _isBuiltinAnnotation(value, '_foreign_helper', 'JSExportName');
+    isBuiltinAnnotation(value, '_foreign_helper', 'JSExportName');
 
 /// Whether [i] is a `spread` invocation (to be used on function arguments
 /// to have them compiled as `...` spread args in ES6 outputs).
 bool isJSSpreadInvocation(Procedure target) =>
-    target.name.name == 'spread' && _isJSLibrary(target.enclosingLibrary);
+    target.name.text == 'spread' && _isJSLibrary(target.enclosingLibrary);
 
 bool isJSName(Expression value) =>
-    _isBuiltinAnnotation(value, '_js_helper', 'JSName');
+    isBuiltinAnnotation(value, '_js_helper', 'JSName');
 
 bool isJsPeerInterface(Expression value) =>
-    _isBuiltinAnnotation(value, '_js_helper', 'JsPeerInterface');
+    isBuiltinAnnotation(value, '_js_helper', 'JsPeerInterface');
 
 bool isNativeAnnotation(Expression value) =>
-    _isBuiltinAnnotation(value, '_js_helper', 'Native');
+    isBuiltinAnnotation(value, '_js_helper', 'Native');
 
 bool isJSAnonymousType(Class namedClass) {
-  return hasJSInteropAnnotation(namedClass) &&
+  var hasJSInterop = hasJSInteropAnnotation(namedClass);
+  var isAnonymous =
       findAnnotation(namedClass, _isJSAnonymousAnnotation) != null;
+  return hasJSInterop && isAnonymous;
 }
+
+bool isUndefinedAnnotation(Expression value) =>
+    isBuiltinAnnotation(value, '_js_helper', '_Undefined');
 
 /// Returns true iff the class has an `@JS(...)` annotation from `package:js`.
 ///
@@ -99,14 +120,18 @@ bool hasJSInteropAnnotation(Class c) => c.annotations.any(isPublicJSAnnotation);
 
 /// Returns true iff this element is a JS interop member.
 ///
-/// The element's library must have `@JS(...)` annotation from `package:js`.
-/// If the element is a class, it must also be marked with `@JS`. Other
-/// elements, such as class members and top-level functions/accessors, should
-/// be marked `external`.
+/// JS annotations are required explicitly on classes. Other elements, such as
+/// class members and top-level functions/accessors, should be marked `external`
+/// and should have directly or indirectly a `JS` annotation. It is sufficient
+/// if the annotation is in the procedure itself or an enclosing element like
+/// the class or library.
 bool usesJSInterop(NamedNode n) {
-  var library = getLibrary(n);
-  return library != null &&
-      library.annotations.any(isPublicJSAnnotation) &&
-      (n is Procedure && n.isExternal ||
-          n is Class && n.annotations.any(isPublicJSAnnotation));
+  if (n is Member && n.isExternal) {
+    return n.enclosingLibrary.annotations.any(isPublicJSAnnotation) ||
+        n.annotations.any(isPublicJSAnnotation) ||
+        (n.enclosingClass?.annotations?.any(isPublicJSAnnotation) ?? false);
+  } else if (n is Class) {
+    return n.annotations.any(isPublicJSAnnotation);
+  }
+  return false;
 }

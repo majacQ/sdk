@@ -6,6 +6,7 @@
 #if defined(HOST_OS_MACOS)
 
 #include "bin/platform.h"
+#include "bin/platform_macos.h"
 
 #include <CoreFoundation/CoreFoundation.h>
 
@@ -14,13 +15,12 @@
 #endif                    // !HOST_OS_IOS
 #include <errno.h>        // NOLINT
 #include <mach-o/dyld.h>
-#include <signal.h>       // NOLINT
-#include <string.h>       // NOLINT
+#include <signal.h>        // NOLINT
 #include <sys/resource.h>  // NOLINT
-#include <sys/sysctl.h>   // NOLINT
-#include <sys/types.h>    // NOLINT
-#include <sys/utsname.h>  // NOLINT
-#include <unistd.h>       // NOLINT
+#include <sys/sysctl.h>    // NOLINT
+#include <sys/types.h>     // NOLINT
+#include <sys/utsname.h>   // NOLINT
+#include <unistd.h>        // NOLINT
 
 #include "bin/console.h"
 #include "bin/file.h"
@@ -34,13 +34,13 @@ int Platform::script_index_ = 1;
 char** Platform::argv_ = NULL;
 
 static void segv_handler(int signal, siginfo_t* siginfo, void* context) {
-  Log::PrintErr(
+  Syslog::PrintErr(
       "\n===== CRASH =====\n"
-      "version=%s\n"
       "si_signo=%s(%d), si_code=%d, si_addr=%p\n",
-      Dart_VersionString(), strsignal(siginfo->si_signo), siginfo->si_signo,
-      siginfo->si_code, siginfo->si_addr);
+      strsignal(siginfo->si_signo), siginfo->si_signo, siginfo->si_code,
+      siginfo->si_addr);
   Dart_DumpNativeStackTrace(context);
+  Dart_PrepareToAbort();
   abort();
 }
 
@@ -48,8 +48,7 @@ bool Platform::Initialize() {
   // Turn off the signal handler for SIGPIPE as it causes the process
   // to terminate on writing to a closed pipe. Without the signal
   // handler error EPIPE is set instead.
-  struct sigaction act;
-  bzero(&act, sizeof(act));
+  struct sigaction act = {};
   act.sa_handler = SIG_IGN;
   if (sigaction(SIGPIPE, &act, 0) != 0) {
     perror("Setting signal handler failed");
@@ -115,7 +114,70 @@ const char* Platform::OperatingSystem() {
 #endif
 }
 
+char* ExtractsOSVersionFromString(char* str) {
+  char* pos = strstr(str, "<key>ProductVersion</key>");
+  if (pos == NULL) {
+    return NULL;
+  }
+  pos = strstr(pos, "<string>");
+  if (pos == NULL) {
+    return NULL;
+  }
+  // Shift the index by the length of "<string>".
+  pos += 8;
+  char* end_pos = strstr(pos, "</string>");
+  if (end_pos == NULL) {
+    return NULL;
+  }
+
+  int length = end_pos - pos;
+  char* result =
+      reinterpret_cast<char*>(Dart_ScopeAllocate(length * sizeof(char)) + 1);
+  strncpy(result, pos, length);
+  result[length] = '\0';
+  return result;
+}
+
+static char* GetOSVersionFromPlist() {
+  const char* path = "/System/Library/CoreServices/SystemVersion.plist";
+  File* file = File::Open(NULL, path, File::kRead);
+  if (file == NULL) {
+    return NULL;
+  }
+  int length = file->Length();
+  if (length < 0) {
+    return NULL;
+  }
+  char* buffer =
+      reinterpret_cast<char*>(Dart_ScopeAllocate(length * sizeof(char) + 1));
+  int bytes = file->ReadFully(buffer, length);
+  buffer[length * sizeof(char)] = '\0';
+  file->Close();
+  file->Release();
+  if (bytes < 0) {
+    return NULL;
+  }
+  return ExtractsOSVersionFromString(buffer);
+}
+
 const char* Platform::OperatingSystemVersion() {
+  char str[64];
+  size_t size = sizeof(str);
+  // This is only available to some versions later than 10.13.*. If it failed,
+  // try to read from "SystemVersion.plist".
+  int res = sysctlbyname("kern.osproductversion", str, &size, NULL, 0);
+  if (res == 0) {
+    int len = snprintf(NULL, 0, "%s", str);
+    char* result_string = DartUtils::ScopedCString(len + 1);
+    strncpy(result_string, str, len);
+    result_string[len] = '\0';
+    return result_string;
+  }
+  char* result_string = GetOSVersionFromPlist();
+  if (result_string != NULL) {
+    return result_string;
+  }
+
   struct utsname info;
   int ret = uname(&info);
   if (ret != 0) {
@@ -252,8 +314,24 @@ const char* Platform::ResolveExecutablePath() {
   return canon_path;
 }
 
+intptr_t Platform::ResolveExecutablePathInto(char* result, size_t result_size) {
+  // Get the required length of the buffer.
+  uint32_t path_size = 0;
+  if (_NSGetExecutablePath(nullptr, &path_size) == 0) {
+    return -1;
+  }
+  if (path_size > result_size) {
+    return -1;
+  }
+  if (_NSGetExecutablePath(result, &path_size) != 0) {
+    return -1;
+  }
+  return path_size;
+}
+
 void Platform::Exit(int exit_code) {
   Console::RestoreConfig();
+  Dart_PrepareToAbort();
   exit(exit_code);
 }
 

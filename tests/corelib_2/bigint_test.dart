@@ -2,10 +2,13 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 // Testing Bigints with and without intrinsics.
-// VMOptions=
-// VMOptions=--no_intrinsify
-// VMOptions=--optimization_counter_threshold=5 --no-background_compilation
+// VMOptions=--intrinsify --no-enable-asserts
+// VMOptions=--intrinsify --enable-asserts
+// VMOptions=--no-intrinsify --enable-asserts
+// VMOptions=--optimization-counter-threshold=5 --no-background-compilation
 
 import "package:expect/expect.dart";
 
@@ -221,6 +224,15 @@ testModInverse() {
   test(mediumNumber, new BigInt.from(137), new BigInt.from(77));
   test(new BigInt.from(137), mediumNumber, new BigInt.from(540686667207353));
   test(bigNumber, new BigInt.from(137), new BigInt.from(128));
+  var x = BigInt.parse(
+      "28ea16430c1f1072754aa5ebbfda0d790605a507c6c9758e88697b0b5dd9e74c",
+      radix: 16);
+  var m = BigInt.parse(
+      "fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f",
+      radix: 16);
+  var r = BigInt.parse("95929095851002583825372225918533539673793386278"
+                       "360575987103577151530201707061", radix: 10);
+  test(x, m, r);
 }
 
 testGcd() {
@@ -761,11 +773,13 @@ testShiftAmount() {
   Expect.equals(BigInt.zero, BigInt.zero >> 1234567890);
   Expect.equals(BigInt.two.pow(999), BigInt.one << 999);
   Expect.equals(BigInt.one, BigInt.two.pow(999) >> 999);
-  Expect.equals(BigInt.zero, new BigInt.from(12) >> 0x7FFFFFFFFFFFFFFF);
-  Expect.equals(-BigInt.one, -new BigInt.from(12) >> 0x7FFFFFFFFFFFFFFF);
+  // 0x7FFFFFFFFFFFFFFF on VM, slightly rounded up on web platform.
+  const int maxInt64 = 0x7FFFFFFFFFFFF000 + 0xFFF;
+  Expect.equals(BigInt.zero, new BigInt.from(12) >> maxInt64);
+  Expect.equals(-BigInt.one, -new BigInt.from(12) >> maxInt64);
   bool exceptionCaught = false;
   try {
-    var a = BigInt.one << 0x7FFFFFFFFFFFFFFF;
+    var a = BigInt.one << maxInt64;
   } on OutOfMemoryError catch (e) {
     exceptionCaught = true;
   } catch (e) {
@@ -1027,42 +1041,53 @@ void testFromToDouble() {
 
   Expect.equals(BigInt.zero, new BigInt.from(0.9999999999999999));
   Expect.equals(BigInt.zero, new BigInt.from(-0.9999999999999999));
+
+  // Regression test for http://dartbug.com/41819
+  // Rounding edge case where last digit causes rounding.
+  Expect.equals(-3.69616463331328e+27,
+      BigInt.parse("-3696164633313280000000000000").toDouble());
+  Expect.equals(-3.6961646333132803e+27,
+      BigInt.parse("-3696164633313280000000000001").toDouble());
 }
 
 main() {
   for (int i = 0; i < 8; i++) {
-    Expect.equals(BigInt.parse("1234567890123456789"), foo()); /// 01: ok
-    Expect.equals(BigInt.parse("12345678901234567890"), bar()); /// 02: ok
-    testModPow(); /// 03: ok
-    testModInverse(); /// 04: ok
-    testGcd(); /// 05: ok
-    testSmiOverflow(); /// 06: ok
-    testBigintAnd(); /// 07: ok
-    testBigintOr(); /// 08: ok
-    testBigintXor(); /// 09: ok
-    testBigintAdd(); /// 10: ok
-    testBigintSub(); /// 11: ok
-    testBigintMul(); /// 12: ok
-    testBigintTruncDiv(); /// 12: ok
-    testBigintDiv(); /// 13: ok
-    testBigintModulo(); /// 14: ok
-    testBigintModPow(); /// 15: ok
-    testBigintModInverse(); /// 16: ok
-    testBigintGcd(); /// 17: ok
-    testBigintNegate(); /// 18: ok
-    testShiftAmount(); /// 19: ok
-    testPow(); /// 20: ok
-    testToRadixString(); /// 21: ok
-    testToString(); /// 22: ok
-    testFromToInt(); /// 23: ok
-    testFromToDouble(); /// 24: ok
-    Expect.equals(BigInt.parse("12345678901234567890"), /// 25: ok
-        BigInt.parse("12345678901234567890").abs()); /// 25: ok
-    Expect.equals(BigInt.parse("12345678901234567890"), /// 26: ok
-        BigInt.parse("-12345678901234567890").abs()); /// 26: ok
-    var a = BigInt.parse("10000000000000000000"); /// 27: ok
-    var b = BigInt.parse("10000000000000000001"); /// 27: ok
-    Expect.equals(false, a.hashCode == b.hashCode); /// 27: ok
-    Expect.equals(true, a.hashCode == (b - BigInt.one).hashCode); /// 27: ok
+    Expect.equals(BigInt.parse("1234567890123456789"), foo()); //# 01: ok
+    Expect.equals(BigInt.parse("12345678901234567890"), bar()); //# 02: ok
+    testModPow(); //# 03: ok
+    testModInverse(); //# 04: ok
+    testGcd(); //# 05: ok
+    testSmiOverflow(); //# 06: ok
+    testBigintAnd(); //# 07: ok
+    testBigintOr(); //# 08: ok
+    testBigintXor(); //# 09: ok
+    testBigintAdd(); //# 10: ok
+    testBigintSub(); //# 11: ok
+    testBigintMul(); //# 12: ok
+    testBigintTruncDiv(); //# 12: ok
+    testBigintDiv(); //# 13: ok
+    testBigintModulo(); //# 14: ok
+    testBigintModPow(); //# 15: ok
+    testBigintModInverse(); //# 16: ok
+    testBigintGcd(); //# 17: ok
+    testBigintNegate(); //# 18: ok
+    testShiftAmount(); //# 19: ok
+    testPow(); //# 20: ok
+    testToRadixString(); //# 21: ok
+    testToString(); //# 22: ok
+    testFromToInt(); //# 23: ok
+    testFromToDouble(); //# 24: ok
+    Expect.equals(BigInt.parse("12345678901234567890"), //# 25: ok
+        BigInt.parse("12345678901234567890").abs()); //# 25: ok
+    Expect.equals(BigInt.parse("12345678901234567890"), //# 26: ok
+        BigInt.parse("-12345678901234567890").abs()); //# 26: ok
+    var a = BigInt.parse("10000000000000000000"); //# 27: ok
+    var b = BigInt.parse("10000000000000000001"); //# 27: ok
+    Expect.equals(false, a.hashCode == b.hashCode); //# 27: ok
+    Expect.equals(true, a.hashCode == (b - BigInt.one).hashCode); //# 27: ok
+
+    // Regression test for http://dartbug.com/36105
+    var overbig = -BigInt.from(10).pow(309);
+    Expect.equals(overbig.toDouble(), double.negativeInfinity);
   }
 }

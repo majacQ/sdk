@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'fix_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(FixTest);
   });
@@ -19,8 +19,8 @@ class FixTest extends FixProcessorTest {
   @override
   FixKind get kind => fail('kind should not be requested');
 
-  test_malformedTypeTest() async {
-    await resolveTestUnit('''
+  Future<void> test_malformedTypeTest() async {
+    await resolveTestCode('''
 main(p) {
   p i s Null;
 }''');

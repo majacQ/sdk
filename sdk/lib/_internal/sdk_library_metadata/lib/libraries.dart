@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.5
+
 library libraries;
 
 /**
@@ -45,8 +47,6 @@ const Map<String, LibraryInfo> libraries = const {
       categories: "Client,Server",
       maturity: Maturity.STABLE,
       dart2jsPatchPath: "_internal/js_runtime/lib/async_patch.dart"),
-  "_chrome": const LibraryInfo("_chrome/dart2js/chrome_dart2js.dart",
-      categories: "Client", documented: false),
   "collection": const LibraryInfo("collection/collection.dart",
       categories: "Client,Server,Embedded",
       maturity: Maturity.STABLE,
@@ -63,6 +63,8 @@ const Map<String, LibraryInfo> libraries = const {
       categories: "Client,Server,Embedded",
       maturity: Maturity.UNSTABLE,
       dart2jsPatchPath: "_internal/js_runtime/lib/developer_patch.dart"),
+  "ffi": const LibraryInfo("ffi/ffi.dart",
+      categories: "Server", maturity: Maturity.STABLE),
   "html": const LibraryInfo("html/dart2js/html_dart2js.dart",
       categories: "Client",
       maturity: Maturity.WEB_STABLE,
@@ -86,16 +88,17 @@ const Map<String, LibraryInfo> libraries = const {
       categories: "Client,Server",
       maturity: Maturity.STABLE,
       dart2jsPatchPath: "_internal/js_runtime/lib/isolate_patch.dart"),
-  "js": const LibraryInfo("js/dart2js/js_dart2js.dart",
+  "js": const LibraryInfo("js/js.dart",
       categories: "Client",
       maturity: Maturity.STABLE,
-      platforms: DART2JS_PLATFORM),
+      platforms: DART2JS_PLATFORM,
+      dart2jsPatchPath: "_internal/js_runtime/lib/js_patch.dart"),
   "_js": const LibraryInfo("js/_js.dart",
       categories: "Client",
       dart2jsPatchPath: "js/_js_client.dart",
       documented: false,
       platforms: DART2JS_PLATFORM),
-  "js_util": const LibraryInfo("js_util/dart2js/js_util_dart2js.dart",
+  "js_util": const LibraryInfo("js_util/js_util.dart",
       categories: "Client",
       maturity: Maturity.STABLE,
       platforms: DART2JS_PLATFORM),
@@ -123,8 +126,7 @@ const Map<String, LibraryInfo> libraries = const {
       documented: false,
       platforms: DART2JS_PLATFORM),
   "cli": const LibraryInfo("cli/cli.dart",
-      categories: "Server",
-      dart2jsPatchPath: "_internal/js_runtime/lib/cli_patch.dart"),
+      categories: "Server", platforms: VM_PLATFORM),
   "svg": const LibraryInfo("svg/dart2js/svg_dart2js.dart",
       categories: "Client",
       maturity: Maturity.WEB_STABLE,
@@ -146,6 +148,10 @@ const Map<String, LibraryInfo> libraries = const {
       documented: false,
       dart2jsPatchPath: "_internal/js_runtime/lib/internal_patch.dart"),
   "_js_helper": const LibraryInfo("_internal/js_runtime/lib/js_helper.dart",
+      categories: "", documented: false, platforms: DART2JS_PLATFORM),
+  "_late_helper": const LibraryInfo("_internal/js_runtime/lib/late_helper.dart",
+      categories: "", documented: false, platforms: DART2JS_PLATFORM),
+  "_rti": const LibraryInfo("_internal/js_runtime/lib/rti.dart",
       categories: "", documented: false, platforms: DART2JS_PLATFORM),
   "_interceptors": const LibraryInfo(
       "_internal/js_runtime/lib/interceptors.dart",
@@ -174,7 +180,14 @@ const Map<String, LibraryInfo> libraries = const {
       categories: "",
       documented: false,
       platforms: DART2JS_PLATFORM),
+  "_recipe_syntax": const LibraryInfo(
+      "_internal/js_runtime/lib/shared/recipe_syntax.dart",
+      categories: "",
+      documented: false,
+      platforms: DART2JS_PLATFORM),
   "_metadata": const LibraryInfo("html/html_common/metadata.dart",
+      categories: "", documented: false, platforms: DART2JS_PLATFORM),
+  "_js_annotations": const LibraryInfo("js/_js_annotations.dart",
       categories: "", documented: false, platforms: DART2JS_PLATFORM),
 };
 
@@ -286,26 +299,26 @@ class Maturity {
       1,
       "Experimental",
       "This library is experimental and will likely change or be removed\n"
-      "in future versions.");
+          "in future versions.");
 
   static const Maturity UNSTABLE = const Maturity(
       2,
       "Unstable",
       "This library is in still changing and have not yet endured\n"
-      "sufficient real-world testing.\n"
-      "Backwards-compatibility is NOT guaranteed.");
+          "sufficient real-world testing.\n"
+          "Backwards-compatibility is NOT guaranteed.");
 
   static const Maturity WEB_STABLE = const Maturity(
       3,
       "Web Stable",
       "This library is tracking the DOM evolution as defined by WC3.\n"
-      "Backwards-compatibility is NOT guaranteed.");
+          "Backwards-compatibility is NOT guaranteed.");
 
   static const Maturity STABLE = const Maturity(
       4,
       "Stable",
       "The library is stable. API backwards-compatibility is guaranteed.\n"
-      "However implementation details might change.");
+          "However implementation details might change.");
 
   static const Maturity LOCKED = const Maturity(5, "Locked",
       "This library will not change except when serious bugs are encountered.");

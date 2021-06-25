@@ -8,8 +8,10 @@
 
 #include "vm/os_thread.h"
 
-#include <errno.h>     // NOLINT
-#include <sys/time.h>  // NOLINT
+#include <errno.h>  // NOLINT
+#include <stdio.h>
+#include <sys/resource.h>  // NOLINT
+#include <sys/time.h>      // NOLINT
 
 #include "platform/address_sanitizer.h"
 #include "platform/assert.h"
@@ -17,7 +19,14 @@
 #include "platform/signal_blocker.h"
 #include "platform/utils.h"
 
+#include "vm/flags.h"
+
 namespace dart {
+
+DEFINE_FLAG(int,
+            worker_thread_priority,
+            kMinInt,
+            "The thread priority the VM should use for new worker threads.");
 
 #define VALIDATE_PTHREAD_RESULT(result)                                        \
   if (result != 0) {                                                           \
@@ -94,6 +103,7 @@ class ThreadStartData {
   DISALLOW_COPY_AND_ASSIGN(ThreadStartData);
 };
 
+// TODO(bkonyi): remove this call once the prebuilt SDK is updated.
 // Spawned threads inherit their spawner's signal mask. We sometimes spawn
 // threads for running Dart code from a thread that is blocking SIGPROF.
 // This function explicitly unblocks SIGPROF so the profiler continues to
@@ -112,12 +122,25 @@ static void UnblockSIGPROF() {
 // is used to ensure that the thread is properly destroyed if the thread just
 // exits.
 static void* ThreadStart(void* data_ptr) {
+  if (FLAG_worker_thread_priority != kMinInt) {
+    if (setpriority(PRIO_PROCESS, gettid(), FLAG_worker_thread_priority) ==
+        -1) {
+      FATAL2("Setting thread priority to %d failed: errno = %d\n",
+             FLAG_worker_thread_priority, errno);
+    }
+  }
+
   ThreadStartData* data = reinterpret_cast<ThreadStartData*>(data_ptr);
 
   const char* name = data->name();
   OSThread::ThreadStartFunction function = data->function();
   uword parameter = data->parameter();
   delete data;
+
+  // Set the thread name. There is 16 bytes limit on the name (including \0).
+  char truncated_name[16];
+  snprintf(truncated_name, ARRAY_SIZE(truncated_name), "%s", name);
+  pthread_setname_np(pthread_self(), truncated_name);
 
   // Create new OSThread object and set as TLS for new thread.
   OSThread* thread = OSThread::CreateOSThread();
@@ -187,7 +210,7 @@ ThreadId OSThread::GetCurrentThreadId() {
   return gettid();
 }
 
-#ifndef PRODUCT
+#ifdef SUPPORT_TIMELINE
 ThreadId OSThread::GetCurrentThreadTraceId() {
   return GetCurrentThreadId();
 }
@@ -212,7 +235,7 @@ void OSThread::Join(ThreadJoinId id) {
 }
 
 intptr_t OSThread::ThreadIdToIntPtr(ThreadId id) {
-  ASSERT(sizeof(id) == sizeof(intptr_t));
+  ASSERT(sizeof(id) <= sizeof(intptr_t));
   return static_cast<intptr_t>(id);
 }
 
@@ -226,7 +249,6 @@ bool OSThread::Compare(ThreadId a, ThreadId b) {
 
 bool OSThread::GetCurrentStackBounds(uword* lower, uword* upper) {
   pthread_attr_t attr;
-  // May fail on the main thread.
   if (pthread_getattr_np(pthread_self(), &attr) != 0) {
     return false;
   }

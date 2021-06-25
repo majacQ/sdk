@@ -17,9 +17,29 @@ class ServiceProtocolInfo {
   /// not support the service protocol, this is 0.
   final int minorVersion = _getServiceMinorVersion();
 
-  /// The Uri to access the service. If the web server is not running, this
-  /// will be null.
-  final Uri serverUri;
+  /// The Uri to connect to the debugger client hosted by the service. If the
+  /// web server is not running, this will be null.
+  final Uri? serverUri;
+
+  /// The Uri to connect to the service via web socket. If the web server is
+  /// not running, this will be null.
+  Uri? get serverWebSocketUri {
+    Uri? uri = serverUri;
+    if (uri != null) {
+      final pathSegments = <String>[];
+      if (uri.pathSegments.isNotEmpty) {
+        pathSegments.addAll(uri.pathSegments.where(
+          // Strip out the empty string that appears at the end of path segments.
+          // Empty string elements will result in an extra '/' being added to the
+          // URI.
+          (s) => s.isNotEmpty,
+        ));
+      }
+      pathSegments.add('ws');
+      uri = uri.replace(scheme: 'ws', pathSegments: pathSegments);
+    }
+    return uri;
+  }
 
   ServiceProtocolInfo(this.serverUri);
 
@@ -41,30 +61,34 @@ class Service {
   /// Uri to access the service).
   static Future<ServiceProtocolInfo> getInfo() async {
     // Port to receive response from service isolate.
-    final RawReceivePort receivePort = new RawReceivePort();
-    final Completer<Uri> uriCompleter = new Completer<Uri>();
-    receivePort.handler = (Uri uri) => uriCompleter.complete(uri);
+    final RawReceivePort receivePort =
+        new RawReceivePort(null, 'Service.getInfo');
+    final Completer<Uri?> uriCompleter = new Completer<Uri?>();
+    receivePort.handler = (Uri? uri) => uriCompleter.complete(uri);
     // Request the information from the service isolate.
     _getServerInfo(receivePort.sendPort);
     // Await the response from the service isolate.
-    Uri uri = await uriCompleter.future;
+    Uri? uri = await uriCompleter.future;
     // Close the port.
     receivePort.close();
     return new ServiceProtocolInfo(uri);
   }
 
   /// Control the web server that the service protocol is accessed through.
-  /// The [enable] argument must be a boolean and is used as a toggle to
-  /// enable (true) or disable (false) the web server servicing requests.
+  /// [enable] is used as a toggle to enable or disable the web server
+  /// servicing requests. If [silenceOutput] is provided and is true,
+  /// the server will not output information to the console.
   static Future<ServiceProtocolInfo> controlWebServer(
-      {bool enable: false}) async {
+      {bool enable = false, bool? silenceOutput}) async {
+    // TODO: When NNBD is complete, delete the following line.
     ArgumentError.checkNotNull(enable, 'enable');
     // Port to receive response from service isolate.
-    final RawReceivePort receivePort = new RawReceivePort();
+    final RawReceivePort receivePort =
+        new RawReceivePort(null, 'Service.controlWebServer');
     final Completer<Uri> uriCompleter = new Completer<Uri>();
     receivePort.handler = (Uri uri) => uriCompleter.complete(uri);
     // Request the information from the service isolate.
-    _webServerControl(receivePort.sendPort, enable);
+    _webServerControl(receivePort.sendPort, enable, silenceOutput);
     // Await the response from the service isolate.
     Uri uri = await uriCompleter.future;
     // Close the port.
@@ -76,7 +100,8 @@ class Service {
   ///
   /// Returns null if the running Dart environment does not support the service
   /// protocol.
-  static String getIsolateID(Isolate isolate) {
+  static String? getIsolateID(Isolate isolate) {
+    // TODO: When NNBD is complete, delete the following line.
     ArgumentError.checkNotNull(isolate, 'isolate');
     return _getIsolateIDFromSendPort(isolate.controlPort);
   }
@@ -86,7 +111,8 @@ class Service {
 external void _getServerInfo(SendPort sendPort);
 
 /// [sendPort] will receive a Uri or null.
-external void _webServerControl(SendPort sendPort, bool enable);
+external void _webServerControl(
+    SendPort sendPort, bool enable, bool? silenceOutput);
 
 /// Returns the major version of the service protocol.
 external int _getServiceMajorVersion();
@@ -95,4 +121,4 @@ external int _getServiceMajorVersion();
 external int _getServiceMinorVersion();
 
 /// Returns the service id for the isolate that owns [sendPort].
-external String _getIsolateIDFromSendPort(SendPort sendPort);
+external String? _getIsolateIDFromSendPort(SendPort sendPort);

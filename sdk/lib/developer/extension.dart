@@ -9,19 +9,25 @@ part of dart.developer;
 /// If the RPC was successful, use [ServiceExtensionResponse.result], otherwise
 /// use [ServiceExtensionResponse.error].
 class ServiceExtensionResponse {
-  final String _result;
-  final int _errorCode;
-  final String _errorDetail;
+  /// The result of a successful service protocol extension RPC.
+  final String? result;
+
+  /// The error code associated with a failed service protocol extension RPC.
+  final int? errorCode;
+
+  /// The details of a failed service protocol extension RPC.
+  final String? errorDetail;
 
   /// Creates a successful response to a service protocol extension RPC.
   ///
   /// Requires [result] to be a JSON object encoded as a string. When forming
   /// the JSON-RPC message [result] will be inlined directly.
   ServiceExtensionResponse.result(String result)
-      : _result = result,
-        _errorCode = null,
-        _errorDetail = null {
-    ArgumentError.checkNotNull(_result, "result");
+      : result = result,
+        errorCode = null,
+        errorDetail = null {
+    // TODO: When NNBD is complete, delete the following line.
+    ArgumentError.checkNotNull(result, "result");
   }
 
   /// Creates an error response to a service protocol extension RPC.
@@ -31,11 +37,12 @@ class ServiceExtensionResponse {
   /// encoded as a string. When forming the JSON-RPC message [errorDetail] will
   /// be inlined directly.
   ServiceExtensionResponse.error(int errorCode, String errorDetail)
-      : _result = null,
-        _errorCode = errorCode,
-        _errorDetail = errorDetail {
-    _validateErrorCode(_errorCode);
-    ArgumentError.checkNotNull(_errorDetail, "errorDetail");
+      : result = null,
+        errorCode = errorCode,
+        errorDetail = errorDetail {
+    _validateErrorCode(errorCode);
+    // TODO: When NNBD is complete, delete the following line.
+    ArgumentError.checkNotNull(errorDetail, "errorDetail");
   }
 
   /// Invalid method parameter(s) error code.
@@ -75,6 +82,7 @@ class ServiceExtensionResponse {
   }
 
   static _validateErrorCode(int errorCode) {
+    // TODO: When NNBD is complete, delete the following line.
     ArgumentError.checkNotNull(errorCode, "errorCode");
     if (errorCode == invalidParams) return;
     if ((errorCode >= extensionErrorMin) && (errorCode <= extensionErrorMax)) {
@@ -83,22 +91,17 @@ class ServiceExtensionResponse {
     throw new ArgumentError.value(errorCode, "errorCode", "Out of range");
   }
 
-  // ignore: unused_element, called from runtime/lib/developer.dart
-  bool _isError() => (_errorCode != null) && (_errorDetail != null);
+  /// Determines if this response represents an error.
+  bool isError() => (errorCode != null) && (errorDetail != null);
 
   // ignore: unused_element, called from runtime/lib/developer.dart
   String _toString() {
-    if (_result != null) {
-      return _result;
-    } else {
-      assert(_errorCode != null);
-      assert(_errorDetail != null);
-      return json.encode({
-        'code': _errorCode,
-        'message': _errorCodeMessage(_errorCode),
-        'data': {'details': _errorDetail}
-      });
-    }
+    return result ??
+        json.encode({
+          'code': errorCode!,
+          'message': _errorCodeMessage(errorCode!),
+          'data': {'details': errorDetail!}
+        });
   }
 }
 
@@ -125,6 +128,7 @@ typedef Future<ServiceExtensionResponse> ServiceExtensionHandler(
 /// Because service extensions are isolate specific, clients using extensions
 /// must always include an 'isolateId' parameter with each RPC.
 void registerExtension(String method, ServiceExtensionHandler handler) {
+  // TODO: When NNBD is complete, delete the following line.
   ArgumentError.checkNotNull(method, 'method');
   if (!method.startsWith('ext.')) {
     throw new ArgumentError.value(method, 'method', 'Must begin with ext.');
@@ -132,6 +136,7 @@ void registerExtension(String method, ServiceExtensionHandler handler) {
   if (_lookupExtension(method) != null) {
     throw new ArgumentError('Extension already registered: $method');
   }
+  // TODO: When NNBD is complete, delete the following line.
   ArgumentError.checkNotNull(handler, 'handler');
   _registerExtension(method, handler);
 }
@@ -139,6 +144,7 @@ void registerExtension(String method, ServiceExtensionHandler handler) {
 /// Post an event of [eventKind] with payload of [eventData] to the `Extension`
 /// event stream.
 void postEvent(String eventKind, Map eventData) {
+  // TODO: When NNBD is complete, delete the following two lines.
   ArgumentError.checkNotNull(eventKind, 'eventKind');
   ArgumentError.checkNotNull(eventData, 'eventData');
   String eventDataAsString = json.encode(eventData);
@@ -152,5 +158,5 @@ external void _postEvent(String eventKind, String eventData);
 // these into Dart code unless you can ensure that the operations will can be
 // done atomically. Native code lives in vm/isolate.cc-
 // LookupServiceExtensionHandler and RegisterServiceExtensionHandler.
-external ServiceExtensionHandler _lookupExtension(String method);
+external ServiceExtensionHandler? _lookupExtension(String method);
 external _registerExtension(String method, ServiceExtensionHandler handler);

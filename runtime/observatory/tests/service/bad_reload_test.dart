@@ -2,6 +2,9 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// OtherResources=bad_reload/v1/main.dart
+// OtherResources=bad_reload/v2/main.dart
+
 import 'test_helper.dart';
 import 'dart:async';
 import 'dart:developer';
@@ -10,7 +13,7 @@ import 'dart:io';
 import 'service_test_common.dart';
 import 'package:observatory/service.dart';
 import 'package:path/path.dart' as path;
-import 'package:unittest/unittest.dart';
+import 'package:test/test.dart';
 
 // Chop off the file name.
 String baseDirectory = path.dirname(Platform.script.path) + '/';
@@ -32,9 +35,17 @@ Future<String> invokeTest(Isolate isolate) async {
   await isolate.reload();
   Library lib = isolate.rootLibrary;
   await lib.load();
-  Instance result = await lib.evaluate('test()');
+  Instance result = await lib.evaluate('test()') as Instance;
   expect(result.isString, isTrue);
-  return result.valueAsString;
+  return result.valueAsString as String;
+}
+
+Future<void> invokeTestWithError(Isolate isolate) async {
+  await isolate.reload();
+  Library lib = isolate.rootLibrary;
+  await lib.load();
+  final result = await lib.evaluate('test()');
+  expect(result.isError, isTrue);
 }
 
 var tests = <IsolateTest>[
@@ -65,14 +76,13 @@ var tests = <IsolateTest>[
     );
     // Observe that it failed.
     expect(response['success'], isFalse);
-    List notices = response['details']['notices'];
+    List notices = response['notices'];
     expect(notices.length, equals(1));
     Map<String, dynamic> reasonForCancelling = notices[0];
     expect(reasonForCancelling['type'], equals('ReasonForCancelling'));
     expect(reasonForCancelling['message'], contains('library_isnt_here_man'));
 
-    String v2 = await invokeTest(spawnedIsolate);
-    expect(v2, 'apple');
+    await invokeTestWithError(spawnedIsolate);
   }
 ];
 

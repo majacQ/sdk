@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'assist_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(ConvertIntoIsNotEmptyTest);
   });
@@ -19,80 +19,80 @@ class ConvertIntoIsNotEmptyTest extends AssistProcessorTest {
   @override
   AssistKind get kind => DartAssistKind.CONVERT_INTO_IS_NOT_EMPTY;
 
-  test_noBang() async {
+  Future<void> test_noBang() async {
     verifyNoTestUnitErrors = false;
-    await resolveTestUnit('''
-main(String str) {
+    await resolveTestCode('''
+void f(String str) {
   ~str.isEmpty;
 }
 ''');
     await assertNoAssistAt('isEmpty;');
   }
 
-  test_noIsNotEmpty() async {
-    await resolveTestUnit('''
+  Future<void> test_noIsNotEmpty() async {
+    await resolveTestCode('''
 class A {
   bool get isEmpty => false;
 }
-main(A a) {
+void f(A a) {
   !a.isEmpty;
 }
 ''');
     await assertNoAssistAt('isEmpty;');
   }
 
-  test_notInPrefixExpression() async {
-    await resolveTestUnit('''
-main(String str) {
+  Future<void> test_notInPrefixExpression() async {
+    await resolveTestCode('''
+void f(String str) {
   str.isEmpty;
 }
 ''');
     await assertNoAssistAt('isEmpty;');
   }
 
-  test_notIsEmpty() async {
-    await resolveTestUnit('''
-main(int p) {
+  Future<void> test_notIsEmpty() async {
+    await resolveTestCode('''
+void f(int p) {
   !p.isEven;
 }
 ''');
     await assertNoAssistAt('isEven;');
   }
 
-  test_on_isEmpty() async {
-    await resolveTestUnit('''
-main(String str) {
+  Future<void> test_on_isEmpty() async {
+    await resolveTestCode('''
+void f(String str) {
   !str.isEmpty;
 }
 ''');
     await assertHasAssistAt('isEmpty', '''
-main(String str) {
+void f(String str) {
   str.isNotEmpty;
 }
 ''');
   }
 
-  test_on_str() async {
-    await resolveTestUnit('''
-main(String str) {
+  Future<void> test_on_str() async {
+    await resolveTestCode('''
+void f(String str) {
   !str.isEmpty;
 }
 ''');
     await assertHasAssistAt('str.', '''
-main(String str) {
+void f(String str) {
   str.isNotEmpty;
 }
 ''');
   }
 
-  test_propertyAccess() async {
-    await resolveTestUnit('''
-main(String str) {
+  Future<void> test_propertyAccess() async {
+    await resolveTestCode('''
+void f(String str) {
   !'text'.isEmpty;
 }
 ''');
     await assertHasAssistAt('isEmpty', '''
-main(String str) {
+void f(String str) {
   'text'.isNotEmpty;
 }
 ''');

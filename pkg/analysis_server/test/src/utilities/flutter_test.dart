@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -9,7 +9,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import '../../abstract_single_unit.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(FlutterTest);
   });
@@ -18,80 +18,91 @@ main() {
 @reflectiveTest
 class FlutterTest extends AbstractSingleUnitTest {
   @override
+  // TODO(brianwilkerson) Update these tests. I believe that will require
+  //  updating the mock flutter package.
+  String? get testPackageLanguageVersion => '2.9';
+
+  Flutter get _flutter => Flutter.instance;
+
+  @override
   void setUp() {
     super.setUp();
-    addFlutterPackage();
+    writeTestPackageConfig(
+      flutter: true,
+    );
   }
 
-  test_getWidgetPresentationText_icon() async {
-    await resolveTestUnit('''
+  Future<void> test_getWidgetPresentationText_icon() async {
+    await resolveTestCode('''
 import 'package:flutter/material.dart';
 var w = const Icon(Icons.book);
 ''');
     var w = _getTopVariableCreation('w');
-    expect(getWidgetPresentationText(w), "Icon(Icons.book)");
+    expect(_flutter.getWidgetPresentationText(w), 'Icon(Icons.book)');
   }
 
-  test_getWidgetPresentationText_icon_withoutArguments() async {
+  Future<void> test_getWidgetPresentationText_icon_withoutArguments() async {
     verifyNoTestUnitErrors = false;
-    await resolveTestUnit('''
+    await resolveTestCode('''
 import 'package:flutter/material.dart';
 var w = const Icon();
 ''');
     var w = _getTopVariableCreation('w');
-    expect(getWidgetPresentationText(w), "Icon");
+    expect(_flutter.getWidgetPresentationText(w), 'Icon');
   }
 
-  test_getWidgetPresentationText_notWidget() async {
-    await resolveTestUnit('''
+  Future<void> test_getWidgetPresentationText_notWidget() async {
+    await resolveTestCode('''
 import 'package:flutter/material.dart';
 var w = new Object();
 ''');
     var w = _getTopVariableCreation('w');
-    expect(getWidgetPresentationText(w), isNull);
+    expect(_flutter.getWidgetPresentationText(w), isNull);
   }
 
-  test_getWidgetPresentationText_text() async {
-    await resolveTestUnit('''
+  Future<void> test_getWidgetPresentationText_text() async {
+    await resolveTestCode('''
 import 'package:flutter/material.dart';
 var w = const Text('foo');
 ''');
     var w = _getTopVariableCreation('w');
-    expect(getWidgetPresentationText(w), "Text('foo')");
+    expect(_flutter.getWidgetPresentationText(w), "Text('foo')");
   }
 
-  test_getWidgetPresentationText_text_longText() async {
-    await resolveTestUnit('''
+  Future<void> test_getWidgetPresentationText_text_longText() async {
+    await resolveTestCode('''
 import 'package:flutter/material.dart';
 var w = const Text('${'abc' * 100}');
 ''');
     var w = _getTopVariableCreation('w');
     expect(
-        getWidgetPresentationText(w), "Text('abcabcabcabcab...cabcabcabcabc')");
+      _flutter.getWidgetPresentationText(w),
+      "Text('abcabcabcabcab...cabcabcabcabc')",
+    );
   }
 
-  test_getWidgetPresentationText_text_withoutArguments() async {
+  Future<void> test_getWidgetPresentationText_text_withoutArguments() async {
     verifyNoTestUnitErrors = false;
-    await resolveTestUnit('''
+    await resolveTestCode('''
 import 'package:flutter/material.dart';
 var w = const Text();
 ''');
     var w = _getTopVariableCreation('w');
-    expect(getWidgetPresentationText(w), "Text");
+    expect(_flutter.getWidgetPresentationText(w), 'Text');
   }
 
-  test_getWidgetPresentationText_unresolved() async {
+  Future<void> test_getWidgetPresentationText_unresolved() async {
     verifyNoTestUnitErrors = false;
-    await resolveTestUnit('''
+    await resolveTestCode('''
 import 'package:flutter/material.dart';
 var w = new Foo();
 ''');
     var w = _getTopVariableCreation('w');
-    expect(getWidgetPresentationText(w), isNull);
+    expect(_flutter.getWidgetPresentationText(w), isNull);
   }
 
-  test_identifyWidgetExpression_node_instanceCreation() async {
-    await resolveTestUnit('''
+  Future<void> test_identifyWidgetExpression_node_instanceCreation() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 
 main() {
@@ -105,43 +116,49 @@ class MyWidget extends StatelessWidget {
   Widget build(BuildContext context) => null;
 }
 ''');
-    FunctionDeclaration main = testUnit.declarations[0];
-    BlockFunctionBody body = main.functionExpression.body;
-    List<Statement> statements = body.block.statements;
+    var main = testUnit.declarations[0] as FunctionDeclaration;
+    var body = main.functionExpression.body as BlockFunctionBody;
+    var statements = body.block.statements;
 
     // new MyWidget(1234);
     {
-      ExpressionStatement statement = statements[0];
-      InstanceCreationExpression creation = statement.expression;
-      ConstructorName constructorName = creation.constructorName;
-      TypeName typeName = constructorName.type;
-      ArgumentList argumentList = creation.argumentList;
-      expect(identifyWidgetExpression(creation), creation);
-      expect(identifyWidgetExpression(constructorName), creation);
-      expect(identifyWidgetExpression(typeName), creation);
-      expect(identifyWidgetExpression(argumentList), isNull);
-      expect(identifyWidgetExpression(argumentList.arguments[0]), isNull);
+      var statement = statements[0] as ExpressionStatement;
+      var creation = statement.expression as InstanceCreationExpression;
+      var constructorName = creation.constructorName;
+      var typeName = constructorName.type;
+      var argumentList = creation.argumentList;
+      expect(_flutter.identifyWidgetExpression(creation), creation);
+      expect(_flutter.identifyWidgetExpression(constructorName), creation);
+      expect(_flutter.identifyWidgetExpression(typeName), creation);
+      expect(_flutter.identifyWidgetExpression(argumentList), isNull);
+      expect(
+        _flutter.identifyWidgetExpression(argumentList.arguments[0]),
+        isNull,
+      );
     }
 
     // new MyWidget.named(5678);
     {
-      ExpressionStatement statement = statements[1];
-      InstanceCreationExpression creation = statement.expression;
-      ConstructorName constructorName = creation.constructorName;
-      TypeName typeName = constructorName.type;
-      ArgumentList argumentList = creation.argumentList;
-      expect(identifyWidgetExpression(creation), creation);
-      expect(identifyWidgetExpression(constructorName), creation);
-      expect(identifyWidgetExpression(typeName), creation);
-      expect(identifyWidgetExpression(typeName.name), creation);
-      expect(identifyWidgetExpression(constructorName.name), creation);
-      expect(identifyWidgetExpression(argumentList), isNull);
-      expect(identifyWidgetExpression(argumentList.arguments[0]), isNull);
+      var statement = statements[1] as ExpressionStatement;
+      var creation = statement.expression as InstanceCreationExpression;
+      var constructorName = creation.constructorName;
+      var typeName = constructorName.type;
+      var argumentList = creation.argumentList;
+      expect(_flutter.identifyWidgetExpression(creation), creation);
+      expect(_flutter.identifyWidgetExpression(constructorName), creation);
+      expect(_flutter.identifyWidgetExpression(typeName), creation);
+      expect(_flutter.identifyWidgetExpression(typeName.name), creation);
+      expect(_flutter.identifyWidgetExpression(constructorName.name), creation);
+      expect(_flutter.identifyWidgetExpression(argumentList), isNull);
+      expect(
+        _flutter.identifyWidgetExpression(argumentList.arguments[0]),
+        isNull,
+      );
     }
   }
 
-  test_identifyWidgetExpression_node_invocation() async {
-    await resolveTestUnit('''
+  Future<void> test_identifyWidgetExpression_node_invocation() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 
 main() {
@@ -153,25 +170,26 @@ Text createEmptyText() => new Text('');
 Text createText(String txt) => new Text(txt);
 ''');
     {
-      MethodInvocation invocation = findNodeAtString(
-          "createEmptyText();", (node) => node is MethodInvocation);
-      expect(identifyWidgetExpression(invocation), invocation);
-      ArgumentList argumentList = invocation.argumentList;
-      expect(identifyWidgetExpression(argumentList), isNull);
+      var invocation = findNode.methodInvocation('createEmptyText();');
+      expect(_flutter.identifyWidgetExpression(invocation), invocation);
+      var argumentList = invocation.argumentList;
+      expect(_flutter.identifyWidgetExpression(argumentList), isNull);
     }
 
     {
-      MethodInvocation invocation = findNodeAtString(
-          "createText('xyz');", (node) => node is MethodInvocation);
-      expect(identifyWidgetExpression(invocation), invocation);
-      ArgumentList argumentList = invocation.argumentList;
-      expect(identifyWidgetExpression(argumentList), isNull);
-      expect(identifyWidgetExpression(argumentList.arguments[0]), isNull);
+      var invocation = findNode.methodInvocation("createText('xyz');");
+      expect(_flutter.identifyWidgetExpression(invocation), invocation);
+      var argumentList = invocation.argumentList;
+      expect(_flutter.identifyWidgetExpression(argumentList), isNull);
+      expect(
+        _flutter.identifyWidgetExpression(argumentList.arguments[0]),
+        isNull,
+      );
     }
   }
 
-  test_identifyWidgetExpression_node_namedExpression() async {
-    await resolveTestUnit('''
+  Future<void> test_identifyWidgetExpression_node_namedExpression() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 
 main() {
@@ -180,12 +198,13 @@ main() {
 
 Text createEmptyText() => new Text('');
 ''');
-    Expression childExpression = findNodeAtString('child: ');
-    expect(identifyWidgetExpression(childExpression), isNull);
+    var childExpression = findNode.namedExpression('child: ');
+    expect(_flutter.identifyWidgetExpression(childExpression), isNull);
   }
 
-  test_identifyWidgetExpression_node_prefixedIdentifier_identifier() async {
-    await resolveTestUnit('''
+  Future<void>
+      test_identifyWidgetExpression_node_prefixedIdentifier_identifier() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 
 abstract class Foo extends Widget {
@@ -196,12 +215,13 @@ main(Foo foo) {
   foo.bar; // ref
 }
 ''');
-    SimpleIdentifier bar = findNodeAtString('bar; // ref');
-    expect(identifyWidgetExpression(bar), bar.parent);
+    var bar = findNode.simple('bar; // ref');
+    expect(_flutter.identifyWidgetExpression(bar), bar.parent);
   }
 
-  test_identifyWidgetExpression_node_prefixedIdentifier_prefix() async {
-    await resolveTestUnit('''
+  Future<void>
+      test_identifyWidgetExpression_node_prefixedIdentifier_prefix() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 
 abstract class Foo extends Widget {
@@ -212,24 +232,24 @@ main(Foo foo) {
   foo.bar; // ref
 }
 ''');
-    SimpleIdentifier foo = findNodeAtString('foo.bar');
-    expect(identifyWidgetExpression(foo), foo.parent);
+    var foo = findNode.simple('foo.bar');
+    expect(_flutter.identifyWidgetExpression(foo), foo.parent);
   }
 
-  test_identifyWidgetExpression_node_simpleIdentifier() async {
-    await resolveTestUnit('''
+  Future<void> test_identifyWidgetExpression_node_simpleIdentifier() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 
 main(Widget widget) {
   widget; // ref
 }
 ''');
-    Expression expression = findNodeAtString('widget; // ref');
-    expect(identifyWidgetExpression(expression), expression);
+    var expression = findNode.simple('widget; // ref');
+    expect(_flutter.identifyWidgetExpression(expression), expression);
   }
 
-  test_identifyWidgetExpression_null() async {
-    await resolveTestUnit('''
+  Future<void> test_identifyWidgetExpression_null() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 
 main() {
@@ -239,20 +259,20 @@ main() {
 
 Text createEmptyText() => new Text('');
 ''');
-    expect(identifyWidgetExpression(null), isNull);
+    expect(_flutter.identifyWidgetExpression(null), isNull);
     {
-      Expression expression = findNodeAtString("42;");
-      expect(identifyWidgetExpression(expression), isNull);
+      var expression = findNode.integerLiteral('42;');
+      expect(_flutter.identifyWidgetExpression(expression), isNull);
     }
 
     {
-      Expression expression = findNodeAtString("intVariable;");
-      expect(identifyWidgetExpression(expression), isNull);
+      var expression = findNode.simple('intVariable;');
+      expect(_flutter.identifyWidgetExpression(expression), isNull);
     }
   }
 
-  test_identifyWidgetExpression_parent_argumentList() async {
-    await resolveTestUnit('''
+  Future<void> test_identifyWidgetExpression_parent_argumentList() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 
 main() {
@@ -262,36 +282,133 @@ main() {
 
 void useWidget(Widget w) {}
 ''');
-    Expression expression = findNodeAtString("text); // ref");
-    expect(identifyWidgetExpression(expression), expression);
+    var expression = findNode.simple('text); // ref');
+    expect(_flutter.identifyWidgetExpression(expression), expression);
   }
 
-  test_identifyWidgetExpression_parent_expressionStatement() async {
-    await resolveTestUnit('''
+  Future<void>
+      test_identifyWidgetExpression_parent_assignmentExpression() async {
+    await resolveTestCode('''
+import 'package:flutter/widgets.dart';
+
+main() {
+  Widget text;
+  text = Text('abc');
+}
+
+void useWidget(Widget w) {}
+''');
+    // Assignment itself.
+    {
+      var expression = findNode.simple('text =');
+      expect(_flutter.identifyWidgetExpression(expression), isNull);
+    }
+
+    // Left hand side.
+    {
+      var expression = findNode.assignment('text =');
+      expect(_flutter.identifyWidgetExpression(expression), isNull);
+    }
+
+    // Right hand side.
+    {
+      var expression = findNode.instanceCreation('Text(');
+      expect(_flutter.identifyWidgetExpression(expression), expression);
+    }
+  }
+
+  Future<void>
+      test_identifyWidgetExpression_parent_conditionalExpression() async {
+    await resolveTestCode('''
+import 'package:flutter/widgets.dart';
+
+main(bool condition, Widget w1, Widget w2) {
+  condition ? w1 : w2;
+}
+''');
+    var thenWidget = findNode.simple('w1 :');
+    expect(_flutter.identifyWidgetExpression(thenWidget), thenWidget);
+
+    var elseWidget = findNode.simple('w2;');
+    expect(_flutter.identifyWidgetExpression(elseWidget), elseWidget);
+  }
+
+  Future<void>
+      test_identifyWidgetExpression_parent_expressionFunctionBody() async {
+    await resolveTestCode('''
+import 'package:flutter/widgets.dart';
+
+main(Widget widget) => widget; // ref
+''');
+    var expression = findNode.simple('widget; // ref');
+    expect(_flutter.identifyWidgetExpression(expression), expression);
+  }
+
+  Future<void>
+      test_identifyWidgetExpression_parent_expressionStatement() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 
 main(Widget widget) {
   widget; // ref
 }
 ''');
-    Expression expression = findNodeAtString("widget; // ref");
-    expect(identifyWidgetExpression(expression), expression);
+    var expression = findNode.simple('widget; // ref');
+    expect(_flutter.identifyWidgetExpression(expression), expression);
   }
 
-  test_identifyWidgetExpression_parent_listLiteral() async {
-    await resolveTestUnit('''
+  Future<void> test_identifyWidgetExpression_parent_forElement() async {
+    await resolveTestCode('''
+import 'package:flutter/widgets.dart';
+
+main(bool b) {
+  [
+    for (var v in [0, 1, 2]) Container()
+  ];
+}
+
+void useWidget(Widget w) {}
+''');
+    var expression = findNode.instanceCreation('Container()');
+    expect(_flutter.identifyWidgetExpression(expression), expression);
+  }
+
+  Future<void> test_identifyWidgetExpression_parent_ifElement() async {
+    await resolveTestCode('''
+import 'package:flutter/widgets.dart';
+
+main(bool b) {
+  [
+    if (b)
+      Text('then')
+    else
+      Text('else')
+  ];
+}
+
+void useWidget(Widget w) {}
+''');
+    var thenExpression = findNode.instanceCreation("Text('then')");
+    expect(_flutter.identifyWidgetExpression(thenExpression), thenExpression);
+
+    var elseExpression = findNode.instanceCreation("Text('else')");
+    expect(_flutter.identifyWidgetExpression(elseExpression), elseExpression);
+  }
+
+  Future<void> test_identifyWidgetExpression_parent_listLiteral() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 
 main(Widget widget) {
   return [widget]; // ref
 }
 ''');
-    Expression expression = findNodeAtString("widget]; // ref");
-    expect(identifyWidgetExpression(expression), expression);
+    var expression = findNode.simple('widget]; // ref');
+    expect(_flutter.identifyWidgetExpression(expression), expression);
   }
 
-  test_identifyWidgetExpression_parent_namedExpression() async {
-    await resolveTestUnit('''
+  Future<void> test_identifyWidgetExpression_parent_namedExpression() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 
 main() {
@@ -301,24 +418,24 @@ main() {
 
 void useWidget({Widget child}) {}
 ''');
-    Expression expression = findNodeAtString("text); // ref");
-    expect(identifyWidgetExpression(expression), expression);
+    var expression = findNode.simple('text); // ref');
+    expect(_flutter.identifyWidgetExpression(expression), expression);
   }
 
-  test_identifyWidgetExpression_parent_returnStatement() async {
-    await resolveTestUnit('''
+  Future<void> test_identifyWidgetExpression_parent_returnStatement() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 
 main(Widget widget) {
   return widget; // ref
 }
 ''');
-    Expression expression = findNodeAtString("widget; // ref");
-    expect(identifyWidgetExpression(expression), expression);
+    var expression = findNode.simple('widget; // ref');
+    expect(_flutter.identifyWidgetExpression(expression), expression);
   }
 
-  test_isWidget() async {
-    await resolveTestUnit('''
+  Future<void> test_isWidget() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 
 class MyStatelessWidget extends StatelessWidget {}
@@ -328,39 +445,39 @@ class NotFlutter {}
 class NotWidget extends State {}
 ''');
     var myStatelessWidget = testUnitElement.getType('MyStatelessWidget');
-    expect(isWidget(myStatelessWidget), isTrue);
+    expect(_flutter.isWidget(myStatelessWidget), isTrue);
 
     var myStatefulWidget = testUnitElement.getType('MyStatefulWidget');
-    expect(isWidget(myStatefulWidget), isTrue);
+    expect(_flutter.isWidget(myStatefulWidget), isTrue);
 
     var myContainer = testUnitElement.getType('MyContainer');
-    expect(isWidget(myContainer), isTrue);
+    expect(_flutter.isWidget(myContainer), isTrue);
 
     var notFlutter = testUnitElement.getType('NotFlutter');
-    expect(isWidget(notFlutter), isFalse);
+    expect(_flutter.isWidget(notFlutter), isFalse);
 
     var notWidget = testUnitElement.getType('NotWidget');
-    expect(isWidget(notWidget), isFalse);
+    expect(_flutter.isWidget(notWidget), isFalse);
   }
 
-  test_isWidgetCreation() async {
-    await resolveTestUnit('''
+  Future<void> test_isWidgetCreation() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 
 var a = new Object();
 var b = new Text('bbb');
 ''');
-    expect(isWidgetCreation(null), isFalse);
+    expect(_flutter.isWidgetCreation(null), isFalse);
 
-    InstanceCreationExpression a = _getTopVariableCreation('a');
-    expect(isWidgetCreation(a), isFalse);
+    var a = _getTopVariableCreation('a');
+    expect(_flutter.isWidgetCreation(a), isFalse);
 
-    InstanceCreationExpression b = _getTopVariableCreation('b');
-    expect(isWidgetCreation(b), isTrue);
+    var b = _getTopVariableCreation('b');
+    expect(_flutter.isWidgetCreation(b), isTrue);
   }
 
-  test_isWidgetExpression() async {
-    await resolveTestUnit('''
+  Future<void> test_isWidgetExpression() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 
 main() {
@@ -380,51 +497,49 @@ class MyWidget extends StatelessWidget {
 Text createEmptyText() => new Text('');
 ''');
     {
-      Expression expression = findNodeAtString('named(); // use');
-      expect(isWidgetExpression(expression), isFalse);
-      var creation = expression.parent.parent as InstanceCreationExpression;
-      expect(isWidgetExpression(creation), isTrue);
+      var expression = findNode.simple('named(); // use');
+      expect(_flutter.isWidgetExpression(expression), isFalse);
+      var creation = expression.parent?.parent as InstanceCreationExpression;
+      expect(_flutter.isWidgetExpression(creation), isTrue);
     }
 
     {
-      Expression expression = findNodeAtString("new Text('abc')");
-      expect(isWidgetExpression(expression), isTrue);
+      var expression = findNode.instanceCreation("new Text('abc')");
+      expect(_flutter.isWidgetExpression(expression), isTrue);
     }
 
     {
-      Expression expression = findNodeAtString("text;");
-      expect(isWidgetExpression(expression), isTrue);
+      var expression = findNode.simple('text;');
+      expect(_flutter.isWidgetExpression(expression), isTrue);
     }
 
     {
-      Expression expression = findNodeAtString(
-          "createEmptyText();", (node) => node is MethodInvocation);
-      expect(isWidgetExpression(expression), isTrue);
+      var expression = findNode.methodInvocation('createEmptyText();');
+      expect(_flutter.isWidgetExpression(expression), isTrue);
     }
 
     {
-      SimpleIdentifier expression = findNodeAtString('Container(');
-      expect(isWidgetExpression(expression), isFalse);
+      var expression = findNode.simple('Container(');
+      expect(_flutter.isWidgetExpression(expression), isFalse);
     }
 
     {
-      NamedExpression expression =
-          findNodeAtString('child: ', (n) => n is NamedExpression);
-      expect(isWidgetExpression(expression), isFalse);
+      var expression = findNode.namedExpression('child: ');
+      expect(_flutter.isWidgetExpression(expression), isFalse);
     }
 
     {
-      Expression expression = findNodeAtString("42;");
-      expect(isWidgetExpression(expression), isFalse);
+      var expression = findNode.integerLiteral('42;');
+      expect(_flutter.isWidgetExpression(expression), isFalse);
     }
 
     {
-      Expression expression = findNodeAtString("intVariable;");
-      expect(isWidgetExpression(expression), isFalse);
+      var expression = findNode.simple('intVariable;');
+      expect(_flutter.isWidgetExpression(expression), isFalse);
     }
   }
 
-  VariableDeclaration _getTopVariable(String name, [CompilationUnit unit]) {
+  VariableDeclaration _getTopVariable(String name, [CompilationUnit? unit]) {
     unit ??= testUnit;
     for (var topDeclaration in unit.declarations) {
       if (topDeclaration is TopLevelVariableDeclaration) {
@@ -439,7 +554,7 @@ Text createEmptyText() => new Text('');
   }
 
   InstanceCreationExpression _getTopVariableCreation(String name,
-      [CompilationUnit unit]) {
+      [CompilationUnit? unit]) {
     return _getTopVariable(name, unit).initializer
         as InstanceCreationExpression;
   }

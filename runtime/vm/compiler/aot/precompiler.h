@@ -5,11 +5,18 @@
 #ifndef RUNTIME_VM_COMPILER_AOT_PRECOMPILER_H_
 #define RUNTIME_VM_COMPILER_AOT_PRECOMPILER_H_
 
+#if defined(DART_PRECOMPILED_RUNTIME)
+#error "AOT runtime should not use compiler sources (including header files)"
+#endif  // defined(DART_PRECOMPILED_RUNTIME)
+
 #include "vm/allocation.h"
+#include "vm/compiler/aot/dispatch_table_generator.h"
+#include "vm/compiler/assembler/assembler.h"
 #include "vm/hash_map.h"
 #include "vm/hash_table.h"
 #include "vm/object.h"
 #include "vm/symbols.h"
+#include "vm/timer.h"
 
 namespace dart {
 
@@ -19,33 +26,29 @@ class Error;
 class Field;
 class Function;
 class GrowableObjectArray;
-class RawError;
-class SequenceNode;
 class String;
-class ParsedJSONObject;
-class ParsedJSONArray;
 class Precompiler;
 class FlowGraph;
-class PrecompilerEntryPointsPrinter;
+class PrecompilerTracer;
+class RetainedReasonsWriter;
 
-class TypeRangeCache : public ValueObject {
+class TableSelectorKeyValueTrait {
  public:
-  TypeRangeCache(Precompiler* precompiler, Thread* thread, intptr_t num_cids);
-  ~TypeRangeCache();
+  // Typedefs needed for the DirectChainedHashMap template.
+  typedef int32_t Key;
+  typedef int32_t Value;
+  typedef int32_t Pair;
 
-  bool InstanceOfHasClassRange(const AbstractType& type,
-                               intptr_t* lower_limit,
-                               intptr_t* upper_limit);
+  static Key KeyOf(Pair kv) { return kv; }
 
- private:
-  static const intptr_t kNotComputed = -1;
-  static const intptr_t kNotContiguous = -2;
+  static Value ValueOf(Pair kv) { return kv; }
 
-  Precompiler* precompiler_;
-  Thread* thread_;
-  intptr_t* lower_limits_;
-  intptr_t* upper_limits_;
+  static inline uword Hash(Key key) { return key; }
+
+  static inline bool IsKeyEqual(Pair pair, Key key) { return pair == key; }
 };
+
+typedef DirectChainedHashMap<TableSelectorKeyValueTrait> TableSelectorSet;
 
 class SymbolKeyValueTrait {
  public:
@@ -58,69 +61,26 @@ class SymbolKeyValueTrait {
 
   static Value ValueOf(Pair kv) { return kv; }
 
-  static inline intptr_t Hashcode(Key key) { return key->Hash(); }
+  static inline uword Hash(Key key) { return key->Hash(); }
 
   static inline bool IsKeyEqual(Pair pair, Key key) {
-    return pair->raw() == key->raw();
+    return pair->ptr() == key->ptr();
   }
 };
 
 typedef DirectChainedHashMap<SymbolKeyValueTrait> SymbolSet;
 
-class UnlinkedCallKeyValueTrait {
- public:
-  // Typedefs needed for the DirectChainedHashMap template.
-  typedef const UnlinkedCall* Key;
-  typedef const UnlinkedCall* Value;
-  typedef const UnlinkedCall* Pair;
-
-  static Key KeyOf(Pair kv) { return kv; }
-
-  static Value ValueOf(Pair kv) { return kv; }
-
-  static inline intptr_t Hashcode(Key key) {
-    return String::Handle(key->target_name()).Hash();
+// Traits for the HashTable template.
+struct FunctionKeyTraits {
+  static uint32_t Hash(const Object& key) { return Function::Cast(key).Hash(); }
+  static const char* Name() { return "FunctionKeyTraits"; }
+  static bool IsMatch(const Object& x, const Object& y) {
+    return x.ptr() == y.ptr();
   }
-
-  static inline bool IsKeyEqual(Pair pair, Key key) {
-    return (pair->target_name() == key->target_name()) &&
-           (pair->args_descriptor() == key->args_descriptor());
-  }
+  static bool ReportStats() { return false; }
 };
 
-typedef DirectChainedHashMap<UnlinkedCallKeyValueTrait> UnlinkedCallSet;
-
-static inline intptr_t SimplePointerHash(void* ptr) {
-  return reinterpret_cast<intptr_t>(ptr) * 2654435761UL;
-}
-
-class FunctionKeyValueTrait {
- public:
-  // Typedefs needed for the DirectChainedHashMap template.
-  typedef const Function* Key;
-  typedef const Function* Value;
-  typedef const Function* Pair;
-
-  static Key KeyOf(Pair kv) { return kv; }
-
-  static Value ValueOf(Pair kv) { return kv; }
-
-  static inline intptr_t Hashcode(Key key) {
-    // We are using pointer hash for objects originating from Kernel because
-    // Fasta currently does not assign any position information to them.
-    if (key->kernel_offset() > 0) {
-      return key->kernel_offset();
-    } else {
-      return key->token_pos().value();
-    }
-  }
-
-  static inline bool IsKeyEqual(Pair pair, Key key) {
-    return pair->raw() == key->raw();
-  }
-};
-
-typedef DirectChainedHashMap<FunctionKeyValueTrait> FunctionSet;
+typedef UnorderedHashSet<FunctionKeyTraits> FunctionSet;
 
 class FieldKeyValueTrait {
  public:
@@ -133,18 +93,16 @@ class FieldKeyValueTrait {
 
   static Value ValueOf(Pair kv) { return kv; }
 
-  static inline intptr_t Hashcode(Key key) {
-    // We are using pointer hash for objects originating from Kernel because
-    // Fasta currently does not assign any position information to them.
-    if (key->kernel_offset() > 0) {
-      return key->kernel_offset();
-    } else {
-      return key->token_pos().value();
+  static inline uword Hash(Key key) {
+    const TokenPosition token_pos = key->token_pos();
+    if (token_pos.IsReal()) {
+      return token_pos.Hash();
     }
+    return key->kernel_offset();
   }
 
   static inline bool IsKeyEqual(Pair pair, Key key) {
-    return pair->raw() == key->raw();
+    return pair->ptr() == key->ptr();
   }
 };
 
@@ -161,10 +119,10 @@ class ClassKeyValueTrait {
 
   static Value ValueOf(Pair kv) { return kv; }
 
-  static inline intptr_t Hashcode(Key key) { return key->token_pos().value(); }
+  static inline uword Hash(Key key) { return key->token_pos().Hash(); }
 
   static inline bool IsKeyEqual(Pair pair, Key key) {
-    return pair->raw() == key->raw();
+    return pair->ptr() == key->ptr();
   }
 };
 
@@ -181,14 +139,54 @@ class AbstractTypeKeyValueTrait {
 
   static Value ValueOf(Pair kv) { return kv; }
 
-  static inline intptr_t Hashcode(Key key) { return key->Hash(); }
+  static inline uword Hash(Key key) { return key->Hash(); }
 
   static inline bool IsKeyEqual(Pair pair, Key key) {
-    return pair->raw() == key->raw();
+    return pair->ptr() == key->ptr();
   }
 };
 
 typedef DirectChainedHashMap<AbstractTypeKeyValueTrait> AbstractTypeSet;
+
+class FunctionTypeKeyValueTrait {
+ public:
+  // Typedefs needed for the DirectChainedHashMap template.
+  typedef const FunctionType* Key;
+  typedef const FunctionType* Value;
+  typedef const FunctionType* Pair;
+
+  static Key KeyOf(Pair kv) { return kv; }
+
+  static Value ValueOf(Pair kv) { return kv; }
+
+  static inline uword Hash(Key key) { return key->Hash(); }
+
+  static inline bool IsKeyEqual(Pair pair, Key key) {
+    return pair->ptr() == key->ptr();
+  }
+};
+
+typedef DirectChainedHashMap<FunctionTypeKeyValueTrait> FunctionTypeSet;
+
+class TypeParameterKeyValueTrait {
+ public:
+  // Typedefs needed for the DirectChainedHashMap template.
+  typedef const TypeParameter* Key;
+  typedef const TypeParameter* Value;
+  typedef const TypeParameter* Pair;
+
+  static Key KeyOf(Pair kv) { return kv; }
+
+  static Value ValueOf(Pair kv) { return kv; }
+
+  static inline uword Hash(Key key) { return key->Hash(); }
+
+  static inline bool IsKeyEqual(Pair pair, Key key) {
+    return pair->ptr() == key->ptr();
+  }
+};
+
+typedef DirectChainedHashMap<TypeParameterKeyValueTrait> TypeParameterSet;
 
 class TypeArgumentsKeyValueTrait {
  public:
@@ -201,10 +199,10 @@ class TypeArgumentsKeyValueTrait {
 
   static Value ValueOf(Pair kv) { return kv; }
 
-  static inline intptr_t Hashcode(Key key) { return key->Hash(); }
+  static inline uword Hash(Key key) { return key->Hash(); }
 
   static inline bool IsKeyEqual(Pair pair, Key key) {
-    return pair->raw() == key->raw();
+    return pair->ptr() == key->ptr();
   }
 };
 
@@ -221,10 +219,10 @@ class InstanceKeyValueTrait {
 
   static Value ValueOf(Pair kv) { return kv; }
 
-  static inline intptr_t Hashcode(Key key) { return key->GetClassId(); }
+  static inline uword Hash(Key key) { return key->GetClassId(); }
 
   static inline bool IsKeyEqual(Pair pair, Key key) {
-    return pair->raw() == key->raw();
+    return pair->ptr() == key->ptr();
   }
 };
 
@@ -232,43 +230,97 @@ typedef DirectChainedHashMap<InstanceKeyValueTrait> InstanceSet;
 
 class Precompiler : public ValueObject {
  public:
-  static RawError* CompileAll();
+  static ErrorPtr CompileAll();
 
-  static RawError* CompileFunction(Precompiler* precompiler,
-                                   Thread* thread,
-                                   Zone* zone,
-                                   const Function& function);
-
-  static RawFunction* CompileStaticInitializer(const Field& field);
+  static ErrorPtr CompileFunction(Precompiler* precompiler,
+                                  Thread* thread,
+                                  Zone* zone,
+                                  const Function& function);
 
   // Returns true if get:runtimeType is not overloaded by any class.
   bool get_runtime_type_is_unique() const {
     return get_runtime_type_is_unique_;
   }
 
+  compiler::ObjectPoolBuilder* global_object_pool_builder() {
+    ASSERT(FLAG_use_bare_instructions);
+    return &global_object_pool_builder_;
+  }
+
+  compiler::SelectorMap* selector_map() {
+    ASSERT(FLAG_use_bare_instructions && FLAG_use_table_dispatch);
+    return dispatch_table_generator_->selector_map();
+  }
+
+  static Precompiler* Instance() { return singleton_; }
+
+  void AddField(const Field& field);
+  void AddTableSelector(const compiler::TableSelector* selector);
+
+  enum class Phase {
+    kPreparation,
+    kCompilingConstructorsForInstructionCounts,
+    kFixpointCodeGeneration,
+    kDone,
+  };
+
+  Phase phase() const { return phase_; }
+
+  bool is_tracing() const { return is_tracing_; }
+
+  Thread* thread() const { return thread_; }
+  Zone* zone() const { return zone_; }
+  Isolate* isolate() const { return isolate_; }
+
  private:
+  static Precompiler* singleton_;
+
+  // Scope which activates machine readable precompiler tracing if tracer
+  // is available.
+  class TracingScope : public ValueObject {
+   public:
+    explicit TracingScope(Precompiler* precompiler)
+        : precompiler_(precompiler), was_tracing_(precompiler->is_tracing_) {
+      precompiler->is_tracing_ = (precompiler->tracer_ != nullptr);
+    }
+
+    ~TracingScope() { precompiler_->is_tracing_ = was_tracing_; }
+
+   private:
+    Precompiler* const precompiler_;
+    const bool was_tracing_;
+  };
+
   explicit Precompiler(Thread* thread);
+  ~Precompiler();
+
+  void ReportStats();
 
   void DoCompileAll();
   void AddRoots();
   void AddAnnotatedRoots();
   void Iterate();
 
+  void AddRetainReason(const Object& obj, const char* reason);
   void AddType(const AbstractType& type);
   void AddTypesOf(const Class& cls);
   void AddTypesOf(const Function& function);
+  void AddTypeParameters(const TypeParameters& params);
   void AddTypeArguments(const TypeArguments& args);
-  void AddCalleesOf(const Function& function);
+  void AddCalleesOf(const Function& function, intptr_t gop_offset);
   void AddCalleesOfHelper(const Object& entry,
                           String* temp_selector,
                           Class* temp_cls);
-  void AddConstObject(const Instance& instance);
-  void AddClosureCall(const Array& arguments_descriptor);
-  void AddField(const Field& field);
-  void AddFunction(const Function& function);
+  void AddConstObject(const class Instance& instance);
+  void AddClosureCall(const String& selector,
+                      const Array& arguments_descriptor);
+  void AddFunction(const Function& function, const char* retain_reason);
   void AddInstantiatedClass(const Class& cls);
   void AddSelector(const String& selector);
   bool IsSent(const String& selector);
+  bool IsHitByTableSelector(const Function& function);
+  // Returns the reason if the function must be retained, otherwise nullptr.
+  const char* MustRetainFunction(const Function& function);
 
   void ProcessFunction(const Function& function);
   void CheckForNewDynamicFunctions();
@@ -277,19 +329,18 @@ class Precompiler : public ValueObject {
   void AttachOptimizedTypeTestingStub();
 
   void TraceForRetainedFunctions();
+  void FinalizeDispatchTable();
+  void ReplaceFunctionStaticCallEntries();
   void DropFunctions();
   void DropFields();
   void TraceTypesFromRetainedClasses();
-  void DropTypes();
-  void DropTypeArguments();
-  void DropScriptData();
   void DropMetadata();
   void DropLibraryEntries();
   void DropClasses();
   void DropLibraries();
+  void DiscardCodeObjects();
 
-  void BindStaticCalls();
-  void SwitchICCalls();
+  DEBUG_ONLY(FunctionPtr FindUnvisitedRetainedFunction());
 
   void Obfuscate();
 
@@ -300,9 +351,7 @@ class Precompiler : public ValueObject {
 
   void FinalizeAllClasses();
 
-  Thread* thread() const { return thread_; }
-  Zone* zone() const { return zone_; }
-  Isolate* isolate() const { return isolate_; }
+  IsolateGroup* isolate_group() const { return thread_->isolate_group(); }
 
   Thread* thread_;
   Zone* zone_;
@@ -318,21 +367,36 @@ class Precompiler : public ValueObject {
   intptr_t dropped_class_count_;
   intptr_t dropped_typearg_count_;
   intptr_t dropped_type_count_;
+  intptr_t dropped_functiontype_count_;
+  intptr_t dropped_typeparam_count_;
   intptr_t dropped_library_count_;
 
+  compiler::ObjectPoolBuilder global_object_pool_builder_;
   GrowableObjectArray& libraries_;
   const GrowableObjectArray& pending_functions_;
   SymbolSet sent_selectors_;
-  FunctionSet enqueued_functions_;
+  FunctionSet functions_called_dynamically_;
+  FunctionSet seen_functions_;
+  FunctionSet possibly_retained_functions_;
   FieldSet fields_to_retain_;
   FunctionSet functions_to_retain_;
   ClassSet classes_to_retain_;
   TypeArgumentsSet typeargs_to_retain_;
   AbstractTypeSet types_to_retain_;
+  FunctionTypeSet functiontypes_to_retain_;
+  TypeParameterSet typeparams_to_retain_;
   InstanceSet consts_to_retain_;
+  TableSelectorSet seen_table_selectors_;
   Error& error_;
 
+  compiler::DispatchTableGenerator* dispatch_table_generator_;
+
   bool get_runtime_type_is_unique_;
+
+  Phase phase_ = Phase::kPreparation;
+  PrecompilerTracer* tracer_ = nullptr;
+  RetainedReasonsWriter* retained_reasons_writer_ = nullptr;
+  bool is_tracing_ = false;
 };
 
 class FunctionsTraits {
@@ -341,29 +405,14 @@ class FunctionsTraits {
   static bool ReportStats() { return false; }
 
   static bool IsMatch(const Object& a, const Object& b) {
-    Zone* zone = Thread::Current()->zone();
-    String& a_s = String::Handle(zone);
-    String& b_s = String::Handle(zone);
-    a_s = a.IsFunction() ? Function::Cast(a).name() : String::Cast(a).raw();
-    b_s = b.IsFunction() ? Function::Cast(b).name() : String::Cast(b).raw();
-    ASSERT(a_s.IsSymbol() && b_s.IsSymbol());
-    return a_s.raw() == b_s.raw();
+    return String::Cast(a).ptr() == String::Cast(b).ptr();
   }
-  static uword Hash(const Object& obj) {
-    if (obj.IsFunction()) {
-      return String::Handle(Function::Cast(obj).name()).Hash();
-    } else {
-      ASSERT(String::Cast(obj).IsSymbol());
-      return String::Cast(obj).Hash();
-    }
-  }
-  static RawObject* NewKey(const Function& function) { return function.raw(); }
+  static uword Hash(const Object& obj) { return String::Cast(obj).Hash(); }
 };
 
-typedef UnorderedHashSet<FunctionsTraits> UniqueFunctionsSet;
+typedef UnorderedHashMap<FunctionsTraits> UniqueFunctionsMap;
 
-#if defined(DART_PRECOMPILER) && !defined(TARGET_ARCH_DBC) &&                  \
-    !defined(TARGET_ARCH_IA32)
+#if defined(DART_PRECOMPILER) && !defined(TARGET_ARCH_IA32)
 // ObfuscationMap maps Strings to Strings.
 class ObfuscationMapTraits {
  public:
@@ -372,7 +421,7 @@ class ObfuscationMapTraits {
 
   // Only for non-descriptor lookup and table expansion.
   static bool IsMatch(const Object& a, const Object& b) {
-    return a.raw() == b.raw();
+    return a.ptr() == b.ptr();
   }
 
   static uword Hash(const Object& key) { return String::Cast(key).Hash(); }
@@ -416,17 +465,13 @@ class Obfuscator : public ValueObject {
   //
   // This method is guaranteed to return the same value for the same
   // input and it always preserves leading '_' even for atomic renames.
-  RawString* Rename(const String& name, bool atomic = false) {
+  StringPtr Rename(const String& name, bool atomic = false) {
     if (state_ == NULL) {
-      return name.raw();
+      return name.ptr();
     }
 
     return state_->RenameImpl(name, atomic);
   }
-
-  // Given a constant |instance| of dart:internal.Symbol rename it by updating
-  // its |name| field.
-  static void ObfuscateSymbolInstance(Thread* thread, const Instance& instance);
 
   // Given a sequence of obfuscated identifiers deobfuscate it.
   //
@@ -445,7 +490,7 @@ class Obfuscator : public ValueObject {
  private:
   // Populate renaming map with names that should have identity renaming.
   // (or in other words: with those names that should not be renamed).
-  void InitializeRenamingMap(Isolate* isolate);
+  void InitializeRenamingMap();
 
   // ObjectStore::obfuscation_map() is an Array with two elements:
   // first element is the last used rename and the second element is
@@ -454,16 +499,16 @@ class Obfuscator : public ValueObject {
   static const intptr_t kSavedStateRenamesIndex = 1;
   static const intptr_t kSavedStateSize = 2;
 
-  static RawArray* GetRenamesFromSavedState(const Array& saved_state) {
+  static ArrayPtr GetRenamesFromSavedState(const Array& saved_state) {
     Array& renames = Array::Handle();
     renames ^= saved_state.At(kSavedStateRenamesIndex);
-    return renames.raw();
+    return renames.ptr();
   }
 
-  static RawString* GetNameFromSavedState(const Array& saved_state) {
+  static StringPtr GetNameFromSavedState(const Array& saved_state) {
     String& name = String::Handle();
     name ^= saved_state.At(kSavedStateNameIndex);
-    return name.raw();
+    return name.ptr();
   }
 
   class ObfuscationState : public ZoneAllocated {
@@ -493,9 +538,10 @@ class Obfuscator : public ValueObject {
     // Note: |name| *must* be a Symbol.
     //
     // By default renames are aware about mangling scheme used for private
-    // names: '_ident@key' and '_ident' will be renamed consistently. If such
-    // interpretation is undesirable e.g. it is known that name does not
-    // contain a private key suffix or name is not a Dart identifier at all
+    // names, getters and setters: '_ident@key', 'get:_ident@key' and
+    // '_ident' will be renamed consistently. If such interpretation is
+    // undesirable e.g. it is known that name does not contain a private
+    // key suffix or name is not a Dart identifier at all
     // then this function should be called with |atomic| set to true.
     //
     // Note: if obfuscator was created with private_key then all
@@ -503,7 +549,7 @@ class Obfuscator : public ValueObject {
     //
     // This method is guaranteed to return the same value for the same
     // input.
-    RawString* RenameImpl(const String& name, bool atomic);
+    StringPtr RenameImpl(const String& name, bool atomic);
 
     // Register an identity (name -> name) mapping in the renaming map.
     //
@@ -520,11 +566,11 @@ class Obfuscator : public ValueObject {
     // For non-atomic renames BuildRename ensures that private mangled
     // identifiers (_ident@key) are renamed consistently with non-mangled
     // counterparts (_ident).
-    RawString* BuildRename(const String& name, bool atomic);
+    StringPtr BuildRename(const String& name, bool atomic);
 
     // Generate a new rename. If |should_be_private| is set to true
     // then we prefix returned identifier with '_'.
-    RawString* NewAtomicRename(bool should_be_private);
+    StringPtr NewAtomicRename(bool should_be_private);
 
     // Update next_ to generate the next free rename.
     void NextName();
@@ -558,18 +604,15 @@ class Obfuscator {
   Obfuscator(Thread* thread, const String& private_key) {}
   ~Obfuscator() {}
 
-  RawString* Rename(const String& name, bool atomic = false) {
-    return name.raw();
+  StringPtr Rename(const String& name, bool atomic = false) {
+    return name.ptr();
   }
 
   void PreventRenaming(const String& name) {}
-  static void ObfuscateSymbolInstance(Thread* thread,
-                                      const Instance& instance) {}
 
   static void Deobfuscate(Thread* thread, const GrowableObjectArray& pieces) {}
 };
-#endif  // defined(DART_PRECOMPILER) && !defined(TARGET_ARCH_DBC) &&           \
-        // !defined(TARGET_ARCH_IA32)
+#endif  // defined(DART_PRECOMPILER) && !defined(TARGET_ARCH_IA32)
 
 }  // namespace dart
 

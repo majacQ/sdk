@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'assist_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(FlutterWrapCenterTest);
   });
@@ -19,26 +19,32 @@ class FlutterWrapCenterTest extends AssistProcessorTest {
   @override
   AssistKind get kind => DartAssistKind.FLUTTER_WRAP_CENTER;
 
-  test_aroundCenter() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  @override
+  void setUp() {
+    super.setUp();
+    writeTestPackageConfig(
+      flutter: true,
+    );
+  }
+
+  Future<void> test_aroundCenter() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 class FakeFlutter {
   main() {
-    return /*caret*/new Center();
+    return /*caret*/Center();
   }
 }
 ''');
     await assertNoAssist();
   }
 
-  test_aroundContainer() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  Future<void> test_aroundContainer() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 class FakeFlutter {
   main() {
-    return /*caret*/new Container();
+    return /*caret*/Container();
   }
 }
 ''');
@@ -46,21 +52,20 @@ class FakeFlutter {
 import 'package:flutter/widgets.dart';
 class FakeFlutter {
   main() {
-    return /*caret*/Center(child: new Container());
+    return Center(child: Container());
   }
 }
 ''');
   }
 
-  test_aroundNamedConstructor() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  Future<void> test_aroundNamedConstructor() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 
 class MyWidget extends StatelessWidget {
   MyWidget.named();
 
-  Widget build(BuildContext context) => null;
+  Widget build(BuildContext context) => Text('');
 }
 
 main() {
@@ -73,11 +78,45 @@ import 'package:flutter/widgets.dart';
 class MyWidget extends StatelessWidget {
   MyWidget.named();
 
-  Widget build(BuildContext context) => null;
+  Widget build(BuildContext context) => Text('');
 }
 
 main() {
-  return Center(child: MyWidget./*caret*/named());
+  return Center(child: MyWidget.named());
+}
+''');
+  }
+
+  Future<void> test_assignment() async {
+    await resolveTestCode('''
+import 'package:flutter/widgets.dart';
+
+main() {
+  Widget w;
+  w = /*caret*/Container();
+}
+''');
+    await assertHasAssist('''
+import 'package:flutter/widgets.dart';
+
+main() {
+  Widget w;
+  w = Center(child: Container());
+}
+''');
+  }
+
+  Future<void> test_expressionFunctionBody() async {
+    await resolveTestCode('''
+import 'package:flutter/widgets.dart';
+class FakeFlutter {
+  main() => /*caret*/Container();
+}
+''');
+    await assertHasAssist('''
+import 'package:flutter/widgets.dart';
+class FakeFlutter {
+  main() => Center(child: Container());
 }
 ''');
   }

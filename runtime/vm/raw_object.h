@@ -5,245 +5,119 @@
 #ifndef RUNTIME_VM_RAW_OBJECT_H_
 #define RUNTIME_VM_RAW_OBJECT_H_
 
+#if defined(SHOULD_NOT_INCLUDE_RUNTIME)
+#error "Should not include runtime"
+#endif
+
 #include "platform/assert.h"
 #include "platform/atomic.h"
+#include "platform/thread_sanitizer.h"
+#include "vm/class_id.h"
 #include "vm/compiler/method_recognizer.h"
+#include "vm/compiler/runtime_api.h"
 #include "vm/exceptions.h"
 #include "vm/globals.h"
+#include "vm/pointer_tagging.h"
 #include "vm/snapshot.h"
+#include "vm/tagged_pointer.h"
 #include "vm/token.h"
 #include "vm/token_position.h"
 
+// Currently we have two different axes for offset generation:
+//
+//  * Target architecture
+//  * DART_PRECOMPILED_RUNTIME (i.e, AOT vs. JIT)
+//
+// That is, fields in UntaggedObject and its subclasses should only be included
+// or excluded conditionally based on these factors. Otherwise, the generated
+// offsets can be wrong (which should be caught by offset checking in dart.cc).
+//
+// TODO(dartbug.com/43646): Add DART_PRECOMPILER as another axis.
+
 namespace dart {
-
-// For now there are no compressed pointers.
-typedef RawObject* RawCompressed;
-
-// Macrobatics to define the Object hierarchy of VM implementation classes.
-#define CLASS_LIST_NO_OBJECT_NOR_STRING_NOR_ARRAY(V)                           \
-  V(Class)                                                                     \
-  V(PatchClass)                                                                \
-  V(Function)                                                                  \
-  V(ClosureData)                                                               \
-  V(SignatureData)                                                             \
-  V(RedirectionData)                                                           \
-  V(Field)                                                                     \
-  V(Script)                                                                    \
-  V(Library)                                                                   \
-  V(Namespace)                                                                 \
-  V(KernelProgramInfo)                                                         \
-  V(Code)                                                                      \
-  V(Bytecode)                                                                  \
-  V(Instructions)                                                              \
-  V(ObjectPool)                                                                \
-  V(PcDescriptors)                                                             \
-  V(CodeSourceMap)                                                             \
-  V(StackMap)                                                                  \
-  V(LocalVarDescriptors)                                                       \
-  V(ExceptionHandlers)                                                         \
-  V(Context)                                                                   \
-  V(ContextScope)                                                              \
-  V(SingleTargetCache)                                                         \
-  V(UnlinkedCall)                                                              \
-  V(ICData)                                                                    \
-  V(MegamorphicCache)                                                          \
-  V(SubtypeTestCache)                                                          \
-  V(Error)                                                                     \
-  V(ApiError)                                                                  \
-  V(LanguageError)                                                             \
-  V(UnhandledException)                                                        \
-  V(UnwindError)                                                               \
-  V(Instance)                                                                  \
-  V(LibraryPrefix)                                                             \
-  V(TypeArguments)                                                             \
-  V(AbstractType)                                                              \
-  V(Type)                                                                      \
-  V(TypeRef)                                                                   \
-  V(TypeParameter)                                                             \
-  V(BoundedType)                                                               \
-  V(MixinAppType)                                                              \
-  V(Closure)                                                                   \
-  V(Number)                                                                    \
-  V(Integer)                                                                   \
-  V(Smi)                                                                       \
-  V(Mint)                                                                      \
-  V(Double)                                                                    \
-  V(Bool)                                                                      \
-  V(GrowableObjectArray)                                                       \
-  V(Float32x4)                                                                 \
-  V(Int32x4)                                                                   \
-  V(Float64x2)                                                                 \
-  V(TypedData)                                                                 \
-  V(ExternalTypedData)                                                         \
-  V(Capability)                                                                \
-  V(ReceivePort)                                                               \
-  V(SendPort)                                                                  \
-  V(StackTrace)                                                                \
-  V(RegExp)                                                                    \
-  V(WeakProperty)                                                              \
-  V(MirrorReference)                                                           \
-  V(LinkedHashMap)                                                             \
-  V(UserTag)
-
-#define CLASS_LIST_ARRAYS(V)                                                   \
-  V(Array)                                                                     \
-  V(ImmutableArray)
-
-#define CLASS_LIST_STRINGS(V)                                                  \
-  V(String)                                                                    \
-  V(OneByteString)                                                             \
-  V(TwoByteString)                                                             \
-  V(ExternalOneByteString)                                                     \
-  V(ExternalTwoByteString)
-
-#define CLASS_LIST_TYPED_DATA(V)                                               \
-  V(Int8Array)                                                                 \
-  V(Uint8Array)                                                                \
-  V(Uint8ClampedArray)                                                         \
-  V(Int16Array)                                                                \
-  V(Uint16Array)                                                               \
-  V(Int32Array)                                                                \
-  V(Uint32Array)                                                               \
-  V(Int64Array)                                                                \
-  V(Uint64Array)                                                               \
-  V(Float32Array)                                                              \
-  V(Float64Array)                                                              \
-  V(Float32x4Array)                                                            \
-  V(Int32x4Array)                                                              \
-  V(Float64x2Array)
-
-#define DART_CLASS_LIST_TYPED_DATA(V)                                          \
-  V(Int8)                                                                      \
-  V(Uint8)                                                                     \
-  V(Uint8Clamped)                                                              \
-  V(Int16)                                                                     \
-  V(Uint16)                                                                    \
-  V(Int32)                                                                     \
-  V(Uint32)                                                                    \
-  V(Int64)                                                                     \
-  V(Uint64)                                                                    \
-  V(Float32)                                                                   \
-  V(Float64)                                                                   \
-  V(Float32x4)                                                                 \
-  V(Int32x4)                                                                   \
-  V(Float64x2)
-
-#define CLASS_LIST_FOR_HANDLES(V)                                              \
-  CLASS_LIST_NO_OBJECT_NOR_STRING_NOR_ARRAY(V)                                 \
-  V(Array)                                                                     \
-  V(String)
-
-#define CLASS_LIST_NO_OBJECT(V)                                                \
-  CLASS_LIST_NO_OBJECT_NOR_STRING_NOR_ARRAY(V)                                 \
-  CLASS_LIST_ARRAYS(V)                                                         \
-  CLASS_LIST_STRINGS(V)
-
-#define CLASS_LIST(V)                                                          \
-  V(Object)                                                                    \
-  CLASS_LIST_NO_OBJECT(V)
 
 // Forward declarations.
 class Isolate;
-#define DEFINE_FORWARD_DECLARATION(clazz) class Raw##clazz;
+class IsolateGroup;
+#define DEFINE_FORWARD_DECLARATION(clazz) class Untagged##clazz;
 CLASS_LIST(DEFINE_FORWARD_DECLARATION)
 #undef DEFINE_FORWARD_DECLARATION
 class CodeStatistics;
+class StackFrame;
 
-enum ClassId {
-  // Illegal class id.
-  kIllegalCid = 0,
+#define DEFINE_CONTAINS_COMPRESSED(type)                                       \
+  static constexpr bool kContainsCompressedPointers =                          \
+      is_compressed_ptr<type>::value;
 
-  // A sentinel used by the vm service's heap snapshots to represent references
-  // from the stack.
-  kStackCid = 1,
+#define CHECK_CONTAIN_COMPRESSED(type)                                         \
+  static_assert(                                                               \
+      kContainsCompressedPointers || is_uncompressed_ptr<type>::value,         \
+      "From declaration uses ObjectPtr");                                      \
+  static_assert(                                                               \
+      !kContainsCompressedPointers || is_compressed_ptr<type>::value,          \
+      "From declaration uses CompressedObjectPtr");
 
-  // The following entries describes classes for pseudo-objects in the heap
-  // that should never be reachable from live objects. Free list elements
-  // maintain the free list for old space, and forwarding corpses are used to
-  // implement one-way become.
-  kFreeListElement,
-  kForwardingCorpse,
+#define VISIT_FROM(first)                                                      \
+  DEFINE_CONTAINS_COMPRESSED(decltype(first##_))                               \
+  base_ptr_type<decltype(first##_)>::type* from() {                            \
+    return reinterpret_cast<base_ptr_type<decltype(first##_)>::type*>(         \
+        &first##_);                                                            \
+  }
 
-// List of Ids for predefined classes.
-#define DEFINE_OBJECT_KIND(clazz) k##clazz##Cid,
-  CLASS_LIST(DEFINE_OBJECT_KIND)
-#undef DEFINE_OBJECT_KIND
+#define VISIT_FROM_PAYLOAD_START(elem_type)                                    \
+  static_assert(is_uncompressed_ptr<elem_type>::value ||                       \
+                    is_compressed_ptr<elem_type>::value,                       \
+                "Payload elements must be object pointers");                   \
+  DEFINE_CONTAINS_COMPRESSED(elem_type)                                        \
+  base_ptr_type<elem_type>::type* from() {                                     \
+    const uword payload_start = reinterpret_cast<uword>(this) + sizeof(*this); \
+    ASSERT(Utils::IsAligned(payload_start, sizeof(elem_type)));                \
+    return reinterpret_cast<base_ptr_type<elem_type>::type*>(payload_start);   \
+  }
 
-#define DEFINE_OBJECT_KIND(clazz) kTypedData##clazz##Cid,
-      CLASS_LIST_TYPED_DATA(DEFINE_OBJECT_KIND)
-#undef DEFINE_OBJECT_KIND
+#define VISIT_TO(last)                                                         \
+  CHECK_CONTAIN_COMPRESSED(decltype(last##_));                                 \
+  base_ptr_type<decltype(last##_)>::type* to(intptr_t length = 0) {            \
+    return reinterpret_cast<base_ptr_type<decltype(last##_)>::type*>(          \
+        &last##_);                                                             \
+  }
 
-#define DEFINE_OBJECT_KIND(clazz) kTypedData##clazz##ViewCid,
-          CLASS_LIST_TYPED_DATA(DEFINE_OBJECT_KIND)
-#undef DEFINE_OBJECT_KIND
-
-              kByteDataViewCid,
-
-#define DEFINE_OBJECT_KIND(clazz) kExternalTypedData##clazz##Cid,
-  CLASS_LIST_TYPED_DATA(DEFINE_OBJECT_KIND)
-#undef DEFINE_OBJECT_KIND
-
-      kByteBufferCid,
-
-  // The following entries do not describe a predefined class, but instead
-  // are class indexes for pre-allocated instances (Null, dynamic and Void).
-  kNullCid,
-  kDynamicCid,
-  kVoidCid,
-
-  kNumPredefinedCids,
-};
-
-#define VISIT_FROM(type, first)                                                \
-  type* from() { return reinterpret_cast<type*>(&ptr()->first); }
-
-#define VISIT_TO(type, last)                                                   \
-  type* to() { return reinterpret_cast<type*>(&ptr()->last); }
-
-#define VISIT_TO_LENGTH(type, last)                                            \
-  type* to(intptr_t length) { return reinterpret_cast<type*>(last); }
+#define VISIT_TO_PAYLOAD_END(elem_type)                                        \
+  static_assert(is_uncompressed_ptr<elem_type>::value ||                       \
+                    is_compressed_ptr<elem_type>::value,                       \
+                "Payload elements must be object pointers");                   \
+  CHECK_CONTAIN_COMPRESSED(elem_type);                                         \
+  base_ptr_type<elem_type>::type* to(intptr_t length) {                        \
+    const uword payload_start = reinterpret_cast<uword>(this) + sizeof(*this); \
+    ASSERT(Utils::IsAligned(payload_start, sizeof(elem_type)));                \
+    const uword payload_last =                                                 \
+        payload_start + sizeof(elem_type) * (length - 1);                      \
+    return reinterpret_cast<base_ptr_type<elem_type>::type*>(payload_last);    \
+  }
 
 #define VISIT_NOTHING() int NothingToVisit();
 
+#if defined(DART_COMPRESSED_POINTERS)
 #define ASSERT_UNCOMPRESSED(Type)                                              \
-  ASSERT(SIZE_OF_DEREFERENCED_RETURNED_VALUE(Raw##Type, from) == kWordSize)
+  static_assert(!Untagged##Type::kContainsCompressedPointers,                  \
+                "Should contain compressed pointers");
 
-// For now there are no compressed pointers, so this assert is the same as
-// the above.
 #define ASSERT_COMPRESSED(Type)                                                \
-  ASSERT(SIZE_OF_DEREFERENCED_RETURNED_VALUE(Raw##Type, from) == kWordSize)
+  static_assert(Untagged##Type::kContainsCompressedPointers,                   \
+                "Should not contain compressed pointers");
+#else
+// Do no checks if there are no compressed pointers.
+#define ASSERT_UNCOMPRESSED(Type)
+#define ASSERT_COMPRESSED(Type)
+#endif
 
 #define ASSERT_NOTHING_TO_VISIT(Type)                                          \
-  ASSERT(SIZE_OF_RETURNED_VALUE(Raw##Type, NothingToVisit) == sizeof(int))
-
-enum ObjectAlignment {
-  // Alignment offsets are used to determine object age.
-  kNewObjectAlignmentOffset = kWordSize,
-  kOldObjectAlignmentOffset = 0,
-  kNewObjectBitPosition = kWordSizeLog2,
-  // Object sizes are aligned to kObjectAlignment.
-  kObjectAlignment = 2 * kWordSize,
-  kObjectAlignmentLog2 = kWordSizeLog2 + 1,
-  kObjectAlignmentMask = kObjectAlignment - 1,
-};
-
-enum {
-  kSmiTag = 0,
-  kHeapObjectTag = 1,
-  kSmiTagSize = 1,
-  kSmiTagMask = 1,
-  kSmiTagShift = 1,
-};
+  ASSERT(SIZE_OF_RETURNED_VALUE(Untagged##Type, NothingToVisit) == sizeof(int))
 
 enum TypedDataElementType {
 #define V(name) k##name##Element,
   CLASS_LIST_TYPED_DATA(V)
 #undef V
-};
-
-enum class MemoryOrder {
-  kRelaxed,
-  kRelease,
 };
 
 #define SNAPSHOT_WRITER_SUPPORT()                                              \
@@ -252,7 +126,7 @@ enum class MemoryOrder {
   friend class SnapshotWriter;
 
 #define VISITOR_SUPPORT(object)                                                \
-  static intptr_t Visit##object##Pointers(Raw##object* raw_obj,                \
+  static intptr_t Visit##object##Pointers(object##Ptr raw_obj,                 \
                                           ObjectPointerVisitor* visitor);
 
 #define HEAP_PROFILER_SUPPORT() friend class HeapProfiler;
@@ -261,36 +135,29 @@ enum class MemoryOrder {
  private: /* NOLINT */                                                         \
   VISITOR_SUPPORT(object)                                                      \
   friend class object;                                                         \
-  friend class RawObject;                                                      \
+  friend class UntaggedObject;                                                 \
   friend class Heap;                                                           \
-  friend class Interpreter;                                                    \
-  friend class InterpreterHelpers;                                             \
   friend class Simulator;                                                      \
   friend class SimulatorHelpers;                                               \
   friend class OffsetsTable;                                                   \
   DISALLOW_ALLOCATION();                                                       \
-  DISALLOW_IMPLICIT_CONSTRUCTORS(Raw##object)
+  DISALLOW_IMPLICIT_CONSTRUCTORS(Untagged##object)
 
-// TODO(koda): Make ptr() return const*, like Object::raw_ptr().
 #define RAW_HEAP_OBJECT_IMPLEMENTATION(object)                                 \
  private:                                                                      \
   RAW_OBJECT_IMPLEMENTATION(object);                                           \
-  Raw##object* ptr() const {                                                   \
-    ASSERT(IsHeapObject());                                                    \
-    return reinterpret_cast<Raw##object*>(reinterpret_cast<uword>(this) -      \
-                                          kHeapObjectTag);                     \
-  }                                                                            \
   SNAPSHOT_WRITER_SUPPORT()                                                    \
   HEAP_PROFILER_SUPPORT()                                                      \
   friend class object##SerializationCluster;                                   \
   friend class object##DeserializationCluster;                                 \
   friend class Serializer;                                                     \
-  friend class Deserializer;
+  friend class Deserializer;                                                   \
+  friend class Pass2Visitor;
 
 // RawObject is the base class of all raw objects; even though it carries the
 // tags_ field not all raw objects are allocated in the heap and thus cannot
 // be dereferenced (e.g. RawSmi).
-class RawObject {
+class UntaggedObject {
  public:
   // The tags field which is a part of the object header uses the following
   // bit fields for storing tags.
@@ -301,17 +168,15 @@ class RawObject {
     kOldBit = 3,                  // Incremental barrier source.
     kOldAndNotRememberedBit = 4,  // Generational barrier source.
     kCanonicalBit = 5,
-    kVMHeapObjectBit = 6,
-    kGraphMarkedBit = 7,  // ObjectGraph needs to mark through new space.
+    kReservedTagPos = 6,
+    kReservedTagSize = 2,
 
-    kSizeTagPos = 8,
+    kSizeTagPos = kReservedTagPos + kReservedTagSize,  // = 8
     kSizeTagSize = 8,
     kClassIdTagPos = kSizeTagPos + kSizeTagSize,  // = 16
     kClassIdTagSize = 16,
-#if defined(HASH_IN_OBJECT_HEADER)
     kHashTagPos = kClassIdTagPos + kClassIdTagSize,  // = 32
-    kHashTagSize = 16,
-#endif
+    kHashTagSize = 32,
   };
 
   static const intptr_t kGenerationalBarrierMask = 1 << kNewBit;
@@ -325,255 +190,309 @@ class RawObject {
   // See Object::MakeUnusedSpaceTraversable.
   COMPILE_ASSERT(kCardRememberedBit == 0);
 
-  COMPILE_ASSERT(kClassIdTagSize == (sizeof(classid_t) * kBitsPerByte));
-
   // Encodes the object size in the tag in units of object alignment.
   class SizeTag {
    public:
-    static const intptr_t kMaxSizeTag = ((1 << RawObject::kSizeTagSize) - 1)
-                                        << kObjectAlignmentLog2;
+    typedef intptr_t Type;
 
-    static uword encode(intptr_t size) {
+    static constexpr intptr_t kMaxSizeTagInUnitsOfAlignment =
+        ((1 << UntaggedObject::kSizeTagSize) - 1);
+    static constexpr intptr_t kMaxSizeTag =
+        kMaxSizeTagInUnitsOfAlignment * kObjectAlignment;
+
+    static constexpr uword encode(intptr_t size) {
       return SizeBits::encode(SizeToTagValue(size));
     }
 
-    static intptr_t decode(uword tag) {
+    static constexpr uword decode(uword tag) {
       return TagValueToSize(SizeBits::decode(tag));
     }
 
-    static uword update(intptr_t size, uword tag) {
+    static constexpr uword update(intptr_t size, uword tag) {
       return SizeBits::update(SizeToTagValue(size), tag);
+    }
+
+    static constexpr bool SizeFits(intptr_t size) {
+      assert(Utils::IsAligned(size, kObjectAlignment));
+      return (size <= kMaxSizeTag);
     }
 
    private:
     // The actual unscaled bit field used within the tag field.
     class SizeBits
-        : public BitField<uint32_t, intptr_t, kSizeTagPos, kSizeTagSize> {};
+        : public BitField<uword, intptr_t, kSizeTagPos, kSizeTagSize> {};
 
-    static intptr_t SizeToTagValue(intptr_t size) {
-      ASSERT(Utils::IsAligned(size, kObjectAlignment));
-      return (size > kMaxSizeTag) ? 0 : (size >> kObjectAlignmentLog2);
+    static constexpr intptr_t SizeToTagValue(intptr_t size) {
+      assert(Utils::IsAligned(size, kObjectAlignment));
+      return !SizeFits(size) ? 0 : (size >> kObjectAlignmentLog2);
     }
-    static intptr_t TagValueToSize(intptr_t value) {
+    static constexpr intptr_t TagValueToSize(intptr_t value) {
       return value << kObjectAlignmentLog2;
     }
   };
 
-  class ClassIdTag
-      : public BitField<uint32_t, intptr_t, kClassIdTagPos, kClassIdTagSize> {};
+  class ClassIdTag : public BitField<uword,
+                                     ClassIdTagType,
+                                     kClassIdTagPos,
+                                     kClassIdTagSize> {};
+  COMPILE_ASSERT(kBitsPerByte * sizeof(ClassIdTagType) == kClassIdTagSize);
+
+#if defined(HASH_IN_OBJECT_HEADER)
+  class HashTag : public BitField<uword, uint32_t, kHashTagPos, kHashTagSize> {
+  };
+#endif
 
   class CardRememberedBit
-      : public BitField<uint32_t, bool, kCardRememberedBit, 1> {};
+      : public BitField<uword, bool, kCardRememberedBit, 1> {};
 
   class OldAndNotMarkedBit
-      : public BitField<uint32_t, bool, kOldAndNotMarkedBit, 1> {};
+      : public BitField<uword, bool, kOldAndNotMarkedBit, 1> {};
 
-  class NewBit : public BitField<uint32_t, bool, kNewBit, 1> {};
+  class NewBit : public BitField<uword, bool, kNewBit, 1> {};
 
-  class CanonicalObjectTag : public BitField<uint32_t, bool, kCanonicalBit, 1> {
-  };
+  class CanonicalBit : public BitField<uword, bool, kCanonicalBit, 1> {};
 
-  class GraphMarkedBit : public BitField<uint32_t, bool, kGraphMarkedBit, 1> {};
-
-  class VMHeapObjectTag : public BitField<uint32_t, bool, kVMHeapObjectBit, 1> {
-  };
-
-  class OldBit : public BitField<uint32_t, bool, kOldBit, 1> {};
+  class OldBit : public BitField<uword, bool, kOldBit, 1> {};
 
   class OldAndNotRememberedBit
-      : public BitField<uint32_t, bool, kOldAndNotRememberedBit, 1> {};
+      : public BitField<uword, bool, kOldAndNotRememberedBit, 1> {};
 
-  bool IsWellFormed() const {
-    uword value = reinterpret_cast<uword>(this);
-    return (value & kSmiTagMask) == 0 ||
-           Utils::IsAligned(value - kHeapObjectTag, kWordSize);
-  }
-  bool IsHeapObject() const {
-    ASSERT(IsWellFormed());
-    uword value = reinterpret_cast<uword>(this);
-    return (value & kSmiTagMask) == kHeapObjectTag;
-  }
+  class ReservedBits
+      : public BitField<uword, intptr_t, kReservedTagPos, kReservedTagSize> {};
+
+  template <typename T>
+  class Tags {
+   public:
+    Tags() : tags_(0) {}
+
+    operator T() const { return tags_.load(std::memory_order_relaxed); }
+    T operator=(T tags) {
+      tags_.store(tags, std::memory_order_relaxed);
+      return tags;
+    }
+
+    T load(std::memory_order order) const { return tags_.load(order); }
+    void store(T value, std::memory_order order) { tags_.store(value, order); }
+
+    bool compare_exchange_weak(T old_tags,
+                               T new_tags,
+                               std::memory_order order) {
+      return tags_.compare_exchange_weak(old_tags, new_tags, order);
+    }
+
+    template <class TagBitField>
+    typename TagBitField::Type Read() const {
+      return TagBitField::decode(tags_.load(std::memory_order_relaxed));
+    }
+
+    template <class TagBitField>
+    NO_SANITIZE_THREAD typename TagBitField::Type ReadIgnoreRace() const {
+      return TagBitField::decode(*reinterpret_cast<const T*>(&tags_));
+    }
+
+    template <class TagBitField,
+              std::memory_order order = std::memory_order_relaxed>
+    void UpdateBool(bool value) {
+      if (value) {
+        tags_.fetch_or(TagBitField::encode(true), order);
+      } else {
+        tags_.fetch_and(~TagBitField::encode(true), order);
+      }
+    }
+
+    template <class TagBitField>
+    void Update(typename TagBitField::Type value) {
+      T old_tags = tags_.load(std::memory_order_relaxed);
+      T new_tags;
+      do {
+        new_tags = TagBitField::update(value, old_tags);
+      } while (!tags_.compare_exchange_weak(old_tags, new_tags,
+                                            std::memory_order_relaxed));
+    }
+
+    template <class TagBitField>
+    void UpdateUnsynchronized(typename TagBitField::Type value) {
+      tags_.store(
+          TagBitField::update(value, tags_.load(std::memory_order_relaxed)),
+          std::memory_order_relaxed);
+    }
+
+    template <class TagBitField>
+    typename TagBitField::Type UpdateConditional(
+        typename TagBitField::Type value_to_be_set,
+        typename TagBitField::Type conditional_old_value) {
+      T old_tags = tags_.load(std::memory_order_relaxed);
+      while (true) {
+        // This operation is only performed if the condition is met.
+        auto old_value = TagBitField::decode(old_tags);
+        if (old_value != conditional_old_value) {
+          return old_value;
+        }
+        T new_tags = TagBitField::update(value_to_be_set, old_tags);
+        if (tags_.compare_exchange_weak(old_tags, new_tags,
+                                        std::memory_order_relaxed)) {
+          return value_to_be_set;
+        }
+        // [old_tags] was updated to it's current value.
+      }
+    }
+
+    template <class TagBitField>
+    bool TryAcquire() {
+      T mask = TagBitField::encode(true);
+      T old_tags = tags_.fetch_or(mask, std::memory_order_relaxed);
+      return !TagBitField::decode(old_tags);
+    }
+
+    template <class TagBitField>
+    bool TryClear() {
+      T mask = ~TagBitField::encode(true);
+      T old_tags = tags_.fetch_and(mask, std::memory_order_relaxed);
+      return TagBitField::decode(old_tags);
+    }
+
+   private:
+    std::atomic<T> tags_;
+    COMPILE_ASSERT(sizeof(std::atomic<T>) == sizeof(T));
+  };
+
   // Assumes this is a heap object.
   bool IsNewObject() const {
-    ASSERT(IsHeapObject());
     uword addr = reinterpret_cast<uword>(this);
-    return (addr & kNewObjectAlignmentOffset) == kNewObjectAlignmentOffset;
-  }
-  bool IsNewObjectMayBeSmi() const {
-    static const uword kNewObjectBits =
-        (kNewObjectAlignmentOffset | kHeapObjectTag);
-    const uword addr = reinterpret_cast<uword>(this);
-    return (addr & kObjectAlignmentMask) == kNewObjectBits;
+    return (addr & kObjectAlignmentMask) == kNewObjectAlignmentOffset;
   }
   // Assumes this is a heap object.
   bool IsOldObject() const {
-    ASSERT(IsHeapObject());
     uword addr = reinterpret_cast<uword>(this);
-    return (addr & kNewObjectAlignmentOffset) == kOldObjectAlignmentOffset;
+    return (addr & kObjectAlignmentMask) == kOldObjectAlignmentOffset;
   }
 
-  // Like !IsHeapObject() || IsOldObject(), but compiles to a single branch.
-  bool IsSmiOrOldObject() const {
-    ASSERT(IsWellFormed());
-    static const uword kNewObjectBits =
-        (kNewObjectAlignmentOffset | kHeapObjectTag);
-    const uword addr = reinterpret_cast<uword>(this);
-    return (addr & kObjectAlignmentMask) != kNewObjectBits;
-  }
-
-  // Like !IsHeapObject() || IsNewObject(), but compiles to a single branch.
-  bool IsSmiOrNewObject() const {
-    ASSERT(IsWellFormed());
-    static const uword kOldObjectBits =
-        (kOldObjectAlignmentOffset | kHeapObjectTag);
-    const uword addr = reinterpret_cast<uword>(this);
-    return (addr & kObjectAlignmentMask) != kOldObjectBits;
-  }
-
-  // Support for GC marking bit.
+  // Support for GC marking bit. Marked objects are either grey (not yet
+  // visited) or black (already visited).
+  static bool IsMarked(uword tags) { return !OldAndNotMarkedBit::decode(tags); }
   bool IsMarked() const {
     ASSERT(IsOldObject());
-    return !OldAndNotMarkedBit::decode(ptr()->tags_);
+    return !tags_.Read<OldAndNotMarkedBit>();
+  }
+  bool IsMarkedIgnoreRace() const {
+    ASSERT(IsOldObject());
+    return !tags_.ReadIgnoreRace<OldAndNotMarkedBit>();
   }
   void SetMarkBit() {
     ASSERT(IsOldObject());
     ASSERT(!IsMarked());
-    UpdateTagBit<OldAndNotMarkedBit>(false);
+    tags_.UpdateBool<OldAndNotMarkedBit>(false);
   }
   void SetMarkBitUnsynchronized() {
     ASSERT(IsOldObject());
     ASSERT(!IsMarked());
-    uint32_t tags = ptr()->tags_;
-    ptr()->tags_ = OldAndNotMarkedBit::update(false, tags);
+    tags_.UpdateUnsynchronized<OldAndNotMarkedBit>(false);
+  }
+  void SetMarkBitRelease() {
+    ASSERT(IsOldObject());
+    ASSERT(!IsMarked());
+    tags_.UpdateBool<OldAndNotMarkedBit, std::memory_order_release>(false);
   }
   void ClearMarkBit() {
     ASSERT(IsOldObject());
     ASSERT(IsMarked());
-    UpdateTagBit<OldAndNotMarkedBit>(true);
+    tags_.UpdateBool<OldAndNotMarkedBit>(true);
   }
   // Returns false if the bit was already set.
   DART_WARN_UNUSED_RESULT
   bool TryAcquireMarkBit() {
     ASSERT(IsOldObject());
-    return TryClearTagBit<OldAndNotMarkedBit>();
+    return tags_.TryClear<OldAndNotMarkedBit>();
   }
 
-  // Support for object tags.
-  bool IsCanonical() const { return CanonicalObjectTag::decode(ptr()->tags_); }
-  void SetCanonical() { UpdateTagBit<CanonicalObjectTag>(true); }
-  void ClearCanonical() { UpdateTagBit<CanonicalObjectTag>(false); }
-  bool IsVMHeapObject() const { return VMHeapObjectTag::decode(ptr()->tags_); }
-  void SetVMHeapObject() { UpdateTagBit<VMHeapObjectTag>(true); }
+  // Canonical objects have the property that two canonical objects are
+  // logically equal iff they are the same object (pointer equal).
+  bool IsCanonical() const { return tags_.Read<CanonicalBit>(); }
+  void SetCanonical() { tags_.UpdateBool<CanonicalBit>(true); }
+  void ClearCanonical() { tags_.UpdateBool<CanonicalBit>(false); }
 
-  // Support for ObjectGraph marking bit.
-  bool IsGraphMarked() const {
-    if (IsVMHeapObject()) return true;
-    return GraphMarkedBit::decode(ptr()->tags_);
-  }
-  void SetGraphMarked() {
-    ASSERT(!IsVMHeapObject());
-    uint32_t tags = ptr()->tags_;
-    ptr()->tags_ = GraphMarkedBit::update(true, tags);
-  }
-  void ClearGraphMarked() {
-    ASSERT(!IsVMHeapObject());
-    uint32_t tags = ptr()->tags_;
-    ptr()->tags_ = GraphMarkedBit::update(false, tags);
-  }
+  bool InVMIsolateHeap() const;
 
   // Support for GC remembered bit.
   bool IsRemembered() const {
     ASSERT(IsOldObject());
-    return !OldAndNotRememberedBit::decode(ptr()->tags_);
+    return !tags_.Read<OldAndNotRememberedBit>();
   }
   void SetRememberedBit() {
     ASSERT(!IsRemembered());
     ASSERT(!IsCardRemembered());
-    UpdateTagBit<OldAndNotRememberedBit>(false);
+    tags_.UpdateBool<OldAndNotRememberedBit>(false);
   }
   void ClearRememberedBit() {
     ASSERT(IsOldObject());
-    UpdateTagBit<OldAndNotRememberedBit>(true);
+    tags_.UpdateBool<OldAndNotRememberedBit>(true);
   }
 
-  bool IsCardRemembered() const {
-    return CardRememberedBit::decode(ptr()->tags_);
+  DART_FORCE_INLINE
+  void AddToRememberedSet(Thread* thread) {
+    ASSERT(!this->IsRemembered());
+    this->SetRememberedBit();
+    thread->StoreBufferAddObject(ObjectPtr(this));
   }
+
+  bool IsCardRemembered() const { return tags_.Read<CardRememberedBit>(); }
   void SetCardRememberedBitUnsynchronized() {
     ASSERT(!IsRemembered());
     ASSERT(!IsCardRemembered());
-    uint32_t tags = ptr()->tags_;
-    ptr()->tags_ = CardRememberedBit::update(true, tags);
+    tags_.UpdateUnsynchronized<CardRememberedBit>(true);
   }
 
-#define DEFINE_IS_CID(clazz)                                                   \
-  bool Is##clazz() const { return ((GetClassId() == k##clazz##Cid)); }
-  CLASS_LIST(DEFINE_IS_CID)
-#undef DEFINE_IS_CID
+  intptr_t GetClassId() const { return tags_.Read<ClassIdTag>(); }
 
-#define DEFINE_IS_CID(clazz)                                                   \
-  bool IsTypedData##clazz() const {                                            \
-    return ((GetClassId() == kTypedData##clazz##Cid));                         \
-  }                                                                            \
-  bool IsTypedDataView##clazz() const {                                        \
-    return ((GetClassId() == kTypedData##clazz##ViewCid));                     \
-  }                                                                            \
-  bool IsExternalTypedData##clazz() const {                                    \
-    return ((GetClassId() == kExternalTypedData##clazz##Cid));                 \
+#if defined(HASH_IN_OBJECT_HEADER)
+  uint32_t GetHeaderHash() const { return tags_.Read<HashTag>(); }
+  uint32_t SetHeaderHashIfNotSet(uint32_t h) {
+    return tags_.UpdateConditional<HashTag>(h, /*conditional_old_value=*/0);
   }
-  CLASS_LIST_TYPED_DATA(DEFINE_IS_CID)
-#undef DEFINE_IS_CID
+#endif
 
-  bool IsStringInstance() const { return IsStringClassId(GetClassId()); }
-  bool IsRawNull() const { return GetClassId() == kNullCid; }
-  bool IsDartInstance() const {
-    return (!IsHeapObject() || (GetClassId() >= kInstanceCid));
-  }
-  bool IsFreeListElement() const {
-    return ((GetClassId() == kFreeListElement));
-  }
-  bool IsForwardingCorpse() const {
-    return ((GetClassId() == kForwardingCorpse));
-  }
-  bool IsPseudoObject() const {
-    return IsFreeListElement() || IsForwardingCorpse();
-  }
-
-  intptr_t GetClassIdMayBeSmi() const {
-    return IsHeapObject() ? GetClassId() : static_cast<intptr_t>(kSmiCid);
-  }
-
-  intptr_t Size() const {
-    uint32_t tags = ptr()->tags_;
+  intptr_t HeapSize() const {
+    uword tags = tags_;
     intptr_t result = SizeTag::decode(tags);
     if (result != 0) {
 #if defined(DEBUG)
       // TODO(22501) Array::MakeFixedLength has a race with this code: we might
       // have loaded tags field and then MakeFixedLength could have updated it
-      // leading to inconsistency between SizeFromClass() and
+      // leading to inconsistency between HeapSizeFromClass() and
       // SizeTag::decode(tags). We are working around it by reloading tags_ and
       // recomputing size from tags.
-      const intptr_t size_from_class = SizeFromClass();
+      const intptr_t size_from_class = HeapSizeFromClass(tags);
       if ((result > size_from_class) && (GetClassId() == kArrayCid) &&
-          (ptr()->tags_ != tags)) {
-        result = SizeTag::decode(ptr()->tags_);
+          (tags_ != tags)) {
+        result = SizeTag::decode(tags_);
       }
       ASSERT(result == size_from_class);
 #endif
       return result;
     }
-    result = SizeFromClass();
+    result = HeapSizeFromClass(tags);
+    ASSERT(result > SizeTag::kMaxSizeTag);
+    return result;
+  }
+
+  // This variant must not deference this->tags_.
+  intptr_t HeapSize(uword tags) const {
+    intptr_t result = SizeTag::decode(tags);
+    if (result != 0) {
+      return result;
+    }
+    result = HeapSizeFromClass(tags);
     ASSERT(result > SizeTag::kMaxSizeTag);
     return result;
   }
 
   bool Contains(uword addr) const {
-    intptr_t this_size = Size();
-    uword this_addr = RawObject::ToAddr(this);
+    intptr_t this_size = HeapSize();
+    uword this_addr = UntaggedObject::ToAddr(this);
     return (addr >= this_addr) && (addr < (this_addr + this_size));
   }
 
-  void Validate(Isolate* isolate) const;
+  void Validate(IsolateGroup* isolate_group) const;
   bool FindObject(FindObjectVisitor* visitor);
 
   // This function may access the class-ID in the header, but it cannot access
@@ -587,14 +506,31 @@ class RawObject {
     }
 
     // Calculate the first and last raw object pointer fields.
-    intptr_t instance_size = Size();
+    intptr_t instance_size = HeapSize();
     uword obj_addr = ToAddr(this);
-    uword from = obj_addr + sizeof(RawObject);
-    uword to = obj_addr + instance_size - kWordSize;
+    uword from = obj_addr + sizeof(UntaggedObject);
+    uword to = obj_addr + instance_size - kCompressedWordSize;
+    const auto first = reinterpret_cast<CompressedObjectPtr*>(from);
+    const auto last = reinterpret_cast<CompressedObjectPtr*>(to);
 
+#if defined(SUPPORT_UNBOXED_INSTANCE_FIELDS)
+    const auto unboxed_fields_bitmap =
+        visitor->shared_class_table()->GetUnboxedFieldsMapAt(class_id);
+
+    if (!unboxed_fields_bitmap.IsEmpty()) {
+      intptr_t bit = sizeof(UntaggedObject) / kCompressedWordSize;
+      for (CompressedObjectPtr* current = first; current <= last; current++) {
+        if (!unboxed_fields_bitmap.Get(bit++)) {
+          visitor->VisitCompressedPointers(heap_base(), current, current);
+        }
+      }
+    } else {
+      visitor->VisitCompressedPointers(heap_base(), first, last);
+    }
+#else
     // Call visitor function virtually
-    visitor->VisitPointers(reinterpret_cast<RawObject**>(from),
-                           reinterpret_cast<RawObject**>(to));
+    visitor->VisitCompressedPointers(heap_base(), first, last);
+#endif  // defined(SUPPORT_UNBOXED_INSTANCE_FIELDS)
 
     return instance_size;
   }
@@ -608,118 +544,112 @@ class RawObject {
     }
 
     // Calculate the first and last raw object pointer fields.
-    intptr_t instance_size = Size();
+    intptr_t instance_size = HeapSize();
     uword obj_addr = ToAddr(this);
-    uword from = obj_addr + sizeof(RawObject);
-    uword to = obj_addr + instance_size - kWordSize;
+    uword from = obj_addr + sizeof(UntaggedObject);
+    uword to = obj_addr + instance_size - kCompressedWordSize;
+    const auto first = reinterpret_cast<CompressedObjectPtr*>(from);
+    const auto last = reinterpret_cast<CompressedObjectPtr*>(to);
 
+#if defined(SUPPORT_UNBOXED_INSTANCE_FIELDS)
+    const auto unboxed_fields_bitmap =
+        visitor->shared_class_table()->GetUnboxedFieldsMapAt(class_id);
+
+    if (!unboxed_fields_bitmap.IsEmpty()) {
+      intptr_t bit = sizeof(UntaggedObject) / kCompressedWordSize;
+      for (CompressedObjectPtr* current = first; current <= last; current++) {
+        if (!unboxed_fields_bitmap.Get(bit++)) {
+          visitor->V::VisitCompressedPointers(heap_base(), current, current);
+        }
+      }
+    } else {
+      visitor->V::VisitCompressedPointers(heap_base(), first, last);
+    }
+#else
     // Call visitor function non-virtually
-    visitor->V::VisitPointers(reinterpret_cast<RawObject**>(from),
-                              reinterpret_cast<RawObject**>(to));
+    visitor->V::VisitCompressedPointers(heap_base(), first, last);
+#endif  // defined(SUPPORT_UNBOXED_INSTANCE_FIELDS)
 
     return instance_size;
   }
 
-  static RawObject* FromAddr(uword addr) {
+  // This variant ensures that we do not visit the extra slot created from
+  // rounding up instance sizes up to the allocation unit.
+  void VisitPointersPrecise(IsolateGroup* isolate_group,
+                            ObjectPointerVisitor* visitor);
+
+  static ObjectPtr FromAddr(uword addr) {
     // We expect the untagged address here.
     ASSERT((addr & kSmiTagMask) != kHeapObjectTag);
-    return reinterpret_cast<RawObject*>(addr + kHeapObjectTag);
+    return static_cast<ObjectPtr>(addr + kHeapObjectTag);
   }
 
-  static uword ToAddr(const RawObject* raw_obj) {
-    return reinterpret_cast<uword>(raw_obj->ptr());
+  static uword ToAddr(const UntaggedObject* raw_obj) {
+    return reinterpret_cast<uword>(raw_obj);
   }
-
-  static bool IsVMHeapObject(intptr_t value) {
-    return VMHeapObjectTag::decode(value);
+  static uword ToAddr(const ObjectPtr raw_obj) {
+    return static_cast<uword>(raw_obj) - kHeapObjectTag;
   }
 
   static bool IsCanonical(intptr_t value) {
-    return CanonicalObjectTag::decode(value);
+    return CanonicalBit::decode(value);
   }
-
-  // Class Id predicates.
-  static bool IsErrorClassId(intptr_t index);
-  static bool IsNumberClassId(intptr_t index);
-  static bool IsIntegerClassId(intptr_t index);
-  static bool IsStringClassId(intptr_t index);
-  static bool IsOneByteStringClassId(intptr_t index);
-  static bool IsTwoByteStringClassId(intptr_t index);
-  static bool IsExternalStringClassId(intptr_t index);
-  static bool IsBuiltinListClassId(intptr_t index);
-  static bool IsTypedDataClassId(intptr_t index);
-  static bool IsTypedDataViewClassId(intptr_t index);
-  static bool IsExternalTypedDataClassId(intptr_t index);
-  static bool IsInternalVMdefinedClassId(intptr_t index);
-  static bool IsVariableSizeClassId(intptr_t index);
-  static bool IsImplicitFieldClassId(intptr_t index);
-
-  static intptr_t NumberOfTypedDataClasses();
 
  private:
-  uint32_t tags_;  // Various object tags (bits).
-#if defined(HASH_IN_OBJECT_HEADER)
-  // On 64 bit there is a hash field in the header for the identity hash.
-  uint32_t hash_;
-#endif
-
-  // TODO(koda): After handling tags_, return const*, like Object::raw_ptr().
-  RawObject* ptr() const {
-    ASSERT(IsHeapObject());
-    return reinterpret_cast<RawObject*>(reinterpret_cast<uword>(this) -
-                                        kHeapObjectTag);
-  }
+  Tags<uword> tags_;  // Various object tags (bits).
 
   intptr_t VisitPointersPredefined(ObjectPointerVisitor* visitor,
                                    intptr_t class_id);
 
-  intptr_t SizeFromClass() const;
+  intptr_t HeapSizeFromClass(uword tags) const;
 
-  intptr_t GetClassId() const {
-    uint32_t tags = ptr()->tags_;
-    return ClassIdTag::decode(tags);
-  }
-
-  void SetClassId(intptr_t new_cid) {
-    uint32_t tags = ptr()->tags_;
-    ptr()->tags_ = ClassIdTag::update(new_cid, tags);
+  void SetClassId(intptr_t new_cid) { tags_.Update<ClassIdTag>(new_cid); }
+  void SetClassIdUnsynchronized(intptr_t new_cid) {
+    tags_.UpdateUnsynchronized<ClassIdTag>(new_cid);
   }
 
-  template <class TagBitField>
-  void UpdateTagBit(bool value) {
-    if (value) {
-      AtomicOperations::FetchOrRelaxedUint32(&ptr()->tags_,
-                                             TagBitField::encode(true));
-    } else {
-      AtomicOperations::FetchAndRelaxedUint32(&ptr()->tags_,
-                                              ~TagBitField::encode(true));
-    }
-  }
-
-  template <class TagBitField>
-  bool TryAcquireTagBit() {
-    uint32_t old_tags = AtomicOperations::FetchOrRelaxedUint32(
-        &ptr()->tags_, TagBitField::encode(true));
-    return !TagBitField::decode(old_tags);
-  }
-  template <class TagBitField>
-  bool TryClearTagBit() {
-    uint32_t old_tags = AtomicOperations::FetchAndRelaxedUint32(
-        &ptr()->tags_, ~TagBitField::encode(true));
-    return TagBitField::decode(old_tags);
-  }
+ protected:
+  // Automatically inherited by subclasses unless overridden.
+  static constexpr bool kContainsCompressedPointers = false;
 
   // All writes to heap objects should ultimately pass through one of the
   // methods below or their counterparts in Object, to ensure that the
   // write barrier is correctly applied.
+  template <typename type, std::memory_order order = std::memory_order_relaxed>
+  type LoadPointer(type const* addr) const {
+    return reinterpret_cast<std::atomic<type>*>(const_cast<type*>(addr))
+        ->load(order);
+  }
+  template <typename type,
+            typename compressed_type,
+            std::memory_order order = std::memory_order_relaxed>
+  type LoadCompressedPointer(compressed_type const* addr) const {
+    compressed_type v = reinterpret_cast<std::atomic<compressed_type>*>(
+                            const_cast<compressed_type*>(addr))
+                            ->load(order);
+    return static_cast<type>(v.Decompress(heap_base()));
+  }
 
-  template <typename type, MemoryOrder order = MemoryOrder::kRelaxed>
+  uword heap_base() const {
+    return reinterpret_cast<uword>(this) & kHeapBaseMask;
+  }
+
+  template <typename type, std::memory_order order = std::memory_order_relaxed>
   void StorePointer(type const* addr, type value) {
-    if (order == MemoryOrder::kRelease) {
-      AtomicOperations::StoreRelease(const_cast<type*>(addr), value);
-    } else {
-      *const_cast<type*>(addr) = value;
+    reinterpret_cast<std::atomic<type>*>(const_cast<type*>(addr))
+        ->store(value, order);
+    if (value->IsHeapObject()) {
+      CheckHeapPointerStore(value, Thread::Current());
     }
+  }
+
+  template <typename type,
+            typename compressed_type,
+            std::memory_order order = std::memory_order_relaxed>
+  void StoreCompressedPointer(compressed_type const* addr, type value) {
+    reinterpret_cast<std::atomic<compressed_type>*>(
+        const_cast<compressed_type*>(addr))
+        ->store(static_cast<compressed_type>(value), order);
     if (value->IsHeapObject()) {
       CheckHeapPointerStore(value, Thread::Current());
     }
@@ -733,51 +663,132 @@ class RawObject {
     }
   }
 
-  DART_FORCE_INLINE
-  void CheckHeapPointerStore(RawObject* value, Thread* thread) {
-    uint32_t source_tags = this->ptr()->tags_;
-    uint32_t target_tags = value->ptr()->tags_;
-    if (((source_tags >> kBarrierOverlapShift) & target_tags &
-         thread->write_barrier_mask()) != 0) {
-      if (value->IsNewObject()) {
-        // Generational barrier: record when a store creates an
-        // old-and-not-remembered -> new reference.
-        ASSERT(!this->IsRemembered());
-        this->SetRememberedBit();
-        thread->StoreBufferAddObject(this);
-      } else {
-        // Incremental barrier: record when a store creates an
-        // old -> old-and-not-marked reference.
-        ASSERT(value->IsOldObject());
-        if (value->TryAcquireMarkBit()) {
-          thread->MarkingStackAddObject(value);
-        }
-      }
+  template <typename type, typename compressed_type>
+  void StoreCompressedPointer(compressed_type const* addr,
+                              type value,
+                              Thread* thread) {
+    *const_cast<compressed_type*>(addr) = value;
+    if (value->IsHeapObject()) {
+      CheckHeapPointerStore(value, thread);
     }
   }
 
   template <typename type>
-  void StoreArrayPointer(type const* addr, type value) {
-    *const_cast<type*>(addr) = value;
+  void StorePointerUnaligned(type const* addr, type value, Thread* thread) {
+    StoreUnaligned(const_cast<type*>(addr), value);
+    if (value->IsHeapObject()) {
+      CheckHeapPointerStore(value, thread);
+    }
+  }
+
+  // Note: StoreArrayPointer won't work if value_type is a compressed pointer.
+  template <typename type,
+            std::memory_order order = std::memory_order_relaxed,
+            typename value_type = type>
+  void StoreArrayPointer(type const* addr, value_type value) {
+    reinterpret_cast<std::atomic<type>*>(const_cast<type*>(addr))
+        ->store(type(value), order);
     if (value->IsHeapObject()) {
       CheckArrayPointerStore(addr, value, Thread::Current());
     }
   }
 
-  template <typename type>
-  void StoreArrayPointer(type const* addr, type value, Thread* thread) {
+  template <typename type, typename value_type = type>
+  void StoreArrayPointer(type const* addr, value_type value, Thread* thread) {
     *const_cast<type*>(addr) = value;
     if (value->IsHeapObject()) {
       CheckArrayPointerStore(addr, value, thread);
     }
   }
 
-  template <typename type>
+  template <typename type,
+            typename compressed_type,
+            std::memory_order order = std::memory_order_relaxed>
+  void StoreCompressedArrayPointer(compressed_type const* addr, type value) {
+    reinterpret_cast<std::atomic<compressed_type>*>(
+        const_cast<compressed_type*>(addr))
+        ->store(static_cast<compressed_type>(value), order);
+    if (value->IsHeapObject()) {
+      CheckArrayPointerStore(addr, value, Thread::Current());
+    }
+  }
+
+  template <typename type, typename compressed_type>
+  void StoreCompressedArrayPointer(compressed_type const* addr,
+                                   type value,
+                                   Thread* thread) {
+    *const_cast<compressed_type*>(addr) = value;
+    if (value->IsHeapObject()) {
+      CheckArrayPointerStore(addr, value, thread);
+    }
+  }
+
+  template <std::memory_order order = std::memory_order_relaxed>
+  SmiPtr LoadSmi(SmiPtr const* addr) const {
+    return reinterpret_cast<std::atomic<SmiPtr>*>(const_cast<SmiPtr*>(addr))
+        ->load(order);
+  }
+  template <std::memory_order order = std::memory_order_relaxed>
+  SmiPtr LoadCompressedSmi(CompressedSmiPtr const* addr) const {
+    return static_cast<SmiPtr>(reinterpret_cast<std::atomic<CompressedSmiPtr>*>(
+                                   const_cast<CompressedSmiPtr*>(addr))
+                                   ->load(order)
+                                   .DecompressSmi());
+  }
+
+  // Use for storing into an explicitly Smi-typed field of an object
+  // (i.e., both the previous and new value are Smis).
+  template <typename type, std::memory_order order = std::memory_order_relaxed>
+  void StoreSmi(type const* addr, type value) {
+    // Can't use Contains, as array length is initialized through this method.
+    ASSERT(reinterpret_cast<uword>(addr) >= UntaggedObject::ToAddr(this));
+    reinterpret_cast<std::atomic<type>*>(const_cast<type*>(addr))
+        ->store(value, order);
+  }
+  template <std::memory_order order = std::memory_order_relaxed>
+  void StoreCompressedSmi(CompressedSmiPtr const* addr, SmiPtr value) {
+    // Can't use Contains, as array length is initialized through this method.
+    ASSERT(reinterpret_cast<uword>(addr) >= UntaggedObject::ToAddr(this));
+    reinterpret_cast<std::atomic<CompressedSmiPtr>*>(
+        const_cast<CompressedSmiPtr*>(addr))
+        ->store(static_cast<CompressedSmiPtr>(value), order);
+  }
+
+ private:
+  DART_FORCE_INLINE
+  void CheckHeapPointerStore(ObjectPtr value, Thread* thread) {
+    uword source_tags = this->tags_;
+    uword target_tags = value->untag()->tags_;
+    if (((source_tags >> kBarrierOverlapShift) & target_tags &
+         thread->write_barrier_mask()) != 0) {
+      if (value->IsNewObject()) {
+        // Generational barrier: record when a store creates an
+        // old-and-not-remembered -> new reference.
+        AddToRememberedSet(thread);
+      } else {
+        // Incremental barrier: record when a store creates an
+        // old -> old-and-not-marked reference.
+        ASSERT(value->IsOldObject());
+#if !defined(TARGET_ARCH_IA32)
+        if (ClassIdTag::decode(target_tags) == kInstructionsCid) {
+          // Instruction pages may be non-writable. Defer marking.
+          thread->DeferredMarkingStackAddObject(value);
+          return;
+        }
+#endif
+        if (value->untag()->TryAcquireMarkBit()) {
+          thread->MarkingStackAddObject(value);
+        }
+      }
+    }
+  }
+
+  template <typename type, typename value_type>
   DART_FORCE_INLINE void CheckArrayPointerStore(type const* addr,
-                                                RawObject* value,
+                                                value_type value,
                                                 Thread* thread) {
-    uint32_t source_tags = this->ptr()->tags_;
-    uint32_t target_tags = value->ptr()->tags_;
+    uword source_tags = this->tags_;
+    uword target_tags = value->untag()->tags_;
     if (((source_tags >> kBarrierOverlapShift) & target_tags &
          thread->write_barrier_mask()) != 0) {
       if (value->IsNewObject()) {
@@ -785,73 +796,63 @@ class RawObject {
         // old-and-not-remembered -> new reference.
         ASSERT(!this->IsRemembered());
         if (this->IsCardRemembered()) {
-          RememberCard(reinterpret_cast<RawObject* const*>(addr));
+          RememberCard(addr);
         } else {
           this->SetRememberedBit();
-          Thread::Current()->StoreBufferAddObject(this);
+          thread->StoreBufferAddObject(static_cast<ObjectPtr>(this));
         }
       } else {
         // Incremental barrier: record when a store creates an
         // old -> old-and-not-marked reference.
         ASSERT(value->IsOldObject());
-        if (value->TryAcquireMarkBit()) {
+#if !defined(TARGET_ARCH_IA32)
+        if (ClassIdTag::decode(target_tags) == kInstructionsCid) {
+          // Instruction pages may be non-writable. Defer marking.
+          thread->DeferredMarkingStackAddObject(value);
+          return;
+        }
+#endif
+        if (value->untag()->TryAcquireMarkBit()) {
           thread->MarkingStackAddObject(value);
         }
       }
     }
   }
 
-  // Use for storing into an explicitly Smi-typed field of an object
-  // (i.e., both the previous and new value are Smis).
-  void StoreSmi(RawSmi* const* addr, RawSmi* value) {
-    // Can't use Contains, as array length is initialized through this method.
-    ASSERT(reinterpret_cast<uword>(addr) >= RawObject::ToAddr(this));
-    *const_cast<RawSmi**>(addr) = value;
-  }
-
- protected:
   friend class StoreBufferUpdateVisitor;  // RememberCard
-  void RememberCard(RawObject* const* slot);
+  void RememberCard(ObjectPtr const* slot);
+#if defined(DART_COMPRESSED_POINTERS)
+  void RememberCard(CompressedObjectPtr const* slot);
+#endif
 
-  friend class Api;
-  friend class ApiMessageReader;  // GetClassId
-  friend class Serializer;        // GetClassId
   friend class Array;
-  friend class Become;  // GetClassId
-  friend class CompactorTask;  // GetClassId
   friend class ByteBuffer;
   friend class CidRewriteVisitor;
   friend class Closure;
   friend class Code;
+  friend class Pointer;
   friend class Double;
+  friend class DynamicLibrary;
   friend class ForwardPointersVisitor;  // StorePointer
   friend class FreeListElement;
   friend class Function;
   friend class GCMarker;
+  friend class GCSweeper;
   friend class ExternalTypedData;
   friend class ForwardList;
   friend class GrowableObjectArray;  // StorePointer
   friend class Heap;
-  friend class HeapMapAsJSONVisitor;
   friend class ClassStatsVisitor;
   template <bool>
   friend class MarkingVisitorBase;
   friend class Mint;
   friend class Object;
   friend class OneByteString;  // StoreSmi
-  friend class RawCode;
-  friend class RawExternalTypedData;
-  friend class RawInstructions;
-  friend class RawInstance;
-  friend class RawString;
-  friend class RawTypedData;
+  friend class UntaggedInstance;
   friend class Scavenger;
-  friend class ScavengerVisitor;
-  friend class SizeExcludingClassVisitor;  // GetClassId
-  friend class InstanceAccumulator;        // GetClassId
-  friend class RetainingPathVisitor;       // GetClassId
-  friend class SkippedCodeFunctions;       // StorePointer
-  friend class ImageReader;                // tags_ check
+  template <bool>
+  friend class ScavengerVisitorBase;
+  friend class ImageReader;  // tags_ check
   friend class ImageWriter;
   friend class AssemblyImageWriter;
   friend class BlobImageWriter;
@@ -859,74 +860,254 @@ class RawObject {
   friend class Deserializer;
   friend class SnapshotWriter;
   friend class String;
-  friend class Type;  // GetClassId
-  friend class TypedData;
-  friend class TypedDataView;
   friend class WeakProperty;            // StorePointer
   friend class Instance;                // StorePointer
   friend class StackFrame;              // GetCodeObject assertion.
   friend class CodeLookupTableBuilder;  // profiler
-  friend class NativeEntry;             // GetClassId
-  friend class WritePointerVisitor;     // GetClassId
-  friend class Interpreter;
-  friend class InterpreterHelpers;
   friend class Simulator;
   friend class SimulatorHelpers;
   friend class ObjectLocator;
-  friend class InstanceMorpher;  // GetClassId
-  friend class VerifyCanonicalVisitor;
-  friend class ObjectGraph::Stack;  // GetClassId
-  friend class Precompiler;         // GetClassId
-  friend class ObjectOffsetTrait;   // GetClassId
   friend class WriteBarrierUpdateVisitor;  // CheckHeapPointerStore
   friend class OffsetsTable;
+  friend class Object;
+  friend void ReportImpossibleNullError(intptr_t cid,
+                                        StackFrame* caller_frame,
+                                        Thread* thread);
 
   DISALLOW_ALLOCATION();
-  DISALLOW_IMPLICIT_CONSTRUCTORS(RawObject);
+  DISALLOW_IMPLICIT_CONSTRUCTORS(UntaggedObject);
 };
 
-class RawClass : public RawObject {
+inline intptr_t ObjectPtr::GetClassId() const {
+  return untag()->GetClassId();
+}
+
+#define POINTER_FIELD(type, name)                                              \
+ public:                                                                       \
+  template <std::memory_order order = std::memory_order_relaxed>               \
+  type name() const {                                                          \
+    return LoadPointer<type, order>(&name##_);                                 \
+  }                                                                            \
+  template <std::memory_order order = std::memory_order_relaxed>               \
+  void set_##name(type value) {                                                \
+    StorePointer<type, order>(&name##_, value);                                \
+  }                                                                            \
+                                                                               \
+ protected:                                                                    \
+  type name##_;
+
+#define COMPRESSED_POINTER_FIELD(type, name)                                   \
+ public:                                                                       \
+  template <std::memory_order order = std::memory_order_relaxed>               \
+  type name() const {                                                          \
+    return LoadCompressedPointer<type, Compressed##type, order>(&name##_);     \
+  }                                                                            \
+  template <std::memory_order order = std::memory_order_relaxed>               \
+  void set_##name(type value) {                                                \
+    StoreCompressedPointer<type, Compressed##type, order>(&name##_, value);    \
+  }                                                                            \
+                                                                               \
+ protected:                                                                    \
+  Compressed##type name##_;
+
+#define ARRAY_POINTER_FIELD(type, name)                                        \
+ public:                                                                       \
+  template <std::memory_order order = std::memory_order_relaxed>               \
+  type name() const {                                                          \
+    return LoadPointer<type, order>(&name##_);                                 \
+  }                                                                            \
+  template <std::memory_order order = std::memory_order_relaxed>               \
+  void set_##name(type value) {                                                \
+    StoreArrayPointer<type, order>(&name##_, value);                           \
+  }                                                                            \
+                                                                               \
+ protected:                                                                    \
+  type name##_;
+
+#define COMPRESSED_ARRAY_POINTER_FIELD(type, name)                             \
+ public:                                                                       \
+  template <std::memory_order order = std::memory_order_relaxed>               \
+  type name() const {                                                          \
+    return LoadPointer<Compressed##type, order>(&name##_).Decompress(          \
+        heap_base());                                                          \
+  }                                                                            \
+  template <std::memory_order order = std::memory_order_relaxed>               \
+  void set_##name(type value) {                                                \
+    StoreArrayPointer<Compressed##type, order>(&name##_,                       \
+                                               Compressed##type(value));       \
+  }                                                                            \
+                                                                               \
+ protected:                                                                    \
+  Compressed##type name##_;
+
+#define VARIABLE_POINTER_FIELDS(type, accessor_name, array_name)               \
+ public:                                                                       \
+  template <std::memory_order order = std::memory_order_relaxed>               \
+  type accessor_name(intptr_t index) const {                                   \
+    return LoadPointer<type, order>(&array_name()[index]);                     \
+  }                                                                            \
+  template <std::memory_order order = std::memory_order_relaxed>               \
+  void set_##accessor_name(intptr_t index, type value) {                       \
+    StoreArrayPointer<type, order>(&array_name()[index], value);               \
+  }                                                                            \
+                                                                               \
+ protected:                                                                    \
+  type* array_name() { OPEN_ARRAY_START(type, type); }                         \
+  type const* array_name() const { OPEN_ARRAY_START(type, type); }             \
+  VISIT_TO_PAYLOAD_END(type)
+
+#define COMPRESSED_VARIABLE_POINTER_FIELDS(type, accessor_name, array_name)    \
+ public:                                                                       \
+  template <std::memory_order order = std::memory_order_relaxed>               \
+  type accessor_name(intptr_t index) const {                                   \
+    return LoadCompressedPointer<type, Compressed##type, order>(               \
+        &array_name()[index]);                                                 \
+  }                                                                            \
+  template <std::memory_order order = std::memory_order_relaxed>               \
+  void set_##accessor_name(intptr_t index, type value) {                       \
+    StoreCompressedArrayPointer<type, Compressed##type, order>(                \
+        &array_name()[index], value);                                          \
+  }                                                                            \
+                                                                               \
+ protected:                                                                    \
+  Compressed##type* array_name() {                                             \
+    OPEN_ARRAY_START(Compressed##type, Compressed##type);                      \
+  }                                                                            \
+  Compressed##type const* array_name() const {                                 \
+    OPEN_ARRAY_START(Compressed##type, Compressed##type);                      \
+  }                                                                            \
+  VISIT_TO_PAYLOAD_END(Compressed##type)
+
+#define SMI_FIELD(type, name)                                                  \
+ public:                                                                       \
+  template <std::memory_order order = std::memory_order_relaxed>               \
+  type name() const {                                                          \
+    type result = LoadSmi<order>(&name##_);                                    \
+    ASSERT(!result.IsHeapObject());                                            \
+    return result;                                                             \
+  }                                                                            \
+  template <std::memory_order order = std::memory_order_relaxed>               \
+  void set_##name(type value) {                                                \
+    ASSERT(!value.IsHeapObject());                                             \
+    StoreSmi<type, order>(&name##_, value);                                    \
+  }                                                                            \
+                                                                               \
+ protected:                                                                    \
+  type name##_;
+
+#define COMPRESSED_SMI_FIELD(type, name)                                       \
+ public:                                                                       \
+  template <std::memory_order order = std::memory_order_relaxed>               \
+  type name() const {                                                          \
+    type result = LoadCompressedSmi<order>(&name##_);                          \
+    ASSERT(!result.IsHeapObject());                                            \
+    return result;                                                             \
+  }                                                                            \
+  template <std::memory_order order = std::memory_order_relaxed>               \
+  void set_##name(type value) {                                                \
+    ASSERT(!value.IsHeapObject());                                             \
+    StoreCompressedSmi(&name##_, value);                                       \
+  }                                                                            \
+                                                                               \
+ protected:                                                                    \
+  Compressed##type name##_;
+
+#if defined(DART_PRECOMPILER)
+#define WSR_COMPRESSED_POINTER_FIELD(Type, Name)                               \
+  COMPRESSED_POINTER_FIELD(ObjectPtr, Name)
+#else
+#define WSR_COMPRESSED_POINTER_FIELD(Type, Name)                               \
+  COMPRESSED_POINTER_FIELD(Type, Name)
+#endif
+
+class UntaggedClass : public UntaggedObject {
  public:
   enum ClassFinalizedState {
-    kAllocated = 0,         // Initial state.
-    kPreFinalized,          // VM classes: size precomputed, but no checks done.
-    kFinalized,             // Class parsed, finalized and ready for use.
-    kRefinalizeAfterPatch,  // Class needs to be refinalized (patched).
+    kAllocated = 0,  // Initial state.
+    kPreFinalized,   // VM classes: size precomputed, but no checks done.
+    kFinalized,      // Class parsed, code compiled, not ready for allocation.
+    kAllocateFinalized,  // CHA invalidated, class is ready for allocation.
   };
+  enum ClassLoadingState {
+    // Class object is created, but it is not filled up.
+    // At this state class can only be used as a forward reference during
+    // class loading.
+    kNameOnly = 0,
+    // Class declaration information such as type parameters, supertype and
+    // implemented interfaces are loaded. However, types in the class are
+    // not finalized yet.
+    kDeclarationLoaded,
+    // Types in the class are finalized. At this point, members can be loaded
+    // and class can be finalized.
+    kTypeFinalized,
+  };
+
+  classid_t id() const { return id_; }
 
  private:
   RAW_HEAP_OBJECT_IMPLEMENTATION(Class);
 
-  VISIT_FROM(RawObject*, name_);
-  RawString* name_;
-  RawString* user_name_;
-  RawArray* functions_;
-  RawArray* functions_hash_table_;
-  RawArray* fields_;
-  RawArray* offset_in_words_to_field_;
-  RawArray* interfaces_;  // Array of AbstractType.
-  RawScript* script_;
-  RawLibrary* library_;
-  RawTypeArguments* type_parameters_;  // Array of TypeParameter.
-  RawAbstractType* super_type_;
-  RawType* mixin_;  // Generic mixin type, e.g. M<T>, not M<int>.
-  RawFunction* signature_function_;  // Associated function for typedef class.
-  RawArray* constants_;      // Canonicalized const instances of this class.
-  RawType* canonical_type_;  // Canonical type for this class.
-  RawArray* invocation_dispatcher_cache_;  // Cache for dispatcher functions.
-  RawCode* allocation_stub_;  // Stub code for allocation of instances.
-  RawGrowableObjectArray* direct_implementors_;  // Array of Class.
-  RawGrowableObjectArray* direct_subclasses_;  // Array of Class.
-  RawArray* dependent_code_;                   // CHA optimized codes.
-  VISIT_TO(RawObject*, dependent_code_);
-  RawObject** to_snapshot(Snapshot::Kind kind) {
+  COMPRESSED_POINTER_FIELD(StringPtr, name)
+  VISIT_FROM(name)
+  NOT_IN_PRODUCT(COMPRESSED_POINTER_FIELD(StringPtr, user_name))
+  COMPRESSED_POINTER_FIELD(ArrayPtr, functions)
+  COMPRESSED_POINTER_FIELD(ArrayPtr, functions_hash_table)
+  COMPRESSED_POINTER_FIELD(ArrayPtr, fields)
+  COMPRESSED_POINTER_FIELD(ArrayPtr, offset_in_words_to_field)
+  COMPRESSED_POINTER_FIELD(ArrayPtr, interfaces)  // Array of AbstractType.
+  COMPRESSED_POINTER_FIELD(ScriptPtr, script)
+  COMPRESSED_POINTER_FIELD(LibraryPtr, library)
+  COMPRESSED_POINTER_FIELD(TypeParametersPtr, type_parameters)
+  COMPRESSED_POINTER_FIELD(AbstractTypePtr, super_type)
+  // Canonicalized const instances of this class.
+  COMPRESSED_POINTER_FIELD(ArrayPtr, constants)
+  // Declaration type for this class.
+  COMPRESSED_POINTER_FIELD(TypePtr, declaration_type)
+  // Cache for dispatcher functions.
+  COMPRESSED_POINTER_FIELD(ArrayPtr, invocation_dispatcher_cache)
+
+#if !defined(PRODUCT) || !defined(DART_PRECOMPILED_RUNTIME)
+  // Array of Class.
+  COMPRESSED_POINTER_FIELD(GrowableObjectArrayPtr, direct_implementors)
+  // Array of Class.
+  COMPRESSED_POINTER_FIELD(GrowableObjectArrayPtr, direct_subclasses)
+#endif  // !defined(PRODUCT) || !defined(DART_PRECOMPILED_RUNTIME)
+
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  // Stub code for allocation of instances.
+  COMPRESSED_POINTER_FIELD(CodePtr, allocation_stub)
+  // CHA optimized codes.
+  COMPRESSED_POINTER_FIELD(ArrayPtr, dependent_code)
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
+
+#if defined(DART_PRECOMPILED_RUNTIME)
+#if defined(PRODUCT)
+  VISIT_TO(invocation_dispatcher_cache)
+#else
+  VISIT_TO(direct_subclasses)
+#endif  // defined(PRODUCT)
+#else
+  VISIT_TO(dependent_code)
+#endif  // defined(DART_PRECOMPILED_RUNTIME)
+
+  CompressedObjectPtr* to_snapshot(Snapshot::Kind kind) {
     switch (kind) {
       case Snapshot::kFullAOT:
-        return reinterpret_cast<RawObject**>(&ptr()->allocation_stub_);
+#if defined(PRODUCT)
+        return reinterpret_cast<CompressedObjectPtr*>(
+            &invocation_dispatcher_cache_);
+#else
+        return reinterpret_cast<CompressedObjectPtr*>(&direct_subclasses_);
+#endif  // defined(PRODUCT)
       case Snapshot::kFull:
-        return reinterpret_cast<RawObject**>(&ptr()->direct_subclasses_);
+      case Snapshot::kFullCore:
+#if !defined(DART_PRECOMPILED_RUNTIME)
+        return reinterpret_cast<CompressedObjectPtr*>(&allocation_stub_);
+#endif
       case Snapshot::kFullJIT:
-        return reinterpret_cast<RawObject**>(&ptr()->dependent_code_);
+#if !defined(DART_PRECOMPILED_RUNTIME)
+        return reinterpret_cast<CompressedObjectPtr*>(&dependent_code_);
+#endif
       case Snapshot::kMessage:
       case Snapshot::kNone:
       case Snapshot::kInvalid:
@@ -936,51 +1117,70 @@ class RawClass : public RawObject {
     return NULL;
   }
 
-  cpp_vtable handle_vtable_;
-  TokenPosition token_pos_;
-  int32_t instance_size_in_words_;  // Size if fixed len or 0 if variable len.
-  int32_t type_arguments_field_offset_in_words_;  // Offset of type args fld.
-  int32_t next_field_offset_in_words_;  // Offset of the next instance field.
+  NOT_IN_PRECOMPILED(TokenPosition token_pos_);
+  NOT_IN_PRECOMPILED(TokenPosition end_token_pos_);
+
   classid_t id_;                // Class Id, also index in the class table.
   int16_t num_type_arguments_;  // Number of type arguments in flattened vector.
-
-  // Bitfields with number of non-overlapping type arguments and 'has_pragma'
-  // bit.
-  uint16_t has_pragma_and_num_own_type_arguments_;
-
   uint16_t num_native_fields_;
-  uint16_t state_bits_;
-  NOT_IN_PRECOMPILED(intptr_t kernel_offset_);
+  uint32_t state_bits_;
+
+  // Size if fixed len or 0 if variable len.
+  int32_t host_instance_size_in_words_;
+
+  // Offset of type args fld.
+  int32_t host_type_arguments_field_offset_in_words_;
+
+  // Offset of the next instance field.
+  int32_t host_next_field_offset_in_words_;
+
+#if defined(DART_PRECOMPILER)
+  // Size if fixed len or 0 if variable len (target).
+  int32_t target_instance_size_in_words_;
+
+  // Offset of type args fld.
+  int32_t target_type_arguments_field_offset_in_words_;
+
+  // Offset of the next instance field (target).
+  int32_t target_next_field_offset_in_words_;
+#endif  // defined(DART_PRECOMPILER)
+
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  uint32_t kernel_offset_;
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
 
   friend class Instance;
-  friend class Isolate;
+  friend class IsolateGroup;
   friend class Object;
-  friend class RawInstance;
-  friend class RawInstructions;
-  friend class RawTypeArguments;
+  friend class UntaggedInstance;
+  friend class UntaggedInstructions;
+  friend class UntaggedTypeArguments;
   friend class SnapshotReader;
   friend class InstanceSerializationCluster;
+  friend class TypeSerializationCluster;
   friend class CidRewriteVisitor;
+  friend class Api;
 };
 
-class RawPatchClass : public RawObject {
+class UntaggedPatchClass : public UntaggedObject {
  private:
   RAW_HEAP_OBJECT_IMPLEMENTATION(PatchClass);
 
-  VISIT_FROM(RawObject*, patched_class_);
-  RawClass* patched_class_;
-  RawClass* origin_class_;
-  RawScript* script_;
-  RawExternalTypedData* library_kernel_data_;
-  VISIT_TO(RawObject*, library_kernel_data_);
+  COMPRESSED_POINTER_FIELD(ClassPtr, patched_class)
+  VISIT_FROM(patched_class)
+  COMPRESSED_POINTER_FIELD(ClassPtr, origin_class)
+  COMPRESSED_POINTER_FIELD(ScriptPtr, script)
+  COMPRESSED_POINTER_FIELD(ExternalTypedDataPtr, library_kernel_data)
+  VISIT_TO(library_kernel_data)
 
-  RawObject** to_snapshot(Snapshot::Kind kind) {
+  CompressedObjectPtr* to_snapshot(Snapshot::Kind kind) {
     switch (kind) {
       case Snapshot::kFullAOT:
-        return reinterpret_cast<RawObject**>(&ptr()->script_);
+        return reinterpret_cast<CompressedObjectPtr*>(&script_);
       case Snapshot::kFull:
+      case Snapshot::kFullCore:
       case Snapshot::kFullJIT:
-        return reinterpret_cast<RawObject**>(&ptr()->library_kernel_data_);
+        return reinterpret_cast<CompressedObjectPtr*>(&library_kernel_data_);
       case Snapshot::kMessage:
       case Snapshot::kNone:
       case Snapshot::kInvalid:
@@ -995,28 +1195,77 @@ class RawPatchClass : public RawObject {
   friend class Function;
 };
 
-class RawFunction : public RawObject {
+class UntaggedFunction : public UntaggedObject {
  public:
+  // When you add a new kind, please also update the observatory to account
+  // for the new string returned by KindToCString().
+  // - runtime/observatory/lib/src/models/objects/function.dart (FunctionKind)
+  // - runtime/observatory/lib/src/elements/function_view.dart
+  //   (_functionKindToString)
+  // - runtime/observatory/lib/src/service/object.dart (stringToFunctionKind)
+#define FOR_EACH_RAW_FUNCTION_KIND(V)                                          \
+  /* an ordinary or operator method */                                         \
+  V(RegularFunction)                                                           \
+  /* a user-declared closure function */                                       \
+  V(ClosureFunction)                                                           \
+  /* an implicit closure (i.e., tear-off) */                                   \
+  V(ImplicitClosureFunction)                                                   \
+  /* a signature only without actual code */                                   \
+  V(GetterFunction)                                                            \
+  /* setter functions e.g: set foo(..) { .. } */                               \
+  V(SetterFunction)                                                            \
+  /* a generative (is_static=false) or factory (is_static=true) constructor */ \
+  V(Constructor)                                                               \
+  /* an implicit getter for instance fields */                                 \
+  V(ImplicitGetter)                                                            \
+  /* an implicit setter for instance fields */                                 \
+  V(ImplicitSetter)                                                            \
+  /* represents an implicit getter for static fields with initializers */      \
+  V(ImplicitStaticGetter)                                                      \
+  /* the initialization expression for a static or instance field */           \
+  V(FieldInitializer)                                                          \
+  /* return a closure on the receiver for tear-offs */                         \
+  V(MethodExtractor)                                                           \
+  /* builds an Invocation and invokes noSuchMethod */                          \
+  V(NoSuchMethodDispatcher)                                                    \
+  /* invokes a field as a closure (i.e., call-through-getter) */               \
+  V(InvokeFieldDispatcher)                                                     \
+  /* a generated irregexp matcher function. */                                 \
+  V(IrregexpFunction)                                                          \
+  /* a forwarder which performs type checks for arguments of a dynamic call */ \
+  /* (i.e., those checks omitted by the caller for interface calls). */        \
+  V(DynamicInvocationForwarder)                                                \
+  V(FfiTrampoline)
+
   enum Kind {
-    kRegularFunction,
-    kClosureFunction,
-    kImplicitClosureFunction,
-    kSignatureFunction,  // represents a signature only without actual code.
-    kGetterFunction,     // represents getter functions e.g: get foo() { .. }.
-    kSetterFunction,     // represents setter functions e.g: set foo(..) { .. }.
-    kConstructor,
-    kImplicitGetter,             // represents an implicit getter for fields.
-    kImplicitSetter,             // represents an implicit setter for fields.
-    kImplicitStaticFinalGetter,  // represents an implicit getter for static
-                                 // final fields (incl. static const fields).
-    kMethodExtractor,  // converts method into implicit closure on the receiver.
-    kNoSuchMethodDispatcher,  // invokes noSuchMethod.
-    kInvokeFieldDispatcher,   // invokes a field as a closure.
-    kIrregexpFunction,  // represents a generated irregexp matcher function.
-    kDynamicInvocationForwarder,  // represents forwarder which performs type
-                                  // checks for arguments of a dynamic
-                                  // invocation.
+#define KIND_DEFN(Name) k##Name,
+    FOR_EACH_RAW_FUNCTION_KIND(KIND_DEFN)
+#undef KIND_DEFN
   };
+
+  static const char* KindToCString(Kind k) {
+    switch (k) {
+#define KIND_CASE(Name)                                                        \
+  case Kind::k##Name:                                                          \
+    return #Name;
+      FOR_EACH_RAW_FUNCTION_KIND(KIND_CASE)
+#undef KIND_CASE
+      default:
+        UNREACHABLE();
+        return nullptr;
+    }
+  }
+
+  static bool ParseKind(const char* str, Kind* out) {
+#define KIND_CASE(Name)                                                        \
+  if (strcmp(str, #Name) == 0) {                                               \
+    *out = Kind::k##Name;                                                      \
+    return true;                                                               \
+  }
+    FOR_EACH_RAW_FUNCTION_KIND(KIND_CASE)
+#undef KIND_CASE
+    return false;
+  }
 
   enum AsyncModifier {
     kNoModifier = 0x0,
@@ -1027,37 +1276,96 @@ class RawFunction : public RawObject {
     kAsyncGen = kAsyncBit | kGeneratorBit,
   };
 
-  static constexpr intptr_t kMaxFixedParametersBits = 15;
-  static constexpr intptr_t kMaxOptionalParametersBits = 14;
+  // Wraps a 64-bit integer to represent the bitmap for unboxed parameters and
+  // return value. Two bits are used for each of them - the first one indicates
+  // whether this value is unboxed or not, and the second one says whether it is
+  // an integer or a double. It includes the two bits for the receiver, even
+  // though currently we do not have information from TFA that allows the
+  // receiver to be unboxed.
+  class alignas(8) UnboxedParameterBitmap {
+   public:
+    static constexpr intptr_t kBitsPerParameter = 2;
+    static constexpr intptr_t kParameterBitmask = (1 << kBitsPerParameter) - 1;
+    static constexpr intptr_t kCapacity =
+        (kBitsPerByte * sizeof(uint64_t)) / kBitsPerParameter;
+
+    UnboxedParameterBitmap() : bitmap_(0) {}
+    explicit UnboxedParameterBitmap(uint64_t bitmap) : bitmap_(bitmap) {}
+    UnboxedParameterBitmap(const UnboxedParameterBitmap&) = default;
+    UnboxedParameterBitmap& operator=(const UnboxedParameterBitmap&) = default;
+
+    DART_FORCE_INLINE bool IsUnboxed(intptr_t position) const {
+      if (position >= kCapacity) {
+        return false;
+      }
+      ASSERT(Utils::TestBit(bitmap_, kBitsPerParameter * position) ||
+             !Utils::TestBit(bitmap_, kBitsPerParameter * position + 1));
+      return Utils::TestBit(bitmap_, kBitsPerParameter * position);
+    }
+    DART_FORCE_INLINE bool IsUnboxedInteger(intptr_t position) const {
+      if (position >= kCapacity) {
+        return false;
+      }
+      return Utils::TestBit(bitmap_, kBitsPerParameter * position) &&
+             !Utils::TestBit(bitmap_, kBitsPerParameter * position + 1);
+    }
+    DART_FORCE_INLINE bool IsUnboxedDouble(intptr_t position) const {
+      if (position >= kCapacity) {
+        return false;
+      }
+      return Utils::TestBit(bitmap_, kBitsPerParameter * position) &&
+             Utils::TestBit(bitmap_, kBitsPerParameter * position + 1);
+    }
+    DART_FORCE_INLINE void SetUnboxedInteger(intptr_t position) {
+      ASSERT(position < kCapacity);
+      bitmap_ |= Utils::Bit<decltype(bitmap_)>(kBitsPerParameter * position);
+      ASSERT(!Utils::TestBit(bitmap_, kBitsPerParameter * position + 1));
+    }
+    DART_FORCE_INLINE void SetUnboxedDouble(intptr_t position) {
+      ASSERT(position < kCapacity);
+      bitmap_ |= Utils::Bit<decltype(bitmap_)>(kBitsPerParameter * position);
+      bitmap_ |=
+          Utils::Bit<decltype(bitmap_)>(kBitsPerParameter * position + 1);
+    }
+    DART_FORCE_INLINE uint64_t Value() const { return bitmap_; }
+    DART_FORCE_INLINE bool IsEmpty() const { return bitmap_ == 0; }
+    DART_FORCE_INLINE void Reset() { bitmap_ = 0; }
+    DART_FORCE_INLINE bool HasUnboxedParameters() const {
+      return (bitmap_ >> kBitsPerParameter) != 0;
+    }
+    DART_FORCE_INLINE bool HasUnboxedReturnValue() const {
+      return (bitmap_ & kParameterBitmask) != 0;
+    }
+
+   private:
+    uint64_t bitmap_;
+  };
 
  private:
-  // So that the SkippedCodeFunctions::DetachCode can null out the code fields.
-  friend class SkippedCodeFunctions;
   friend class Class;
+  friend class UnitDeserializationRoots;
 
   RAW_HEAP_OBJECT_IMPLEMENTATION(Function);
 
-  static bool ShouldVisitCode(RawCode* raw_code);
-  static bool CheckUsageCounter(RawFunction* raw_fun);
-
-  uword entry_point_;  // Accessed from generated code.
+  uword entry_point_;            // Accessed from generated code.
   uword unchecked_entry_point_;  // Accessed from generated code.
 
-  VISIT_FROM(RawObject*, name_);
-  RawString* name_;
-  RawObject* owner_;  // Class or patch class or mixin class
-                      // where this function is defined.
-  RawAbstractType* result_type_;
-  RawArray* parameter_types_;
-  RawArray* parameter_names_;
-  RawTypeArguments* type_parameters_;  // Array of TypeParameter.
-  RawObject* data_;  // Additional data specific to the function kind.
-  RawObject** to_snapshot(Snapshot::Kind kind) {
+  COMPRESSED_POINTER_FIELD(StringPtr, name)
+  VISIT_FROM(name)
+  // Class or patch class or mixin class where this function is defined.
+  COMPRESSED_POINTER_FIELD(ObjectPtr, owner)
+  COMPRESSED_POINTER_FIELD(ArrayPtr, parameter_names)
+  COMPRESSED_POINTER_FIELD(FunctionTypePtr, signature)
+  // Additional data specific to the function kind. See Function::set_data()
+  // for details.
+  COMPRESSED_POINTER_FIELD(ObjectPtr, data)
+  CompressedObjectPtr* to_snapshot(Snapshot::Kind kind) {
     switch (kind) {
       case Snapshot::kFullAOT:
       case Snapshot::kFull:
+      case Snapshot::kFullCore:
       case Snapshot::kFullJIT:
-        return reinterpret_cast<RawObject**>(&ptr()->data_);
+        return reinterpret_cast<CompressedObjectPtr*>(&data_);
       case Snapshot::kMessage:
       case Snapshot::kNone:
       case Snapshot::kInvalid:
@@ -1066,35 +1374,46 @@ class RawFunction : public RawObject {
     UNREACHABLE();
     return NULL;
   }
-  RawArray* ic_data_array_;  // ICData of unoptimized code.
-  RawObject** to_no_code() {
-    return reinterpret_cast<RawObject**>(&ptr()->ic_data_array_);
-  }
-  RawCode* code_;  // Currently active code. Accessed from generated code.
-  NOT_IN_PRECOMPILED(RawBytecode* bytecode_);
-  NOT_IN_PRECOMPILED(RawCode* unoptimized_code_);  // Unoptimized code, keep it
-                                                   // after optimization.
+  // ICData of unoptimized code.
+  COMPRESSED_POINTER_FIELD(ArrayPtr, ic_data_array);
+  // Currently active code. Accessed from generated code.
+  COMPRESSED_POINTER_FIELD(CodePtr, code);
+  // Unoptimized code, keep it after optimization.
+  NOT_IN_PRECOMPILED(COMPRESSED_POINTER_FIELD(CodePtr, unoptimized_code));
 #if defined(DART_PRECOMPILED_RUNTIME)
-  VISIT_TO(RawObject*, code_);
+  VISIT_TO(code);
 #else
-  VISIT_TO(RawObject*, unoptimized_code_);
+  VISIT_TO(unoptimized_code);
 #endif
 
+  NOT_IN_PRECOMPILED(UnboxedParameterBitmap unboxed_parameters_info_);
   NOT_IN_PRECOMPILED(TokenPosition token_pos_);
   NOT_IN_PRECOMPILED(TokenPosition end_token_pos_);
-  uint32_t kind_tag_;                          // See Function::KindTagBits.
+  Tags<uint32_t> kind_tag_;  // See Function::KindTagBits.
   uint32_t packed_fields_;
 
-  typedef BitField<uint32_t, bool, 0, 1>
-      PackedHasNamedOptionalParameters;
+  // TODO(regis): Split packed_fields_ in 2 uint32_t if max values are too low.
+
+  static constexpr intptr_t kMaxOptimizableBits = 1;
+  static constexpr intptr_t kMaxTypeParametersBits = 7;
+  static constexpr intptr_t kMaxHasNamedOptionalParametersBits = 1;
+  static constexpr intptr_t kMaxFixedParametersBits = 10;
+  static constexpr intptr_t kMaxOptionalParametersBits = 10;
+
+  typedef BitField<uint32_t, bool, 0, kMaxOptimizableBits> PackedOptimizable;
+  typedef BitField<uint32_t,
+                   uint8_t,
+                   PackedOptimizable::kNextBit,
+                   kMaxTypeParametersBits>
+      PackedNumTypeParameters;
   typedef BitField<uint32_t,
                    bool,
-                   PackedHasNamedOptionalParameters::kNextBit,
-                   1>
-      BackgroundOptimizableBit;
+                   PackedNumTypeParameters::kNextBit,
+                   kMaxHasNamedOptionalParametersBits>
+      PackedHasNamedOptionalParameters;
   typedef BitField<uint32_t,
                    uint16_t,
-                   BackgroundOptimizableBit::kNextBit,
+                   PackedHasNamedOptionalParameters::kNextBit,
                    kMaxFixedParametersBits>
       PackedNumFixedParameters;
   typedef BitField<uint32_t,
@@ -1103,11 +1422,10 @@ class RawFunction : public RawObject {
                    kMaxOptionalParametersBits>
       PackedNumOptionalParameters;
   static_assert(PackedNumOptionalParameters::kNextBit <=
-                    kBitsPerWord * sizeof(decltype(packed_fields_)),
-                "RawFunction::packed_fields_ bitfields don't align.");
+                    kBitsPerByte * sizeof(decltype(packed_fields_)),
+                "UntaggedFunction::packed_fields_ bitfields don't fit.");
 
 #define JIT_FUNCTION_COUNTERS(F)                                               \
-  F(intptr_t, intptr_t, kernel_offset)                                         \
   F(intptr_t, int32_t, usage_counter)                                          \
   F(intptr_t, uint16_t, optimized_instruction_count)                           \
   F(intptr_t, uint16_t, optimized_call_site_count)                             \
@@ -1116,84 +1434,109 @@ class RawFunction : public RawObject {
   F(int, int8_t, inlining_depth)
 
 #if !defined(DART_PRECOMPILED_RUNTIME)
+  uint32_t kernel_offset_;
+
 #define DECLARE(return_type, type, name) type name##_;
-
   JIT_FUNCTION_COUNTERS(DECLARE)
-
 #undef DECLARE
-#endif
+
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
+
+  friend class UntaggedFunctionType;  // To use same constants for packing.
 };
 
-class RawClosureData : public RawObject {
+class UntaggedClosureData : public UntaggedObject {
  private:
   RAW_HEAP_OBJECT_IMPLEMENTATION(ClosureData);
 
-  VISIT_FROM(RawObject*, context_scope_);
-  RawContextScope* context_scope_;
-  RawFunction* parent_function_;  // Enclosing function of this local function.
-  RawType* signature_type_;
-  RawInstance* closure_;  // Closure object for static implicit closures.
-  VISIT_TO(RawObject*, closure_);
+  COMPRESSED_POINTER_FIELD(ContextScopePtr, context_scope)
+  VISIT_FROM(context_scope)
+  // Enclosing function of this local function.
+  WSR_COMPRESSED_POINTER_FIELD(FunctionPtr, parent_function)
+  // Closure object for static implicit closures.
+  COMPRESSED_POINTER_FIELD(ClosurePtr, closure)
+  VISIT_TO(closure)
+
+  enum class DefaultTypeArgumentsKind : uint8_t {
+    // Only here to make sure it's explicitly set appropriately.
+    kInvalid = 0,
+    // Must instantiate the default type arguments before use.
+    kNeedsInstantiation,
+    // The default type arguments are already instantiated.
+    kIsInstantiated,
+    // Use the instantiator type arguments that would be used to instantiate
+    // the default type arguments, as instantiating produces the same result.
+    kSharesInstantiatorTypeArguments,
+    // Use the function type arguments that would be used to instantiate
+    // the default type arguments, as instantiating produces the same result.
+    kSharesFunctionTypeArguments,
+  };
+
+  // kernel_to_il.cc assumes we can load the untagged value and box it in a Smi.
+  static_assert(sizeof(DefaultTypeArgumentsKind) * kBitsPerByte <=
+                    compiler::target::kSmiBits,
+                "Default type arguments kind must fit in a Smi");
+
+  DefaultTypeArgumentsKind default_type_arguments_kind_;
 
   friend class Function;
+  friend class UnitDeserializationRoots;
 };
 
-class RawSignatureData : public RawObject {
+class UntaggedFfiTrampolineData : public UntaggedObject {
  private:
-  RAW_HEAP_OBJECT_IMPLEMENTATION(SignatureData);
+  RAW_HEAP_OBJECT_IMPLEMENTATION(FfiTrampolineData);
 
-  VISIT_FROM(RawObject*, parent_function_);
-  RawFunction* parent_function_;  // Enclosing function of this sig. function.
-  RawType* signature_type_;
-  VISIT_TO(RawObject*, signature_type_);
-  RawObject** to_snapshot(Snapshot::Kind kind) { return to(); }
+  COMPRESSED_POINTER_FIELD(TypePtr, signature_type)
+  VISIT_FROM(signature_type)
+  COMPRESSED_POINTER_FIELD(FunctionTypePtr, c_signature)
 
-  friend class Function;
+  // Target Dart method for callbacks, otherwise null.
+  COMPRESSED_POINTER_FIELD(FunctionPtr, callback_target)
+
+  // For callbacks, value to return if Dart target throws an exception.
+  COMPRESSED_POINTER_FIELD(InstancePtr, callback_exceptional_return)
+  VISIT_TO(callback_exceptional_return)
+  CompressedObjectPtr* to_snapshot(Snapshot::Kind kind) { return to(); }
+
+  // Callback id for callbacks.
+  //
+  // The callbacks ids are used so that native callbacks can lookup their own
+  // code objects, since native code doesn't pass code objects into function
+  // calls. The callback id is also used to for verifying that callbacks are
+  // called on the correct isolate. See DLRT_VerifyCallbackIsolate for details.
+  //
+  // Will be 0 for non-callbacks. Check 'callback_target_' to determine if this
+  // is a callback or not.
+  uint32_t callback_id_;
+
+  // Whether this is a leaf call - i.e. one that doesn't call back into Dart.
+  bool is_leaf_;
 };
 
-class RawRedirectionData : public RawObject {
- private:
-  RAW_HEAP_OBJECT_IMPLEMENTATION(RedirectionData);
-
-  VISIT_FROM(RawObject*, type_);
-  RawType* type_;
-  RawString* identifier_;
-  RawFunction* target_;
-  VISIT_TO(RawObject*, target_);
-  RawObject** to_snapshot(Snapshot::Kind kind) { return to(); }
-};
-
-class RawField : public RawObject {
+class UntaggedField : public UntaggedObject {
   RAW_HEAP_OBJECT_IMPLEMENTATION(Field);
 
-  VISIT_FROM(RawObject*, name_);
-  RawString* name_;
-  RawObject* owner_;  // Class or patch class or mixin class
-                      // where this field is defined or original field.
-  RawAbstractType* type_;
-  union {
-    RawInstance* static_value_;  // Value for static fields.
-    RawSmi* offset_;             // Offset in words for instance fields.
-  } value_;
-  union {
-    // When precompiling we need to save the static initializer function here
-    // so that code for it can be generated.
-    RawFunction* precompiled_;  // Static initializer function - precompiling.
-    // When generating script snapshots after running the application it is
-    // necessary to save the initial value of static fields so that we can
-    // restore the value back to the original initial value.
-    RawInstance* saved_value_;  // Saved initial value - static fields.
-  } initializer_;
-  RawSmi* guarded_list_length_;
-  RawArray* dependent_code_;
-  RawObject** to_snapshot(Snapshot::Kind kind) {
+  COMPRESSED_POINTER_FIELD(StringPtr, name)
+  VISIT_FROM(name)
+  // Class or patch class or mixin class where this field is defined or original
+  // field.
+  COMPRESSED_POINTER_FIELD(ObjectPtr, owner)
+  COMPRESSED_POINTER_FIELD(AbstractTypePtr, type)
+  // Static initializer function.
+  COMPRESSED_POINTER_FIELD(FunctionPtr, initializer_function)
+  // - for instance fields: offset in words to the value in the class instance.
+  // - for static fields: index into field_table.
+  COMPRESSED_POINTER_FIELD(SmiPtr, host_offset_or_field_id)
+  COMPRESSED_POINTER_FIELD(SmiPtr, guarded_list_length)
+  COMPRESSED_POINTER_FIELD(ArrayPtr, dependent_code)
+  CompressedObjectPtr* to_snapshot(Snapshot::Kind kind) {
     switch (kind) {
       case Snapshot::kFull:
-        return reinterpret_cast<RawObject**>(&ptr()->guarded_list_length_);
+      case Snapshot::kFullCore:
       case Snapshot::kFullJIT:
-        return reinterpret_cast<RawObject**>(&ptr()->dependent_code_);
       case Snapshot::kFullAOT:
-        return reinterpret_cast<RawObject**>(&ptr()->initializer_);
+        return reinterpret_cast<CompressedObjectPtr*>(&initializer_function_);
       case Snapshot::kMessage:
       case Snapshot::kNone:
       case Snapshot::kInvalid:
@@ -1203,17 +1546,22 @@ class RawField : public RawObject {
     return NULL;
   }
 #if defined(DART_PRECOMPILED_RUNTIME)
-  VISIT_TO(RawObject*, dependent_code_);
+  VISIT_TO(dependent_code);
 #else
-  RawSubtypeTestCache* type_test_cache_;  // For type test in implicit setter.
-  VISIT_TO(RawObject*, type_test_cache_);
+  // For type test in implicit setter.
+  COMPRESSED_POINTER_FIELD(SubtypeTestCachePtr, type_test_cache);
+  VISIT_TO(type_test_cache);
 #endif
   TokenPosition token_pos_;
   TokenPosition end_token_pos_;
-  classid_t guarded_cid_;
-  classid_t is_nullable_;  // kNullCid if field can contain null value and
-                           // any other value otherwise.
-  NOT_IN_PRECOMPILED(intptr_t kernel_offset_);
+  ClassIdTagType guarded_cid_;
+  ClassIdTagType is_nullable_;  // kNullCid if field can contain null value and
+                                // kIllegalCid otherwise.
+
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  uint32_t kernel_offset_;
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
+
   // Offset to the guarded length field inside an instance of class matching
   // guarded_cid_. Stored corrected by -kHeapObjectTag to simplify code
   // generated on platforms with weak addressing modes (ARM).
@@ -1226,40 +1574,43 @@ class RawField : public RawObject {
 
   uint16_t kind_bits_;  // static, final, const, has initializer....
 
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  // for instance fields, the offset in words in the target architecture
+  int32_t target_offset_;
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
+
   friend class CidRewriteVisitor;
+  friend class GuardFieldClassInstr;     // For sizeof(guarded_cid_/...)
+  friend class LoadFieldInstr;           // For sizeof(guarded_cid_/...)
+  friend class StoreInstanceFieldInstr;  // For sizeof(guarded_cid_/...)
 };
 
-class RawScript : public RawObject {
- public:
-  enum Kind {
-    kScriptTag = 0,
-    kLibraryTag,
-    kSourceTag,
-    kPatchTag,
-    kEvaluateTag,
-    kKernelTag,
-  };
-
- private:
+class alignas(8) UntaggedScript : public UntaggedObject {
   RAW_HEAP_OBJECT_IMPLEMENTATION(Script);
 
-  VISIT_FROM(RawObject*, url_);
-  RawString* url_;
-  RawString* resolved_url_;
-  RawArray* compile_time_constants_;
-  RawTypedData* line_starts_;
-  RawArray* debug_positions_;
-  RawArray* yield_positions_;
-  RawKernelProgramInfo* kernel_program_info_;
-  RawString* source_;
-  VISIT_TO(RawObject*, source_);
-  RawObject** to_snapshot(Snapshot::Kind kind) {
+  COMPRESSED_POINTER_FIELD(StringPtr, url)
+  VISIT_FROM(url)
+  COMPRESSED_POINTER_FIELD(StringPtr, resolved_url)
+  COMPRESSED_POINTER_FIELD(TypedDataPtr, line_starts)
+#if !defined(PRODUCT) && !defined(DART_PRECOMPILED_RUNTIME)
+  COMPRESSED_POINTER_FIELD(ExternalTypedDataPtr, constant_coverage)
+#endif  // !defined(PRODUCT) && !defined(DART_PRECOMPILED_RUNTIME)
+  COMPRESSED_POINTER_FIELD(ArrayPtr, debug_positions)
+  COMPRESSED_POINTER_FIELD(KernelProgramInfoPtr, kernel_program_info)
+  COMPRESSED_POINTER_FIELD(StringPtr, source)
+  VISIT_TO(source)
+  CompressedObjectPtr* to_snapshot(Snapshot::Kind kind) {
     switch (kind) {
       case Snapshot::kFullAOT:
-        return reinterpret_cast<RawObject**>(&ptr()->url_);
+#if defined(PRODUCT)
+        return reinterpret_cast<CompressedObjectPtr*>(&url_);
+#else
+        return reinterpret_cast<CompressedObjectPtr*>(&resolved_url_);
+#endif
       case Snapshot::kFull:
+      case Snapshot::kFullCore:
       case Snapshot::kFullJIT:
-        return reinterpret_cast<RawObject**>(&ptr()->kernel_program_info_);
+        return reinterpret_cast<CompressedObjectPtr*>(&kernel_program_info_);
       case Snapshot::kMessage:
       case Snapshot::kNone:
       case Snapshot::kInvalid:
@@ -1269,43 +1620,89 @@ class RawScript : public RawObject {
     return NULL;
   }
 
-  int32_t line_offset_;
-  int32_t col_offset_;
-  int8_t kind_;  // Of type Kind.
-  intptr_t kernel_script_index_;
+#if !defined(PRODUCT) && !defined(DART_PRECOMPILED_RUNTIME)
   int64_t load_timestamp_;
+  int32_t kernel_script_index_;
+#else
+  int32_t kernel_script_index_;
+  int64_t load_timestamp_;
+#endif
+
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  int32_t flags_and_max_position_;
+
+ public:
+  using LazyLookupSourceAndLineStartsBit =
+      BitField<decltype(flags_and_max_position_), bool, 0, 1>;
+  using HasCachedMaxPositionBit =
+      BitField<decltype(flags_and_max_position_),
+               bool,
+               LazyLookupSourceAndLineStartsBit::kNextBit,
+               1>;
+  using CachedMaxPositionBitField = BitField<decltype(flags_and_max_position_),
+                                             intptr_t,
+                                             HasCachedMaxPositionBit::kNextBit>;
+
+ private:
+#endif
 };
 
-class RawLibrary : public RawObject {
+class UntaggedLibrary : public UntaggedObject {
   enum LibraryState {
     kAllocated,       // Initial state.
     kLoadRequested,   // Compiler or script requested load of library.
     kLoadInProgress,  // Library is in the process of being loaded.
     kLoaded,          // Library is loaded.
-    kLoadError,       // Error occurred during load of the Library.
   };
+
+  enum LibraryFlags {
+    kDartSchemeBit = 0,
+    kDebuggableBit,        // True if debugger can stop in library.
+    kInFullSnapshotBit,    // True if library is in a full snapshot.
+    kNnbdBit,              // True if library is non nullable by default.
+    kNnbdCompiledModePos,  // Encodes nnbd compiled mode of constants in lib.
+    kNnbdCompiledModeSize = 2,
+    kNumFlagBits = kNnbdCompiledModePos + kNnbdCompiledModeSize,
+  };
+  COMPILE_ASSERT(kNumFlagBits <= (sizeof(uint8_t) * kBitsPerByte));
+  class DartSchemeBit : public BitField<uint8_t, bool, kDartSchemeBit, 1> {};
+  class DebuggableBit : public BitField<uint8_t, bool, kDebuggableBit, 1> {};
+  class InFullSnapshotBit
+      : public BitField<uint8_t, bool, kInFullSnapshotBit, 1> {};
+  class NnbdBit : public BitField<uint8_t, bool, kNnbdBit, 1> {};
+  class NnbdCompiledModeBits : public BitField<uint8_t,
+                                               uint8_t,
+                                               kNnbdCompiledModePos,
+                                               kNnbdCompiledModeSize> {};
 
   RAW_HEAP_OBJECT_IMPLEMENTATION(Library);
 
-  VISIT_FROM(RawObject*, name_);
-  RawString* name_;
-  RawString* url_;
-  RawString* private_key_;
-  RawArray* dictionary_;              // Top-level names in this library.
-  RawGrowableObjectArray* metadata_;  // Metadata on classes, methods etc.
-  RawClass* toplevel_class_;          // Class containing top-level elements.
-  RawGrowableObjectArray* patch_classes_;
-  RawArray* imports_;        // List of Namespaces imported without prefix.
-  RawArray* exports_;        // List of re-exported Namespaces.
-  RawInstance* load_error_;  // Error iff load_state_ == kLoadError.
-  RawExternalTypedData* kernel_data_;
-  RawObject** to_snapshot(Snapshot::Kind kind) {
+  COMPRESSED_POINTER_FIELD(StringPtr, name)
+  VISIT_FROM(name)
+  COMPRESSED_POINTER_FIELD(StringPtr, url)
+  COMPRESSED_POINTER_FIELD(StringPtr, private_key)
+  // Top-level names in this library.
+  COMPRESSED_POINTER_FIELD(ArrayPtr, dictionary)
+  // Metadata on classes, methods etc.
+  COMPRESSED_POINTER_FIELD(ArrayPtr, metadata)
+  // Class containing top-level elements.
+  COMPRESSED_POINTER_FIELD(ClassPtr, toplevel_class)
+  COMPRESSED_POINTER_FIELD(GrowableObjectArrayPtr, used_scripts)
+  COMPRESSED_POINTER_FIELD(LoadingUnitPtr, loading_unit)
+  // List of Namespaces imported without prefix.
+  COMPRESSED_POINTER_FIELD(ArrayPtr, imports)
+  // List of re-exported Namespaces.
+  COMPRESSED_POINTER_FIELD(ArrayPtr, exports)
+  COMPRESSED_POINTER_FIELD(ArrayPtr, dependencies)
+  COMPRESSED_POINTER_FIELD(ExternalTypedDataPtr, kernel_data)
+  CompressedObjectPtr* to_snapshot(Snapshot::Kind kind) {
     switch (kind) {
       case Snapshot::kFullAOT:
-        return reinterpret_cast<RawObject**>(&ptr()->load_error_);
+        return reinterpret_cast<CompressedObjectPtr*>(&exports_);
       case Snapshot::kFull:
+      case Snapshot::kFullCore:
       case Snapshot::kFullJIT:
-        return reinterpret_cast<RawObject**>(&ptr()->kernel_data_);
+        return reinterpret_cast<CompressedObjectPtr*>(&kernel_data_);
       case Snapshot::kMessage:
       case Snapshot::kNone:
       case Snapshot::kInvalid:
@@ -1314,69 +1711,107 @@ class RawLibrary : public RawObject {
     UNREACHABLE();
     return NULL;
   }
-  RawArray* resolved_names_;  // Cache of resolved names in library scope.
-  RawArray* exported_names_;  // Cache of exported names by library.
-  RawArray* loaded_scripts_;  // Array of scripts loaded in this library.
-  VISIT_TO(RawObject*, loaded_scripts_);
+  // Cache of resolved names in library scope.
+  COMPRESSED_POINTER_FIELD(ArrayPtr, resolved_names);
+  // Cache of exported names by library.
+  COMPRESSED_POINTER_FIELD(ArrayPtr, exported_names);
+  // Array of scripts loaded in this library.
+  COMPRESSED_POINTER_FIELD(ArrayPtr, loaded_scripts);
+  VISIT_TO(loaded_scripts);
 
   Dart_NativeEntryResolver native_entry_resolver_;  // Resolves natives.
   Dart_NativeEntrySymbol native_entry_symbol_resolver_;
+  Dart_FfiNativeResolver ffi_native_resolver_;
+
   classid_t index_;       // Library id number.
   uint16_t num_imports_;  // Number of entries in imports_.
   int8_t load_state_;     // Of type LibraryState.
-  bool corelib_imported_;
-  bool is_dart_scheme_;
-  bool debuggable_;          // True if debugger can stop in library.
-  bool is_in_fullsnapshot_;  // True if library is in a full snapshot.
-  NOT_IN_PRECOMPILED(intptr_t kernel_offset_);  // Offset of this library's
-                                                // kernel data in the overall
-                                                // kernel program.
+  uint8_t flags_;         // BitField for LibraryFlags.
+
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  uint32_t kernel_offset_;
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
 
   friend class Class;
   friend class Isolate;
 };
 
-class RawNamespace : public RawObject {
+class UntaggedNamespace : public UntaggedObject {
   RAW_HEAP_OBJECT_IMPLEMENTATION(Namespace);
 
-  VISIT_FROM(RawObject*, library_);
-  RawLibrary* library_;       // library with name dictionary.
-  RawArray* show_names_;      // list of names that are exported.
-  RawArray* hide_names_;      // blacklist of names that are not exported.
-  RawField* metadata_field_;  // remembers the token pos of metadata if any,
-                              // and the metadata values if computed.
-  VISIT_TO(RawObject*, metadata_field_);
-  RawObject** to_snapshot(Snapshot::Kind kind) { return to(); }
-};
-
-class RawKernelProgramInfo : public RawObject {
-  RAW_HEAP_OBJECT_IMPLEMENTATION(KernelProgramInfo);
-
-  VISIT_FROM(RawObject*, string_offsets_);
-  RawTypedData* string_offsets_;
-  RawExternalTypedData* string_data_;
-  RawTypedData* canonical_names_;
-  RawExternalTypedData* metadata_payloads_;
-  RawExternalTypedData* metadata_mappings_;
-  RawArray* scripts_;
-  RawArray* constants_;
-  RawArray* bytecode_component_;
-  RawGrowableObjectArray* potential_natives_;
-  RawGrowableObjectArray* potential_pragma_functions_;
-  RawExternalTypedData* constants_table_;
-  RawArray* libraries_cache_;
-  RawArray* classes_cache_;
-  VISIT_TO(RawObject*, classes_cache_);
-
-  RawObject** to_snapshot(Snapshot::Kind kind) {
-    return reinterpret_cast<RawObject**>(&ptr()->potential_natives_);
+  // library with name dictionary.
+  COMPRESSED_POINTER_FIELD(LibraryPtr, target)
+  VISIT_FROM(target)
+  // list of names that are exported.
+  COMPRESSED_POINTER_FIELD(ArrayPtr, show_names)
+  // list of names that are hidden.
+  COMPRESSED_POINTER_FIELD(ArrayPtr, hide_names)
+  COMPRESSED_POINTER_FIELD(LibraryPtr, owner)
+  VISIT_TO(owner)
+  CompressedObjectPtr* to_snapshot(Snapshot::Kind kind) {
+    switch (kind) {
+      case Snapshot::kFullAOT:
+        return reinterpret_cast<CompressedObjectPtr*>(&target_);
+      case Snapshot::kFull:
+      case Snapshot::kFullCore:
+      case Snapshot::kFullJIT:
+        return reinterpret_cast<CompressedObjectPtr*>(&owner_);
+      case Snapshot::kMessage:
+      case Snapshot::kNone:
+      case Snapshot::kInvalid:
+        break;
+    }
+    UNREACHABLE();
+    return NULL;
   }
 };
 
-class RawCode : public RawObject {
+class UntaggedKernelProgramInfo : public UntaggedObject {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(KernelProgramInfo);
+
+  COMPRESSED_POINTER_FIELD(TypedDataPtr, string_offsets)
+  VISIT_FROM(string_offsets)
+  COMPRESSED_POINTER_FIELD(ExternalTypedDataPtr, string_data)
+  COMPRESSED_POINTER_FIELD(TypedDataPtr, canonical_names)
+  COMPRESSED_POINTER_FIELD(ExternalTypedDataPtr, metadata_payloads)
+  COMPRESSED_POINTER_FIELD(ExternalTypedDataPtr, metadata_mappings)
+  COMPRESSED_POINTER_FIELD(ArrayPtr, scripts)
+  COMPRESSED_POINTER_FIELD(ArrayPtr, constants)
+  COMPRESSED_POINTER_FIELD(GrowableObjectArrayPtr, potential_natives)
+  COMPRESSED_POINTER_FIELD(GrowableObjectArrayPtr, potential_pragma_functions)
+  COMPRESSED_POINTER_FIELD(ExternalTypedDataPtr, constants_table)
+  COMPRESSED_POINTER_FIELD(ArrayPtr, libraries_cache)
+  COMPRESSED_POINTER_FIELD(ArrayPtr, classes_cache)
+  COMPRESSED_POINTER_FIELD(ObjectPtr, retained_kernel_blob)
+  VISIT_TO(retained_kernel_blob)
+
+  uint32_t kernel_binary_version_;
+
+  CompressedObjectPtr* to_snapshot(Snapshot::Kind kind) {
+    return reinterpret_cast<CompressedObjectPtr*>(&constants_table_);
+  }
+};
+
+class UntaggedWeakSerializationReference : public UntaggedObject {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(WeakSerializationReference);
+
+  COMPRESSED_POINTER_FIELD(ObjectPtr, target)
+  VISIT_FROM(target)
+  COMPRESSED_POINTER_FIELD(ObjectPtr, replacement)
+  VISIT_TO(replacement)
+};
+
+class UntaggedCode : public UntaggedObject {
   RAW_HEAP_OBJECT_IMPLEMENTATION(Code);
 
-  uword entry_point_;          // Accessed from generated code.
+  // When in the precompiled runtime, there is no disabling of Code objects
+  // and thus no active_instructions_ field. Thus, the entry point caches are
+  // only set once during deserialization. If not using bare instructions,
+  // the caches should match the entry points for instructions_.
+  //
+  // Otherwise, they should contain entry points for active_instructions_.
+
+  uword entry_point_;  // Accessed from generated code.
 
   // In AOT this entry-point supports switchable calls. It checks the type of
   // the receiver on entry to the function and calls a stub to patch up the
@@ -1412,100 +1847,90 @@ class RawCode : public RawObject {
   // type checks are necessary or this Code belongs to a stub). In this case
   // 'unchecked_entry_point_' will refer to the same position as 'entry_point_'.
   //
-  uword unchecked_entry_point_;  // Accessed from generated code.
+  uword unchecked_entry_point_;              // Accessed from generated code.
+  uword monomorphic_unchecked_entry_point_;  // Accessed from generated code.
 
-  VISIT_FROM(RawObject*, object_pool_);
-  RawObjectPool* object_pool_;     // Accessed from generated code.
-  RawInstructions* instructions_;  // Accessed from generated code.
+  POINTER_FIELD(ObjectPoolPtr, object_pool)  // Accessed from generated code.
+  VISIT_FROM(object_pool)
+  POINTER_FIELD(InstructionsPtr,
+                instructions)  // Accessed from generated code.
   // If owner_ is Function::null() the owner is a regular stub.
   // If owner_ is a Class the owner is the allocation stub for that class.
   // Else, owner_ is a regular Dart Function.
-  RawObject* owner_;  // Function, Null, or a Class.
-  RawExceptionHandlers* exception_handlers_;
-  RawPcDescriptors* pc_descriptors_;
-  union {
-    RawTypedData* catch_entry_moves_maps_;
-    RawSmi* variables_;
-  } catch_entry_;
-  RawArray* stackmaps_;
-  RawArray* inlined_id_to_function_;
-  RawCodeSourceMap* code_source_map_;
-  NOT_IN_PRECOMPILED(RawInstructions* active_instructions_);
-  NOT_IN_PRECOMPILED(RawArray* deopt_info_array_);
+  POINTER_FIELD(ObjectPtr, owner)  // Function, Null, or a Class.
+  POINTER_FIELD(ExceptionHandlersPtr, exception_handlers)
+  POINTER_FIELD(PcDescriptorsPtr, pc_descriptors)
+  // If FLAG_precompiled_mode, then this field contains
+  //   TypedDataPtr catch_entry_moves_maps
+  // Otherwise, it is
+  //   SmiPtr num_variables
+  POINTER_FIELD(ObjectPtr, catch_entry)
+  POINTER_FIELD(CompressedStackMapsPtr, compressed_stackmaps)
+  POINTER_FIELD(ArrayPtr, inlined_id_to_function)
+  POINTER_FIELD(CodeSourceMapPtr, code_source_map)
+  NOT_IN_PRECOMPILED(POINTER_FIELD(InstructionsPtr, active_instructions))
+  NOT_IN_PRECOMPILED(POINTER_FIELD(ArrayPtr, deopt_info_array))
   // (code-offset, function, code) triples.
-  NOT_IN_PRECOMPILED(RawArray* static_calls_target_table_);
-  NOT_IN_PRODUCT(RawArray* await_token_positions_);
+  NOT_IN_PRECOMPILED(POINTER_FIELD(ArrayPtr, static_calls_target_table))
   // If return_address_metadata_ is a Smi, it is the offset to the prologue.
   // Else, return_address_metadata_ is null.
-  NOT_IN_PRODUCT(RawObject* return_address_metadata_);
-  NOT_IN_PRODUCT(RawLocalVarDescriptors* var_descriptors_);
-  NOT_IN_PRODUCT(RawArray* comments_);
+  NOT_IN_PRODUCT(POINTER_FIELD(ObjectPtr, return_address_metadata))
+  NOT_IN_PRODUCT(POINTER_FIELD(LocalVarDescriptorsPtr, var_descriptors))
+  NOT_IN_PRODUCT(POINTER_FIELD(ArrayPtr, comments))
 
 #if !defined(PRODUCT)
-  VISIT_TO(RawObject*, comments_);
+  VISIT_TO(comments);
 #elif defined(DART_PRECOMPILED_RUNTIME)
-  VISIT_TO(RawObject*, code_source_map_);
+  VISIT_TO(code_source_map);
 #else
-  VISIT_TO(RawObject*, static_calls_target_table_);
+  VISIT_TO(static_calls_target_table);
 #endif
 
   // Compilation timestamp.
-  NOT_IN_PRODUCT(int64_t compile_timestamp_);
+  NOT_IN_PRODUCT(alignas(8) int64_t compile_timestamp_);
 
   // state_bits_ is a bitfield with three fields:
   // The optimized bit, the alive bit, and a count of the number of pointer
   // offsets.
   // Alive: If true, the embedded object pointers will be visited during GC.
   int32_t state_bits_;
+  // Caches the unchecked entry point offset for instructions_, in case we need
+  // to reset the active_instructions_ to instructions_.
+  NOT_IN_PRECOMPILED(uint32_t unchecked_offset_);
+  // Stores the instructions length when not using RawInstructions objects.
+  ONLY_IN_PRECOMPILED(uint32_t instructions_length_);
 
   // Variable length data follows here.
   int32_t* data() { OPEN_ARRAY_START(int32_t, int32_t); }
   const int32_t* data() const { OPEN_ARRAY_START(int32_t, int32_t); }
 
-  static bool ContainsPC(RawObject* raw_obj, uword pc);
+  static bool ContainsPC(const ObjectPtr raw_obj, uword pc);
 
   friend class Function;
   template <bool>
   friend class MarkingVisitorBase;
-  friend class SkippedCodeFunctions;
   friend class StackFrame;
   friend class Profiler;
   friend class FunctionDeserializationCluster;
+  friend class UnitSerializationRoots;
+  friend class UnitDeserializationRoots;
+  friend class CallSiteResetter;
 };
 
-class RawBytecode : public RawObject {
-  RAW_HEAP_OBJECT_IMPLEMENTATION(Bytecode);
-
-  VISIT_FROM(RawObject*, object_pool_);
-  RawObjectPool* object_pool_;
-  RawExternalTypedData* instructions_;
-  RawFunction* function_;
-  RawExceptionHandlers* exception_handlers_;
-  RawPcDescriptors* pc_descriptors_;
-  VISIT_TO(RawObject*, pc_descriptors_);
-  RawObject** to_snapshot(Snapshot::Kind kind) { return to(); }
-
-  intptr_t source_positions_binary_offset_;
-
-  static bool ContainsPC(RawObject* raw_obj, uword pc);
-
-  friend class Function;
-  friend class StackFrame;
-};
-
-class RawObjectPool : public RawObject {
+class UntaggedObjectPool : public UntaggedObject {
   RAW_HEAP_OBJECT_IMPLEMENTATION(ObjectPool);
 
   intptr_t length_;
 
   struct Entry {
     union {
-      RawObject* raw_obj_;
+      ObjectPtr raw_obj_;
       uword raw_value_;
     };
   };
   Entry* data() { OPEN_ARRAY_START(Entry, Entry); }
   Entry const* data() const { OPEN_ARRAY_START(Entry, Entry); }
+  DEFINE_CONTAINS_COMPRESSED(decltype(Entry::raw_obj_));
 
   // The entry bits are located after the last entry. They are encoded versions
   // of `ObjectPool::TypeBits() | ObjectPool::PatchabililtyBit()`.
@@ -1515,9 +1940,12 @@ class RawObjectPool : public RawObject {
   }
 
   friend class Object;
+  friend class CodeSerializationCluster;
+  friend class UnitSerializationRoots;
+  friend class UnitDeserializationRoots;
 };
 
-class RawInstructions : public RawObject {
+class UntaggedInstructions : public UntaggedObject {
   RAW_HEAP_OBJECT_IMPLEMENTATION(Instructions);
   VISIT_NOTHING();
 
@@ -1525,81 +1953,145 @@ class RawInstructions : public RawObject {
   // Currently, only flag indicates 1 or 2 entry points.
   uint32_t size_and_flags_;
 
-#if defined(DART_PRECOMPILER)
-  // There is a gap between size_and_flags_ and the entry point
-  // because we align entry point by 4 words on all platforms.
-  // This allows us to have a free field here without affecting
-  // the aligned size of the Instructions object header.
-  // This also means that entry point offset is the same
-  // whether this field is included or excluded.
-  CodeStatistics* stats_;
-#endif
-
-  uword unchecked_entrypoint_pc_offset_;
-
   // Variable length data follows here.
   uint8_t* data() { OPEN_ARRAY_START(uint8_t, uint8_t); }
 
   // Private helper function used while visiting stack frames. The
   // code which iterates over dart frames is also called during GC and
   // is not allowed to create handles.
-  static bool ContainsPC(RawInstructions* raw_instr, uword pc);
+  static bool ContainsPC(const InstructionsPtr raw_instr, uword pc);
 
-  friend class RawCode;
-  friend class RawFunction;
+  friend class UntaggedCode;
+  friend class UntaggedFunction;
   friend class Code;
   friend class StackFrame;
   template <bool>
   friend class MarkingVisitorBase;
-  friend class SkippedCodeFunctions;
   friend class Function;
   friend class ImageReader;
   friend class ImageWriter;
+  friend class AssemblyImageWriter;
+  friend class BlobImageWriter;
 };
 
-class RawPcDescriptors : public RawObject {
+// Used to carry extra information to the VM without changing the embedder
+// interface, to provide memory accounting for the bare instruction payloads
+// we serialize, since they are no longer part of RawInstructions objects,
+// and to avoid special casing bare instructions payload Images in the GC.
+class UntaggedInstructionsSection : public UntaggedObject {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(InstructionsSection);
+  VISIT_NOTHING();
+
+  // Instructions section payload length in bytes.
+  uword payload_length_;
+  // The offset of the corresponding BSS section from this text section.
+  word bss_offset_;
+  // The relocated address of this text section in the shared object. Properly
+  // filled for ELF snapshots, always 0 in assembly snapshots. (For the latter,
+  // we instead get the value during BSS initialization and store it there.)
+  uword instructions_relocated_address_;
+  // The offset of the GNU build ID note section from this text section.
+  word build_id_offset_;
+
+  // Variable length data follows here.
+  uint8_t* data() { OPEN_ARRAY_START(uint8_t, uint8_t); }
+
+  friend class Image;
+};
+
+class UntaggedInstructionsTable : public UntaggedObject {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(InstructionsTable);
+
+  POINTER_FIELD(ArrayPtr, descriptors)
+  VISIT_FROM(descriptors)
+  VISIT_TO(descriptors)
+
+  intptr_t length_;
+  uword start_pc_;
+  uword end_pc_;
+
+  // Variable length data follows here.
+  uint32_t* data() { OPEN_ARRAY_START(uint32_t, uint32_t); }
+  const uint32_t* data() const { OPEN_ARRAY_START(uint32_t, uint32_t); }
+};
+
+class UntaggedPcDescriptors : public UntaggedObject {
  public:
+// The macro argument V is passed two arguments, the raw name of the enum value
+// and the initialization expression used within the enum definition.  The uses
+// of enum values inside the initialization expression are hardcoded currently,
+// so the second argument is useless outside the enum definition and should be
+// dropped by other users of this macro.
+#define FOR_EACH_RAW_PC_DESCRIPTOR(V)                                          \
+  /* Deoptimization continuation point. */                                     \
+  V(Deopt, 1)                                                                  \
+  /* IC call. */                                                               \
+  V(IcCall, kDeopt << 1)                                                       \
+  /* Call to a known target via stub. */                                       \
+  V(UnoptStaticCall, kIcCall << 1)                                             \
+  /* Runtime call. */                                                          \
+  V(RuntimeCall, kUnoptStaticCall << 1)                                        \
+  /* OSR entry point in unopt. code. */                                        \
+  V(OsrEntry, kRuntimeCall << 1)                                               \
+  /* Call rewind target address. */                                            \
+  V(Rewind, kOsrEntry << 1)                                                    \
+  /* Target-word-size relocation. */                                           \
+  V(BSSRelocation, kRewind << 1)                                               \
+  V(Other, kBSSRelocation << 1)                                                \
+  V(AnyKind, -1)
+
   enum Kind {
-    kDeopt = 1,                            // Deoptimization continuation point.
-    kIcCall = kDeopt << 1,                 // IC call.
-    kUnoptStaticCall = kIcCall << 1,       // Call to a known target via stub.
-    kRuntimeCall = kUnoptStaticCall << 1,  // Runtime call.
-    kOsrEntry = kRuntimeCall << 1,         // OSR entry point in unopt. code.
-    kRewind = kOsrEntry << 1,              // Call rewind target address.
-    kOther = kRewind << 1,
-    kLastKind = kOther,
-    kAnyKind = -1
+#define ENUM_DEF(name, init) k##name = init,
+    FOR_EACH_RAW_PC_DESCRIPTOR(ENUM_DEF)
+#undef ENUM_DEF
+        kLastKind = kOther,
   };
 
-  class MergedKindTry {
+  static const char* KindToCString(Kind k);
+  static bool ParseKind(const char* cstr, Kind* out);
+
+  // Used to represent the absense of a yield index in PcDescriptors.
+  static constexpr intptr_t kInvalidYieldIndex = -1;
+
+  class KindAndMetadata {
    public:
     // Most of the time try_index will be small and merged field will fit into
     // one byte.
-    static intptr_t Encode(intptr_t kind, intptr_t try_index) {
-      intptr_t kind_shift = Utils::ShiftForPowerOfTwo(kind);
-      ASSERT(Utils::IsUint(kKindShiftSize, kind_shift));
-      ASSERT(Utils::IsInt(kTryIndexSize, try_index));
-      return (try_index << kTryIndexPos) | (kind_shift << kKindShiftPos);
+    static uint32_t Encode(intptr_t kind,
+                           intptr_t try_index,
+                           intptr_t yield_index) {
+      return KindShiftBits::encode(Utils::ShiftForPowerOfTwo(kind)) |
+             TryIndexBits::encode(try_index + 1) |
+             YieldIndexBits::encode(yield_index + 1);
     }
 
-    static intptr_t DecodeKind(intptr_t merged_kind_try) {
-      const intptr_t kKindShiftMask = (1 << kKindShiftSize) - 1;
-      return 1 << (merged_kind_try & kKindShiftMask);
+    static intptr_t DecodeKind(uint32_t kind_and_metadata) {
+      return 1 << KindShiftBits::decode(kind_and_metadata);
     }
 
-    static intptr_t DecodeTryIndex(intptr_t merged_kind_try) {
-      // Arithmetic shift.
-      return merged_kind_try >> kTryIndexPos;
+    static intptr_t DecodeTryIndex(uint32_t kind_and_metadata) {
+      return TryIndexBits::decode(kind_and_metadata) - 1;
+    }
+
+    static intptr_t DecodeYieldIndex(uint32_t kind_and_metadata) {
+      return YieldIndexBits::decode(kind_and_metadata) - 1;
     }
 
    private:
-    static const intptr_t kKindShiftPos = 0;
     static const intptr_t kKindShiftSize = 3;
-    // Is kKindShiftSize enough bits?
-    COMPILE_ASSERT(kLastKind <= 1 << ((1 << kKindShiftSize) - 1));
+    static const intptr_t kTryIndexSize = 10;
+    static const intptr_t kYieldIndexSize = 32 - kKindShiftSize - kTryIndexSize;
 
-    static const intptr_t kTryIndexPos = kKindShiftSize;
-    static const intptr_t kTryIndexSize = kBitsPerWord - kKindShiftSize;
+    class KindShiftBits
+        : public BitField<uint32_t, intptr_t, 0, kKindShiftSize> {};
+    class TryIndexBits : public BitField<uint32_t,
+                                         intptr_t,
+                                         KindShiftBits::kNextBit,
+                                         kTryIndexSize> {};
+    class YieldIndexBits : public BitField<uint32_t,
+                                           intptr_t,
+                                           TryIndexBits::kNextBit,
+                                           kYieldIndexSize> {};
   };
 
  private:
@@ -1616,11 +2108,12 @@ class RawPcDescriptors : public RawObject {
   const uint8_t* data() const { OPEN_ARRAY_START(uint8_t, intptr_t); }
 
   friend class Object;
+  friend class ImageWriter;
 };
 
 // CodeSourceMap encodes a mapping from code PC ranges to source token
 // positions and the stack of inlined functions.
-class RawCodeSourceMap : public RawObject {
+class UntaggedCodeSourceMap : public UntaggedObject {
  private:
   RAW_HEAP_OBJECT_IMPLEMENTATION(CodeSourceMap);
   VISIT_NOTHING();
@@ -1634,32 +2127,86 @@ class RawCodeSourceMap : public RawObject {
   const uint8_t* data() const { OPEN_ARRAY_START(uint8_t, intptr_t); }
 
   friend class Object;
+  friend class ImageWriter;
 };
 
-// StackMap is an immutable representation of the layout of the stack at a
-// PC. The stack map representation consists of a bit map which marks each
-// live object index starting from the base of the frame.
-//
-// The bit map representation is optimized for dense and small bit maps, without
-// any upper bound.
-class RawStackMap : public RawObject {
-  RAW_HEAP_OBJECT_IMPLEMENTATION(StackMap);
+// RawCompressedStackMaps is a compressed representation of the stack maps
+// for certain PC offsets into a set of instructions, where a stack map is a bit
+// map that marks each live object index starting from the base of the frame.
+class UntaggedCompressedStackMaps : public UntaggedObject {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(CompressedStackMaps);
   VISIT_NOTHING();
 
-  // Offset from code entry point corresponding to this stack map
-  // representation.
-  uint32_t pc_offset_;
+  // The most significant bits are the length of the encoded payload, in bytes.
+  // The low bits determine the expected payload contents, as described below.
+  uint32_t flags_and_size_;
 
-  uint16_t length_;               // Length of payload, in bits.
-  uint16_t slow_path_bit_count_;  // Slow path live values, included in length_.
-  // ARM64 requires register_bit_count_ to be as large as 96.
+  // Variable length data follows here. The contents of the payload depend on
+  // the type of CompressedStackMaps (CSM) being represented. There are three
+  // major types of CSM:
+  //
+  // 1) GlobalTableBit = false, UsesTableBit = false: CSMs that include all
+  //    information about the stack maps. The payload for these contain tightly
+  //    packed entries with the following information:
+  //
+  //   * A header containing the following three pieces of information:
+  //     * An unsigned integer representing the PC offset as a delta from the
+  //       PC offset of the previous entry (from 0 for the first entry).
+  //     * An unsigned integer representing the number of bits used for
+  //       spill slot entries.
+  //     * An unsigned integer representing the number of bits used for other
+  //       entries.
+  //   * The body containing the bits for the stack map. The length of the body
+  //     in bits is the sum of the spill slot and non-spill slot bit counts.
+  //
+  // 2) GlobalTableBit = false, UsesTableBit = true: CSMs where the majority of
+  //    the stack map information has been offloaded and canonicalized into a
+  //    global table. The payload contains tightly packed entries with the
+  //    following information:
+  //
+  //   * A header containing just an unsigned integer representing the PC offset
+  //     delta as described above.
+  //   * The body is just an unsigned integer containing the offset into the
+  //     payload for the global table.
+  //
+  // 3) GlobalTableBit = true, UsesTableBit = false: A CSM implementing the
+  //    global table. Here, the payload contains tightly packed entries with
+  //    the following information:
+  //
+  //   * A header containing the following two pieces of information:
+  //     * An unsigned integer representing the number of bits used for
+  //       spill slot entries.
+  //     * An unsigned integer representing the number of bits used for other
+  //       entries.
+  //   * The body containing the bits for the stack map. The length of the body
+  //     in bits is the sum of the spill slot and non-spill slot bit counts.
+  //
+  // In all types of CSM, each unsigned integer is LEB128 encoded, as generally
+  // they tend to fit in a single byte or two. Thus, entry headers are not a
+  // fixed length, and currently there is no random access of entries.  In
+  // addition, PC offsets are currently encoded as deltas, which also inhibits
+  // random access without accessing previous entries. That means to find an
+  // entry for a given PC offset, a linear search must be done where the payload
+  // is decoded up to the entry whose PC offset is >= the given PC.
 
-  // Variable length data follows here (bitmap of the stack layout).
   uint8_t* data() { OPEN_ARRAY_START(uint8_t, uint8_t); }
   const uint8_t* data() const { OPEN_ARRAY_START(uint8_t, uint8_t); }
+
+  class GlobalTableBit : public BitField<uint32_t, bool, 0, 1> {};
+  class UsesTableBit
+      : public BitField<uint32_t, bool, GlobalTableBit::kNextBit, 1> {};
+  class SizeField : public BitField<uint32_t,
+                                    uint32_t,
+                                    UsesTableBit::kNextBit,
+                                    sizeof(flags_and_size_) * kBitsPerByte -
+                                        UsesTableBit::kNextBit> {};
+
+  friend class Object;
+  friend class ImageWriter;
+  friend class StackMapEntry;
 };
 
-class RawLocalVarDescriptors : public RawObject {
+class UntaggedLocalVarDescriptors : public UntaggedObject {
  public:
   enum VarInfoKind {
     kStackVar = 1,
@@ -1684,11 +2231,14 @@ class RawLocalVarDescriptors : public RawObject {
   class KindBits : public BitField<int32_t, int8_t, kKindPos, kKindSize> {};
 
   struct VarInfo {
-    int32_t index_kind;  // Bitfield for slot index on stack or in context,
-                         // and Entry kind of type VarInfoKind.
-    TokenPosition declaration_pos;  // Token position of declaration.
-    TokenPosition begin_pos;        // Token position of scope start.
-    TokenPosition end_pos;          // Token position of scope end.
+    int32_t index_kind = 0;  // Bitfield for slot index on stack or in context,
+                             // and Entry kind of type VarInfoKind.
+    TokenPosition declaration_pos =
+        TokenPosition::kNoSource;  // Token position of declaration.
+    TokenPosition begin_pos =
+        TokenPosition::kNoSource;  // Token position of scope start.
+    TokenPosition end_pos =
+        TokenPosition::kNoSource;   // Token position of scope end.
     int16_t scope_id;               // Scope to which the variable belongs.
 
     VarInfoKind kind() const {
@@ -1710,23 +2260,23 @@ class RawLocalVarDescriptors : public RawObject {
   // platforms.
   uword num_entries_;
 
-  VISIT_FROM(RawObject*, names()[0]);
-  RawString** names() {
-    // Array of [num_entries_] variable names.
-    OPEN_ARRAY_START(RawString*, RawString*);
+  VISIT_FROM_PAYLOAD_START(CompressedStringPtr)
+  COMPRESSED_VARIABLE_POINTER_FIELDS(StringPtr, name, names)
+
+  CompressedStringPtr* nameAddrAt(intptr_t i) { return &(names()[i]); }
+  void set_name(intptr_t i, StringPtr value) {
+    StoreCompressedPointer(nameAddrAt(i), value);
   }
-  RawString** nameAddrAt(intptr_t i) { return &(ptr()->names()[i]); }
-  VISIT_TO_LENGTH(RawObject*, nameAddrAt(length - 1));
 
   // Variable info with [num_entries_] entries.
   VarInfo* data() {
-    return reinterpret_cast<VarInfo*>(nameAddrAt(ptr()->num_entries_));
+    return reinterpret_cast<VarInfo*>(nameAddrAt(num_entries_));
   }
 
   friend class Object;
 };
 
-class RawExceptionHandlers : public RawObject {
+class UntaggedExceptionHandlers : public UntaggedObject {
  private:
   RAW_HEAP_OBJECT_IMPLEMENTATION(ExceptionHandlers);
 
@@ -1735,9 +2285,9 @@ class RawExceptionHandlers : public RawObject {
 
   // Array with [num_entries_] entries. Each entry is an array of all handled
   // exception types.
-  VISIT_FROM(RawObject*, handled_types_data_)
-  RawArray* handled_types_data_;
-  VISIT_TO_LENGTH(RawObject*, &ptr()->handled_types_data_);
+  COMPRESSED_POINTER_FIELD(ArrayPtr, handled_types_data)
+  VISIT_FROM(handled_types_data)
+  VISIT_TO(handled_types_data)
 
   // Exception handler info of length [num_entries_].
   const ExceptionHandlerInfo* data() const {
@@ -1750,107 +2300,157 @@ class RawExceptionHandlers : public RawObject {
   friend class Object;
 };
 
-class RawContext : public RawObject {
+class UntaggedContext : public UntaggedObject {
   RAW_HEAP_OBJECT_IMPLEMENTATION(Context);
 
   int32_t num_variables_;
 
-  VISIT_FROM(RawObject*, parent_);
-  RawContext* parent_;
-
+  POINTER_FIELD(ContextPtr, parent)
+  VISIT_FROM(parent)
   // Variable length data follows here.
-  RawObject** data() { OPEN_ARRAY_START(RawObject*, RawObject*); }
-  RawObject* const* data() const { OPEN_ARRAY_START(RawObject*, RawObject*); }
-  VISIT_TO_LENGTH(RawObject*, &ptr()->data()[length - 1]);
+  VARIABLE_POINTER_FIELDS(ObjectPtr, element, data)
 
   friend class Object;
   friend class SnapshotReader;
 };
 
-class RawContextScope : public RawObject {
+class UntaggedContextScope : public UntaggedObject {
   RAW_HEAP_OBJECT_IMPLEMENTATION(ContextScope);
 
   // TODO(iposva): Switch to conventional enum offset based structure to avoid
   // alignment mishaps.
   struct VariableDesc {
-    RawSmi* declaration_token_pos;
-    RawSmi* token_pos;
-    RawString* name;
-    RawBool* is_final;
-    RawBool* is_const;
+    CompressedSmiPtr declaration_token_pos;
+    CompressedSmiPtr token_pos;
+    CompressedStringPtr name;
+    CompressedSmiPtr flags;
+    static constexpr intptr_t kIsFinal = 0x1;
+    static constexpr intptr_t kIsConst = 0x2;
+    static constexpr intptr_t kIsLate = 0x4;
+    CompressedSmiPtr late_init_offset;
     union {
-      RawAbstractType* type;
-      RawInstance* value;  // iff is_const is true
+      CompressedAbstractTypePtr type;
+      CompressedInstancePtr value;  // iff is_const is true
     };
-    RawSmi* context_index;
-    RawSmi* context_level;
+    CompressedSmiPtr context_index;
+    CompressedSmiPtr context_level;
   };
 
   int32_t num_variables_;
   bool is_implicit_;  // true, if this context scope is for an implicit closure.
 
-  RawObject** from() {
-    VariableDesc* begin = const_cast<VariableDesc*>(ptr()->VariableDescAddr(0));
-    return reinterpret_cast<RawObject**>(begin);
+  // Just choose one of the fields in VariableDesc, since they should all be
+  // compressed or not compressed.
+  DEFINE_CONTAINS_COMPRESSED(decltype(VariableDesc::name));
+
+  CompressedObjectPtr* from() {
+    VariableDesc* begin = const_cast<VariableDesc*>(VariableDescAddr(0));
+    return reinterpret_cast<CompressedObjectPtr*>(begin);
   }
   // Variable length data follows here.
-  RawObject* const* data() const { OPEN_ARRAY_START(RawObject*, RawObject*); }
+  CompressedObjectPtr const* data() const {
+    OPEN_ARRAY_START(CompressedObjectPtr, CompressedObjectPtr);
+  }
   const VariableDesc* VariableDescAddr(intptr_t index) const {
     ASSERT((index >= 0) && (index < num_variables_ + 1));
     // data() points to the first component of the first descriptor.
     return &(reinterpret_cast<const VariableDesc*>(data())[index]);
   }
-  RawObject** to(intptr_t num_vars) {
-    uword end = reinterpret_cast<uword>(ptr()->VariableDescAddr(num_vars));
-    // 'end' is the address just beyond the last descriptor, so step back.
-    return reinterpret_cast<RawObject**>(end - kWordSize);
+
+#define DEFINE_ACCESSOR(type, name)                                            \
+  type name##_at(intptr_t index) {                                             \
+    return LoadCompressedPointer<type>(&VariableDescAddr(index)->name);        \
+  }                                                                            \
+  void set_##name##_at(intptr_t index, type value) {                           \
+    StoreCompressedPointer(&VariableDescAddr(index)->name, value);             \
   }
-  RawObject** to_snapshot(Snapshot::Kind kind, intptr_t num_vars) {
+  DEFINE_ACCESSOR(SmiPtr, declaration_token_pos)
+  DEFINE_ACCESSOR(SmiPtr, token_pos)
+  DEFINE_ACCESSOR(StringPtr, name)
+  DEFINE_ACCESSOR(SmiPtr, flags)
+  DEFINE_ACCESSOR(SmiPtr, late_init_offset)
+  DEFINE_ACCESSOR(AbstractTypePtr, type)
+  DEFINE_ACCESSOR(InstancePtr, value)
+  DEFINE_ACCESSOR(SmiPtr, context_index)
+  DEFINE_ACCESSOR(SmiPtr, context_level)
+#undef DEFINE_ACCESSOR
+
+  CompressedObjectPtr* to(intptr_t num_vars) {
+    uword end = reinterpret_cast<uword>(VariableDescAddr(num_vars));
+    // 'end' is the address just beyond the last descriptor, so step back.
+    return reinterpret_cast<CompressedObjectPtr*>(end -
+                                                  sizeof(CompressedObjectPtr));
+  }
+  CompressedObjectPtr* to_snapshot(Snapshot::Kind kind, intptr_t num_vars) {
     return to(num_vars);
   }
 
   friend class Object;
-  friend class RawClosureData;
+  friend class UntaggedClosureData;
   friend class SnapshotReader;
 };
 
-class RawSingleTargetCache : public RawObject {
+class UntaggedSentinel : public UntaggedObject {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(Sentinel);
+  VISIT_NOTHING();
+};
+
+class UntaggedSingleTargetCache : public UntaggedObject {
   RAW_HEAP_OBJECT_IMPLEMENTATION(SingleTargetCache);
-  VISIT_FROM(RawObject*, target_);
-  RawCode* target_;
-  VISIT_TO(RawObject*, target_);
+  POINTER_FIELD(CodePtr, target)
+  VISIT_FROM(target)
+  VISIT_TO(target)
   uword entry_point_;
-  classid_t lower_limit_;
-  classid_t upper_limit_;
+  ClassIdTagType lower_limit_;
+  ClassIdTagType upper_limit_;
 };
 
-class RawUnlinkedCall : public RawObject {
+class UntaggedMonomorphicSmiableCall : public UntaggedObject {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(MonomorphicSmiableCall);
+  POINTER_FIELD(CodePtr,
+                target);  // Entrypoint PC in bare mode, Code in non-bare mode.
+  VISIT_FROM(target)
+  VISIT_TO(target)
+  uword expected_cid_;
+  uword entrypoint_;
+  ObjectPtr* to_snapshot(Snapshot::Kind kind) { return to(); }
+};
+
+// Abstract base class for RawICData/RawMegamorphicCache
+class UntaggedCallSiteData : public UntaggedObject {
+ protected:
+  POINTER_FIELD(StringPtr, target_name);  // Name of target function.
+  VISIT_FROM(target_name)
+  // arg_descriptor in RawICData and in RawMegamorphicCache should be
+  // in the same position so that NoSuchMethod can access it.
+  POINTER_FIELD(ArrayPtr, args_descriptor);  // Arguments descriptor.
+  VISIT_TO(args_descriptor)
+  ObjectPtr* to_snapshot(Snapshot::Kind kind) { return to(); }
+
+ private:
+  RAW_HEAP_OBJECT_IMPLEMENTATION(CallSiteData)
+};
+
+class UntaggedUnlinkedCall : public UntaggedCallSiteData {
   RAW_HEAP_OBJECT_IMPLEMENTATION(UnlinkedCall);
-  VISIT_FROM(RawObject*, target_name_);
-  RawString* target_name_;
-  RawArray* args_descriptor_;
-  VISIT_TO(RawObject*, args_descriptor_);
-  RawObject** to_snapshot(Snapshot::Kind kind) { return to(); }
+
+  bool can_patch_to_monomorphic_;
 };
 
-class RawICData : public RawObject {
+class UntaggedICData : public UntaggedCallSiteData {
   RAW_HEAP_OBJECT_IMPLEMENTATION(ICData);
-
-  VISIT_FROM(RawObject*, ic_data_);
-  RawArray* ic_data_;          // Contains class-ids, target and count.
-  RawString* target_name_;     // Name of target function.
-  RawArray* args_descriptor_;  // Arguments descriptor.
-  // Static type of the receiver. If it is set then we are performing
-  // exactness profiling for the receiver type. See StaticTypeExactnessState
-  // class for more information.
-  NOT_IN_PRECOMPILED(RawAbstractType* static_receiver_type_);
-  RawObject* owner_;  // Parent/calling function or original IC of cloned IC.
-  VISIT_TO(RawObject*, owner_);
-  RawObject** to_snapshot(Snapshot::Kind kind) {
+  POINTER_FIELD(ArrayPtr, entries)  // Contains class-ids, target and count.
+  // Static type of the receiver, if instance call and available.
+  NOT_IN_PRECOMPILED(POINTER_FIELD(AbstractTypePtr, receivers_static_type))
+  POINTER_FIELD(ObjectPtr,
+                owner)  // Parent/calling function or original IC of cloned IC.
+  VISIT_TO(owner)
+  ObjectPtr* to_snapshot(Snapshot::Kind kind) {
     switch (kind) {
       case Snapshot::kFullAOT:
-        return reinterpret_cast<RawObject**>(&ptr()->args_descriptor_);
+        return reinterpret_cast<ObjectPtr*>(&entries_);
       case Snapshot::kFull:
+      case Snapshot::kFullCore:
       case Snapshot::kFullJIT:
         return to();
       case Snapshot::kMessage:
@@ -1863,103 +2463,119 @@ class RawICData : public RawObject {
   }
   NOT_IN_PRECOMPILED(int32_t deopt_id_);
   uint32_t state_bits_;  // Number of arguments tested in IC, deopt reasons.
-#if defined(TAG_IC_DATA)
-  enum class Tag : intptr_t{kUnknown, kInstanceCall, kStaticCall};
-
-  Tag tag_;  // Debugging, verifying that the icdata is assigned to the
-             // same instruction again.
-#endif
 };
 
-class RawMegamorphicCache : public RawObject {
+class UntaggedMegamorphicCache : public UntaggedCallSiteData {
   RAW_HEAP_OBJECT_IMPLEMENTATION(MegamorphicCache);
 
-  VISIT_FROM(RawObject*, buckets_)
-  RawArray* buckets_;
-  RawSmi* mask_;
-  RawString* target_name_;     // Name of target function.
-  RawArray* args_descriptor_;  // Arguments descriptor.
-  VISIT_TO(RawObject*, args_descriptor_)
-  RawObject** to_snapshot(Snapshot::Kind kind) { return to(); }
+  POINTER_FIELD(ArrayPtr, buckets)
+  SMI_FIELD(SmiPtr, mask)
+  VISIT_TO(mask)
+  ObjectPtr* to_snapshot(Snapshot::Kind kind) { return to(); }
 
   int32_t filled_entry_count_;
 };
 
-class RawSubtypeTestCache : public RawObject {
+class UntaggedSubtypeTestCache : public UntaggedObject {
   RAW_HEAP_OBJECT_IMPLEMENTATION(SubtypeTestCache);
-  VISIT_FROM(RawObject*, cache_);
-  RawArray* cache_;
-  VISIT_TO(RawObject*, cache_);
+
+  POINTER_FIELD(ArrayPtr, cache)
+  VISIT_FROM(cache)
+  VISIT_TO(cache)
 };
 
-class RawError : public RawObject {
+class UntaggedLoadingUnit : public UntaggedObject {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(LoadingUnit);
+
+  COMPRESSED_POINTER_FIELD(LoadingUnitPtr, parent)
+  VISIT_FROM(parent)
+  COMPRESSED_POINTER_FIELD(ArrayPtr, base_objects)
+  VISIT_TO(base_objects)
+  int32_t id_;
+  bool load_outstanding_;
+  bool loaded_;
+};
+
+class UntaggedError : public UntaggedObject {
   RAW_HEAP_OBJECT_IMPLEMENTATION(Error);
 };
 
-class RawApiError : public RawError {
+class UntaggedApiError : public UntaggedError {
   RAW_HEAP_OBJECT_IMPLEMENTATION(ApiError);
 
-  VISIT_FROM(RawObject*, message_)
-  RawString* message_;
-  VISIT_TO(RawObject*, message_)
+  COMPRESSED_POINTER_FIELD(StringPtr, message)
+  VISIT_FROM(message)
+  VISIT_TO(message)
 };
 
-class RawLanguageError : public RawError {
+class UntaggedLanguageError : public UntaggedError {
   RAW_HEAP_OBJECT_IMPLEMENTATION(LanguageError);
 
-  VISIT_FROM(RawObject*, previous_error_)
-  RawError* previous_error_;  // May be null.
-  RawScript* script_;
-  RawString* message_;
-  RawString* formatted_message_;  // Incl. previous error's formatted message.
-  VISIT_TO(RawObject*, formatted_message_)
+  COMPRESSED_POINTER_FIELD(ErrorPtr, previous_error)  // May be null.
+  VISIT_FROM(previous_error)
+  COMPRESSED_POINTER_FIELD(ScriptPtr, script)
+  COMPRESSED_POINTER_FIELD(StringPtr, message)
+  // Incl. previous error's formatted message.
+  COMPRESSED_POINTER_FIELD(StringPtr, formatted_message)
+  VISIT_TO(formatted_message)
   TokenPosition token_pos_;  // Source position in script_.
   bool report_after_token_;  // Report message at or after the token.
   int8_t kind_;              // Of type Report::Kind.
 
-  RawObject** to_snapshot(Snapshot::Kind kind) { return to(); }
+  CompressedObjectPtr* to_snapshot(Snapshot::Kind kind) { return to(); }
 };
 
-class RawUnhandledException : public RawError {
+class UntaggedUnhandledException : public UntaggedError {
   RAW_HEAP_OBJECT_IMPLEMENTATION(UnhandledException);
 
-  VISIT_FROM(RawObject*, exception_)
-  RawInstance* exception_;
-  RawInstance* stacktrace_;
-  VISIT_TO(RawObject*, stacktrace_)
-  RawObject** to_snapshot(Snapshot::Kind kind) { return to(); }
+  COMPRESSED_POINTER_FIELD(InstancePtr, exception)
+  VISIT_FROM(exception)
+  COMPRESSED_POINTER_FIELD(InstancePtr, stacktrace)
+  VISIT_TO(stacktrace)
+  CompressedObjectPtr* to_snapshot(Snapshot::Kind kind) { return to(); }
 };
 
-class RawUnwindError : public RawError {
+class UntaggedUnwindError : public UntaggedError {
   RAW_HEAP_OBJECT_IMPLEMENTATION(UnwindError);
 
-  VISIT_FROM(RawObject*, message_)
-  RawString* message_;
-  VISIT_TO(RawObject*, message_)
+  COMPRESSED_POINTER_FIELD(StringPtr, message)
+  VISIT_FROM(message)
+  VISIT_TO(message)
   bool is_user_initiated_;
 };
 
-class RawInstance : public RawObject {
+class UntaggedInstance : public UntaggedObject {
   RAW_HEAP_OBJECT_IMPLEMENTATION(Instance);
+  friend class Object;
+  friend class SnapshotReader;
+
+ public:
+#if defined(DART_COMPRESSED_POINTERS)
+  static constexpr bool kContainsCompressedPointers = true;
+#else
+  static constexpr bool kContainsCompressedPointers = false;
+#endif
 };
 
-class RawLibraryPrefix : public RawInstance {
+class UntaggedLibraryPrefix : public UntaggedInstance {
   RAW_HEAP_OBJECT_IMPLEMENTATION(LibraryPrefix);
 
-  VISIT_FROM(RawObject*, name_)
-  RawString* name_;           // Library prefix name.
-  RawLibrary* importer_;      // Library which declares this prefix.
-  RawArray* imports_;         // Libraries imported with this prefix.
-  RawArray* dependent_code_;  // Code that refers to deferred, unloaded
-                              // library prefix.
-  VISIT_TO(RawObject*, dependent_code_)
-  RawObject** to_snapshot(Snapshot::Kind kind) {
+  // Library prefix name.
+  COMPRESSED_POINTER_FIELD(StringPtr, name)
+  VISIT_FROM(name)
+  // Libraries imported with this prefix.
+  COMPRESSED_POINTER_FIELD(ArrayPtr, imports)
+  // Library which declares this prefix.
+  COMPRESSED_POINTER_FIELD(LibraryPtr, importer)
+  VISIT_TO(importer)
+  CompressedObjectPtr* to_snapshot(Snapshot::Kind kind) {
     switch (kind) {
-      case Snapshot::kFull:
-      case Snapshot::kFullJIT:
-        return reinterpret_cast<RawObject**>(&ptr()->imports_);
       case Snapshot::kFullAOT:
-        return reinterpret_cast<RawObject**>(&ptr()->importer_);
+        return reinterpret_cast<CompressedObjectPtr*>(&imports_);
+      case Snapshot::kFull:
+      case Snapshot::kFullCore:
+      case Snapshot::kFullJIT:
+        return reinterpret_cast<CompressedObjectPtr*>(&importer_);
       case Snapshot::kMessage:
       case Snapshot::kNone:
       case Snapshot::kInvalid:
@@ -1970,54 +2586,62 @@ class RawLibraryPrefix : public RawInstance {
   }
   uint16_t num_imports_;  // Number of library entries in libraries_.
   bool is_deferred_load_;
-  bool is_loaded_;
 };
 
-class RawTypeArguments : public RawInstance {
+class UntaggedTypeArguments : public UntaggedInstance {
  private:
   RAW_HEAP_OBJECT_IMPLEMENTATION(TypeArguments);
 
-  VISIT_FROM(RawObject*, instantiations_)
   // The instantiations_ array remains empty for instantiated type arguments.
-  RawArray* instantiations_;  // Array of paired canonical vectors:
-                              // Even index: instantiator.
-                              // Odd index: instantiated (without bound error).
-  // Instantiations leading to bound errors do not get cached.
-  RawSmi* length_;
-  RawSmi* hash_;
-
+  // Of 3-tuple: 2 instantiators, result.
+  COMPRESSED_POINTER_FIELD(ArrayPtr, instantiations)
+  VISIT_FROM(instantiations)
+  COMPRESSED_SMI_FIELD(SmiPtr, length)
+  COMPRESSED_SMI_FIELD(SmiPtr, hash)
+  COMPRESSED_SMI_FIELD(SmiPtr, nullability)
   // Variable length data follows here.
-  RawAbstractType* const* types() const {
-    OPEN_ARRAY_START(RawAbstractType*, RawAbstractType*);
-  }
-  RawAbstractType** types() {
-    OPEN_ARRAY_START(RawAbstractType*, RawAbstractType*);
-  }
-  RawObject** to(intptr_t length) {
-    return reinterpret_cast<RawObject**>(&ptr()->types()[length - 1]);
-  }
+  COMPRESSED_VARIABLE_POINTER_FIELDS(AbstractTypePtr, element, types)
 
   friend class Object;
   friend class SnapshotReader;
 };
 
-class RawAbstractType : public RawInstance {
- protected:
+class UntaggedTypeParameters : public UntaggedObject {
+ private:
+  RAW_HEAP_OBJECT_IMPLEMENTATION(TypeParameters);
+
+  // Length of names reflects the number of type parameters.
+  COMPRESSED_POINTER_FIELD(ArrayPtr, names)
+  VISIT_FROM(names)
+  // flags: isGenericCovariantImpl and (todo) variance.
+  COMPRESSED_POINTER_FIELD(ArrayPtr, flags)
+  COMPRESSED_POINTER_FIELD(TypeArgumentsPtr, bounds)
+  // defaults is the instantiation to bounds (calculated by CFE).
+  COMPRESSED_POINTER_FIELD(TypeArgumentsPtr, defaults)
+  VISIT_TO(defaults)
+  CompressedObjectPtr* to_snapshot(Snapshot::Kind kind) { return to(); }
+
+  friend class Object;
+  friend class SnapshotReader;
+};
+
+class UntaggedAbstractType : public UntaggedInstance {
+ public:
   enum TypeState {
     kAllocated,                // Initial state.
-    kResolved,                 // Type class and type arguments resolved.
     kBeingFinalized,           // In the process of being finalized.
     kFinalizedInstantiated,    // Instantiated type ready for use.
     kFinalizedUninstantiated,  // Uninstantiated type ready for use.
+    // Adjust kTypeStateBitSize if more are added.
   };
 
-  // Note: we don't handle this field in GC in any special way.
-  // Instead we rely on two things:
-  //   (1) GC not moving code objects and
-  //   (2) lifetime of optimized stubs exceeding that of types;
-  // Practically (2) means that optimized stubs never die because
-  // canonical types to which they are attached never die.
-  uword type_test_stub_entry_point_;  // Accessed from generated code.
+ protected:
+  static constexpr intptr_t kTypeStateBitSize = 2;
+
+  // Accessed from generated code.
+  uword type_test_stub_entry_point_;
+  COMPRESSED_POINTER_FIELD(CodePtr, type_test_stub)
+  VISIT_FROM(type_test_stub)
 
  private:
   RAW_HEAP_OBJECT_IMPLEMENTATION(AbstractType);
@@ -2026,88 +2650,120 @@ class RawAbstractType : public RawInstance {
   friend class StubCode;
 };
 
-class RawType : public RawAbstractType {
+class UntaggedType : public UntaggedAbstractType {
  private:
   RAW_HEAP_OBJECT_IMPLEMENTATION(Type);
 
-  VISIT_FROM(RawObject*, type_class_id_)
-  RawSmi* type_class_id_;
-  RawTypeArguments* arguments_;
-  RawSmi* hash_;
-  // This type object represents a function type if its signature field is a
-  // non-null function object.
-  // If this type is malformed or malbounded, the signature field gets
-  // overwritten by the error object in order to save space. If the type is a
-  // function type, its signature is lost, but the message in the error object
-  // can describe the issue without needing the signature.
-  union {
-    RawFunction* signature_;   // If not null, this type is a function type.
-    RawLanguageError* error_;  // If not null, type is malformed or malbounded.
-  } sig_or_err_;
-  VISIT_TO(RawObject*, sig_or_err_.error_)
-  TokenPosition token_pos_;
-  int8_t type_state_;
+  COMPRESSED_POINTER_FIELD(SmiPtr, type_class_id)
+  COMPRESSED_POINTER_FIELD(TypeArgumentsPtr, arguments)
+  COMPRESSED_POINTER_FIELD(SmiPtr, hash)
+  VISIT_TO(hash)
+  uint8_t type_state_;
+  uint8_t nullability_;
 
-  RawObject** to_snapshot(Snapshot::Kind kind) { return to(); }
+  CompressedObjectPtr* to_snapshot(Snapshot::Kind kind) { return to(); }
 
   friend class CidRewriteVisitor;
-  friend class RawTypeArguments;
+  friend class UntaggedTypeArguments;
 };
 
-class RawTypeRef : public RawAbstractType {
+class UntaggedFunctionType : public UntaggedAbstractType {
+ private:
+  RAW_HEAP_OBJECT_IMPLEMENTATION(FunctionType);
+
+  COMPRESSED_POINTER_FIELD(TypeParametersPtr, type_parameters)
+  COMPRESSED_POINTER_FIELD(AbstractTypePtr, result_type)
+  COMPRESSED_POINTER_FIELD(ArrayPtr, parameter_types)
+  COMPRESSED_POINTER_FIELD(ArrayPtr, parameter_names);
+  COMPRESSED_POINTER_FIELD(SmiPtr, hash)
+  VISIT_TO(hash)
+  uint32_t packed_fields_;  // Number of parent type args and own parameters.
+  uint8_t type_state_;
+  uint8_t nullability_;
+
+  static constexpr intptr_t kMaxParentTypeArgumentsBits = 8;
+  static constexpr intptr_t kMaxImplicitParametersBits = 1;
+  static constexpr intptr_t kMaxHasNamedOptionalParametersBits =
+      UntaggedFunction::kMaxHasNamedOptionalParametersBits;
+  static constexpr intptr_t kMaxFixedParametersBits =
+      UntaggedFunction::kMaxFixedParametersBits;
+  static constexpr intptr_t kMaxOptionalParametersBits =
+      UntaggedFunction::kMaxOptionalParametersBits;
+
+  // The bit fields are public for use in kernel_to_il.cc.
+ public:
+  typedef BitField<uint32_t, uint8_t, 0, kMaxParentTypeArgumentsBits>
+      PackedNumParentTypeArguments;
+  typedef BitField<uint32_t,
+                   uint8_t,
+                   PackedNumParentTypeArguments::kNextBit,
+                   kMaxImplicitParametersBits>
+      PackedNumImplicitParameters;
+  typedef BitField<uint32_t,
+                   bool,
+                   PackedNumImplicitParameters::kNextBit,
+                   kMaxHasNamedOptionalParametersBits>
+      PackedHasNamedOptionalParameters;
+  typedef BitField<uint32_t,
+                   uint16_t,
+                   PackedHasNamedOptionalParameters::kNextBit,
+                   kMaxFixedParametersBits>
+      PackedNumFixedParameters;
+  typedef BitField<uint32_t,
+                   uint16_t,
+                   PackedNumFixedParameters::kNextBit,
+                   kMaxOptionalParametersBits>
+      PackedNumOptionalParameters;
+  static_assert(PackedNumOptionalParameters::kNextBit <=
+                    kBitsPerByte * sizeof(decltype(packed_fields_)),
+                "UntaggedFunctionType::packed_fields_ bitfields don't fit.");
+  static_assert(PackedNumOptionalParameters::kNextBit <=
+                    compiler::target::kSmiBits,
+                "In-place mask for number of optional parameters cannot fit in "
+                "a Smi on the target architecture");
+
+ private:
+  CompressedObjectPtr* to_snapshot(Snapshot::Kind kind) { return to(); }
+
+  friend class Function;
+};
+
+class UntaggedTypeRef : public UntaggedAbstractType {
  private:
   RAW_HEAP_OBJECT_IMPLEMENTATION(TypeRef);
 
-  VISIT_FROM(RawObject*, type_)
-  RawAbstractType* type_;  // The referenced type.
-  VISIT_TO(RawObject*, type_)
-  RawObject** to_snapshot(Snapshot::Kind kind) { return to(); }
+  COMPRESSED_POINTER_FIELD(AbstractTypePtr, type)  // The referenced type.
+  VISIT_TO(type)
+  CompressedObjectPtr* to_snapshot(Snapshot::Kind kind) { return to(); }
 };
 
-class RawTypeParameter : public RawAbstractType {
+class UntaggedTypeParameter : public UntaggedAbstractType {
  private:
   RAW_HEAP_OBJECT_IMPLEMENTATION(TypeParameter);
 
-  VISIT_FROM(RawObject*, name_)
-  RawString* name_;
-  RawSmi* hash_;
-  RawAbstractType* bound_;  // ObjectType if no explicit bound specified.
-  RawFunction* parameterized_function_;
-  VISIT_TO(RawObject*, parameterized_function_)
-  classid_t parameterized_class_id_;
-  TokenPosition token_pos_;
-  int16_t index_;
-  int8_t type_state_;
+  COMPRESSED_POINTER_FIELD(SmiPtr, hash)
+  // ObjectType if no explicit bound specified.
+  COMPRESSED_POINTER_FIELD(AbstractTypePtr, bound)
+  VISIT_TO(bound)
+  ClassIdTagType parameterized_class_id_;  // Or kFunctionCid for function tp.
+  uint8_t base_;   // Number of enclosing function type parameters.
+  uint8_t index_;  // Keep size in sync with BuildTypeParameterTypeTestStub.
+  uint8_t flags_;
+  uint8_t nullability_;
 
-  RawObject** to_snapshot(Snapshot::Kind kind) { return to(); }
+ public:
+  using BeingFinalizedBit = BitField<decltype(flags_), bool, 0, 1>;
+  using FinalizedBit =
+      BitField<decltype(flags_), bool, BeingFinalizedBit::kNextBit, 1>;
+  static constexpr intptr_t kFlagsBitSize = FinalizedBit::kNextBit;
+
+ private:
+  CompressedObjectPtr* to_snapshot(Snapshot::Kind kind) { return to(); }
 
   friend class CidRewriteVisitor;
 };
 
-class RawBoundedType : public RawAbstractType {
- private:
-  RAW_HEAP_OBJECT_IMPLEMENTATION(BoundedType);
-
-  VISIT_FROM(RawObject*, type_);
-  RawAbstractType* type_;
-  RawAbstractType* bound_;
-  RawSmi* hash_;
-  RawTypeParameter* type_parameter_;  // For more detailed error reporting.
-  VISIT_TO(RawObject*, type_parameter_);
-  RawObject** to_snapshot(Snapshot::Kind kind) { return to(); }
-};
-
-class RawMixinAppType : public RawAbstractType {
- private:
-  RAW_HEAP_OBJECT_IMPLEMENTATION(MixinAppType);
-
-  VISIT_FROM(RawObject*, super_type_);
-  RawAbstractType* super_type_;
-  RawArray* mixin_types_;  // Array of AbstractType.
-  VISIT_TO(RawObject*, mixin_types_);
-};
-
-class RawClosure : public RawInstance {
+class UntaggedClosure : public UntaggedInstance {
  private:
   RAW_HEAP_OBJECT_IMPLEMENTATION(Closure);
 
@@ -2116,17 +2772,22 @@ class RawClosure : public RawInstance {
 
   // The following fields are also declared in the Dart source of class
   // _Closure.
-  VISIT_FROM(RawCompressed, instantiator_type_arguments_)
-  RawTypeArguments* instantiator_type_arguments_;
-  RawTypeArguments* function_type_arguments_;
-  RawTypeArguments* delayed_type_arguments_;
-  RawFunction* function_;
-  RawContext* context_;
-  RawSmi* hash_;
+  COMPRESSED_POINTER_FIELD(TypeArgumentsPtr, instantiator_type_arguments)
+  VISIT_FROM(instantiator_type_arguments)
+  COMPRESSED_POINTER_FIELD(TypeArgumentsPtr, function_type_arguments)
+  COMPRESSED_POINTER_FIELD(TypeArgumentsPtr, delayed_type_arguments)
+  COMPRESSED_POINTER_FIELD(FunctionPtr, function)
+  COMPRESSED_POINTER_FIELD(ContextPtr, context)
+  COMPRESSED_POINTER_FIELD(SmiPtr, hash)
+  VISIT_TO(hash)
 
-  VISIT_TO(RawCompressed, hash_)
+  // We have an extra word in the object due to alignment rounding, so use it in
+  // bare instructions mode to cache the entry point from the closure function
+  // to avoid an extra redirection on call. Closure functions only have
+  // one entry point, as dynamic calls use dynamic closure call dispatchers.
+  ONLY_IN_PRECOMPILED(uword entry_point_);
 
-  RawObject** to_snapshot(Snapshot::Kind kind) { return to(); }
+  CompressedObjectPtr* to_snapshot(Snapshot::Kind kind) { return to(); }
 
   // Note that instantiator_type_arguments_, function_type_arguments_ and
   // delayed_type_arguments_ are used to instantiate the signature of function_
@@ -2150,33 +2811,36 @@ class RawClosure : public RawInstance {
   // Object::empty_type_arguments(), the types in this vector will be passed as
   // type arguments to the closure when invoked. In this case there may not be
   // any type arguments passed directly (or NSM will be invoked instead).
+
+  friend class UnitDeserializationRoots;
 };
 
-class RawNumber : public RawInstance {
+class UntaggedNumber : public UntaggedInstance {
   RAW_OBJECT_IMPLEMENTATION(Number);
 };
 
-class RawInteger : public RawNumber {
+class UntaggedInteger : public UntaggedNumber {
   RAW_OBJECT_IMPLEMENTATION(Integer);
 };
 
-class RawSmi : public RawInteger {
+class UntaggedSmi : public UntaggedInteger {
   RAW_OBJECT_IMPLEMENTATION(Smi);
 };
 
-class RawMint : public RawInteger {
+class UntaggedMint : public UntaggedInteger {
   RAW_HEAP_OBJECT_IMPLEMENTATION(Mint);
   VISIT_NOTHING();
 
   ALIGN8 int64_t value_;
 
   friend class Api;
+  friend class Class;
   friend class Integer;
   friend class SnapshotReader;
 };
-COMPILE_ASSERT(sizeof(RawMint) == 16);
+COMPILE_ASSERT(sizeof(UntaggedMint) == 16);
 
-class RawDouble : public RawNumber {
+class UntaggedDouble : public UntaggedNumber {
   RAW_HEAP_OBJECT_IMPLEMENTATION(Double);
   VISIT_NOTHING();
 
@@ -2184,20 +2848,21 @@ class RawDouble : public RawNumber {
 
   friend class Api;
   friend class SnapshotReader;
+  friend class Class;
 };
-COMPILE_ASSERT(sizeof(RawDouble) == 16);
+COMPILE_ASSERT(sizeof(UntaggedDouble) == 16);
 
-class RawString : public RawInstance {
+class UntaggedString : public UntaggedInstance {
   RAW_HEAP_OBJECT_IMPLEMENTATION(String);
 
  protected:
-  VISIT_FROM(RawObject*, length_)
-  RawSmi* length_;
-#if !defined(HASH_IN_OBJECT_HEADER)
-  RawSmi* hash_;
-  VISIT_TO(RawObject*, hash_)
+  COMPRESSED_SMI_FIELD(SmiPtr, length)
+  VISIT_FROM(length)
+#if defined(HASH_IN_OBJECT_HEADER)
+  VISIT_TO(length)
 #else
-  VISIT_TO(RawObject*, length_)
+  COMPRESSED_SMI_FIELD(SmiPtr, hash)
+  VISIT_TO(hash);
 #endif
 
  private:
@@ -2207,9 +2872,10 @@ class RawString : public RawInstance {
   friend class OneByteStringDeserializationCluster;
   friend class TwoByteStringDeserializationCluster;
   friend class RODataSerializationCluster;
+  friend class ImageWriter;
 };
 
-class RawOneByteString : public RawString {
+class UntaggedOneByteString : public UntaggedString {
   RAW_HEAP_OBJECT_IMPLEMENTATION(OneByteString);
   VISIT_NOTHING();
 
@@ -2223,7 +2889,7 @@ class RawOneByteString : public RawString {
   friend class String;
 };
 
-class RawTwoByteString : public RawString {
+class UntaggedTwoByteString : public UntaggedString {
   RAW_HEAP_OBJECT_IMPLEMENTATION(TwoByteString);
   VISIT_NOTHING();
 
@@ -2236,7 +2902,144 @@ class RawTwoByteString : public RawString {
   friend class String;
 };
 
-class RawExternalOneByteString : public RawString {
+// Abstract base class for RawTypedData/RawExternalTypedData/RawTypedDataView/
+// Pointer.
+//
+// TypedData extends this with a length field, while Pointer extends this with
+// TypeArguments field.
+class UntaggedPointerBase : public UntaggedInstance {
+ protected:
+  // The contents of [data_] depends on what concrete subclass is used:
+  //
+  //  - RawTypedData: Start of the payload.
+  //  - RawExternalTypedData: Start of the C-heap payload.
+  //  - RawTypedDataView: The [data_] field of the backing store for the view
+  //    plus the [offset_in_bytes_] the view has.
+  //  - RawPointer: Pointer into C memory (no length specified).
+  //
+  // During allocation or snapshot reading the [data_] can be temporarily
+  // nullptr (which is the case for views which just got created but haven't
+  // gotten the backing store set).
+  uint8_t* data_;
+
+ private:
+  RAW_HEAP_OBJECT_IMPLEMENTATION(PointerBase);
+};
+
+// Abstract base class for RawTypedData/RawExternalTypedData/RawTypedDataView.
+class UntaggedTypedDataBase : public UntaggedPointerBase {
+ protected:
+  // The length of the view in element sizes (obtainable via
+  // [TypedDataBase::ElementSizeInBytes]).
+  COMPRESSED_SMI_FIELD(SmiPtr, length);
+  VISIT_FROM(length)
+  VISIT_TO(length)
+
+ private:
+  friend class UntaggedTypedDataView;
+  RAW_HEAP_OBJECT_IMPLEMENTATION(TypedDataBase);
+};
+
+class UntaggedTypedData : public UntaggedTypedDataBase {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(TypedData);
+
+ public:
+  static intptr_t payload_offset() {
+    return OFFSET_OF_RETURNED_VALUE(UntaggedTypedData, internal_data);
+  }
+
+  // Recompute [data_] pointer to internal data.
+  void RecomputeDataField() { data_ = internal_data(); }
+
+ protected:
+  // Variable length data follows here.
+  uint8_t* internal_data() { OPEN_ARRAY_START(uint8_t, uint8_t); }
+  const uint8_t* internal_data() const { OPEN_ARRAY_START(uint8_t, uint8_t); }
+
+  uint8_t* data() {
+    ASSERT(data_ == internal_data());
+    return data_;
+  }
+  const uint8_t* data() const {
+    ASSERT(data_ == internal_data());
+    return data_;
+  }
+
+  friend class Api;
+  friend class Instance;
+  friend class NativeEntryData;
+  friend class Object;
+  friend class ObjectPool;
+  friend class ObjectPoolDeserializationCluster;
+  friend class ObjectPoolSerializationCluster;
+  friend class UntaggedObjectPool;
+  friend class SnapshotReader;
+};
+
+// All _*ArrayView/_ByteDataView classes share the same layout.
+class UntaggedTypedDataView : public UntaggedTypedDataBase {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(TypedDataView);
+
+ public:
+  // Recompute [data_] based on internal/external [typed_data_].
+  void RecomputeDataField() {
+    const intptr_t offset_in_bytes = RawSmiValue(this->offset_in_bytes());
+    uint8_t* payload = typed_data()->untag()->data_;
+    data_ = payload + offset_in_bytes;
+  }
+
+  // Recompute [data_] based on internal [typed_data_] - needs to be called by
+  // GC whenever the backing store moved.
+  //
+  // NOTICE: This method assumes [this] is the forwarded object and the
+  // [typed_data_] pointer points to the new backing store. The backing store's
+  // fields don't need to be valid - only it's address.
+  void RecomputeDataFieldForInternalTypedData() {
+    data_ = DataFieldForInternalTypedData();
+  }
+
+  uint8_t* DataFieldForInternalTypedData() const {
+    const intptr_t offset_in_bytes = RawSmiValue(this->offset_in_bytes());
+    uint8_t* payload =
+        reinterpret_cast<uint8_t*>(UntaggedObject::ToAddr(typed_data()) +
+                                   UntaggedTypedData::payload_offset());
+    return payload + offset_in_bytes;
+  }
+
+  void ValidateInnerPointer() {
+    if (typed_data()->untag()->GetClassId() == kNullCid) {
+      // The view object must have gotten just initialized.
+      if (data_ != nullptr || RawSmiValue(offset_in_bytes()) != 0 ||
+          RawSmiValue(length()) != 0) {
+        FATAL("RawTypedDataView has invalid inner pointer.");
+      }
+    } else {
+      const intptr_t offset_in_bytes = RawSmiValue(this->offset_in_bytes());
+      uint8_t* payload = typed_data()->untag()->data_;
+      if ((payload + offset_in_bytes) != data_) {
+        FATAL("RawTypedDataView has invalid inner pointer.");
+      }
+    }
+  }
+
+ protected:
+  COMPRESSED_POINTER_FIELD(TypedDataBasePtr, typed_data)
+  COMPRESSED_SMI_FIELD(SmiPtr, offset_in_bytes)
+  VISIT_TO(offset_in_bytes)
+  CompressedObjectPtr* to_snapshot(Snapshot::Kind kind) { return to(); }
+
+  friend class Api;
+  friend class Object;
+  friend class ObjectPoolDeserializationCluster;
+  friend class ObjectPoolSerializationCluster;
+  friend class UntaggedObjectPool;
+  friend class GCCompactor;
+  template <bool>
+  friend class ScavengerVisitorBase;
+  friend class SnapshotReader;
+};
+
+class UntaggedExternalOneByteString : public UntaggedString {
   RAW_HEAP_OBJECT_IMPLEMENTATION(ExternalOneByteString);
 
   const uint8_t* external_data_;
@@ -2245,7 +3048,7 @@ class RawExternalOneByteString : public RawString {
   friend class String;
 };
 
-class RawExternalTwoByteString : public RawString {
+class UntaggedExternalTwoByteString : public UntaggedString {
   RAW_HEAP_OBJECT_IMPLEMENTATION(ExternalTwoByteString);
 
   const uint16_t* external_data_;
@@ -2254,81 +3057,88 @@ class RawExternalTwoByteString : public RawString {
   friend class String;
 };
 
-class RawBool : public RawInstance {
+class UntaggedBool : public UntaggedInstance {
   RAW_HEAP_OBJECT_IMPLEMENTATION(Bool);
   VISIT_NOTHING();
 
   bool value_;
+
+  friend class Object;
 };
 
-class RawArray : public RawInstance {
+class UntaggedArray : public UntaggedInstance {
   RAW_HEAP_OBJECT_IMPLEMENTATION(Array);
 
-  VISIT_FROM(RawCompressed, type_arguments_)
-  RawTypeArguments* type_arguments_;
-  RawSmi* length_;
+  COMPRESSED_ARRAY_POINTER_FIELD(TypeArgumentsPtr, type_arguments)
+  VISIT_FROM(type_arguments)
+  COMPRESSED_SMI_FIELD(SmiPtr, length)
   // Variable length data follows here.
-  RawObject** data() { OPEN_ARRAY_START(RawObject*, RawObject*); }
-  RawObject* const* data() const { OPEN_ARRAY_START(RawObject*, RawObject*); }
-  VISIT_TO_LENGTH(RawCompressed, &ptr()->data()[length - 1])
+  COMPRESSED_VARIABLE_POINTER_FIELDS(ObjectPtr, element, data)
 
   friend class LinkedHashMapSerializationCluster;
   friend class LinkedHashMapDeserializationCluster;
+  friend class CodeSerializationCluster;
+  friend class CodeDeserializationCluster;
   friend class Deserializer;
-  friend class RawCode;
-  friend class RawImmutableArray;
+  friend class UntaggedCode;
+  friend class UntaggedImmutableArray;
   friend class SnapshotReader;
   friend class GrowableObjectArray;
   friend class LinkedHashMap;
-  friend class RawLinkedHashMap;
+  friend class UntaggedLinkedHashMap;
   friend class Object;
   friend class ICData;            // For high performance access.
   friend class SubtypeTestCache;  // For high performance access.
-
-  friend class HeapPage;
+  friend class ReversePc;
+  template <typename Table, bool kAllCanonicalObjectsAreIncludedIntoSet>
+  friend class CanonicalSetDeserializationCluster;
+  friend class OldPage;
 };
 
-class RawImmutableArray : public RawArray {
+class UntaggedImmutableArray : public UntaggedArray {
   RAW_HEAP_OBJECT_IMPLEMENTATION(ImmutableArray);
 
   friend class SnapshotReader;
 };
 
-class RawGrowableObjectArray : public RawInstance {
+class UntaggedGrowableObjectArray : public UntaggedInstance {
   RAW_HEAP_OBJECT_IMPLEMENTATION(GrowableObjectArray);
 
-  VISIT_FROM(RawCompressed, type_arguments_)
-  RawTypeArguments* type_arguments_;
-  RawSmi* length_;
-  RawArray* data_;
-  VISIT_TO(RawCompressed, data_)
-  RawObject** to_snapshot(Snapshot::Kind kind) { return to(); }
+  COMPRESSED_POINTER_FIELD(TypeArgumentsPtr, type_arguments)
+  VISIT_FROM(type_arguments)
+  COMPRESSED_SMI_FIELD(SmiPtr, length)
+  COMPRESSED_POINTER_FIELD(ArrayPtr, data)
+  VISIT_TO(data)
+  CompressedObjectPtr* to_snapshot(Snapshot::Kind kind) { return to(); }
 
   friend class SnapshotReader;
+  friend class ReversePc;
 };
 
-class RawLinkedHashMap : public RawInstance {
+class UntaggedLinkedHashMap : public UntaggedInstance {
   RAW_HEAP_OBJECT_IMPLEMENTATION(LinkedHashMap);
 
-  VISIT_FROM(RawCompressed, type_arguments_)
-  RawTypeArguments* type_arguments_;
-  RawTypedData* index_;
-  RawSmi* hash_mask_;
-  RawArray* data_;
-  RawSmi* used_data_;
-  RawSmi* deleted_keys_;
-  VISIT_TO(RawCompressed, deleted_keys_)
+  COMPRESSED_POINTER_FIELD(TypeArgumentsPtr, type_arguments)
+  VISIT_FROM(type_arguments)
+  COMPRESSED_POINTER_FIELD(TypedDataPtr, index)
+  COMPRESSED_POINTER_FIELD(SmiPtr, hash_mask)
+  COMPRESSED_POINTER_FIELD(ArrayPtr, data)
+  COMPRESSED_POINTER_FIELD(SmiPtr, used_data)
+  COMPRESSED_POINTER_FIELD(SmiPtr, deleted_keys)
+  VISIT_TO(deleted_keys)
+  CompressedObjectPtr* to_snapshot(Snapshot::Kind kind) { return to(); }
 
   friend class SnapshotReader;
 };
 
-class RawFloat32x4 : public RawInstance {
+class UntaggedFloat32x4 : public UntaggedInstance {
   RAW_HEAP_OBJECT_IMPLEMENTATION(Float32x4);
   VISIT_NOTHING();
 
   ALIGN8 float value_[4];
 
   friend class SnapshotReader;
+  friend class Class;
 
  public:
   float x() const { return value_[0]; }
@@ -2336,9 +3146,9 @@ class RawFloat32x4 : public RawInstance {
   float z() const { return value_[2]; }
   float w() const { return value_[3]; }
 };
-COMPILE_ASSERT(sizeof(RawFloat32x4) == 24);
+COMPILE_ASSERT(sizeof(UntaggedFloat32x4) == 24);
 
-class RawInt32x4 : public RawInstance {
+class UntaggedInt32x4 : public UntaggedInstance {
   RAW_HEAP_OBJECT_IMPLEMENTATION(Int32x4);
   VISIT_NOTHING();
 
@@ -2352,76 +3162,72 @@ class RawInt32x4 : public RawInstance {
   int32_t z() const { return value_[2]; }
   int32_t w() const { return value_[3]; }
 };
-COMPILE_ASSERT(sizeof(RawInt32x4) == 24);
+COMPILE_ASSERT(sizeof(UntaggedInt32x4) == 24);
 
-class RawFloat64x2 : public RawInstance {
+class UntaggedFloat64x2 : public UntaggedInstance {
   RAW_HEAP_OBJECT_IMPLEMENTATION(Float64x2);
   VISIT_NOTHING();
 
   ALIGN8 double value_[2];
 
   friend class SnapshotReader;
+  friend class Class;
 
  public:
   double x() const { return value_[0]; }
   double y() const { return value_[1]; }
 };
-COMPILE_ASSERT(sizeof(RawFloat64x2) == 24);
+COMPILE_ASSERT(sizeof(UntaggedFloat64x2) == 24);
 
 // Define an aliases for intptr_t.
 #if defined(ARCH_IS_32_BIT)
 #define kIntPtrCid kTypedDataInt32ArrayCid
+#define GetIntPtr GetInt32
 #define SetIntPtr SetInt32
+#define kUintPtrCid kTypedDataUint32ArrayCid
+#define GetUintPtr GetUint32
+#define SetUintPtr SetUint32
 #elif defined(ARCH_IS_64_BIT)
 #define kIntPtrCid kTypedDataInt64ArrayCid
+#define GetIntPtr GetInt64
 #define SetIntPtr SetInt64
+#define kUintPtrCid kTypedDataUint64ArrayCid
+#define GetUintPtr GetUint64
+#define SetUintPtr SetUint64
 #else
 #error Architecture is not 32-bit or 64-bit.
 #endif  // ARCH_IS_32_BIT
 
-class RawTypedData : public RawInstance {
-  RAW_HEAP_OBJECT_IMPLEMENTATION(TypedData);
-
- protected:
-  VISIT_FROM(RawCompressed, length_)
-  RawSmi* length_;
-  VISIT_TO_LENGTH(RawCompressed, &ptr()->length_)
-  // Variable length data follows here.
-  uint8_t* data() { OPEN_ARRAY_START(uint8_t, uint8_t); }
-  const uint8_t* data() const { OPEN_ARRAY_START(uint8_t, uint8_t); }
-
-  friend class Api;
-  friend class Instance;
-  friend class NativeEntryData;
-  friend class Object;
-  friend class ObjectPool;
-  friend class ObjectPoolDeserializationCluster;
-  friend class ObjectPoolSerializationCluster;
-  friend class RawObjectPool;
-  friend class SnapshotReader;
+class UntaggedExternalTypedData : public UntaggedTypedDataBase {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(ExternalTypedData);
 };
 
-class RawExternalTypedData : public RawInstance {
-  RAW_HEAP_OBJECT_IMPLEMENTATION(ExternalTypedData);
+class UntaggedPointer : public UntaggedPointerBase {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(Pointer);
 
- protected:
-  VISIT_FROM(RawCompressed, length_)
-  RawSmi* length_;
-  VISIT_TO(RawCompressed, length_)
+  COMPRESSED_POINTER_FIELD(TypeArgumentsPtr, type_arguments)
+  VISIT_FROM(type_arguments)
+  VISIT_TO(type_arguments)
 
-  uint8_t* data_;
+  friend class Pointer;
+};
 
-  friend class RawBytecode;
+class UntaggedDynamicLibrary : public UntaggedInstance {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(DynamicLibrary);
+  VISIT_NOTHING();
+  void* handle_;
+
+  friend class DynamicLibrary;
 };
 
 // VM implementations of the basic types in the isolate.
-class RawCapability : public RawInstance {
+class alignas(8) UntaggedCapability : public UntaggedInstance {
   RAW_HEAP_OBJECT_IMPLEMENTATION(Capability);
   VISIT_NOTHING();
   uint64_t id_;
 };
 
-class RawSendPort : public RawInstance {
+class alignas(8) UntaggedSendPort : public UntaggedInstance {
   RAW_HEAP_OBJECT_IMPLEMENTATION(SendPort);
   VISIT_NOTHING();
   Dart_Port id_;
@@ -2430,108 +3236,125 @@ class RawSendPort : public RawInstance {
   friend class ReceivePort;
 };
 
-class RawReceivePort : public RawInstance {
+class UntaggedReceivePort : public UntaggedInstance {
   RAW_HEAP_OBJECT_IMPLEMENTATION(ReceivePort);
 
-  VISIT_FROM(RawObject*, send_port_)
-  RawSendPort* send_port_;
-  RawInstance* handler_;
-  VISIT_TO(RawObject*, handler_)
+  COMPRESSED_POINTER_FIELD(SendPortPtr, send_port)
+  VISIT_FROM(send_port)
+  COMPRESSED_POINTER_FIELD(InstancePtr, handler)
+#if defined(PRODUCT)
+  VISIT_TO(handler)
+#else
+  COMPRESSED_POINTER_FIELD(StringPtr, debug_name)
+  COMPRESSED_POINTER_FIELD(StackTracePtr, allocation_location)
+  VISIT_TO(allocation_location)
+#endif  // !defined(PRODUCT)
+};
+
+class UntaggedTransferableTypedData : public UntaggedInstance {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(TransferableTypedData);
+  VISIT_NOTHING();
 };
 
 // VM type for capturing stacktraces when exceptions are thrown,
 // Currently we don't have any interface that this object is supposed
 // to implement so we just support the 'toString' method which
 // converts the stack trace into a string.
-class RawStackTrace : public RawInstance {
+class UntaggedStackTrace : public UntaggedInstance {
   RAW_HEAP_OBJECT_IMPLEMENTATION(StackTrace);
 
-  VISIT_FROM(RawObject*, async_link_)
-  RawStackTrace* async_link_;  // Link to parent async stack trace.
-  RawArray* code_array_;       // Code object for each frame in the stack trace.
-  RawArray* pc_offset_array_;  // Offset of PC for each frame.
-  VISIT_TO(RawObject*, pc_offset_array_)
-  RawObject** to_snapshot(Snapshot::Kind kind) { return to(); }
+  // Link to parent async stack trace.
+  COMPRESSED_POINTER_FIELD(StackTracePtr, async_link);
+  VISIT_FROM(async_link)
+  // Code object for each frame in the stack trace.
+  COMPRESSED_POINTER_FIELD(ArrayPtr, code_array);
+  // Offset of PC for each frame.
+  COMPRESSED_POINTER_FIELD(TypedDataPtr, pc_offset_array);
+
+  VISIT_TO(pc_offset_array)
+  CompressedObjectPtr* to_snapshot(Snapshot::Kind kind) { return to(); }
 
   // False for pre-allocated stack trace (used in OOM and Stack overflow).
   bool expand_inlined_;
+  // Whether the link between the stack and the async-link represents a
+  // synchronous start to an asynchronous function. In this case, we omit the
+  // <asynchronous suspension> marker when concatenating the stacks.
+  bool skip_sync_start_in_parent_stack;
 };
 
 // VM type for capturing JS regular expressions.
-class RawRegExp : public RawInstance {
+class UntaggedRegExp : public UntaggedInstance {
   RAW_HEAP_OBJECT_IMPLEMENTATION(RegExp);
 
-  VISIT_FROM(RawObject*, num_bracket_expressions_)
-  RawSmi* num_bracket_expressions_;
-  RawString* pattern_;  // Pattern to be used for matching.
-  union {
-    RawFunction* function_;
-    RawTypedData* bytecode_;
-  } one_byte_;
-  union {
-    RawFunction* function_;
-    RawTypedData* bytecode_;
-  } two_byte_;
-  RawFunction* external_one_byte_function_;
-  RawFunction* external_two_byte_function_;
-  union {
-    RawFunction* function_;
-    RawTypedData* bytecode_;
-  } one_byte_sticky_;
-  union {
-    RawFunction* function_;
-    RawTypedData* bytecode_;
-  } two_byte_sticky_;
-  RawFunction* external_one_byte_sticky_function_;
-  RawFunction* external_two_byte_sticky_function_;
-  VISIT_TO(RawObject*, external_two_byte_sticky_function_)
-  RawObject** to_snapshot(Snapshot::Kind kind) { return to(); }
+  COMPRESSED_POINTER_FIELD(ArrayPtr, capture_name_map)
+  VISIT_FROM(capture_name_map)
+  // Pattern to be used for matching.
+  COMPRESSED_POINTER_FIELD(StringPtr, pattern)
+  COMPRESSED_POINTER_FIELD(ObjectPtr, one_byte)  // FunctionPtr or TypedDataPtr
+  COMPRESSED_POINTER_FIELD(ObjectPtr, two_byte)
+  COMPRESSED_POINTER_FIELD(ObjectPtr, external_one_byte)
+  COMPRESSED_POINTER_FIELD(ObjectPtr, external_two_byte)
+  COMPRESSED_POINTER_FIELD(ObjectPtr, one_byte_sticky)
+  COMPRESSED_POINTER_FIELD(ObjectPtr, two_byte_sticky)
+  COMPRESSED_POINTER_FIELD(ObjectPtr, external_one_byte_sticky)
+  COMPRESSED_POINTER_FIELD(ObjectPtr, external_two_byte_sticky)
+  VISIT_TO(external_two_byte_sticky)
+  CompressedObjectPtr* to_snapshot(Snapshot::Kind kind) { return to(); }
 
-  intptr_t num_registers_;
+  intptr_t num_bracket_expressions_;
+
+  // The same pattern may use different amount of registers if compiled
+  // for a one-byte target than a two-byte target. For example, we do not
+  // need to allocate registers to check whether the current position is within
+  // a surrogate pair when matching a Unicode pattern against a one-byte string.
+  intptr_t num_one_byte_registers_;
+  intptr_t num_two_byte_registers_;
 
   // A bitfield with two fields:
   // type: Uninitialized, simple or complex.
-  // flags: Represents global/local, case insensitive, multiline.
+  // flags: Represents global/local, case insensitive, multiline, unicode,
+  //        dotAll.
   int8_t type_flags_;
 };
 
-class RawWeakProperty : public RawInstance {
+class UntaggedWeakProperty : public UntaggedInstance {
   RAW_HEAP_OBJECT_IMPLEMENTATION(WeakProperty);
 
-  VISIT_FROM(RawObject*, key_)
-  RawObject* key_;
-  RawObject* value_;
-  VISIT_TO(RawObject*, value_)
-  RawObject** to_snapshot(Snapshot::Kind kind) { return to(); }
+  COMPRESSED_POINTER_FIELD(ObjectPtr, key)
+  VISIT_FROM(key)
+  COMPRESSED_POINTER_FIELD(ObjectPtr, value)
+  VISIT_TO(value)
+  CompressedObjectPtr* to_snapshot(Snapshot::Kind kind) { return to(); }
 
-  // Linked list is chaining all pending weak properties.
-  // Untyped to make it clear that it is not to be visited by GC.
-  uword next_;
+  // Linked list is chaining all pending weak properties. Not visited by
+  // pointer visitors.
+  CompressedWeakPropertyPtr next_;
 
   friend class GCMarker;
   template <bool>
   friend class MarkingVisitorBase;
   friend class Scavenger;
-  friend class ScavengerVisitor;
+  template <bool>
+  friend class ScavengerVisitorBase;
 };
 
 // MirrorReferences are used by mirrors to hold reflectees that are VM
 // internal objects, such as libraries, classes, functions or types.
-class RawMirrorReference : public RawInstance {
+class UntaggedMirrorReference : public UntaggedInstance {
   RAW_HEAP_OBJECT_IMPLEMENTATION(MirrorReference);
 
-  VISIT_FROM(RawObject*, referent_)
-  RawObject* referent_;
-  VISIT_TO(RawObject*, referent_)
+  COMPRESSED_POINTER_FIELD(ObjectPtr, referent)
+  VISIT_FROM(referent)
+  VISIT_TO(referent)
 };
 
 // UserTag are used by the profiler to track Dart script state.
-class RawUserTag : public RawInstance {
+class UntaggedUserTag : public UntaggedInstance {
   RAW_HEAP_OBJECT_IMPLEMENTATION(UserTag);
 
-  VISIT_FROM(RawObject*, label_)
-  RawString* label_;
-  VISIT_TO(RawObject*, label_)
+  COMPRESSED_POINTER_FIELD(StringPtr, label)
+  VISIT_FROM(label)
+  VISIT_TO(label)
 
   // Isolate unique tag.
   uword tag_;
@@ -2543,182 +3366,17 @@ class RawUserTag : public RawInstance {
   uword tag() const { return tag_; }
 };
 
-// Class Id predicates.
+class UntaggedFutureOr : public UntaggedInstance {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(FutureOr);
 
-inline bool RawObject::IsErrorClassId(intptr_t index) {
-  // Make sure this function is updated when new Error types are added.
-  COMPILE_ASSERT(
-      kApiErrorCid == kErrorCid + 1 && kLanguageErrorCid == kErrorCid + 2 &&
-      kUnhandledExceptionCid == kErrorCid + 3 &&
-      kUnwindErrorCid == kErrorCid + 4 && kInstanceCid == kErrorCid + 5);
-  return (index >= kErrorCid && index < kInstanceCid);
-}
+  COMPRESSED_POINTER_FIELD(TypeArgumentsPtr, type_arguments)
+  VISIT_FROM(type_arguments)
+  VISIT_TO(type_arguments)
 
-inline bool RawObject::IsNumberClassId(intptr_t index) {
-  // Make sure this function is updated when new Number types are added.
-  COMPILE_ASSERT(kIntegerCid == kNumberCid + 1 && kSmiCid == kNumberCid + 2 &&
-                 kMintCid == kNumberCid + 3 && kDoubleCid == kNumberCid + 4);
-  return (index >= kNumberCid && index <= kDoubleCid);
-}
+  friend class SnapshotReader;
+};
 
-inline bool RawObject::IsIntegerClassId(intptr_t index) {
-  // Make sure this function is updated when new Integer types are added.
-  COMPILE_ASSERT(kSmiCid == kIntegerCid + 1 && kMintCid == kIntegerCid + 2);
-  return (index >= kIntegerCid && index <= kMintCid);
-}
-
-inline bool RawObject::IsStringClassId(intptr_t index) {
-  // Make sure this function is updated when new StringCid types are added.
-  COMPILE_ASSERT(kOneByteStringCid == kStringCid + 1 &&
-                 kTwoByteStringCid == kStringCid + 2 &&
-                 kExternalOneByteStringCid == kStringCid + 3 &&
-                 kExternalTwoByteStringCid == kStringCid + 4);
-  return (index >= kStringCid && index <= kExternalTwoByteStringCid);
-}
-
-inline bool RawObject::IsOneByteStringClassId(intptr_t index) {
-  // Make sure this function is updated when new StringCid types are added.
-  COMPILE_ASSERT(kOneByteStringCid == kStringCid + 1 &&
-                 kTwoByteStringCid == kStringCid + 2 &&
-                 kExternalOneByteStringCid == kStringCid + 3 &&
-                 kExternalTwoByteStringCid == kStringCid + 4);
-  return (index == kOneByteStringCid || index == kExternalOneByteStringCid);
-}
-
-inline bool RawObject::IsTwoByteStringClassId(intptr_t index) {
-  // Make sure this function is updated when new StringCid types are added.
-  COMPILE_ASSERT(kOneByteStringCid == kStringCid + 1 &&
-                 kTwoByteStringCid == kStringCid + 2 &&
-                 kExternalOneByteStringCid == kStringCid + 3 &&
-                 kExternalTwoByteStringCid == kStringCid + 4);
-  return (index == kTwoByteStringCid || index == kExternalTwoByteStringCid);
-}
-
-inline bool RawObject::IsExternalStringClassId(intptr_t index) {
-  // Make sure this function is updated when new StringCid types are added.
-  COMPILE_ASSERT(kOneByteStringCid == kStringCid + 1 &&
-                 kTwoByteStringCid == kStringCid + 2 &&
-                 kExternalOneByteStringCid == kStringCid + 3 &&
-                 kExternalTwoByteStringCid == kStringCid + 4);
-  return (index == kExternalOneByteStringCid ||
-          index == kExternalTwoByteStringCid);
-}
-
-inline bool RawObject::IsBuiltinListClassId(intptr_t index) {
-  // Make sure this function is updated when new builtin List types are added.
-  COMPILE_ASSERT(kImmutableArrayCid == kArrayCid + 1);
-  return ((index >= kArrayCid && index <= kImmutableArrayCid) ||
-          (index == kGrowableObjectArrayCid) || IsTypedDataClassId(index) ||
-          IsTypedDataViewClassId(index) || IsExternalTypedDataClassId(index) ||
-          (index == kByteBufferCid));
-}
-
-inline bool RawObject::IsTypedDataClassId(intptr_t index) {
-  // Make sure this is updated when new TypedData types are added.
-  COMPILE_ASSERT(kTypedDataUint8ArrayCid == kTypedDataInt8ArrayCid + 1 &&
-                 kTypedDataUint8ClampedArrayCid == kTypedDataInt8ArrayCid + 2 &&
-                 kTypedDataInt16ArrayCid == kTypedDataInt8ArrayCid + 3 &&
-                 kTypedDataUint16ArrayCid == kTypedDataInt8ArrayCid + 4 &&
-                 kTypedDataInt32ArrayCid == kTypedDataInt8ArrayCid + 5 &&
-                 kTypedDataUint32ArrayCid == kTypedDataInt8ArrayCid + 6 &&
-                 kTypedDataInt64ArrayCid == kTypedDataInt8ArrayCid + 7 &&
-                 kTypedDataUint64ArrayCid == kTypedDataInt8ArrayCid + 8 &&
-                 kTypedDataFloat32ArrayCid == kTypedDataInt8ArrayCid + 9 &&
-                 kTypedDataFloat64ArrayCid == kTypedDataInt8ArrayCid + 10 &&
-                 kTypedDataFloat32x4ArrayCid == kTypedDataInt8ArrayCid + 11 &&
-                 kTypedDataInt32x4ArrayCid == kTypedDataInt8ArrayCid + 12 &&
-                 kTypedDataFloat64x2ArrayCid == kTypedDataInt8ArrayCid + 13 &&
-                 kTypedDataInt8ArrayViewCid == kTypedDataInt8ArrayCid + 14);
-  return (index >= kTypedDataInt8ArrayCid &&
-          index <= kTypedDataFloat64x2ArrayCid);
-}
-
-inline bool RawObject::IsTypedDataViewClassId(intptr_t index) {
-  // Make sure this is updated when new TypedData types are added.
-  COMPILE_ASSERT(
-      kTypedDataUint8ArrayViewCid == kTypedDataInt8ArrayViewCid + 1 &&
-      kTypedDataUint8ClampedArrayViewCid == kTypedDataInt8ArrayViewCid + 2 &&
-      kTypedDataInt16ArrayViewCid == kTypedDataInt8ArrayViewCid + 3 &&
-      kTypedDataUint16ArrayViewCid == kTypedDataInt8ArrayViewCid + 4 &&
-      kTypedDataInt32ArrayViewCid == kTypedDataInt8ArrayViewCid + 5 &&
-      kTypedDataUint32ArrayViewCid == kTypedDataInt8ArrayViewCid + 6 &&
-      kTypedDataInt64ArrayViewCid == kTypedDataInt8ArrayViewCid + 7 &&
-      kTypedDataUint64ArrayViewCid == kTypedDataInt8ArrayViewCid + 8 &&
-      kTypedDataFloat32ArrayViewCid == kTypedDataInt8ArrayViewCid + 9 &&
-      kTypedDataFloat64ArrayViewCid == kTypedDataInt8ArrayViewCid + 10 &&
-      kTypedDataFloat32x4ArrayViewCid == kTypedDataInt8ArrayViewCid + 11 &&
-      kTypedDataInt32x4ArrayViewCid == kTypedDataInt8ArrayViewCid + 12 &&
-      kTypedDataFloat64x2ArrayViewCid == kTypedDataInt8ArrayViewCid + 13 &&
-      kByteDataViewCid == kTypedDataInt8ArrayViewCid + 14 &&
-      kExternalTypedDataInt8ArrayCid == kTypedDataInt8ArrayViewCid + 15);
-  return (index >= kTypedDataInt8ArrayViewCid && index <= kByteDataViewCid);
-}
-
-inline bool RawObject::IsExternalTypedDataClassId(intptr_t index) {
-  // Make sure this is updated when new ExternalTypedData types are added.
-  COMPILE_ASSERT(
-      (kExternalTypedDataUint8ArrayCid == kExternalTypedDataInt8ArrayCid + 1) &&
-      (kExternalTypedDataUint8ClampedArrayCid ==
-       kExternalTypedDataInt8ArrayCid + 2) &&
-      (kExternalTypedDataInt16ArrayCid == kExternalTypedDataInt8ArrayCid + 3) &&
-      (kExternalTypedDataUint16ArrayCid ==
-       kExternalTypedDataInt8ArrayCid + 4) &&
-      (kExternalTypedDataInt32ArrayCid == kExternalTypedDataInt8ArrayCid + 5) &&
-      (kExternalTypedDataUint32ArrayCid ==
-       kExternalTypedDataInt8ArrayCid + 6) &&
-      (kExternalTypedDataInt64ArrayCid == kExternalTypedDataInt8ArrayCid + 7) &&
-      (kExternalTypedDataUint64ArrayCid ==
-       kExternalTypedDataInt8ArrayCid + 8) &&
-      (kExternalTypedDataFloat32ArrayCid ==
-       kExternalTypedDataInt8ArrayCid + 9) &&
-      (kExternalTypedDataFloat64ArrayCid ==
-       kExternalTypedDataInt8ArrayCid + 10) &&
-      (kExternalTypedDataFloat32x4ArrayCid ==
-       kExternalTypedDataInt8ArrayCid + 11) &&
-      (kExternalTypedDataInt32x4ArrayCid ==
-       kExternalTypedDataInt8ArrayCid + 12) &&
-      (kExternalTypedDataFloat64x2ArrayCid ==
-       kExternalTypedDataInt8ArrayCid + 13) &&
-      (kByteBufferCid == kExternalTypedDataInt8ArrayCid + 14));
-  return (index >= kExternalTypedDataInt8ArrayCid &&
-          index <= kExternalTypedDataFloat64x2ArrayCid);
-}
-
-inline bool RawObject::IsInternalVMdefinedClassId(intptr_t index) {
-  return ((index < kNumPredefinedCids) &&
-          !RawObject::IsImplicitFieldClassId(index));
-}
-
-inline bool RawObject::IsVariableSizeClassId(intptr_t index) {
-  return (index == kArrayCid) || (index == kImmutableArrayCid) ||
-         RawObject::IsOneByteStringClassId(index) ||
-         RawObject::IsTwoByteStringClassId(index) ||
-         RawObject::IsTypedDataClassId(index) || (index == kContextCid) ||
-         (index == kTypeArgumentsCid) || (index == kInstructionsCid) ||
-         (index == kObjectPoolCid) || (index == kPcDescriptorsCid) ||
-         (index == kCodeSourceMapCid) || (index == kStackMapCid) ||
-         (index == kLocalVarDescriptorsCid) ||
-         (index == kExceptionHandlersCid) || (index == kCodeCid) ||
-         (index == kContextScopeCid) || (index == kInstanceCid) ||
-         (index == kRegExpCid);
-}
-
-// This is a set of classes that are not Dart classes whose representation
-// is defined by the VM but are used in the VM code by computing the
-// implicit field offsets of the various fields in the dart object.
-inline bool RawObject::IsImplicitFieldClassId(intptr_t index) {
-  return (IsTypedDataViewClassId(index) || index == kByteBufferCid);
-}
-
-inline intptr_t RawObject::NumberOfTypedDataClasses() {
-  // Make sure this is updated when new TypedData types are added.
-  COMPILE_ASSERT(kTypedDataInt8ArrayViewCid == kTypedDataInt8ArrayCid + 14);
-  COMPILE_ASSERT(kExternalTypedDataInt8ArrayCid ==
-                 kTypedDataInt8ArrayViewCid + 15);
-  COMPILE_ASSERT(kByteBufferCid == kExternalTypedDataInt8ArrayCid + 14);
-  COMPILE_ASSERT(kNullCid == kByteBufferCid + 1);
-  return (kNullCid - kTypedDataInt8ArrayCid);
-}
+#undef WSR_COMPRESSED_POINTER_FIELD
 
 }  // namespace dart
 

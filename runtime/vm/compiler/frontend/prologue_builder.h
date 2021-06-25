@@ -5,7 +5,9 @@
 #ifndef RUNTIME_VM_COMPILER_FRONTEND_PROLOGUE_BUILDER_H_
 #define RUNTIME_VM_COMPILER_FRONTEND_PROLOGUE_BUILDER_H_
 
-#if !defined(DART_PRECOMPILED_RUNTIME)
+#if defined(DART_PRECOMPILED_RUNTIME)
+#error "AOT runtime should not use compiler sources (including header files)"
+#endif  // defined(DART_PRECOMPILED_RUNTIME)
 
 #include "vm/compiler/frontend/base_flow_graph_builder.h"
 
@@ -47,8 +49,7 @@ class PrologueBuilder : public BaseFlowGraphBuilder {
   BlockEntryInstr* BuildPrologue(BlockEntryInstr* entry,
                                  PrologueInfo* prologue_info);
 
-  Fragment BuildOptionalParameterHandling(JoinEntryInstr* nsm,
-                                          LocalVariable* temp_var);
+  Fragment BuildOptionalParameterHandling(LocalVariable* temp_var);
 
   static bool HasEmptyPrologue(const Function& function);
   static bool PrologueSkippableOnUncheckedEntry(const Function& function);
@@ -56,26 +57,22 @@ class PrologueBuilder : public BaseFlowGraphBuilder {
   intptr_t last_used_block_id() const { return last_used_block_id_; }
 
  private:
-  Fragment BuildTypeArgumentsLengthCheck(JoinEntryInstr* nsm,
-                                         bool expect_type_args);
-
-  Fragment BuildFixedParameterLengthChecks(JoinEntryInstr* nsm);
-
   Fragment BuildClosureContextHandling();
 
-  Fragment BuildTypeArgumentsHandling(JoinEntryInstr* nsm);
+  Fragment BuildTypeArgumentsHandling();
 
   LocalVariable* ParameterVariable(intptr_t index) {
     return parsed_function_->RawParameterVariable(index);
   }
 
   const Instance& DefaultParameterValueAt(intptr_t i) {
-    if (parsed_function_->default_parameter_values() != NULL) {
+    if (parsed_function_->default_parameter_values() != nullptr) {
       return parsed_function_->DefaultParameterValueAt(i);
     }
-
-    ASSERT(parsed_function_->function().kind() ==
-           RawFunction::kNoSuchMethodDispatcher);
+    // Only invocation dispatchers that have compile-time arguments
+    // descriptors lack default parameter values (because their functions only
+    // have optional named parameters, all of which are provided in calls.)
+    ASSERT(has_saved_args_desc_array());
     return Instance::null_instance();
   }
 
@@ -90,5 +87,4 @@ class PrologueBuilder : public BaseFlowGraphBuilder {
 }  // namespace kernel
 }  // namespace dart
 
-#endif  // !defined(DART_PRECOMPILED_RUNTIME)
 #endif  // RUNTIME_VM_COMPILER_FRONTEND_PROLOGUE_BUILDER_H_

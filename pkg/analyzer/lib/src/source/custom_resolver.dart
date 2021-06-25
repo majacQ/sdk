@@ -1,4 +1,4 @@
-// Copyright (c) 2016, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2016, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -13,17 +13,17 @@ class CustomUriResolver extends UriResolver {
   CustomUriResolver(this.resourceProvider, this._urlMappings);
 
   @override
-  Source resolveAbsolute(Uri uri, [Uri actualUri]) {
-    String mapping = _urlMappings[uri.toString()];
+  Source? resolveAbsolute(Uri uri) {
+    var mapping = _urlMappings[uri.toString()];
     if (mapping == null) {
       return null;
     }
-    Uri fileUri = new Uri.file(mapping);
+    Uri fileUri = Uri.file(mapping);
     if (!fileUri.isAbsolute) {
       return null;
     }
     var pathContext = resourceProvider.pathContext;
     var path = fileUriToNormalizedPath(pathContext, fileUri);
-    return resourceProvider.getFile(path).createSource(actualUri ?? uri);
+    return resourceProvider.getFile(path).createSource(uri);
   }
 }

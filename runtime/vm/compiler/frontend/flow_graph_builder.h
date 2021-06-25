@@ -5,6 +5,10 @@
 #ifndef RUNTIME_VM_COMPILER_FRONTEND_FLOW_GRAPH_BUILDER_H_
 #define RUNTIME_VM_COMPILER_FRONTEND_FLOW_GRAPH_BUILDER_H_
 
+#if defined(DART_PRECOMPILED_RUNTIME)
+#error "AOT runtime should not use compiler sources (including header files)"
+#endif  // defined(DART_PRECOMPILED_RUNTIME)
+
 #include "platform/assert.h"
 #include "platform/globals.h"
 #include "vm/allocation.h"
@@ -69,7 +73,6 @@ class InlineExitCollector : public ZoneAllocated {
                           Instruction** last_instruction,
                           intptr_t try_index);
 
-  Isolate* isolate() const { return caller_graph_->isolate(); }
   Zone* zone() const { return caller_graph_->zone(); }
 
   FlowGraph* caller_graph_;

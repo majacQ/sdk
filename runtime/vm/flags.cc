@@ -5,6 +5,7 @@
 #include "vm/flags.h"
 
 #include "platform/assert.h"
+#include "vm/isolate.h"
 #include "vm/json_stream.h"
 #include "vm/os.h"
 
@@ -16,60 +17,60 @@ DEFINE_FLAG(bool,
             false,
             "Ignore unrecognized flags.");
 
-#define PRODUCT_FLAG_MARCO(name, type, default_value, comment)                 \
+#define PRODUCT_FLAG_MACRO(name, type, default_value, comment)                 \
   type FLAG_##name =                                                           \
       Flags::Register_##type(&FLAG_##name, #name, default_value, comment);
 
 #if defined(DEBUG)
-#define DEBUG_FLAG_MARCO(name, type, default_value, comment)                   \
+#define DEBUG_FLAG_MACRO(name, type, default_value, comment)                   \
   type FLAG_##name =                                                           \
       Flags::Register_##type(&FLAG_##name, #name, default_value, comment);
 #else  // defined(DEBUG)
-#define DEBUG_FLAG_MARCO(name, type, default_value, comment)
+#define DEBUG_FLAG_MACRO(name, type, default_value, comment)
 #endif  // defined(DEBUG)
 
 #if defined(PRODUCT) && defined(DART_PRECOMPILED_RUNTIME)
 // Nothing to be done for the product flag definitions.
-#define RELEASE_FLAG_MARCO(name, product_value, type, default_value, comment)
+#define RELEASE_FLAG_MACRO(name, product_value, type, default_value, comment)
 // Nothing to be done for the precompilation flag definitions.
-#define PRECOMPILE_FLAG_MARCO(name, pre_value, product_value, type,            \
+#define PRECOMPILE_FLAG_MACRO(name, pre_value, product_value, type,            \
                               default_value, comment)
 
 #elif defined(PRODUCT)  // !PRECOMPILED
 // Nothing to be done for the product flag definitions.
-#define RELEASE_FLAG_MARCO(name, product_value, type, default_value, comment)
+#define RELEASE_FLAG_MACRO(name, product_value, type, default_value, comment)
 // Nothing to be done for the precompilation flag definitions.
-#define PRECOMPILE_FLAG_MARCO(name, pre_value, product_value, type,            \
+#define PRECOMPILE_FLAG_MACRO(name, pre_value, product_value, type,            \
                               default_value, comment)
 
 #elif defined(DART_PRECOMPILED_RUNTIME)  // !PRODUCT
-#define RELEASE_FLAG_MARCO(name, product_value, type, default_value, comment)  \
+#define RELEASE_FLAG_MACRO(name, product_value, type, default_value, comment)  \
   type FLAG_##name =                                                           \
       Flags::Register_##type(&FLAG_##name, #name, default_value, comment);
 // Nothing to be done for the precompilation flag definitions.
-#define PRECOMPILE_FLAG_MARCO(name, pre_value, product_value, type,            \
+#define PRECOMPILE_FLAG_MACRO(name, pre_value, product_value, type,            \
                               default_value, comment)
 
 #else  // !PRODUCT && !PRECOMPILED
-#define RELEASE_FLAG_MARCO(name, product_value, type, default_value, comment)  \
+#define RELEASE_FLAG_MACRO(name, product_value, type, default_value, comment)  \
   type FLAG_##name =                                                           \
       Flags::Register_##type(&FLAG_##name, #name, default_value, comment);
-#define PRECOMPILE_FLAG_MARCO(name, pre_value, product_value, type,            \
+#define PRECOMPILE_FLAG_MACRO(name, pre_value, product_value, type,            \
                               default_value, comment)                          \
   type FLAG_##name =                                                           \
       Flags::Register_##type(&FLAG_##name, #name, default_value, comment);
 #endif
 
 // Define all of the non-product flags here.
-FLAG_LIST(PRODUCT_FLAG_MARCO,
-          RELEASE_FLAG_MARCO,
-          DEBUG_FLAG_MARCO,
-          PRECOMPILE_FLAG_MARCO)
+FLAG_LIST(PRODUCT_FLAG_MACRO,
+          RELEASE_FLAG_MACRO,
+          PRECOMPILE_FLAG_MACRO,
+          DEBUG_FLAG_MACRO)
 
-#undef RELEASE_FLAG_MARCO
-#undef DEBUG_FLAG_MARCO
-#undef PRODUCT_FLAG_MARCO
-#undef PRECOMPILE_FLAG_MARCO
+#undef PRODUCT_FLAG_MACRO
+#undef RELEASE_FLAG_MACRO
+#undef PRECOMPILE_FLAG_MACRO
+#undef DEBUG_FLAG_MACRO
 
 bool Flags::initialized_ = false;
 
@@ -95,11 +96,13 @@ class Flag {
   Flag(const char* name, const char* comment, FlagHandler handler)
       : name_(name),
         comment_(comment),
+        string_value_("false"),
         flag_handler_(handler),
         type_(kFlagHandler) {}
   Flag(const char* name, const char* comment, OptionHandler handler)
       : name_(name),
         comment_(comment),
+        string_value_(nullptr),
         option_handler_(handler),
         type_(kOptionHandler) {}
 
@@ -148,6 +151,7 @@ class Flag {
 
   const char* name_;
   const char* comment_;
+  const char* string_value_;
   union {
     void* addr_;
     bool* bool_ptr_;
@@ -158,7 +162,7 @@ class Flag {
     OptionHandler option_handler_;
   };
   FlagType type_;
-  bool changed_;
+  bool changed_ = false;
 };
 
 Flag* Flags::Lookup(const char* name) {
@@ -291,7 +295,7 @@ bool Flags::SetFlagFromString(Flag* flag, const char* argument) {
       break;
     }
     case Flag::kString: {
-      *flag->charp_ptr_ = argument == NULL ? NULL : strdup(argument);
+      *flag->charp_ptr_ = argument == NULL ? NULL : Utils::StrDup(argument);
       break;
     }
     case Flag::kInteger: {
@@ -332,9 +336,11 @@ bool Flags::SetFlagFromString(Flag* flag, const char* argument) {
       } else {
         return false;
       }
+      flag->string_value_ = argument;
       break;
     }
     case Flag::kOptionHandler: {
+      flag->string_value_ = argument;
       (flag->option_handler_)(argument);
       break;
     }
@@ -423,7 +429,7 @@ int Flags::CompareFlagNames(const void* left, const void* right) {
 char* Flags::ProcessCommandLineFlags(int number_of_vm_flags,
                                      const char** vm_flags) {
   if (initialized_) {
-    return strdup("Flags already set");
+    return Utils::StrDup("Flags already set");
   }
 
   qsort(flags_, num_flags_, sizeof flags_[0], CompareFlagNames);
@@ -461,6 +467,20 @@ char* Flags::ProcessCommandLineFlags(int number_of_vm_flags,
     PrintFlags();
   }
 
+  // TODO(dartbug.com/36097): Support for isolate groups in JIT mode is
+  // in-development. We will start with very conservative settings. As we make
+  // more of our compiler, runtime as well as generated code re-entrant we'll
+  // graudally remove those restrictions.
+
+#if !defined(DART_PRCOMPILED_RUNTIME)
+  if (!FLAG_precompiled_mode && IsolateGroup::AreIsolateGroupsEnabled()) {
+    // Our compiler should not make rely on a global field being initialized at
+    // compile-time, since that compiled code might be re-used in another
+    // isolate that has not yet initialized the global field.
+    FLAG_fields_may_be_reset = true;
+  }
+#endif  // !defined(DART_PRCOMPILED_RUNTIME)
+
   initialized_ = true;
   return NULL;
 }
@@ -487,11 +507,7 @@ void Flags::PrintFlags() {
 
 #ifndef PRODUCT
 void Flags::PrintFlagToJSONArray(JSONArray* jsarr, const Flag* flag) {
-  if (!FLAG_support_service) {
-    return;
-  }
-  if (flag->IsUnrecognized() || flag->type_ == Flag::kFlagHandler ||
-      flag->type_ == Flag::kOptionHandler) {
+  if (flag->IsUnrecognized()) {
     return;
   }
   JSONObject jsflag(jsarr);
@@ -524,6 +540,20 @@ void Flags::PrintFlagToJSONArray(JSONArray* jsarr, const Flag* flag) {
       }
       break;
     }
+    case Flag::kFlagHandler: {
+      jsflag.AddProperty("_flagType", "Bool");
+      jsflag.AddProperty("valueAsString", flag->string_value_);
+      break;
+    }
+    case Flag::kOptionHandler: {
+      jsflag.AddProperty("_flagType", "String");
+      if (flag->string_value_ != nullptr) {
+        jsflag.AddProperty("valueAsString", flag->string_value_);
+      } else {
+        // valueAsString missing means NULL.
+      }
+      break;
+    }
     default:
       UNREACHABLE();
       break;
@@ -531,9 +561,6 @@ void Flags::PrintFlagToJSONArray(JSONArray* jsarr, const Flag* flag) {
 }
 
 void Flags::PrintJSON(JSONStream* js) {
-  if (!FLAG_support_service) {
-    return;
-  }
   JSONObject jsobj(js);
   jsobj.AddProperty("type", "FlagList");
   JSONArray jsarr(&jsobj, "flags");

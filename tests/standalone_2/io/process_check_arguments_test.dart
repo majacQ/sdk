@@ -2,12 +2,15 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import "package:expect/expect.dart";
 import "dart:io";
 import "process_test_util.dart";
 
 test(args) {
-  var future = Process.start(Platform.executable, args);
+  var future = Process.start(Platform.executable,
+      []..addAll(Platform.executableArguments)..addAll(args));
   future.then((process) {
     process.exitCode.then((exitCode) {
       Expect.equals(0, exitCode);
@@ -35,4 +38,5 @@ main() {
   test([scriptFile.path, '4', '0', 'a\tb', 'a']);
   test([scriptFile.path, '4', '0', 'a\tb', 'a\t\t\t\tb']);
   test([scriptFile.path, '4', '0', 'a\tb', 'a    b']);
+  test([scriptFile.path, '5', '0', 'a\tb', 'a    b', '']);
 }

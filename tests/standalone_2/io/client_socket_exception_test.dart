@@ -4,6 +4,8 @@
 //
 // Tests socket exceptions.
 
+// @dart = 2.9
+
 import "dart:async";
 import "dart:io";
 
@@ -47,7 +49,7 @@ void clientSocketExceptionTest() {
       } catch (ex) {
         wrongExceptionCaught = true;
       }
-      Expect.isFalse(exceptionCaught);
+      Expect.isTrue(exceptionCaught);
       Expect.isFalse(wrongExceptionCaught);
 
       // From here exceptions are expected.

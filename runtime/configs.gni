@@ -16,6 +16,8 @@ _base_fuchsia_config = [
   "$_dart_runtime:dart_os_fuchsia_config",
 ]
 
+_base_host_targeting_host_config = [ "$_dart_runtime:dart_config" ]
+
 _maybe_product = [ "$_dart_runtime:dart_maybe_product_config" ]
 
 _product = [ "$_dart_runtime:dart_product_config" ]
@@ -23,6 +25,10 @@ _product = [ "$_dart_runtime:dart_product_config" ]
 _jit_config = _base_config + _maybe_product
 
 _jit_product_config = _base_config + _product
+
+_base_libfuzzer_config = [ "$_dart_runtime:dart_libfuzzer_config" ]
+
+_libfuzzer_config = _base_config + _base_libfuzzer_config
 
 _precompiled_runtime_config =
     _base_config + [
@@ -36,63 +42,101 @@ _precompiled_runtime_product_config =
       "$_dart_runtime:dart_product_config",
     ]
 
-_nosnapshot_precompiler_base = [
-  "$_dart_runtime:dart_nosnapshot_config",
-  "$_dart_runtime:dart_precompiler_config",
-]
+_precompiler_base = [ "$_dart_runtime:dart_precompiler_config" ]
 
-_nosnapshot_with_precompiler_config =
-    _base_config + _nosnapshot_precompiler_base + _maybe_product
+_precompiler_config = _base_config + _precompiler_base + _maybe_product
 
-_nosnapshot_with_precompiler_product_config =
-    _base_config + _nosnapshot_precompiler_base + _product
+_precompiler_product_config = _base_config + _precompiler_base + _product
 
-_nosnapshot_with_precompiler_fuchsia_config =
-    _base_fuchsia_config + _nosnapshot_precompiler_base + _maybe_product
+_precompiler_fuchsia_config =
+    _base_fuchsia_config + _precompiler_base + _maybe_product
 
-_nosnapshot_with_precompiler_product_fuchsia_config =
-    _base_fuchsia_config + _nosnapshot_precompiler_base + _product
+_precompiler_product_fuchsia_config =
+    _base_fuchsia_config + _precompiler_base + _product
+
+_precompiler_host_targeting_host_config =
+    _base_host_targeting_host_config + _precompiler_base + _maybe_product
+
+_precompiler_product_host_targeting_host_config =
+    _base_host_targeting_host_config + _precompiler_base + _product
 
 _all_configs = [
   {
     suffix = "_jit"
     configs = _jit_config
     snapshot = true
+    compiler = true
+    is_product = false
   },
   {
     suffix = "_jit_product"
     configs = _jit_product_config
     snapshot = true
+    compiler = true
+    is_product = true
   },
   {
     suffix = "_precompiled_runtime"
     configs = _precompiled_runtime_config
     snapshot = true
+    compiler = false
+    is_product = false
   },
   {
     suffix = "_precompiled_runtime_product"
     configs = _precompiled_runtime_product_config
     snapshot = true
+    compiler = false
+    is_product = true
   },
   {
-    suffix = "_nosnapshot_with_precompiler"
-    configs = _nosnapshot_with_precompiler_config
+    suffix = "_precompiler"
+    configs = _precompiler_config
     snapshot = false
+    compiler = true
+    is_product = false
   },
   {
-    suffix = "_nosnapshot_with_precompiler_product"
-    configs = _nosnapshot_with_precompiler_product_config
+    suffix = "_precompiler_product"
+    configs = _precompiler_product_config
     snapshot = false
+    compiler = true
+    is_product = true
   },
   {
-    suffix = "_nosnapshot_with_precompiler_fuchsia"
-    configs = _nosnapshot_with_precompiler_fuchsia_config
+    suffix = "_precompiler_fuchsia"
+    configs = _precompiler_fuchsia_config
     snapshot = false
+    compiler = true
+    is_product = false
   },
   {
-    suffix = "_nosnapshot_with_precompiler_product_fuchsia"
-    configs = _nosnapshot_with_precompiler_product_fuchsia_config
+    suffix = "_precompiler_product_fuchsia"
+    configs = _precompiler_product_fuchsia_config
     snapshot = false
+    compiler = true
+    is_product = true
+  },
+  {
+    suffix = "_precompiler_host_targeting_host"
+    configs = _precompiler_host_targeting_host_config
+    snapshot = false
+    compiler = true
+    is_product = false
+  },
+  {
+    suffix = "_precompiler_product_host_targeting_host"
+    configs = _precompiler_product_host_targeting_host_config
+    snapshot = false
+    compiler = true
+    is_product = true
+  },
+  {
+    suffix = "_libfuzzer"
+    configs = _libfuzzer_config
+    snapshot = true
+    compiler = true
+    is_product = false
   },
 ]
 
@@ -127,12 +171,6 @@ _all_configs = [
 #  snapshot_sources (optional):
 #    Additional sources to include when the configuration has a snapshot.
 #
-#  nosnapshot_sources (optional):
-#    Additional sources to include when the configuration does not have a
-#    snapshot (that is, one of the "nosnapshot" configurations above).
-#
-#  nosnapshot_deps (optional):
-#    Similar to nosnapshot_sources, but for deps.
 template("library_for_all_configs") {
   assert(defined(invoker.target_type))
   extra_configs = []
@@ -147,6 +185,14 @@ template("library_for_all_configs") {
   if (defined(invoker.extra_deps)) {
     extra_deps += invoker.extra_deps
   }
+  extra_product_deps = []
+  if (defined(invoker.extra_product_deps)) {
+    extra_product_deps += invoker.extra_product_deps
+  }
+  extra_nonproduct_deps = []
+  if (defined(invoker.extra_nonproduct_deps)) {
+    extra_nonproduct_deps += invoker.extra_nonproduct_deps
+  }
   foreach(conf, _all_configs) {
     target(invoker.target_type, "${target_name}${conf.suffix}") {
       forward_variables_from(invoker,
@@ -156,34 +202,75 @@ template("library_for_all_configs") {
                                "extra_deps",
                                "configurable_deps",
                              ])
-      if (is_fuchsia) {
-        configs -= [ "//build/config:symbol_visibility_hidden" ]
-      }
       configs += conf.configs + extra_configs
       configured_deps = []
       foreach(dep, configurable_deps) {
         configured_deps += [ "${dep}${conf.suffix}" ]
       }
+      if (defined(compiler_lib)) {
+        if (conf.compiler) {
+          configured_deps += [ "${compiler_lib}${conf.suffix}" ]
+        } else {
+          not_needed([ "compiler_lib" ])
+        }
+      }
       deps = configured_deps + extra_deps
+      if (conf.is_product) {
+        deps += extra_product_deps
+      } else {
+        deps += extra_nonproduct_deps
+      }
       if (conf.snapshot) {
         if (defined(snapshot_sources)) {
           sources += snapshot_sources
-        }
-        if (defined(nosnapshot_sources)) {
-          not_needed([ "nosnapshot_sources" ])
-        }
-        if (defined(nosnapshot_deps)) {
-          not_needed([ "nosnapshot_deps" ])
         }
       } else {
         if (defined(snapshot_sources)) {
           not_needed([ "snapshot_sources" ])
         }
-        if (defined(nosnapshot_sources)) {
-          sources += nosnapshot_sources
+      }
+    }
+  }
+}
+
+template("library_for_all_configs_with_compiler") {
+  assert(defined(invoker.target_type))
+  extra_configs = []
+  if (defined(invoker.extra_configs)) {
+    extra_configs += invoker.extra_configs
+  }
+  configurable_deps = []
+  if (defined(invoker.configurable_deps)) {
+    configurable_deps += invoker.configurable_deps
+  }
+  extra_deps = []
+  if (defined(invoker.extra_deps)) {
+    extra_deps += invoker.extra_deps
+  }
+  foreach(conf, _all_configs) {
+    if (conf.compiler) {
+      target(invoker.target_type, "${target_name}${conf.suffix}") {
+        forward_variables_from(invoker,
+                               "*",
+                               [
+                                 "extra_configs",
+                                 "extra_deps",
+                                 "configurable_deps",
+                               ])
+        configs += conf.configs + extra_configs
+        configured_deps = []
+        foreach(dep, configurable_deps) {
+          configured_deps += [ "${dep}${conf.suffix}" ]
         }
-        if (defined(nosnapshot_deps)) {
-          deps += nosnapshot_deps
+        deps = configured_deps + extra_deps
+        if (conf.snapshot) {
+          if (defined(snapshot_sources)) {
+            sources += snapshot_sources
+          }
+        } else {
+          if (defined(snapshot_sources)) {
+            not_needed([ "snapshot_sources" ])
+          }
         }
       }
     }

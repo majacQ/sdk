@@ -3,7 +3,7 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:observatory/service_io.dart';
-import 'package:unittest/unittest.dart';
+import 'package:test/test.dart';
 import 'test_helper.dart';
 import 'dart:io' show WebSocket;
 import 'dart:convert' show jsonDecode, jsonEncode;
@@ -11,10 +11,10 @@ import 'dart:async' show Future, Stream, StreamController;
 
 var tests = <IsolateTest>[
   (Isolate isolate) async {
-    VM vm = isolate.owner;
+    VM vm = isolate.owner as VM;
 
     final serviceEvents =
-        (await vm.getEventStream('_Service')).asBroadcastStream();
+        (await vm.getEventStream('Service')).asBroadcastStream();
 
     WebSocket _socket =
         await WebSocket.connect((vm as WebSocketVM).target.networkAddress);
@@ -23,7 +23,7 @@ var tests = <IsolateTest>[
 
     // Avoid to manually encode and decode messages from the stream
     Stream<String> stream = socket.stream.map(jsonEncode);
-    stream.cast<Object>().pipe(_socket);
+    stream.cast<dynamic>().pipe(_socket);
     dynamic _decoder(dynamic obj) {
       return jsonDecode(obj);
     }
@@ -43,7 +43,7 @@ var tests = <IsolateTest>[
     socket.add({
       'jsonrpc': '2.0',
       'id': 1,
-      'method': '_registerService',
+      'method': 'registerService',
       'params': {'service': serviceName, 'alias': serviceAlias}
     });
 
@@ -89,4 +89,7 @@ var tests = <IsolateTest>[
   },
 ];
 
-main(args) => runIsolateTests(args, tests);
+main(args) => runIsolateTests(
+      args,
+      tests,
+    );

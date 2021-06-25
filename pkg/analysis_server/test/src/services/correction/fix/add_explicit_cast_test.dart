@@ -7,11 +7,13 @@ import 'package:analyzer/src/error/codes.dart';
 import 'package:analyzer_plugin/utilities/fixes/fixes.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
+import '../../../../abstract_context.dart';
 import 'fix_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(AddExplicitCastTest);
+    defineReflectiveTests(AddExplicitCastWithNullSafetyTest);
   });
 }
 
@@ -20,8 +22,8 @@ class AddExplicitCastTest extends FixProcessorTest {
   @override
   FixKind get kind => DartFixKind.ADD_EXPLICIT_CAST;
 
-  test_as() async {
-    await resolveTestUnit('''
+  Future<void> test_as() async {
+    await resolveTestCode('''
 f(A a) {
   C c = a as B;
   print(c);
@@ -33,8 +35,8 @@ class C {}
     await assertNoFix();
   }
 
-  test_assignment_general() async {
-    await resolveTestUnit('''
+  Future<void> test_assignment_general() async {
+    await resolveTestCode('''
 f(A a) {
   B b;
   b = a;
@@ -54,8 +56,9 @@ class B {}
 ''');
   }
 
-  test_assignment_general_all() async {
-    await resolveTestUnit('''
+  @FailingTest(issue: 'https://github.com/dart-lang/sdk/issues/45026')
+  Future<void> test_assignment_general_all() async {
+    await resolveTestCode('''
 f(A a) {
   B b, b2;
   b = a;
@@ -64,7 +67,7 @@ f(A a) {
 class A {}
 class B {}
 ''');
-    await assertHasFixAllFix(StaticTypeWarningCode.INVALID_ASSIGNMENT, '''
+    await assertHasFixAllFix(CompileTimeErrorCode.INVALID_ASSIGNMENT, '''
 f(A a) {
   B b, b2;
   b = a as B;
@@ -75,8 +78,8 @@ class B {}
 ''');
   }
 
-  test_assignment_list() async {
-    await resolveTestUnit('''
+  Future<void> test_assignment_list() async {
+    await resolveTestCode('''
 f(List<A> a) {
   List<B> b;
   b = a.where((e) => e is B).toList();
@@ -96,8 +99,9 @@ class B {}
 ''');
   }
 
-  test_assignment_list_all() async {
-    await resolveTestUnit('''
+  @FailingTest(issue: 'https://github.com/dart-lang/sdk/issues/45026')
+  Future<void> test_assignment_list_all() async {
+    await resolveTestCode('''
 f(List<A> a) {
   List<B> b, b2;
   b = a.where((e) => e is B).toList();
@@ -106,7 +110,7 @@ f(List<A> a) {
 class A {}
 class B {}
 ''');
-    await assertHasFixAllFix(StaticTypeWarningCode.INVALID_ASSIGNMENT, '''
+    await assertHasFixAllFix(CompileTimeErrorCode.INVALID_ASSIGNMENT, '''
 f(List<A> a) {
   List<B> b, b2;
   b = a.where((e) => e is B).cast<B>().toList();
@@ -117,8 +121,8 @@ class B {}
 ''');
   }
 
-  test_assignment_map() async {
-    await resolveTestUnit('''
+  Future<void> test_assignment_map() async {
+    await resolveTestCode('''
 f(Map<A, B> a) {
   Map<B, A> b;
   b = a;
@@ -138,8 +142,9 @@ class B {}
 ''');
   }
 
-  test_assignment_map_all() async {
-    await resolveTestUnit('''
+  @FailingTest(issue: 'https://github.com/dart-lang/sdk/issues/45026')
+  Future<void> test_assignment_map_all() async {
+    await resolveTestCode('''
 f(Map<A, B> a) {
   Map<B, A> b, b2;
   b = a;
@@ -148,7 +153,7 @@ f(Map<A, B> a) {
 class A {}
 class B {}
 ''');
-    await assertHasFixAllFix(StaticTypeWarningCode.INVALID_ASSIGNMENT, '''
+    await assertHasFixAllFix(CompileTimeErrorCode.INVALID_ASSIGNMENT, '''
 f(Map<A, B> a) {
   Map<B, A> b, b2;
   b = a.cast<B, A>();
@@ -159,8 +164,8 @@ class B {}
 ''');
   }
 
-  test_assignment_needsParens() async {
-    await resolveTestUnit('''
+  Future<void> test_assignment_needsParens() async {
+    await resolveTestCode('''
 f(A a) {
   B b;
   b = a..m();
@@ -184,8 +189,9 @@ class B {}
 ''');
   }
 
-  test_assignment_needsParens_all() async {
-    await resolveTestUnit('''
+  @FailingTest(issue: 'https://github.com/dart-lang/sdk/issues/45026')
+  Future<void> test_assignment_needsParens_all() async {
+    await resolveTestCode('''
 f(A a) {
   B b, b2;
   b = a..m();
@@ -196,7 +202,7 @@ class A {
 }
 class B {}
 ''');
-    await assertHasFixAllFix(StaticTypeWarningCode.INVALID_ASSIGNMENT, '''
+    await assertHasFixAllFix(CompileTimeErrorCode.INVALID_ASSIGNMENT, '''
 f(A a) {
   B b, b2;
   b = (a..m()) as B;
@@ -209,8 +215,8 @@ class B {}
 ''');
   }
 
-  test_assignment_set() async {
-    await resolveTestUnit('''
+  Future<void> test_assignment_set() async {
+    await resolveTestCode('''
 f(Set<A> a) {
   Set<B> b;
   b = a;
@@ -230,8 +236,9 @@ class B {}
 ''');
   }
 
-  test_assignment_set_all() async {
-    await resolveTestUnit('''
+  @FailingTest(issue: 'https://github.com/dart-lang/sdk/issues/45026')
+  Future<void> test_assignment_set_all() async {
+    await resolveTestCode('''
 f(Set<A> a) {
   Set<B> b, b2;
   b = a;
@@ -240,7 +247,7 @@ f(Set<A> a) {
 class A {}
 class B {}
 ''');
-    await assertHasFixAllFix(StaticTypeWarningCode.INVALID_ASSIGNMENT, '''
+    await assertHasFixAllFix(CompileTimeErrorCode.INVALID_ASSIGNMENT, '''
 f(Set<A> a) {
   Set<B> b, b2;
   b = a.cast<B>();
@@ -251,8 +258,8 @@ class B {}
 ''');
   }
 
-  test_cast() async {
-    await resolveTestUnit('''
+  Future<void> test_cast() async {
+    await resolveTestCode('''
 f(List<A> a) {
   List<B> b = a.cast<A>();
   print(b);
@@ -263,8 +270,8 @@ class B {}
     await assertNoFix();
   }
 
-  test_declaration_general() async {
-    await resolveTestUnit('''
+  Future<void> test_declaration_general() async {
+    await resolveTestCode('''
 f(A a) {
   B b = a;
   print(b);
@@ -282,8 +289,9 @@ class B {}
 ''');
   }
 
-  test_declaration_general_all() async {
-    await resolveTestUnit('''
+  @FailingTest(issue: 'https://github.com/dart-lang/sdk/issues/45026')
+  Future<void> test_declaration_general_all() async {
+    await resolveTestCode('''
 f(A a) {
   B b = a;
   B b2 = a;
@@ -291,7 +299,7 @@ f(A a) {
 class A {}
 class B {}
 ''');
-    await assertHasFixAllFix(StaticTypeWarningCode.INVALID_ASSIGNMENT, '''
+    await assertHasFixAllFix(CompileTimeErrorCode.INVALID_ASSIGNMENT, '''
 f(A a) {
   B b = a as B;
   B b2 = a as B;
@@ -301,8 +309,8 @@ class B {}
 ''');
   }
 
-  test_declaration_list() async {
-    await resolveTestUnit('''
+  Future<void> test_declaration_list() async {
+    await resolveTestCode('''
 f(List<A> a) {
   List<B> b = a.where((e) => e is B).toList();
   print(b);
@@ -320,8 +328,9 @@ class B {}
 ''');
   }
 
-  test_declaration_list_all() async {
-    await resolveTestUnit('''
+  @FailingTest(issue: 'https://github.com/dart-lang/sdk/issues/45026')
+  Future<void> test_declaration_list_all() async {
+    await resolveTestCode('''
 f(List<A> a) {
   List<B> b = a.where((e) => e is B).toList();
   List<B> b2 = a.where((e) => e is B).toList();
@@ -329,7 +338,7 @@ f(List<A> a) {
 class A {}
 class B {}
 ''');
-    await assertHasFixAllFix(StaticTypeWarningCode.INVALID_ASSIGNMENT, '''
+    await assertHasFixAllFix(CompileTimeErrorCode.INVALID_ASSIGNMENT, '''
 f(List<A> a) {
   List<B> b = a.where((e) => e is B).cast<B>().toList();
   List<B> b2 = a.where((e) => e is B).cast<B>().toList();
@@ -339,8 +348,8 @@ class B {}
 ''');
   }
 
-  test_declaration_map() async {
-    await resolveTestUnit('''
+  Future<void> test_declaration_map() async {
+    await resolveTestCode('''
 f(Map<A, B> a) {
   Map<B, A> b = a;
   print(b);
@@ -358,8 +367,9 @@ class B {}
 ''');
   }
 
-  test_declaration_map_all() async {
-    await resolveTestUnit('''
+  @FailingTest(issue: 'https://github.com/dart-lang/sdk/issues/45026')
+  Future<void> test_declaration_map_all() async {
+    await resolveTestCode('''
 f(Map<A, B> a) {
   Map<B, A> b = a;
   Map<B, A> b2 = a;
@@ -367,7 +377,7 @@ f(Map<A, B> a) {
 class A {}
 class B {}
 ''');
-    await assertHasFixAllFix(StaticTypeWarningCode.INVALID_ASSIGNMENT, '''
+    await assertHasFixAllFix(CompileTimeErrorCode.INVALID_ASSIGNMENT, '''
 f(Map<A, B> a) {
   Map<B, A> b = a.cast<B, A>();
   Map<B, A> b2 = a.cast<B, A>();
@@ -377,8 +387,8 @@ class B {}
 ''');
   }
 
-  test_declaration_needsParens() async {
-    await resolveTestUnit('''
+  Future<void> test_declaration_needsParens() async {
+    await resolveTestCode('''
 f(A a) {
   B b = a..m();
   print(b);
@@ -400,8 +410,9 @@ class B {}
 ''');
   }
 
-  test_declaration_needsParens_all() async {
-    await resolveTestUnit('''
+  @FailingTest(issue: 'https://github.com/dart-lang/sdk/issues/45026')
+  Future<void> test_declaration_needsParens_all() async {
+    await resolveTestCode('''
 f(A a) {
   B b = a..m();
   B b2 = a..m();
@@ -411,7 +422,7 @@ class A {
 }
 class B {}
 ''');
-    await assertHasFixAllFix(StaticTypeWarningCode.INVALID_ASSIGNMENT, '''
+    await assertHasFixAllFix(CompileTimeErrorCode.INVALID_ASSIGNMENT, '''
 f(A a) {
   B b = (a..m()) as B;
   B b2 = (a..m()) as B;
@@ -423,8 +434,8 @@ class B {}
 ''');
   }
 
-  test_declaration_set() async {
-    await resolveTestUnit('''
+  Future<void> test_declaration_set() async {
+    await resolveTestCode('''
 f(Set<A> a) {
   Set<B> b = a;
   print(b);
@@ -442,8 +453,9 @@ class B {}
 ''');
   }
 
-  test_declaration_set_all() async {
-    await resolveTestUnit('''
+  @FailingTest(issue: 'https://github.com/dart-lang/sdk/issues/45026')
+  Future<void> test_declaration_set_all() async {
+    await resolveTestCode('''
 f(Set<A> a) {
   Set<B> b = a;
   Set<B> b2 = a;
@@ -451,7 +463,7 @@ f(Set<A> a) {
 class A {}
 class B {}
 ''');
-    await assertHasFixAllFix(StaticTypeWarningCode.INVALID_ASSIGNMENT, '''
+    await assertHasFixAllFix(CompileTimeErrorCode.INVALID_ASSIGNMENT, '''
 f(Set<A> a) {
   Set<B> b = a.cast<B>();
   Set<B> b2 = a.cast<B>();
@@ -459,5 +471,40 @@ f(Set<A> a) {
 class A {}
 class B {}
 ''');
+  }
+
+  Future<void> test_notExpression_incomplete() async {
+    await resolveTestCode(r'''
+void foo(int a) {
+  a = a < ;
+}
+''');
+    await assertNoFix(
+      errorFilter: (e) {
+        return e.errorCode == CompileTimeErrorCode.INVALID_ASSIGNMENT;
+      },
+    );
+  }
+}
+
+@reflectiveTest
+class AddExplicitCastWithNullSafetyTest extends AddExplicitCastTest
+    with WithNullSafetyMixin {
+  Future<void> test_assignment_null() async {
+    await resolveTestCode('''
+void f(int x) {
+  x = null;
+}
+''');
+    await assertNoFix();
+  }
+
+  Future<void> test_assignment_nullable() async {
+    await resolveTestCode('''
+void f(int x, int? y) {
+  x = y;
+}
+''');
+    await assertNoFix();
   }
 }

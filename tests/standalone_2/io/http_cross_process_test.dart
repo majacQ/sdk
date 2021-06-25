@@ -3,6 +3,8 @@
 // BSD-style license that can be found in the LICENSE file.
 //
 
+// @dart = 2.9
+
 import 'dart:async';
 import 'dart:io';
 import "package:expect/expect.dart";
@@ -27,15 +29,14 @@ void main(List<String> args) {
 Future makeServer() {
   return HttpServer.bind(InternetAddress.loopbackIPv4, 0).then((server) {
     server.listen((request) {
-      request.pipe(request.response);
+      request.cast<List<int>>().pipe(request.response);
     });
     return server;
   });
 }
 
 Future runClientProcess(int port) {
-  return Process
-      .run(
+  return Process.run(
           Platform.executable,
           []
             ..addAll(Platform.executableArguments)

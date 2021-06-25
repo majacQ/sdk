@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 // Sanity check on the growing behavior of a growable list.
 
 import "package:expect/expect.dart";
@@ -90,8 +92,9 @@ void testConstructor() {
   testGrowable(new List<int>()..length = 5);
   testGrowable(new List<int>.filled(5, null, growable: true));
   Expect.throwsArgumentError(() => new List<int>(-1), "-1");
-  // There must be limits. Fix this test if we ever allow 10^30 elements.
-  Expect.throwsArgumentError(() => new List<int>(0x7fffffffffffffff), "bignum");
+  // There must be limits. Fix this test if we ever allow 2^63 elements.
+  Expect.throws(() => new List<int>(0x7ffffffffffff000),
+      (e) => e is OutOfMemoryError || e is ArgumentError, "bignum");
   Expect.throwsArgumentError(() => new List<int>(null), "null");
   testThrowsOrTypeError(
       () => new List([] as Object), // Cast to avoid warning.

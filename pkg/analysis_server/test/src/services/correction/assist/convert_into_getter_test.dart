@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'assist_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(ConvertIntoGetterTest);
   });
@@ -19,9 +19,9 @@ class ConvertIntoGetterTest extends AssistProcessorTest {
   @override
   AssistKind get kind => DartAssistKind.CONVERT_INTO_GETTER;
 
-  test_noInitializer() async {
+  Future<void> test_noInitializer() async {
     verifyNoTestUnitErrors = false;
-    await resolveTestUnit('''
+    await resolveTestCode('''
 class A {
   final int foo;
 }
@@ -29,8 +29,8 @@ class A {
     await assertNoAssistAt('foo');
   }
 
-  test_notFinal() async {
-    await resolveTestUnit('''
+  Future<void> test_notFinal() async {
+    await resolveTestCode('''
 class A {
   int foo = 1;
 }
@@ -38,8 +38,8 @@ class A {
     await assertNoAssistAt('foo');
   }
 
-  test_notSingleField() async {
-    await resolveTestUnit('''
+  Future<void> test_notSingleField() async {
+    await resolveTestCode('''
 class A {
   final int foo = 1, bar = 2;
 }
@@ -47,8 +47,8 @@ class A {
     await assertNoAssistAt('foo');
   }
 
-  test_noType() async {
-    await resolveTestUnit('''
+  Future<void> test_noType() async {
+    await resolveTestCode('''
 class A {
   final foo = 42;
 }
@@ -60,8 +60,8 @@ class A {
 ''');
   }
 
-  test_type() async {
-    await resolveTestUnit('''
+  Future<void> test_type() async {
+    await resolveTestCode('''
 const myAnnotation = const Object();
 class A {
   @myAnnotation

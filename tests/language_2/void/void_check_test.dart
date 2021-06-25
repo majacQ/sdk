@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 // Tests that `void` accepts any value and won't throw on non-`null` values.
 // The test is set up in a way that `--trust-type-annotations` and type
 // propagation must not assume that `void` is `null` either.
@@ -23,7 +25,7 @@ class B extends A {
 // Makes the typing cleaner: the return type here is `dynamic` and we are
 // guaranteed that there won't be any warnings.
 // Dart2js can still infer the type by itself.
-@NoInline()
+@pragma('dart2js:noInline')
 callFoo(A a) => a.foo();
 
 main() {

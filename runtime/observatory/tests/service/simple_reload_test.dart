@@ -1,6 +1,8 @@
 // Copyright (c) 2018, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
+//
+// OtherResources=simple_reload/v1/main.dart simple_reload/v2/main.dart
 
 import 'test_helper.dart';
 import 'dart:async';
@@ -10,7 +12,7 @@ import 'dart:io';
 import 'service_test_common.dart';
 import 'package:observatory/service.dart';
 import 'package:path/path.dart' as path;
-import 'package:unittest/unittest.dart';
+import 'package:test/test.dart';
 
 // Chop off the file name.
 String baseDirectory = path.dirname(Platform.script.path) + '/';
@@ -32,9 +34,9 @@ Future<String> invokeTest(Isolate isolate) async {
   await isolate.reload();
   Library lib = isolate.rootLibrary;
   await lib.load();
-  Instance result = await lib.evaluate('test()');
+  Instance result = await lib.evaluate('test()') as Instance;
   expect(result.isString, isTrue);
-  return result.valueAsString;
+  return result.valueAsString as String;
 }
 
 var tests = <IsolateTest>[

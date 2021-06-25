@@ -158,11 +158,11 @@ class HtmlEscape extends Converter<String, String> {
   ///
   /// Returns `null` if no changes were necessary, otherwise returns
   /// the converted string.
-  String _convert(String text, int start, int end) {
-    StringBuffer result;
+  String? _convert(String text, int start, int end) {
+    StringBuffer? result;
     for (var i = start; i < end; i++) {
       var ch = text[i];
-      String replacement;
+      String? replacement;
       switch (ch) {
         case '&':
           replacement = '&amp;';

@@ -3,9 +3,10 @@
 // BSD-style license that can be found in the LICENSE file.
 // SharedOptions=--supermixin
 
+// @dart = 2.9
+
 library front_end.test.standard_file_system_test;
 
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
 import 'dart:math' show Random;
@@ -25,8 +26,8 @@ main() {
   });
 }
 
-const Matcher _throwsFileSystemException =
-    const Throws(const isInstanceOf<FileSystemException>());
+final Matcher _throwsFileSystemException =
+    throwsA(const TypeMatcher<FileSystemException>());
 
 @reflectiveTest
 class DirectoryTest extends _BaseTest {
@@ -197,7 +198,7 @@ class StandardFileSystemTest extends _BaseTest {
     ]) {
       if (!uri.path.startsWith('/')) {
         expect(() => StandardFileSystem.instance.entityForUri(uri),
-            throwsA(new isInstanceOf<Error>()));
+            throwsA(const TypeMatcher<Error>()));
       }
     }
   }

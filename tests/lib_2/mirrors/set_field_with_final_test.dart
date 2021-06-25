@@ -2,9 +2,10 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library test.set_field_with_final;
 
-@MirrorsUsed(targets: "test.set_field_with_final")
 import 'dart:mirrors';
 import 'package:expect/expect.dart';
 
@@ -27,7 +28,7 @@ main() {
   Expect.throwsNoSuchMethodError(() => cm.setField(#staticFinal, 9));
   Expect.throwsNoSuchMethodError(() => cm.setField(#staticGetter, 10));
 
-  LibraryMirror lm = cm.owner;
+  LibraryMirror lm = cm.owner as LibraryMirror;
   Expect.throwsNoSuchMethodError(() => lm.setField(#toplevelFinal, 11));
   Expect.throwsNoSuchMethodError(() => lm.setField(#toplevelGetter, 12));
 }

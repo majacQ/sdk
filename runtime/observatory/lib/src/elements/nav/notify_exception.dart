@@ -5,21 +5,19 @@
 import 'dart:html';
 import 'dart:async';
 import 'package:observatory/src/elements/helpers/rendering_scheduler.dart';
-import 'package:observatory/src/elements/helpers/tag.dart';
+import 'package:observatory/src/elements/helpers/custom_element.dart';
 import 'package:observatory/src/elements/helpers/uris.dart';
 import 'package:observatory/models.dart' show ConnectionException;
 
 class ExceptionDeleteEvent {
   final dynamic exception;
-  final StackTrace stacktrace;
+  final StackTrace? stacktrace;
 
   ExceptionDeleteEvent(this.exception, {this.stacktrace});
 }
 
-class NavNotifyExceptionElement extends HtmlElement implements Renderable {
-  static const tag = const Tag<NavNotifyExceptionElement>('nav-exception');
-
-  RenderingScheduler _r;
+class NavNotifyExceptionElement extends CustomElement implements Renderable {
+  late RenderingScheduler<NavNotifyExceptionElement> _r;
 
   Stream<RenderedEvent<NavNotifyExceptionElement>> get onRendered =>
       _r.onRendered;
@@ -28,23 +26,23 @@ class NavNotifyExceptionElement extends HtmlElement implements Renderable {
       new StreamController<ExceptionDeleteEvent>.broadcast();
   Stream<ExceptionDeleteEvent> get onDelete => _onDelete.stream;
 
-  dynamic _exception;
-  StackTrace _stacktrace;
+  late dynamic _exception;
+  StackTrace? _stacktrace;
 
   dynamic get exception => _exception;
-  StackTrace get stacktrace => _stacktrace;
+  StackTrace? get stacktrace => _stacktrace;
 
   factory NavNotifyExceptionElement(dynamic exception,
-      {StackTrace stacktrace: null, RenderingQueue queue}) {
+      {StackTrace? stacktrace: null, RenderingQueue? queue}) {
     assert(exception != null);
-    NavNotifyExceptionElement e = document.createElement(tag.name);
+    NavNotifyExceptionElement e = new NavNotifyExceptionElement.created();
     e._r = new RenderingScheduler<NavNotifyExceptionElement>(e, queue: queue);
     e._exception = exception;
     e._stacktrace = stacktrace;
     return e;
   }
 
-  NavNotifyExceptionElement.created() : super.created();
+  NavNotifyExceptionElement.created() : super.created('nav-exception');
 
   @override
   void attached() {

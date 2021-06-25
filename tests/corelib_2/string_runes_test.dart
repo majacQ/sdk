@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import "package:expect/expect.dart";
 
 main() {
@@ -41,16 +43,16 @@ main() {
 
     // Reset, moveNext.
     it.reset(1);
-    Expect.equals(null, it.rawIndex);
-    Expect.equals(null, it.current);
+    Expect.equals(-1, it.rawIndex);
+    Expect.equals(-1, it.current);
     it.moveNext();
     Expect.equals(1, it.rawIndex);
     Expect.equals(expectedRunes[1], it.current);
 
     // Reset, movePrevious.
     it.reset(1);
-    Expect.equals(null, it.rawIndex);
-    Expect.equals(null, it.current);
+    Expect.equals(-1, it.rawIndex);
+    Expect.equals(-1, it.current);
     it.movePrevious();
     Expect.equals(0, it.rawIndex);
     Expect.equals(expectedRunes[0], it.current);

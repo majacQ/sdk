@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 // This test uses the multi-test "ok" feature to create two positive tests from
 // one file. One of these tests fail on dart2js, but pass on the VM, or vice
 // versa.
@@ -17,12 +19,12 @@ import 'model.dart';
 import 'stringify.dart';
 
 class Mixin {
-  int i;
+  int i = 0;
   m() {}
 }
 
 class Mixin2 {
-  int i2;
+  int i2 = 0;
   m2() {}
 }
 
@@ -66,7 +68,9 @@ constructorsOf(ClassMirror cm) {
 
 checkClass(Type type, List<String> expectedSuperclasses) {
   int i = 0;
-  for (var cls = reflectClass(type); cls != null; cls = cls.superclass) {
+  for (ClassMirror cls = reflectClass(type);
+      cls != null;
+      cls = cls.superclass) {
     expect(expectedSuperclasses[i++], cls);
   }
   Expect.equals(i, expectedSuperclasses.length, '$type');

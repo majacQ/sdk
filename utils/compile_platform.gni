@@ -3,6 +3,7 @@
 # BSD-style license that can be found in the LICENSE file.
 
 import("../build/dart/dart_action.gni")
+import("../sdk_args.gni")
 
 _dart_root = get_path_info("..", "abspath")
 
@@ -34,6 +35,11 @@ template("compile_platform") {
         invoker.add_implicit_vm_platform_dependency
   }
 
+  outline = "vm_outline_strong.dill"
+  if (defined(invoker.outline)) {
+    outline = invoker.outline
+  }
+
   prebuilt_dart_action(target_name) {
     script = "$_dart_root/pkg/front_end/tool/_fasta/compile_platform.dart"
 
@@ -41,10 +47,11 @@ template("compile_platform") {
 
     outputs = invoker.outputs
 
+    vm_args = [ "-Dsdk_hash=$sdk_hash" ]
+
     inputs = []
     deps = []
     args = []
-
     if (defined(invoker.deps)) {
       deps += invoker.deps
     }
@@ -54,7 +61,7 @@ template("compile_platform") {
     }
 
     if (add_implicit_vm_platform_dependency) {
-      inputs += [ "$root_out_dir/vm_outline_strong.dill" ]
+      inputs += [ "$root_out_dir/$outline" ]
       deps += [ "$_dart_root/runtime/vm:vm_platform" ]
     }
     depfile = outputs[0] + ".d"
@@ -72,8 +79,7 @@ template("compile_platform") {
       args +=
           [ rebase_path(invoker.libraries_specification_uri, root_build_dir) ]
     }
-    args +=
-        [ rebase_path("$root_out_dir/vm_outline_strong.dill", root_build_dir) ]
+    args += [ rebase_path("$root_out_dir/$outline", root_build_dir) ]
     args += rebase_path(outputs, root_build_dir)
   }
 }

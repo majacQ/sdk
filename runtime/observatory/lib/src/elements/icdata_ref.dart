@@ -6,34 +6,32 @@ import 'dart:html';
 import 'dart:async';
 import 'package:observatory/models.dart' as M show IsolateRef, ICDataRef;
 import 'package:observatory/src/elements/helpers/rendering_scheduler.dart';
-import 'package:observatory/src/elements/helpers/tag.dart';
+import 'package:observatory/src/elements/helpers/custom_element.dart';
 import 'package:observatory/src/elements/helpers/uris.dart';
 
-class ICDataRefElement extends HtmlElement implements Renderable {
-  static const tag = const Tag<ICDataRefElement>('icdata-ref');
-
-  RenderingScheduler<ICDataRefElement> _r;
+class ICDataRefElement extends CustomElement implements Renderable {
+  late RenderingScheduler<ICDataRefElement> _r;
 
   Stream<RenderedEvent<ICDataRefElement>> get onRendered => _r.onRendered;
 
-  M.IsolateRef _isolate;
-  M.ICDataRef _icdata;
+  late M.IsolateRef _isolate;
+  late M.ICDataRef _icdata;
 
   M.IsolateRef get isolate => _isolate;
   M.ICDataRef get icdata => _icdata;
 
   factory ICDataRefElement(M.IsolateRef isolate, M.ICDataRef icdata,
-      {RenderingQueue queue}) {
+      {RenderingQueue? queue}) {
     assert(isolate != null);
     assert(icdata != null);
-    ICDataRefElement e = document.createElement(tag.name);
+    ICDataRefElement e = new ICDataRefElement.created();
     e._r = new RenderingScheduler<ICDataRefElement>(e, queue: queue);
     e._isolate = isolate;
     e._icdata = icdata;
     return e;
   }
 
-  ICDataRefElement.created() : super.created();
+  ICDataRefElement.created() : super.created('icdata-ref');
 
   @override
   void attached() {

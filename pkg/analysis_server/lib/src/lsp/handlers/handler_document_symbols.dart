@@ -2,12 +2,10 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'dart:async';
-import 'dart:collection';
-
 import 'package:analysis_server/lsp_protocol/protocol_generated.dart';
 import 'package:analysis_server/lsp_protocol/protocol_special.dart';
 import 'package:analysis_server/src/computer/computer_outline.dart';
+import 'package:analysis_server/src/lsp/client_capabilities.dart';
 import 'package:analysis_server/src/lsp/handlers/handlers.dart';
 import 'package:analysis_server/src/lsp/lsp_analysis_server.dart';
 import 'package:analysis_server/src/lsp/mapping.dart';
@@ -15,139 +13,126 @@ import 'package:analysis_server/src/protocol_server.dart' show Outline;
 import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/source/line_info.dart';
 
-// If the client does not provide capabilities.documentSymbol.symbolKind.valueSet
-// then we must never send a kind that's not in this list.
-final defaultSupportedSymbolKinds = new HashSet<SymbolKind>.of([
-  SymbolKind.File,
-  SymbolKind.Module,
-  SymbolKind.Namespace,
-  SymbolKind.Package,
-  SymbolKind.Class,
-  SymbolKind.Method,
-  SymbolKind.Property,
-  SymbolKind.Field,
-  SymbolKind.Constructor,
-  SymbolKind.Enum,
-  SymbolKind.Interface,
-  SymbolKind.Function,
-  SymbolKind.Variable,
-  SymbolKind.Constant,
-  SymbolKind.Str,
-  SymbolKind.Number,
-  SymbolKind.Boolean,
-  SymbolKind.Array,
-]);
-
 class DocumentSymbolHandler extends MessageHandler<DocumentSymbolParams,
-    Either2<List<DocumentSymbol>, List<SymbolInformation>>> {
+    Either2<List<DocumentSymbol>, List<SymbolInformation>>?> {
   DocumentSymbolHandler(LspAnalysisServer server) : super(server);
+  @override
   Method get handlesMessage => Method.textDocument_documentSymbol;
 
   @override
-  DocumentSymbolParams convertParams(Map<String, dynamic> json) =>
-      DocumentSymbolParams.fromJson(json);
+  LspJsonHandler<DocumentSymbolParams> get jsonHandler =>
+      DocumentSymbolParams.jsonHandler;
 
-  Future<ErrorOr<Either2<List<DocumentSymbol>, List<SymbolInformation>>>>
-      handle(DocumentSymbolParams params) async {
-    final symbolCapabilities =
-        server?.clientCapabilities?.textDocument?.documentSymbol;
+  @override
+  Future<ErrorOr<Either2<List<DocumentSymbol>, List<SymbolInformation>>?>>
+      handle(DocumentSymbolParams params, CancellationToken token) async {
+    final clientCapabilities = server.clientCapabilities;
+    if (clientCapabilities == null || !isDartDocument(params.textDocument)) {
+      return success(
+        Either2<List<DocumentSymbol>, List<SymbolInformation>>.t2([]),
+      );
+    }
 
-    final clientSupportedSymbolKinds =
-        symbolCapabilities?.symbolKind?.valueSet != null
-            ? new HashSet<SymbolKind>.of(symbolCapabilities.symbolKind.valueSet)
-            : defaultSupportedSymbolKinds;
-
-    final clientSupportsDocumentSymbol =
-        symbolCapabilities?.hierarchicalDocumentSymbolSupport ?? false;
-
-    final path = pathOf(params.textDocument);
-    final unit = await path.mapResult(requireUnit);
-    return unit.mapResult((unit) => _getSymbols(clientSupportedSymbolKinds,
-        clientSupportsDocumentSymbol, path.result, unit));
+    final path = pathOfDoc(params.textDocument);
+    final unit = await path.mapResult(requireResolvedUnit);
+    return unit.mapResult(
+        (unit) => _getSymbols(clientCapabilities, path.result, unit));
   }
 
   DocumentSymbol _asDocumentSymbol(
-    HashSet<SymbolKind> clientSupportedSymbolKinds,
+    Set<SymbolKind> supportedKinds,
     LineInfo lineInfo,
     Outline outline,
   ) {
-    return new DocumentSymbol(
-      outline.element.name,
-      outline.element.parameters,
-      elementKindToSymbolKind(clientSupportedSymbolKinds, outline.element.kind),
-      outline.element.isDeprecated,
-      toRange(lineInfo, outline.codeOffset, outline.codeLength),
-      toRange(lineInfo, outline.element.location.offset,
-          outline.element.location.length),
-      outline.children
-          ?.map((child) =>
-              _asDocumentSymbol(clientSupportedSymbolKinds, lineInfo, child))
-          ?.toList(),
+    final codeRange = toRange(lineInfo, outline.codeOffset, outline.codeLength);
+    final nameLocation = outline.element.location;
+    final nameRange = nameLocation != null
+        ? toRange(lineInfo, nameLocation.offset, nameLocation.length)
+        : null;
+    return DocumentSymbol(
+      name: toElementName(outline.element),
+      detail: outline.element.parameters,
+      kind: elementKindToSymbolKind(supportedKinds, outline.element.kind),
+      deprecated: outline.element.isDeprecated,
+      range: codeRange,
+      selectionRange: nameRange ?? codeRange,
+      children: outline.children
+          ?.map((child) => _asDocumentSymbol(supportedKinds, lineInfo, child))
+          .toList(),
     );
   }
 
-  SymbolInformation _asSymbolInformation(
-    String containerName,
-    HashSet<SymbolKind> clientSupportedSymbolKinds,
+  SymbolInformation? _asSymbolInformation(
+    String? containerName,
+    Set<SymbolKind> supportedKinds,
     String documentUri,
     LineInfo lineInfo,
     Outline outline,
   ) {
-    return new SymbolInformation(
-      outline.element.name,
-      elementKindToSymbolKind(clientSupportedSymbolKinds, outline.element.kind),
-      outline.element.isDeprecated,
-      new Location(
-        documentUri,
-        toRange(lineInfo, outline.element.location.offset,
-            outline.element.location.length),
+    final location = outline.element.location;
+    if (location == null) {
+      return null;
+    }
+
+    return SymbolInformation(
+      name: toElementName(outline.element),
+      kind: elementKindToSymbolKind(supportedKinds, outline.element.kind),
+      deprecated: outline.element.isDeprecated,
+      location: Location(
+        uri: documentUri,
+        range: toRange(lineInfo, location.offset, location.length),
       ),
-      containerName,
+      containerName: containerName,
     );
   }
 
-  ErrorOr<Either2<List<DocumentSymbol>, List<SymbolInformation>>> _getSymbols(
-    HashSet<SymbolKind> clientSupportedSymbolKinds,
-    bool clientSupportsDocumentSymbol,
+  ErrorOr<Either2<List<DocumentSymbol>, List<SymbolInformation>>?> _getSymbols(
+    LspClientCapabilities capabilities,
     String path,
     ResolvedUnitResult unit,
   ) {
-    final computer =
-        new DartUnitOutlineComputer(path, unit.lineInfo, unit.unit);
+    final computer = DartUnitOutlineComputer(unit);
     final outline = computer.compute();
 
-    if (clientSupportsDocumentSymbol) {
+    if (capabilities.hierarchicalSymbols) {
       // Return a tree of DocumentSymbol only if the client shows explicit support
       // for it.
+      final children = outline.children;
+      if (children == null) {
+        return success(null);
+      }
       return success(
         Either2<List<DocumentSymbol>, List<SymbolInformation>>.t1(
-          outline?.children
-              ?.map((child) => _asDocumentSymbol(
-                  clientSupportedSymbolKinds, unit.lineInfo, child))
-              ?.toList(),
+          children
+              .map((child) => _asDocumentSymbol(
+                  capabilities.documentSymbolKinds, unit.lineInfo, child))
+              .toList(),
         ),
       );
     } else {
       // Otherwise, we need to use the original flat SymbolInformation.
       final allSymbols = <SymbolInformation>[];
-      final documentUri = new Uri.file(path).toString();
+      final documentUri = Uri.file(path).toString();
 
       // Adds a symbol and it's children recursively, supplying the parent
       // name as required by SymbolInformation.
-      addSymbol(Outline outline, {String parentName}) {
-        allSymbols.add(_asSymbolInformation(
+      void addSymbol(Outline outline, {String? parentName}) {
+        final symbol = _asSymbolInformation(
           parentName,
-          clientSupportedSymbolKinds,
+          capabilities.documentSymbolKinds,
           documentUri,
           unit.lineInfo,
           outline,
-        ));
+        );
+        if (symbol != null) {
+          allSymbols.add(symbol);
+        }
         outline.children?.forEach(
           (c) => addSymbol(c, parentName: outline.element.name),
         );
       }
 
-      outline?.children?.forEach(addSymbol);
+      outline.children?.forEach(addSymbol);
 
       return success(
         Either2<List<DocumentSymbol>, List<SymbolInformation>>.t2(allSymbols),

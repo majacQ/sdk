@@ -2,10 +2,17 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart=2.9
+
 /// Shared code used by fasta_perf and incremental_perf.
 library front_end.tool.perf_common;
 
 import 'dart:io' show exitCode, stderr;
+
+import 'package:_fe_analyzer_shared/src/messages/diagnostic_message.dart'
+    show DiagnosticMessage, DiagnosticMessageHandler, getMessageCodeObject;
+
+import 'package:_fe_analyzer_shared/src/messages/severity.dart' show Severity;
 
 import 'package:kernel/target/targets.dart' show Target, TargetFlags;
 
@@ -13,29 +20,24 @@ import 'package:vm/target/flutter.dart' show FlutterTarget;
 
 import 'package:vm/target/vm.dart' show VmTarget;
 
-import 'package:front_end/src/api_prototype/diagnostic_message.dart'
-    show DiagnosticMessage, DiagnosticMessageHandler, getMessageCodeObject;
-
 import 'package:front_end/src/api_prototype/terminal_color_support.dart'
     show printDiagnosticMessage;
 
 import 'package:front_end/src/fasta/fasta_codes.dart' as fastaCodes;
 
-import 'package:front_end/src/fasta/severity.dart' show Severity;
-
 /// Error messages that we temporarily allow when compiling benchmarks in strong
 /// mode.
 ///
-/// This whitelist lets us run the compiler benchmarks while those errors get
+/// This allowlist lets us run the compiler benchmarks while those errors get
 /// fixed. We don't blindly allow any error message because we would then miss
 /// situations where the benchmarks are actually broken.
 ///
 /// Note: the performance bots compile both dart2js and the flutter-gallery app
 /// as benchmarks, so they both need to be checked before we remove a message
 /// from this set.
-final whitelistMessageCode = new Set<fastaCodes.Code>.from(<fastaCodes.Code>[
+final allowlistMessageCode = new Set<fastaCodes.Code>.from(<fastaCodes.Code>[
   // Code names in this list should match the key used in messages.yaml
-  fastaCodes.codeInvalidAssignment,
+  fastaCodes.codeInvalidAssignmentError,
   fastaCodes.codeOverrideTypeMismatchParameter,
   fastaCodes.codeOverriddenMethodCause,
 
@@ -48,18 +50,17 @@ final whitelistMessageCode = new Set<fastaCodes.Code>.from(<fastaCodes.Code>[
   fastaCodes.codeUndefinedMethod,
 ]);
 
-DiagnosticMessageHandler onDiagnosticMessageHandler({bool legacyMode: false}) {
+DiagnosticMessageHandler onDiagnosticMessageHandler() {
   bool messageReported = false;
   return (DiagnosticMessage m) {
     if (m.severity == Severity.internalProblem ||
         m.severity == Severity.error) {
-      if (legacyMode ||
-          !whitelistMessageCode.contains(getMessageCodeObject(m))) {
+      if (!allowlistMessageCode.contains(getMessageCodeObject(m))) {
         printDiagnosticMessage(m, stderr.writeln);
         exitCode = 1;
       } else if (!messageReported) {
         messageReported = true;
-        stderr.writeln('Whitelisted error messages omitted');
+        stderr.writeln('Allowlisted error messages omitted');
       }
     }
   };
@@ -70,29 +71,13 @@ DiagnosticMessageHandler onDiagnosticMessageHandler({bool legacyMode: false}) {
 // TODO(sigmund): delete as soon as the disableTypeInference flag and the
 // legacyMode flag get merged, and we have a single way of specifying the
 // legacy-mode flag to the FE.
-Target createTarget({bool isFlutter: false, bool legacyMode: false}) {
-  var flags = new TargetFlags(legacyMode: legacyMode);
+Target createTarget({bool isFlutter: false}) {
+  TargetFlags flags = new TargetFlags();
   if (isFlutter) {
-    return legacyMode
-        ? new LegacyFlutterTarget(flags)
-        : new FlutterTarget(flags);
+    return new FlutterTarget(flags);
   } else {
-    return legacyMode ? new LegacyVmTarget(flags) : new VmTarget(flags);
+    return new VmTarget(flags);
   }
-}
-
-class LegacyVmTarget extends VmTarget {
-  LegacyVmTarget(TargetFlags flags) : super(flags);
-
-  @override
-  bool get disableTypeInference => true;
-}
-
-class LegacyFlutterTarget extends FlutterTarget {
-  LegacyFlutterTarget(TargetFlags flags) : super(flags);
-
-  @override
-  bool get disableTypeInference => true;
 }
 
 class TimingsCollector {
@@ -137,10 +122,16 @@ class TimingsCollector {
   void printTimings() {
     timings.forEach((String key, List<double> durations) {
       double total = 0.0;
-      for (double duration in durations.skip(3)) {
-        total += duration;
+      int length = durations.length;
+      if (length == 1) {
+        total += durations.single;
+      } else {
+        length -= 3;
+        for (double duration in durations.skip(3)) {
+          total += duration;
+        }
       }
-      print("$key took: ${total / (durations.length - 3)}ms");
+      print("$key took: ${total / length}ms");
     });
   }
 }

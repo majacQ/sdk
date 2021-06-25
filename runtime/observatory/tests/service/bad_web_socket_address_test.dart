@@ -4,16 +4,21 @@
 
 import 'package:logging/logging.dart';
 import "package:observatory/service_io.dart";
-import 'package:unittest/unittest.dart';
+import 'package:test/test.dart';
 
-void testBadWebSocket() {
+void testBadWebSocket() async {
   var vm = new WebSocketVM(new WebSocketVMTarget('ws://karatekid/ws'));
-  vm.load().then<dynamic>((_) => null).catchError(expectAsync((error) {
-    expect(error, new isInstanceOf<NetworkRpcException>());
-  }));
+
+  dynamic error;
+  try {
+    await vm.load();
+  } catch (e) {
+    error = e;
+  }
+  expect(error, isA<NetworkRpcException>());
 }
 
-main() {
+main() async {
   Logger.root.level = Level.INFO;
   Logger.root.onRecord.listen((LogRecord rec) {
     print('${rec.level.name}: ${rec.time}: ${rec.message}');

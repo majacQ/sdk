@@ -4,7 +4,7 @@
 
 import 'dart:convert';
 import 'package:observatory/service_io.dart';
-import 'package:unittest/unittest.dart';
+import 'package:test/test.dart';
 import 'test_helper.dart';
 
 var tests = <VMTest>[
@@ -17,13 +17,13 @@ var tests = <VMTest>[
     result = await vm.invokeRpcNoUpgrade('_createDevFS', params);
     expect(result['type'], equals('FileSystem'));
     expect(result['name'], equals('alpha'));
-    expect(result['uri'], new isInstanceOf<String>());
+    expect(result['uri'], isA<String>());
 
     result = await vm.invokeRpcNoUpgrade('_listDevFS', {});
     expect(result['type'], equals('FileSystemList'));
     expect(result['fsNames'].toString(), equals('[alpha]'));
 
-    bool caughtException;
+    bool caughtException = false;
     try {
       await vm.invokeRpcNoUpgrade('_createDevFS', params);
       expect(false, isTrue, reason: 'Unreachable');
@@ -62,7 +62,7 @@ var tests = <VMTest>[
     result = await vm.invokeRpcNoUpgrade('_createDevFS', {'fsName': fsId});
     expect(result['type'], equals('FileSystem'));
     expect(result['name'], equals(fsId));
-    expect(result['uri'], new isInstanceOf<String>());
+    expect(result['uri'], isA<String>());
 
     bool caughtException = false;
     try {

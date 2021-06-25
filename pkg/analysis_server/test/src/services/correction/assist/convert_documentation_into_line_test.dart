@@ -3,12 +3,13 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:analysis_server/src/services/correction/assist.dart';
+import 'package:analysis_server/src/services/linter/lint_names.dart';
 import 'package:analyzer_plugin/utilities/assist/assist.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'assist_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(ConvertDocumentationIntoLineTest);
   });
@@ -19,16 +20,16 @@ class ConvertDocumentationIntoLineTest extends AssistProcessorTest {
   @override
   AssistKind get kind => DartAssistKind.CONVERT_DOCUMENTATION_INTO_LINE;
 
-  test_alreadyLine() async {
-    await resolveTestUnit('''
+  Future<void> test_alreadyLine() async {
+    await resolveTestCode('''
 /// AAAAAAA
 class A {}
 ''');
     await assertNoAssistAt('AAA');
   }
 
-  test_hasEmptyLine() async {
-    await resolveTestUnit('''
+  Future<void> test_hasEmptyLine() async {
+    await resolveTestCode('''
 class A {
   /**
    * AAAAAAA [int] AAAAAAA
@@ -48,16 +49,16 @@ class A {
 ''');
   }
 
-  test_notDocumentation() async {
-    await resolveTestUnit('''
+  Future<void> test_notDocumentation() async {
+    await resolveTestCode('''
 /* AAAA */
 class A {}
 ''');
     await assertNoAssistAt('AAA');
   }
 
-  test_onReference() async {
-    await resolveTestUnit('''
+  Future<void> test_onReference() async {
+    await resolveTestCode('''
 /**
  * AAAAAAA [int] AAAAAAA
  */
@@ -69,8 +70,8 @@ class A {}
 ''');
   }
 
-  test_onText() async {
-    await resolveTestUnit('''
+  Future<void> test_onText() async {
+    await resolveTestCode('''
 class A {
   /**
    * AAAAAAA [int] AAAAAAA
@@ -90,8 +91,8 @@ class A {
 ''');
   }
 
-  test_onText_hasFirstLine() async {
-    await resolveTestUnit('''
+  Future<void> test_onText_hasFirstLine() async {
+    await resolveTestCode('''
 class A {
   /** AAAAAAA [int] AAAAAAA
    * BBBBBBBB BBBB BBBB
@@ -106,6 +107,43 @@ class A {
   /// BBBBBBBB BBBB BBBB
   /// CCC [A] CCCCCCCCCCC
   mmm() {}
+}
+''');
+  }
+
+  Future<void> test_onText_noAssistWithLint() async {
+    createAnalysisOptionsFile(lints: [LintNames.slash_for_doc_comments]);
+    verifyNoTestUnitErrors = false;
+    await resolveTestCode('''
+class A {
+  /**
+   * AAAAAAA [int] AAAAAAA
+   * BBBBBBBB BBBB BBBB
+   * CCC [A] CCCCCCCCCCC
+   */
+  mmm() {}
+}
+''');
+    await assertNoAssist();
+  }
+
+  Future<void> test_preserveIndentation() async {
+    await resolveTestCode('''
+class A {
+  /**
+   * First line.
+   *     Indented line.
+   * Last line.
+   */
+  m() {}
+}
+''');
+    await assertHasAssistAt('Indented', '''
+class A {
+  /// First line.
+  ///     Indented line.
+  /// Last line.
+  m() {}
 }
 ''');
   }

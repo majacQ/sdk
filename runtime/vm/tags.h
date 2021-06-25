@@ -6,6 +6,7 @@
 #define RUNTIME_VM_TAGS_H_
 
 #include "vm/allocation.h"
+#include "vm/thread_stack_resource.h"
 
 namespace dart {
 
@@ -17,15 +18,14 @@ class RuntimeEntry;
   V(Idle)     /* isolate is idle and is_runnable() */                          \
   V(LoadWait) /* isolate is idle and !is_runnable() */                         \
   V(VM)       /* Catch all */                                                  \
-  V(LoadBytecode)                                                              \
   V(CompileOptimized)                                                          \
   V(CompileUnoptimized)                                                        \
-  V(CompileClass)                                                              \
+  V(ClassLoading)                                                              \
   V(CompileParseRegExp)                                                        \
-  V(DartCompiled)                                                              \
-  V(DartInterpreted)                                                           \
+  V(Dart)                                                                      \
   V(GCNewSpace)                                                                \
   V(GCOldSpace)                                                                \
+  V(GCIdle)                                                                    \
   V(Embedder)                                                                  \
   V(Runtime)                                                                   \
   V(Native)
@@ -71,10 +71,10 @@ class VMTag : public AllStatic {
     const char* name;
     uword id;
   };
-  static TagEntry entries_[];
+  static const TagEntry entries_[];
 };
 
-class VMTagScope : StackResource {
+class VMTagScope : ThreadStackResource {
  public:
   VMTagScope(Thread* thread, uword tag, bool conditional_set = true);
   ~VMTagScope();

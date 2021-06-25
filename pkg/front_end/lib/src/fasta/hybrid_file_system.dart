@@ -6,19 +6,17 @@
 /// sdk sources from disk.
 library front_end.src.hybrid_file_system;
 
-import 'dart:async';
-
 import '../api_prototype/file_system.dart';
 import '../api_prototype/memory_file_system.dart';
 import '../api_prototype/standard_file_system.dart';
 
 /// A file system that mixes files from memory and a physical file system. All
-/// memory entities take priotity over file system entities.
+/// memory entities take priority over file system entities.
 class HybridFileSystem implements FileSystem {
   final MemoryFileSystem memory;
   final FileSystem physical;
 
-  HybridFileSystem(this.memory, [FileSystem _physical])
+  HybridFileSystem(this.memory, [FileSystem? _physical])
       : physical = _physical ?? StandardFileSystem.instance;
 
   @override
@@ -26,23 +24,23 @@ class HybridFileSystem implements FileSystem {
       new HybridFileSystemEntity(uri, this);
 }
 
-/// Entity that delegates to an underlying memory or phisical file system
+/// Entity that delegates to an underlying memory or physical file system
 /// entity.
 class HybridFileSystemEntity implements FileSystemEntity {
   final Uri uri;
-  FileSystemEntity _delegate;
+  FileSystemEntity? _delegate;
   final HybridFileSystem _fs;
 
   HybridFileSystemEntity(this.uri, this._fs);
 
   Future<FileSystemEntity> get delegate async {
-    if (_delegate != null) return _delegate;
+    if (_delegate != null) return _delegate!;
     FileSystemEntity entity = _fs.memory.entityForUri(uri);
     if (((uri.scheme != 'file' && uri.scheme != 'data') &&
             _fs.physical is StandardFileSystem) ||
         await entity.exists()) {
       _delegate = entity;
-      return _delegate;
+      return _delegate!;
     }
     return _delegate = _fs.physical.entityForUri(uri);
   }
@@ -51,7 +49,15 @@ class HybridFileSystemEntity implements FileSystemEntity {
   Future<bool> exists() async => (await delegate).exists();
 
   @override
+  Future<bool> existsAsyncIfPossible() async =>
+      (await delegate).existsAsyncIfPossible();
+
+  @override
   Future<List<int>> readAsBytes() async => (await delegate).readAsBytes();
+
+  @override
+  Future<List<int>> readAsBytesAsyncIfPossible() async =>
+      (await delegate).readAsBytesAsyncIfPossible();
 
   @override
   Future<String> readAsString() async => (await delegate).readAsString();

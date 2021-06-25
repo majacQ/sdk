@@ -2,105 +2,115 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'dart:async' show Future;
-
 import 'dart:io' show BytesBuilder, File, IOSink;
 
-import 'package:kernel/clone.dart' show CloneVisitor;
+import 'dart:typed_data' show Uint8List;
+
+import 'package:kernel/clone.dart' show CloneVisitorWithMembers;
 
 import 'package:kernel/ast.dart'
     show
+        Class,
+        Component,
         DartType,
         Library,
-        Component,
         Procedure,
-        Class,
+        Supertype,
+        TreeNode,
         TypeParameter,
-        TypeParameterType,
-        Supertype;
+        TypeParameterType;
 
 import 'package:kernel/binary/ast_to_binary.dart' show BinaryPrinter;
-
-import 'package:kernel/binary/limited_ast_to_binary.dart'
-    show LimitedBinaryPrinter;
 
 import 'package:kernel/text/ast_to_text.dart' show Printer;
 
 /// Print the given [component].  Do nothing if it is `null`.  If the
 /// [libraryFilter] is provided, then only libraries that satisfy it are
 /// printed.
-void printComponentText(Component component,
-    {bool libraryFilter(Library library)}) {
+void printComponentText(Component? component,
+    {bool Function(Library library)? libraryFilter}) {
   if (component == null) return;
   StringBuffer sb = new StringBuffer();
+  Printer printer = new Printer(sb);
+  printer.writeComponentProblems(component);
   for (Library library in component.libraries) {
     if (libraryFilter != null && !libraryFilter(library)) continue;
-    Printer printer = new Printer(sb);
     printer.writeLibraryFile(library);
   }
+  printer.writeConstantTable(component);
   print(sb);
 }
 
 /// Write [component] to file only including libraries that match [filter].
 Future<Null> writeComponentToFile(Component component, Uri uri,
-    {bool filter(Library library)}) async {
+    {bool Function(Library library)? filter}) async {
   File output = new File.fromUri(uri);
   IOSink sink = output.openWrite();
   try {
-    BinaryPrinter printer = filter == null
-        ? new BinaryPrinter(sink)
-        : new LimitedBinaryPrinter(sink, filter ?? (_) => true, false);
+    BinaryPrinter printer = new BinaryPrinter(sink, libraryFilter: filter);
     printer.writeComponentFile(component);
-    component.unbindCanonicalNames();
   } finally {
     await sink.close();
   }
 }
 
 /// Serialize the libraries in [component] that match [filter].
-List<int> serializeComponent(Component component,
-    {bool filter(Library library), bool excludeUriToSource: false}) {
+Uint8List serializeComponent(Component component,
+    {bool Function(Library library)? filter,
+    bool includeSources: true,
+    bool includeOffsets: true}) {
   ByteSink byteSink = new ByteSink();
-  BinaryPrinter printer = filter == null && !excludeUriToSource
-      ? new BinaryPrinter(byteSink)
-      : new LimitedBinaryPrinter(
-          byteSink, filter ?? (_) => true, excludeUriToSource);
+  BinaryPrinter printer = new BinaryPrinter(byteSink,
+      libraryFilter: filter,
+      includeSources: includeSources,
+      includeOffsets: includeOffsets);
   printer.writeComponentFile(component);
   return byteSink.builder.takeBytes();
 }
 
 const String kDebugClassName = "#DebugClass";
 
-List<int> serializeProcedure(Procedure procedure) {
-  Library fakeLibrary =
-      new Library(new Uri(scheme: 'evaluate', path: 'source'));
+Component createExpressionEvaluationComponent(Procedure procedure) {
+  Library realLibrary = procedure.enclosingLibrary;
 
-  if (procedure.parent is Class) {
-    Class realClass = procedure.parent;
+  Uri uri = new Uri(scheme: 'evaluate', path: 'source');
+  Library fakeLibrary = new Library(uri, fileUri: uri)
+    ..setLanguageVersion(realLibrary.languageVersion)
+    ..isNonNullableByDefault = realLibrary.isNonNullableByDefault
+    ..nonNullableByDefaultCompiledMode =
+        realLibrary.nonNullableByDefaultCompiledMode;
 
-    Class fakeClass = new Class(name: kDebugClassName);
+  TreeNode? realClass = procedure.parent;
+  if (realClass is Class) {
+    Class fakeClass = new Class(name: kDebugClassName, fileUri: uri)
+      ..parent = fakeLibrary;
     Map<TypeParameter, TypeParameter> typeParams =
         <TypeParameter, TypeParameter>{};
     Map<TypeParameter, DartType> typeSubstitution = <TypeParameter, DartType>{};
     for (TypeParameter typeParam in realClass.typeParameters) {
-      var newNode = new TypeParameter(typeParam.name);
+      TypeParameter newNode = new TypeParameter(typeParam.name)
+        ..parent = fakeClass;
       typeParams[typeParam] = newNode;
-      typeSubstitution[typeParam] = new TypeParameterType(newNode);
+      typeSubstitution[typeParam] =
+          new TypeParameterType.forAlphaRenaming(typeParam, newNode);
     }
-    CloneVisitor cloner = new CloneVisitor(
+    CloneVisitorWithMembers cloner = new CloneVisitorWithMembers(
         typeSubstitution: typeSubstitution, typeParams: typeParams);
 
     for (TypeParameter typeParam in realClass.typeParameters) {
-      fakeClass.typeParameters.add(typeParam.accept(cloner));
+      fakeClass.typeParameters
+          .add(typeParam.accept<TreeNode>(cloner) as TypeParameter);
     }
 
-    fakeClass.parent = fakeLibrary;
-    fakeClass.supertype = new Supertype.byReference(
-        realClass.supertype.className,
-        realClass.supertype.typeArguments.map(cloner.visitType).toList());
+    if (realClass.supertype != null) {
+      // supertype is null for Object.
+      fakeClass.supertype = new Supertype.byReference(
+          realClass.supertype!.className,
+          realClass.supertype!.typeArguments.map(cloner.visitType).toList());
+    }
 
     // Rebind the type parameters in the procedure.
-    procedure = procedure.accept(cloner);
+    procedure = cloner.cloneProcedure(procedure, null);
     procedure.parent = fakeClass;
     fakeClass.procedures.add(procedure);
     fakeLibrary.classes.add(fakeClass);
@@ -110,8 +120,14 @@ List<int> serializeProcedure(Procedure procedure) {
   }
 
   // TODO(vegorov) find a way to preserve metadata.
-  Component program = new Component(libraries: [fakeLibrary]);
-  return serializeComponent(program);
+  Component component = new Component(libraries: [fakeLibrary]);
+  component.setMainMethodAndMode(
+      null, false, fakeLibrary.nonNullableByDefaultCompiledMode);
+  return component;
+}
+
+List<int> serializeProcedure(Procedure procedure) {
+  return serializeComponent(createExpressionEvaluationComponent(procedure));
 }
 
 /// A [Sink] that directly writes data into a byte builder.

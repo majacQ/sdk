@@ -7,37 +7,34 @@ import 'dart:async';
 import 'package:observatory/models.dart' as M;
 import 'package:observatory/utils.dart';
 import 'package:observatory/src/elements/helpers/rendering_scheduler.dart';
-import 'package:observatory/src/elements/helpers/tag.dart';
+import 'package:observatory/src/elements/helpers/custom_element.dart';
 import 'package:observatory/src/elements/helpers/uris.dart';
 import 'package:observatory/src/elements/isolate/counter_chart.dart';
 
-class IsolateSharedSummaryElement extends HtmlElement implements Renderable {
-  static const tag = const Tag<IsolateSharedSummaryElement>(
-      'isolate-shared-summary',
-      dependencies: const [IsolateCounterChartElement.tag]);
-
-  RenderingScheduler<IsolateSharedSummaryElement> _r;
+class IsolateSharedSummaryElement extends CustomElement implements Renderable {
+  late RenderingScheduler<IsolateSharedSummaryElement> _r;
 
   Stream<RenderedEvent<IsolateSharedSummaryElement>> get onRendered =>
       _r.onRendered;
 
-  M.Isolate _isolate;
-  M.EventRepository _events;
-  StreamSubscription _isolateSubscription;
+  late M.Isolate _isolate;
+  late M.EventRepository _events;
+  late StreamSubscription _isolateSubscription;
 
   factory IsolateSharedSummaryElement(
       M.Isolate isolate, M.EventRepository events,
-      {RenderingQueue queue}) {
+      {RenderingQueue? queue}) {
     assert(isolate != null);
     assert(events != null);
-    IsolateSharedSummaryElement e = document.createElement(tag.name);
+    IsolateSharedSummaryElement e = new IsolateSharedSummaryElement.created();
     e._r = new RenderingScheduler<IsolateSharedSummaryElement>(e, queue: queue);
     e._isolate = isolate;
     e._events = events;
     return e;
   }
 
-  IsolateSharedSummaryElement.created() : super.created();
+  IsolateSharedSummaryElement.created()
+      : super.created('isolate-shared-summary');
 
   @override
   void attached() {
@@ -55,10 +52,10 @@ class IsolateSharedSummaryElement extends HtmlElement implements Renderable {
   }
 
   void render() {
-    final newHeapUsed = Utils.formatSize(_isolate.newSpace.used);
-    final newHeapCapacity = Utils.formatSize(_isolate.newSpace.capacity);
-    final oldHeapUsed = Utils.formatSize(_isolate.oldSpace.used);
-    final oldHeapCapacity = Utils.formatSize(_isolate.oldSpace.capacity);
+    final newHeapUsed = Utils.formatSize(_isolate.newSpace!.used);
+    final newHeapCapacity = Utils.formatSize(_isolate.newSpace!.capacity);
+    final oldHeapUsed = Utils.formatSize(_isolate.oldSpace!.used);
+    final oldHeapCapacity = Utils.formatSize(_isolate.oldSpace!.capacity);
     final content = <Element>[
       new DivElement()
         ..classes = ['menu']
@@ -91,7 +88,8 @@ class IsolateSharedSummaryElement extends HtmlElement implements Renderable {
           new DivElement()
             ..children = <Element>[
               new SpanElement()..text = 'see ',
-              new AnchorElement(href: Uris.debugger(_isolate))..text = 'debug'
+              new AnchorElement(href: Uris.debugger(_isolate))
+                ..text = 'debugger'
             ],
           new DivElement()
             ..children = <Element>[
@@ -150,13 +148,14 @@ class IsolateSharedSummaryElement extends HtmlElement implements Renderable {
               new AnchorElement(href: Uris.logging(_isolate))..text = 'logging'
             ]
         ],
-      new IsolateCounterChartElement(_isolate.counters, queue: _r.queue)
+      new IsolateCounterChartElement(_isolate.counters!, queue: _r.queue)
+          .element
     ];
     if (_isolate.error != null) {
       children = <Element>[
         new PreElement()
           ..classes = ['errorBox']
-          ..text = _isolate.error.message,
+          ..text = _isolate.error!.message,
         new DivElement()
           ..classes = ['summary']
           ..children = content

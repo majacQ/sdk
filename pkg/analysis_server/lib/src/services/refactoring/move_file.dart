@@ -1,123 +1,154 @@
-// Copyright (c) 2018, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2018, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'dart:async';
 import 'dart:core';
 
 import 'package:analysis_server/src/protocol_server.dart' hide Element;
 import 'package:analysis_server/src/services/correction/status.dart';
 import 'package:analysis_server/src/services/refactoring/refactoring.dart';
 import 'package:analysis_server/src/services/refactoring/refactoring_internal.dart';
-import 'package:analysis_server/src/services/search/search_engine.dart';
+import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/dart/ast/ast.dart';
-import 'package:analyzer/dart/element/element.dart';
 import 'package:analyzer/file_system/file_system.dart';
 import 'package:analyzer/src/dart/analysis/driver.dart';
 import 'package:analyzer/src/generated/source.dart';
-import 'package:analyzer_plugin/utilities/change_builder/change_builder_dart.dart';
+import 'package:analyzer_plugin/utilities/change_builder/change_builder_core.dart';
+import 'package:analyzer_plugin/utilities/range_factory.dart';
+import 'package:collection/collection.dart';
 import 'package:path/path.dart' as pathos;
 
-/**
- * [MoveFileRefactoring] implementation.
- */
+/// [MoveFileRefactoring] implementation.
 class MoveFileRefactoringImpl extends RefactoringImpl
     implements MoveFileRefactoring {
   final ResourceProvider resourceProvider;
   final pathos.Context pathContext;
-  final RefactoringWorkspace workspace;
-  final Source source;
-  AnalysisDriver driver;
+  final RefactoringWorkspace refactoringWorkspace;
+  final ResolvedUnitResult resolvedUnit;
+  late AnalysisDriver driver;
 
-  String oldFile;
-  String newFile;
+  late String oldFile;
+  late String newFile;
 
-  final packagePrefixedStringPattern = new RegExp(r'''^r?['"]+package:''');
+  final packagePrefixedStringPattern = RegExp(r'''^r?['"]+package:''');
 
-  MoveFileRefactoringImpl(ResourceProvider resourceProvider, this.workspace,
-      this.source, this.oldFile)
-      : resourceProvider = resourceProvider,
-        pathContext = resourceProvider.pathContext {
-    if (source != null) {
-      oldFile = source.fullName;
-    }
-  }
+  MoveFileRefactoringImpl(this.resourceProvider, this.refactoringWorkspace,
+      this.resolvedUnit, this.oldFile)
+      : pathContext = resourceProvider.pathContext;
 
   @override
   String get refactoringName => 'Move File';
 
   @override
   Future<RefactoringStatus> checkFinalConditions() async {
-    final drivers = workspace.driversContaining(oldFile);
-    if (drivers.length != 1) {
-      if (workspace.drivers
-          .any((d) => pathContext.equals(d.contextRoot.root, oldFile))) {
-        return new RefactoringStatus.fatal(
+    for (var driver in refactoringWorkspace.drivers) {
+      var rootPath = driver.analysisContext!.contextRoot.root.path;
+      if (pathContext.equals(rootPath, oldFile)) {
+        return RefactoringStatus.fatal(
             'Renaming an analysis root is not supported ($oldFile)');
-      } else {
-        return new RefactoringStatus.fatal(
-            '$oldFile does not belong to an analysis root.');
       }
     }
+
+    final drivers = refactoringWorkspace.driversContaining(oldFile);
+    if (drivers.length != 1) {
+      return RefactoringStatus.fatal(
+          '$oldFile does not belong to an analysis root.');
+    }
+
     driver = drivers.first;
     if (!driver.resourceProvider.getFile(oldFile).exists) {
-      return new RefactoringStatus.fatal('$oldFile does not exist.');
+      return RefactoringStatus.fatal('$oldFile does not exist.');
     }
-    return new RefactoringStatus();
+
+    return RefactoringStatus();
   }
 
   @override
   Future<RefactoringStatus> checkInitialConditions() async {
-    return new RefactoringStatus();
+    return RefactoringStatus();
   }
 
   @override
   Future<SourceChange> createChange() async {
-    var changeBuilder = new DartChangeBuilder(driver.currentSession);
-    final result = await driver.getUnitElement(oldFile);
-    final element = result?.element;
+    var changeBuilder = ChangeBuilder(session: resolvedUnit.session);
+    var element = resolvedUnit.unit!.declaredElement;
     if (element == null) {
       return changeBuilder.sourceChange;
     }
-    final library = element.library;
+
+    var libraryElement = element.library;
+
+    final oldDir = pathContext.dirname(oldFile);
+    final newDir = pathContext.dirname(newFile);
 
     // If this element is a library, update outgoing references inside the file.
-    if (element == library.definingCompilationUnit) {
-      await changeBuilder.addFileEdit(library.source.fullName, (builder) {
-        final oldDir = pathContext.dirname(oldFile);
-        final newDir = pathContext.dirname(newFile);
-        _updateUriReferences(builder, library.imports, oldDir, newDir);
-        _updateUriReferences(builder, library.exports, oldDir, newDir);
-        _updateUriReferences(builder, library.parts, oldDir, newDir);
-      });
-    } else {
+    if (element == libraryElement.definingCompilationUnit) {
+      // Handle part-of directives in this library
+      var libraryResult = await driver.currentSession
+          .getResolvedLibraryByElement2(libraryElement);
+      if (libraryResult is! ResolvedLibraryResult) {
+        return changeBuilder.sourceChange;
+      }
+      var definingUnitResult = libraryResult.units!.first;
+      for (var result in libraryResult.units!) {
+        if (result.isPart) {
+          var partOfs = result.unit!.directives
+              .whereType<PartOfDirective>()
+              .map((e) => e.uri)
+              .whereNotNull()
+              .where((uri) => _isRelativeUri(uri.stringValue));
+          if (partOfs.isNotEmpty) {
+            await changeBuilder.addDartFileEdit(
+                result.unit!.declaredElement!.source.fullName, (builder) {
+              partOfs.forEach((uri) {
+                var newLocation =
+                    pathContext.join(newDir, pathos.basename(newFile));
+                var newUri = _getRelativeUri(newLocation, oldDir);
+                builder.addSimpleReplacement(
+                    SourceRange(uri.offset, uri.length), "'$newUri'");
+              });
+            });
+          }
+        }
+      }
+
+      if (newDir != oldDir) {
+        await changeBuilder.addDartFileEdit(definingUnitResult.path!,
+            (builder) {
+          for (var directive in definingUnitResult.unit!.directives) {
+            if (directive is UriBasedDirective) {
+              _updateUriReference(builder, directive, oldDir, newDir);
+            }
+          }
+        });
+      }
+    } else if (newDir != oldDir) {
       // Otherwise, we need to update any relative part-of references.
-      final result = await driver.currentSession.getResolvedUnit(oldFile);
-      Iterable<PartOfDirective> partOfs = result.unit.directives
+      var partOfs = resolvedUnit.unit!.directives
           .whereType<PartOfDirective>()
-          .where((po) => po.uri != null && _isRelativeUri(po.uri.stringValue));
+          .map((e) => e.uri)
+          .whereNotNull()
+          .where((uri) => _isRelativeUri(uri.stringValue));
 
       if (partOfs.isNotEmpty) {
-        await changeBuilder.addFileEdit(element.source.fullName, (builder) {
-          partOfs.forEach((po) {
-            final oldDir = pathContext.dirname(oldFile);
-            final newDir = pathContext.dirname(newFile);
-            String oldLocation = pathContext.join(oldDir, po.uri.stringValue);
-            String newUri = _getRelativeUri(oldLocation, newDir);
+        await changeBuilder.addDartFileEdit(element.source.fullName, (builder) {
+          partOfs.forEach((uri) {
+            var oldLocation = pathContext.join(oldDir, uri.stringValue);
+            var newUri = _getRelativeUri(oldLocation, newDir);
             builder.addSimpleReplacement(
-                new SourceRange(po.uri.offset, po.uri.length), "'$newUri'");
+                SourceRange(uri.offset, uri.length), "'$newUri'");
           });
         });
       }
     }
 
     // Update incoming references to this file
-    List<SearchMatch> matches =
-        await workspace.searchEngine.searchReferences(element);
-    List<SourceReference> references = getSourceReferences(matches);
-    for (SourceReference reference in references) {
-      await changeBuilder.addFileEdit(reference.file, (builder) {
-        String newUri = _computeNewUri(reference);
+    var matches =
+        await refactoringWorkspace.searchEngine.searchReferences(element);
+    var references = getSourceReferences(matches);
+    for (var reference in references) {
+      await changeBuilder.addDartFileEdit(reference.file, (builder) {
+        var newUri = _computeNewUri(reference);
         builder.addSimpleReplacement(reference.range, "'$newUri'");
       });
     }
@@ -125,17 +156,17 @@ class MoveFileRefactoringImpl extends RefactoringImpl
     return changeBuilder.sourceChange;
   }
 
-  /**
-   * Computes the URI to use to reference [newFile] from [reference].
-   */
+  /// Computes the URI to use to reference [newFile] from [reference].
   String _computeNewUri(SourceReference reference) {
-    String refDir = pathContext.dirname(reference.file);
+    var refDir = pathContext.dirname(reference.file);
     // Try to keep package: URI
     if (_isPackageReference(reference)) {
-      Source newSource = new NonExistingSource(
-          newFile, pathos.toUri(newFile), UriKind.FILE_URI);
-      Uri restoredUri = driver.sourceFactory.restoreUri(newSource);
-      if (restoredUri != null) {
+      Source newSource =
+          NonExistingSource(newFile, pathos.toUri(newFile), UriKind.FILE_URI);
+      var restoredUri = driver.sourceFactory.restoreUri(newSource);
+      // If the new URI is not a package: URI, fall back to computing a relative
+      // URI below.
+      if (restoredUri?.isScheme('package') ?? false) {
         return restoredUri.toString();
       }
     }
@@ -143,27 +174,27 @@ class MoveFileRefactoringImpl extends RefactoringImpl
   }
 
   String _getRelativeUri(String path, String from) {
-    String uri = pathContext.relative(path, from: from);
-    List<String> parts = pathContext.split(uri);
+    var uri = pathContext.relative(path, from: from);
+    var parts = pathContext.split(uri);
     return pathos.posix.joinAll(parts);
   }
 
   bool _isPackageReference(SourceReference reference) {
-    final Source source = reference.element.source;
-    final String quotedImportUri = source.contents.data.substring(
-        reference.range.offset,
+    var source = reference.element.source!;
+    var quotedImportUri = source.contents.data.substring(reference.range.offset,
         reference.range.offset + reference.range.length);
     return packagePrefixedStringPattern.hasMatch(quotedImportUri);
   }
 
-  /**
-   * Checks if the given [path] represents a relative URI.
-   *
-   * The following URI's are not relative:
-   *    `/absolute/path/file.dart`
-   *    `dart:math`
-   */
-  bool _isRelativeUri(String path) {
+  /// Checks if the given [path] represents a relative URI.
+  ///
+  /// The following URI's are not relative:
+  ///    `/absolute/path/file.dart`
+  ///    `dart:math`
+  bool _isRelativeUri(String? path) {
+    if (path == null) {
+      return false;
+    }
     // absolute URI
     if (Uri.parse(path).isAbsolute) {
       return false;
@@ -176,25 +207,14 @@ class MoveFileRefactoringImpl extends RefactoringImpl
     return true;
   }
 
-  void _updateUriReference(DartFileEditBuilder builder,
-      UriReferencedElement element, String oldDir, String newDir) {
-    if (!element.isSynthetic) {
-      String elementUri = element.uri;
-      if (_isRelativeUri(elementUri)) {
-        String elementPath = pathContext.join(oldDir, elementUri);
-        String newUri = _getRelativeUri(elementPath, newDir);
-        int uriOffset = element.uriOffset;
-        int uriLength = element.uriEnd - uriOffset;
-        builder.addSimpleReplacement(
-            new SourceRange(uriOffset, uriLength), "'$newUri'");
-      }
-    }
-  }
-
-  void _updateUriReferences(DartFileEditBuilder builder,
-      List<UriReferencedElement> elements, String oldDir, String newDir) {
-    for (UriReferencedElement element in elements) {
-      _updateUriReference(builder, element, oldDir, newDir);
+  void _updateUriReference(FileEditBuilder builder, UriBasedDirective directive,
+      String oldDir, String newDir) {
+    var uriNode = directive.uri;
+    var uriValue = uriNode.stringValue;
+    if (_isRelativeUri(uriValue)) {
+      var elementPath = pathContext.join(oldDir, uriValue);
+      var newUri = _getRelativeUri(elementPath, newDir);
+      builder.addSimpleReplacement(range.node(uriNode), "'$newUri'");
     }
   }
 }

@@ -3,7 +3,7 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:observatory/service_io.dart';
-import 'package:unittest/unittest.dart';
+import 'package:test/test.dart';
 import 'test_helper.dart';
 
 import 'dart:developer';
@@ -26,12 +26,12 @@ var tests = <IsolateTest>[
   (Isolate isolate) async {
     var params = {'metricId': 'metrics/native/heap.old.used'};
     ServiceMetric counter =
-        await isolate.invokeRpc('_getIsolateMetric', params);
+        await isolate.invokeRpc('_getIsolateMetric', params) as ServiceMetric;
     expect(counter.type, equals('Counter'));
     expect(counter.name, equals('heap.old.used'));
   },
   (Isolate isolate) async {
-    bool caughtException;
+    bool caughtException = false;
     try {
       await isolate.invokeRpc(
           '_getIsolateMetric', {'metricId': 'metrics/native/doesnotexist'});

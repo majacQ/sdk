@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 /// Test operators.
 library test.operator_test;
 
@@ -42,16 +44,19 @@ void main() {
   var operators = new Map<Symbol, MethodMirror>();
   var operatorParameters = new Map<Symbol, List>();
   var returnTypes = new Map<Symbol, Mirror>();
-  for (MethodMirror method in cls.declarations.values
-      .where((d) => d is MethodMirror && !d.isConstructor)) {
-    Expect.isTrue(method.isRegularMethod);
-    Expect.isTrue(method.isOperator);
-    Expect.isFalse(method.isGetter);
-    Expect.isFalse(method.isSetter);
-    Expect.isFalse(method.isAbstract);
-    operators[method.simpleName] = method;
-    operatorParameters[method.simpleName] = method.parameters;
-    returnTypes[method.simpleName] = method.returnType;
+  for (var method in cls.declarations.values) {
+    if (method is MethodMirror) {
+      if (!method.isConstructor) {
+        Expect.isTrue(method.isRegularMethod);
+        Expect.isTrue(method.isOperator);
+        Expect.isFalse(method.isGetter);
+        Expect.isFalse(method.isSetter);
+        Expect.isFalse(method.isAbstract);
+        operators[method.simpleName] = method;
+        operatorParameters[method.simpleName] = method.parameters;
+        returnTypes[method.simpleName] = method.returnType;
+      }
+    }
   }
   expect(OPERATORS, operators);
   expect(PARAMETERS, operatorParameters);

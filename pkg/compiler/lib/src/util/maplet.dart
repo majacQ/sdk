@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart=2.12
+
 library dart2js.util.maplet;
 
 import 'dart:collection' show MapBase, IterableBase;
@@ -34,6 +36,7 @@ class Maplet<K, V> extends MapBase<K, V> {
     });
   }
 
+  @override
   bool get isEmpty {
     if (_extra == null) {
       return _MARKER == _key;
@@ -44,6 +47,7 @@ class Maplet<K, V> extends MapBase<K, V> {
     }
   }
 
+  @override
   int get length {
     if (_extra == null) {
       return (_MARKER == _key) ? 0 : 1;
@@ -54,7 +58,8 @@ class Maplet<K, V> extends MapBase<K, V> {
     }
   }
 
-  bool containsKey(Object key) {
+  @override
+  bool containsKey(Object? key) {
     if (_extra == null) {
       return _key == key;
     } else if (_MARKER == _extra) {
@@ -70,7 +75,8 @@ class Maplet<K, V> extends MapBase<K, V> {
     }
   }
 
-  V operator [](Object key) {
+  @override
+  V? operator [](Object? key) {
     if (_extra == null) {
       return (_key == key) ? _value : null;
     } else if (_MARKER == _extra) {
@@ -86,6 +92,7 @@ class Maplet<K, V> extends MapBase<K, V> {
     }
   }
 
+  @override
   void operator []=(K key, V value) {
     if (_extra == null) {
       if (_MARKER == _key) {
@@ -94,7 +101,7 @@ class Maplet<K, V> extends MapBase<K, V> {
       } else if (_key == key) {
         _value = value;
       } else {
-        List list = new List(CAPACITY * 2);
+        List list = new List.filled(CAPACITY * 2, null);
         list[0] = _key;
         list[1] = key;
         list[CAPACITY] = _value;
@@ -108,7 +115,8 @@ class Maplet<K, V> extends MapBase<K, V> {
     } else {
       int remaining = _extra;
       int index = 0;
-      int copyTo, copyFrom;
+      int copyTo = 0;
+      int copyFrom = 0;
       while (remaining > 0 && index < CAPACITY) {
         var candidate = _key[index];
         if (_MARKER == candidate) {
@@ -166,7 +174,8 @@ class Maplet<K, V> extends MapBase<K, V> {
     }
   }
 
-  V remove(Object key) {
+  @override
+  V? remove(Object? key) {
     if (_extra == null) {
       if (_key != key) return null;
       _key = _MARKER;
@@ -193,6 +202,7 @@ class Maplet<K, V> extends MapBase<K, V> {
     }
   }
 
+  @override
   void forEach(void action(K key, V value)) {
     if (_extra == null) {
       if (_MARKER != _key) action(_key, _value);
@@ -208,11 +218,13 @@ class Maplet<K, V> extends MapBase<K, V> {
     }
   }
 
+  @override
   void clear() {
     _key = _MARKER;
     _value = _extra = null;
   }
 
+  @override
   Iterable<K> get keys => new _MapletKeyIterable<K>(this);
 }
 
@@ -225,6 +237,7 @@ class _MapletKeyIterable<K> extends IterableBase<K> {
 
   _MapletKeyIterable(this.maplet);
 
+  @override
   Iterator<K> get iterator {
     if (maplet._extra == null) {
       return new _MapletSingleIterator<K>(maplet._key);
@@ -238,12 +251,14 @@ class _MapletKeyIterable<K> extends IterableBase<K> {
 
 class _MapletSingleIterator<K> implements Iterator<K> {
   var _element;
-  K _current;
+  K? _current;
 
   _MapletSingleIterator(this._element);
 
-  K get current => _current;
+  @override
+  K get current => _current as K;
 
+  @override
   bool moveNext() {
     if (Maplet._MARKER == _element) {
       _current = null;
@@ -259,12 +274,14 @@ class _MapletListIterator<K> implements Iterator<K> {
   final List _list;
   int _remaining;
   int _index = 0;
-  K _current;
+  K? _current;
 
   _MapletListIterator(this._list, this._remaining);
 
-  K get current => _current;
+  @override
+  K get current => _current as K;
 
+  @override
   bool moveNext() {
     while (_remaining > 0) {
       var candidate = _list[_index++];

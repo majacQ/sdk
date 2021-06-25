@@ -1,13 +1,13 @@
-// compile options: --emit-metadata
 // Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
+
+// @dart = 2.9
 
 // Regression test for Issue 17141.
 
 library test.metadata_nested_constructor_call;
 
-@MirrorsUsed(targets: "test.metadata_nested_constructor_call")
 import 'dart:mirrors';
 import 'package:expect/expect.dart';
 

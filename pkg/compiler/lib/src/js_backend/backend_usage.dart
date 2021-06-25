@@ -7,6 +7,7 @@ import '../common_elements.dart';
 import '../elements/entities.dart';
 import '../elements/types.dart';
 import '../frontend_strategy.dart';
+import '../ir/runtime_type_analysis.dart';
 import '../serialization/serialization.dart';
 import '../universe/feature.dart';
 import '../util/util.dart' show Setlet;
@@ -52,6 +53,10 @@ abstract class BackendUsage {
 
   /// `true` if `noSuchMethod` is used.
   bool get isNoSuchMethodUsed;
+
+  /// `true` if the `dart:html` is loaded.
+  // TODO(johnniwinther): This is always `true` with the CFE.
+  bool get isHtmlLoaded;
 }
 
 abstract class BackendUsageBuilder {
@@ -89,6 +94,9 @@ abstract class BackendUsageBuilder {
   /// `true` if `noSuchMethod` is used.
   bool isNoSuchMethodUsed;
 
+  /// Register that `dart:html` is loaded.
+  void registerHtmlIsLoaded();
+
   BackendUsage close();
 }
 
@@ -112,14 +120,16 @@ class BackendUsageBuilderImpl implements BackendUsageBuilder {
   /// `true` if a core-library function requires the preamble file to function.
   bool requiresPreamble = false;
 
-  /// `true` if `Function.apply` is used.
+  @override
   bool isFunctionApplyUsed = false;
 
   /// `true` if 'dart:mirrors' features are used.
   bool isMirrorsUsed = false;
 
-  /// `true` if `noSuchMethod` is used.
+  @override
   bool isNoSuchMethodUsed = false;
+
+  bool isHtmlLoaded = false;
 
   BackendUsageBuilderImpl(this._frontendStrategy);
 
@@ -154,8 +164,7 @@ class BackendUsageBuilderImpl implements BackendUsageBuilder {
   bool _isValidEntity(Entity element) {
     if (element is ConstructorEntity &&
         (element == _commonElements.streamIteratorConstructor ||
-            _commonElements.isSymbolConstructor(element) ||
-            _commonElements.isSymbolValidatedConstructor(element))) {
+            _commonElements.isSymbolConstructor(element))) {
       // TODO(johnniwinther): These are valid but we could be more precise.
       return true;
     } else if (element == _commonElements.symbolImplementationClass ||
@@ -164,6 +173,8 @@ class BackendUsageBuilderImpl implements BackendUsageBuilder {
       return true;
     } else if (element == _commonElements.listClass ||
         element == _commonElements.mapLiteralClass ||
+        element == _commonElements.setLiteralClass ||
+        element == _commonElements.unmodifiableSetClass ||
         element == _commonElements.functionClass ||
         element == _commonElements.stringClass) {
       // TODO(johnniwinther): Avoid these.
@@ -187,6 +198,7 @@ class BackendUsageBuilderImpl implements BackendUsageBuilder {
     }
   }
 
+  @override
   void processBackendImpact(BackendImpact backendImpact) {
     for (FunctionEntity staticUse in backendImpact.staticUses) {
       assert(staticUse != null);
@@ -220,6 +232,7 @@ class BackendUsageBuilderImpl implements BackendUsageBuilder {
     }
   }
 
+  @override
   void registerUsedMember(MemberEntity member) {
     if (member == _commonElements.getIsolateAffinityTagMarker) {
       _needToInitializeIsolateAffinityTag = true;
@@ -232,6 +245,7 @@ class BackendUsageBuilderImpl implements BackendUsageBuilder {
     }
   }
 
+  @override
   void registerGlobalFunctionDependency(FunctionEntity element) {
     assert(element != null);
     if (_globalFunctionDependencies == null) {
@@ -240,6 +254,7 @@ class BackendUsageBuilderImpl implements BackendUsageBuilder {
     _globalFunctionDependencies.add(element);
   }
 
+  @override
   void registerGlobalClassDependency(ClassEntity element) {
     assert(element != null);
     if (_globalClassDependencies == null) {
@@ -253,6 +268,12 @@ class BackendUsageBuilderImpl implements BackendUsageBuilder {
     _runtimeTypeUses.add(runtimeTypeUse);
   }
 
+  @override
+  void registerHtmlIsLoaded() {
+    isHtmlLoaded = true;
+  }
+
+  @override
   BackendUsage close() {
     return new BackendUsageImpl(
         globalFunctionDependencies: _globalFunctionDependencies,
@@ -265,7 +286,8 @@ class BackendUsageBuilderImpl implements BackendUsageBuilder {
         runtimeTypeUses: _runtimeTypeUses,
         isFunctionApplyUsed: isFunctionApplyUsed,
         isMirrorsUsed: isMirrorsUsed,
-        isNoSuchMethodUsed: isNoSuchMethodUsed);
+        isNoSuchMethodUsed: isNoSuchMethodUsed,
+        isHtmlLoaded: isHtmlLoaded);
   }
 }
 
@@ -286,20 +308,25 @@ class BackendUsageImpl implements BackendUsage {
 
   final Set<RuntimeTypeUse> _runtimeTypeUses;
 
+  @override
   bool needToInitializeIsolateAffinityTag;
+  @override
   bool needToInitializeDispatchProperty;
 
-  /// `true` if a core-library function requires the preamble file to function.
+  @override
   final bool requiresPreamble;
 
-  /// `true` if `Function.apply` is used.
+  @override
   final bool isFunctionApplyUsed;
 
-  /// `true` if 'dart:mirrors' features are used.
+  @override
   final bool isMirrorsUsed;
 
-  /// `true` if `noSuchMethod` is used.
+  @override
   final bool isNoSuchMethodUsed;
+
+  @override
+  final bool isHtmlLoaded;
 
   BackendUsageImpl(
       {Set<FunctionEntity> globalFunctionDependencies,
@@ -312,7 +339,8 @@ class BackendUsageImpl implements BackendUsage {
       Set<RuntimeTypeUse> runtimeTypeUses,
       this.isFunctionApplyUsed,
       this.isMirrorsUsed,
-      this.isNoSuchMethodUsed})
+      this.isNoSuchMethodUsed,
+      this.isHtmlLoaded})
       : this._globalFunctionDependencies = globalFunctionDependencies,
         this._globalClassDependencies = globalClassDependencies,
         this._helperFunctionsUsed = helperFunctionsUsed,
@@ -339,6 +367,7 @@ class BackendUsageImpl implements BackendUsage {
     bool isFunctionApplyUsed = source.readBool();
     bool isMirrorsUsed = source.readBool();
     bool isNoSuchMethodUsed = source.readBool();
+    bool isHtmlLoaded = source.readBool();
     source.end(tag);
     return new BackendUsageImpl(
         globalFunctionDependencies: globalFunctionDependencies,
@@ -351,9 +380,11 @@ class BackendUsageImpl implements BackendUsage {
         requiresPreamble: requiresPreamble,
         isFunctionApplyUsed: isFunctionApplyUsed,
         isMirrorsUsed: isMirrorsUsed,
-        isNoSuchMethodUsed: isNoSuchMethodUsed);
+        isNoSuchMethodUsed: isNoSuchMethodUsed,
+        isHtmlLoaded: isHtmlLoaded);
   }
 
+  @override
   void writeToDataSink(DataSink sink) {
     sink.begin(tag);
     sink.writeMembers(_globalFunctionDependencies);
@@ -371,6 +402,7 @@ class BackendUsageImpl implements BackendUsage {
     sink.writeBool(isFunctionApplyUsed);
     sink.writeBool(isMirrorsUsed);
     sink.writeBool(isNoSuchMethodUsed);
+    sink.writeBool(isHtmlLoaded);
     sink.end(tag);
   }
 

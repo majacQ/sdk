@@ -5,6 +5,10 @@
 #ifndef RUNTIME_VM_COMPILER_BACKEND_LINEARSCAN_H_
 #define RUNTIME_VM_COMPILER_BACKEND_LINEARSCAN_H_
 
+#if defined(DART_PRECOMPILED_RUNTIME)
+#error "AOT runtime should not use compiler sources (including header files)"
+#endif  // defined(DART_PRECOMPILED_RUNTIME)
+
 #include "vm/compiler/backend/flow_graph.h"
 #include "vm/compiler/backend/il.h"
 #include "vm/growable_array.h"
@@ -52,7 +56,8 @@ struct ExtraLoopInfo;
 class FlowGraphAllocator : public ValueObject {
  public:
   // Number of stack slots needed for a fpu register spill slot.
-  static const intptr_t kDoubleSpillFactor = kDoubleSize / kWordSize;
+  static const intptr_t kDoubleSpillFactor =
+      kDoubleSize / compiler::target::kWordSize;
 
   explicit FlowGraphAllocator(const FlowGraph& flow_graph,
                               bool intrinsic_mode = false);
@@ -61,6 +66,20 @@ class FlowGraphAllocator : public ValueObject {
 
   // Map a virtual register number to its live range.
   LiveRange* GetLiveRange(intptr_t vreg);
+
+  DART_FORCE_INLINE static void SetLifetimePosition(Instruction* instr,
+                                                    intptr_t pos) {
+    instr->SetPassSpecificId(CompilerPass::kAllocateRegisters, pos);
+  }
+
+  DART_FORCE_INLINE static bool HasLifetimePosition(Instruction* instr) {
+    return instr->HasPassSpecificId(CompilerPass::kAllocateRegisters);
+  }
+
+  DART_FORCE_INLINE static intptr_t GetLifetimePosition(
+      const Instruction* instr) {
+    return instr->GetPassSpecificId(CompilerPass::kAllocateRegisters);
+  }
 
  private:
   void CollectRepresentations();
@@ -127,7 +146,8 @@ class FlowGraphAllocator : public ValueObject {
 
   void ProcessInitialDefinition(Definition* defn,
                                 LiveRange* range,
-                                BlockEntryInstr* block);
+                                BlockEntryInstr* block,
+                                bool second_location_for_definition = false);
   void ConnectIncomingPhiMoves(JoinEntryInstr* join);
   void BlockLocation(Location loc, intptr_t from, intptr_t to);
   void BlockRegisterLocation(Location loc,
@@ -152,11 +172,10 @@ class FlowGraphAllocator : public ValueObject {
   void AllocateUnallocatedRanges();
   void AdvanceActiveIntervals(const intptr_t start);
 
+  void RemoveFrameIfNotNeeded();
+
   // Connect split siblings over non-linear control flow edges.
   void ResolveControlFlow();
-  void ConnectSplitSiblings(LiveRange* range,
-                            BlockEntryInstr* source_block,
-                            BlockEntryInstr* target_block);
 
   // Returns true if the target location is the spill slot for the given range.
   bool TargetLocationIsSpillSlot(LiveRange* range, Location target);
@@ -243,6 +262,11 @@ class FlowGraphAllocator : public ValueObject {
 
   void PrintLiveRanges();
 
+  Location ComputeParameterLocation(BlockEntryInstr* block,
+                                    ParameterInstr* param,
+                                    Register base_reg,
+                                    intptr_t pair_index);
+
   const FlowGraph& flow_graph_;
 
   ReachingDefs reaching_defs_;
@@ -293,10 +317,6 @@ class FlowGraphAllocator : public ValueObject {
   Location::Kind register_kind_;
 
   intptr_t number_of_registers_;
-
-#if defined(TARGET_ARCH_DBC)
-  intptr_t last_used_register_;
-#endif
 
   // Per register lists of allocated live ranges.  Contain only those
   // ranges that can be affected by future allocation decisions.
@@ -525,16 +545,16 @@ class LiveRange : public ZoneAllocated {
   Location spill_slot() const { return spill_slot_; }
 
   bool HasOnlyUnconstrainedUsesInLoop(intptr_t loop_id) const {
-    if (loop_id < kBitsPerWord) {
-      const intptr_t mask = static_cast<intptr_t>(1) << loop_id;
+    if (loop_id < kMaxLoops) {
+      const uint64_t mask = static_cast<uint64_t>(1) << loop_id;
       return (has_only_any_uses_in_loops_ & mask) != 0;
     }
     return false;
   }
 
   void MarkHasOnlyUnconstrainedUsesInLoop(intptr_t loop_id) {
-    if (loop_id < kBitsPerWord) {
-      has_only_any_uses_in_loops_ |= static_cast<intptr_t>(1) << loop_id;
+    if (loop_id < kMaxLoops) {
+      has_only_any_uses_in_loops_ |= static_cast<uint64_t>(1) << loop_id;
     }
   }
 
@@ -576,7 +596,8 @@ class LiveRange : public ZoneAllocated {
 
   LiveRange* next_sibling_;
 
-  intptr_t has_only_any_uses_in_loops_;
+  static constexpr intptr_t kMaxLoops = sizeof(uint64_t) * kBitsPerByte;
+  uint64_t has_only_any_uses_in_loops_;
   bool is_loop_phi_;
 
   AllocationFinger finger_;

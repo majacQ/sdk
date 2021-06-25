@@ -1,7 +1,7 @@
 // Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-
+// @dart=2.9
 /*@testedFeatures=inference*/
 library test;
 
@@ -37,6 +37,6 @@ G bar() => new H();
 // bar().foo resolves to G::foo, which is inherited from E::foo, so its return
 // type is B.  Note that the target is annotated as G::foo, since that is the
 // forwarding stub.
-var /*@topType=B*/ x = bar(). /*@target=G::foo*/ foo();
+var x = bar(). /*@target=G.foo*/ foo();
 
 main() {}

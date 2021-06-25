@@ -6,7 +6,7 @@ library set_library_debuggable_test;
 
 import 'dart:developer';
 import 'package:observatory/service_io.dart';
-import 'package:unittest/unittest.dart';
+import 'package:test/test.dart';
 import 'service_test_common.dart';
 import 'test_helper.dart';
 
@@ -49,8 +49,8 @@ var tests = <IsolateTest>[
       'libraryId': dartCore.id,
       'isDebuggable': false,
     };
-    Map<String, dynamic> result = await isolate.invokeRpcNoUpgrade(
-        'setLibraryDebuggable', setDebugParams);
+    var result = await isolate.invokeRpcNoUpgrade(
+        'setLibraryDebuggable', setDebugParams) as Map<String, dynamic>;
     expect(result['type'], equals('Success'));
     await dartCore.reload();
     expect(dartCore.debuggable, equals(false));

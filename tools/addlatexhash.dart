@@ -22,11 +22,11 @@
 // NB: This utility assumes UN*X style line endings, \n, in the LaTeX
 // source file received as input; it will not work with other styles.
 
+import 'dart:convert';
 import 'dart:io';
 
-import 'package:crypto/crypto.dart';
 import 'package:convert/convert.dart';
-import 'package:utf/utf.dart';
+import 'package:crypto/crypto.dart';
 
 // ----------------------------------------------------------------------
 // Normalization of the text: removal or normalization of parts that
@@ -111,7 +111,7 @@ normalizeWhitespace(line) {
 multilineNormalize(lines) {
   var afterBlankLines = false; // Does [line] succeed >0 empty lines?
   var afterCommentLines = false; // Does [line] succeed >0 commentOnly lines?
-  var newLines = new List();
+  var newLines = [];
   for (var line in lines) {
     if (afterBlankLines && afterCommentLines) {
       // Previous line was both blank and a comment: not possible.
@@ -193,7 +193,7 @@ sispIsDartEnd(line) => line.contains(dartCodeEndRE);
 /// and "interesting" lines may be characterized by [analysisFunc] via
 /// the returned event object.
 findEvents(lines, analyzer) {
-  var events = new List();
+  var events = [];
   for (var line in lines) {
     var event = analyzer.analyze(line);
     if (event != null) events.add(event);
@@ -242,8 +242,11 @@ bool isntHashBlockTerminator(line) => !isSectioningCommand(line);
 extractHashLabel(line) {
   var startMatch = hashLabelStartRE.firstMatch(line);
   var endMatch = hashLabelEndRE.firstMatch(line);
-  assert(startMatch != null && endMatch != null);
-  return line.substring(startMatch.end, endMatch.start);
+  if (startMatch != null && endMatch != null) {
+    return line.substring(startMatch.end, endMatch.start);
+  } else {
+    throw "Assertion failure (so this file is both valid nnbd and not)";
+  }
 }
 
 // Event classes: Keep track of relevant information about the LaTeX
@@ -491,7 +494,7 @@ computeHashValue(lines, startIndex, nextIndex, listSink) {
   final gatheredLine = gatherLines(lines, startIndex, nextIndex);
   final simplifiedLine = simplifyLine(gatheredLine);
   listSink.write("  % $simplifiedLine\n");
-  var digest = sha1.convert(encodeUtf8(simplifiedLine));
+  var digest = sha1.convert(utf8.encode(simplifiedLine));
   return digest.bytes;
 }
 
@@ -540,7 +543,7 @@ main([args]) {
 
   // Perform single-line normalization.
   var inDartCode = false;
-  var normalizedLines = new List();
+  var normalizedLines = [];
 
   for (var line in lines) {
     if (sispIsDartBegin(line)) {

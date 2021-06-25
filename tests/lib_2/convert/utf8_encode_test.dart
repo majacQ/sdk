@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import "package:expect/expect.dart";
 import 'dart:convert';
 import 'unicode_tests.dart';
@@ -25,8 +27,8 @@ void testEncodeSlice() {
   String ascii = "ABCDE";
   Expect.listEquals([0x41, 0x42, 0x43, 0x44, 0x45], encoder.convert(ascii));
   Expect.listEquals([0x41, 0x42, 0x43, 0x44, 0x45], encoder.convert(ascii, 0));
-  Expect
-      .listEquals([0x41, 0x42, 0x43, 0x44, 0x45], encoder.convert(ascii, 0, 5));
+  Expect.listEquals(
+      [0x41, 0x42, 0x43, 0x44, 0x45], encoder.convert(ascii, 0, 5));
   Expect.listEquals([0x42, 0x43, 0x44, 0x45], encoder.convert(ascii, 1));
   Expect.listEquals([0x41, 0x42, 0x43, 0x44], encoder.convert(ascii, 0, 4));
   Expect.listEquals([0x42, 0x43, 0x44], encoder.convert(ascii, 1, 4));
@@ -50,6 +52,6 @@ void testEncodeSlice() {
   Expect.listEquals(
       [0xc2, 0x82, 0xe1, 0x81, 0x81], encoder.convert(unicode, 1, 3));
   // Split in the middle of a surrogate pair.
-  Expect.listEquals([0xc2, 0x82, 0xe1, 0x81, 0x81, 0xed, 0xa0, 0x80],
+  Expect.listEquals([0xc2, 0x82, 0xe1, 0x81, 0x81, 0xef, 0xbf, 0xbd],
       encoder.convert(unicode, 1, 4));
 }

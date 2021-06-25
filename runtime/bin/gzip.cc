@@ -4,6 +4,7 @@
 
 #include "bin/gzip.h"
 
+#include "platform/allocation.h"
 #include "platform/assert.h"
 #include "platform/globals.h"
 #include "zlib/zlib.h"
@@ -29,7 +30,7 @@ void Decompress(const uint8_t* input,
   }
   *output = reinterpret_cast<uint8_t*>(malloc(output_capacity));
 
-  uint8_t chunk_out[kChunkSize];
+  uint8_t* chunk_out = reinterpret_cast<uint8_t*>(malloc(kChunkSize));
   z_stream strm;
   strm.zalloc = Z_NULL;
   strm.zfree = Z_NULL;
@@ -80,6 +81,7 @@ void Decompress(const uint8_t* input,
   inflateEnd(&strm);
 
   *output_length = output_cursor;
+  free(chunk_out);
 }
 
 }  // namespace bin

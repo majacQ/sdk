@@ -6,17 +6,20 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:analysis_server_client/server.dart';
+import 'package:analysis_server_client/listener/server_listener.dart';
 import 'package:analysis_server_client/protocol.dart';
+import 'package:analysis_server_client/server.dart';
 import 'package:test/test.dart';
 
 void main() {
-  MockProcess process;
-  Server server;
+  late _ServerListener listener;
+  late MockProcess process;
+  late Server server;
 
   setUp(() async {
-    process = new MockProcess();
-    server = new Server(process: process);
+    process = MockProcess();
+    listener = _ServerListener();
+    server = Server(process: process, listener: listener);
   });
 
   group('listenToOutput', () {
@@ -27,7 +30,7 @@ void main() {
       final future = server.send('blahMethod', null);
       server.listenToOutput();
 
-      final response = await future;
+      final response = (await future)!;
       expect(response['foo'], 'bar');
     });
 
@@ -36,12 +39,14 @@ void main() {
       process.stderr = _noMessage();
 
       final future = server.send('blahMethod', null);
+      // ignore: unawaited_futures
       future.catchError((e) {
         expect(e, const TypeMatcher<RequestError>());
         final error = e as RequestError;
         expect(error.code, RequestErrorCode.UNKNOWN_REQUEST);
         expect(error.message, 'something went wrong');
         expect(error.stackTrace, 'some long stack trace');
+        return <String, Object?>{};
       });
       server.listenToOutput();
     });
@@ -50,51 +55,109 @@ void main() {
       process.stdout = _eventMessage();
       process.stderr = _noMessage();
 
-      final completer = new Completer();
+      final completer = Completer();
       void eventHandler(Notification notification) {
         expect(notification.event, 'fooEvent');
-        expect(notification.params.length, 2);
-        expect(notification.params['foo'] as String, 'bar');
-        expect(notification.params['baz'] as String, 'bang');
+        var params = notification.params!;
+        expect(params.length, 2);
+        expect(params['foo'] as String, 'bar');
+        expect(params['baz'] as String, 'bang');
         completer.complete();
       }
 
+      // ignore: unawaited_futures
       server.send('blahMethod', null);
       server.listenToOutput(notificationProcessor: eventHandler);
       await completer.future;
+    });
+
+    test('unexpected message', () async {
+      // No 'id', so not a response.
+      // No 'event', so not a notification.
+      process.stdout = Stream.value(
+        utf8.encoder.convert(json.encode({'foo': 'bar'})),
+      );
+      process.stderr = _noMessage();
+
+      server.listenToOutput();
+
+      // Must happen for the test to pass.
+      await listener.unexpectedMessageController.stream.first;
+    });
+
+    test('unexpected notification format', () async {
+      process.stdout = Stream.value(
+        utf8.encoder.convert(json.encode({'event': 'foo', 'noParams': '42'})),
+      );
+      process.stderr = _noMessage();
+
+      server.listenToOutput();
+
+      // Must happen for the test to pass.
+      await listener.unexpectedNotificationFormatCompleter.stream.first;
+    });
+
+    test('unexpected response', () async {
+      // We have no asked anything, but got a response.
+      process.stdout = Stream.value(
+        utf8.encoder.convert(json.encode({'id': '0'})),
+      );
+      process.stderr = _noMessage();
+
+      server.listenToOutput();
+
+      // Must happen for the test to pass.
+      await listener.unexpectedResponseCompleter.stream.first;
+    });
+
+    test('unexpected response format', () async {
+      // We expect that the first request has id `0`.
+      // The response is invalid - the "result" field is not an object.
+      process.stdout = Stream.value(
+        utf8.encoder.convert(json.encode({'id': '0', 'result': '42'})),
+      );
+      process.stderr = _noMessage();
+
+      // ignore: unawaited_futures
+      server.send('blahMethod', null);
+      server.listenToOutput();
+
+      // Must happen for the test to pass.
+      await listener.unexpectedResponseFormatCompleter.stream.first;
     });
   });
 
   group('stop', () {
     test('ok', () async {
-      final mockout = new StreamController<List<int>>();
+      final mockout = StreamController<List<int>>();
       process.stdout = mockout.stream;
       process.stderr = _noMessage();
+      // ignore: unawaited_futures
       process.mockin.controller.stream.first.then((_) {
-        String encoded = json.encode({'id': '0'});
+        var encoded = json.encode({'id': '0'});
         mockout.add(utf8.encoder.convert('$encoded\n'));
       });
-      process.exitCode = new Future.value(0);
+      process.exitCode = Future.value(0);
 
       server.listenToOutput();
       await server.stop(timeLimit: const Duration(milliseconds: 1));
       expect(process.killed, isFalse);
     });
     test('stopped', () async {
-      final mockout = new StreamController<List<int>>();
+      final mockout = StreamController<List<int>>();
       process.stdout = mockout.stream;
       process.stderr = _noMessage();
-      process.exitCode = new Future.value(0);
+      process.exitCode = Future.value(0);
 
       server.listenToOutput();
       await server.stop(timeLimit: const Duration(milliseconds: 1));
       expect(process.killed, isFalse);
     });
     test('kill', () async {
-      final mockout = new StreamController<List<int>>();
+      final mockout = StreamController<List<int>>();
       process.stdout = mockout.stream;
       process.stderr = _noMessage();
-      process.exitCode = new Future.delayed(const Duration(seconds: 1));
+      process.exitCode = Future.delayed(const Duration(seconds: 1), () => 0);
 
       server.listenToOutput();
       await server.stop(timeLimit: const Duration(milliseconds: 10));
@@ -141,41 +204,35 @@ Stream<List<int>> _noMessage() async* {
 }
 
 class MockProcess implements Process {
-  MockStdin mockin = new MockStdin();
+  MockStdin mockin = MockStdin();
 
   bool killed = false;
 
   @override
-  Stream<List<int>> stderr;
+  late Stream<List<int>> stderr;
+
+  @override
+  late Stream<List<int>> stdout;
+
+  @override
+  late Future<int> exitCode;
 
   @override
   IOSink get stdin => mockin;
 
   @override
-  Stream<List<int>> stdout;
-
-  @override
-  Future<int> exitCode;
-
-  @override
-  int get pid => null;
-
-  @override
   bool kill([ProcessSignal signal = ProcessSignal.sigterm]) {
-    bool wasKilled = killed;
+    var wasKilled = killed;
     killed = true;
     return !wasKilled;
   }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 class MockStdin implements IOSink {
-  final controller = new StreamController<String>();
-
-  @override
-  Encoding encoding;
-
-  @override
-  Future get done => null;
+  final controller = StreamController<String>();
 
   @override
   void add(List<int> data) {
@@ -183,26 +240,35 @@ class MockStdin implements IOSink {
   }
 
   @override
-  void addError(Object error, [StackTrace stackTrace]) {}
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _ServerListener with ServerListener {
+  final unexpectedMessageController = StreamController<Object>();
+  final unexpectedNotificationFormatCompleter = StreamController<Object>();
+  final unexpectedResponseCompleter = StreamController<Object>();
+  final unexpectedResponseFormatCompleter = StreamController<Object>();
 
   @override
-  Future addStream(Stream<List<int>> stream) => null;
+  void log(String prefix, String details) {}
 
   @override
-  Future close() => null;
+  void unexpectedMessage(Map<String, Object?> message) {
+    unexpectedMessageController.add(message);
+  }
 
   @override
-  Future flush() => null;
+  void unexpectedNotificationFormat(Map<String, Object?> message) {
+    unexpectedNotificationFormatCompleter.add(message);
+  }
 
   @override
-  void write(Object obj) {}
+  void unexpectedResponse(Map<String, Object?> message, Object id) {
+    unexpectedResponseCompleter.add(message);
+  }
 
   @override
-  void writeAll(Iterable objects, [String separator = ""]) {}
-
-  @override
-  void writeCharCode(int charCode) {}
-
-  @override
-  void writeln([Object obj = ""]) {}
+  void unexpectedResponseFormat(Map<String, Object?> message) {
+    unexpectedResponseFormatCompleter.add(message);
+  }
 }

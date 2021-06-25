@@ -26,7 +26,9 @@ toolchain_data = exec_script("setup_toolchain.py",
                                visual_studio_path,
                                windows_sdk_path,
                                visual_studio_runtime_dirs,
+                               "win",
                                current_cpu,
+                               "environment." + current_cpu,
                              ],
                              "scope")
 
@@ -72,7 +74,11 @@ template("msvc_toolchain") {
       # TODO(brettw) enable this when GN support in the binary has been rolled.
       #precompiled_header_type = "msvc"
       pdbname = "{{target_out_dir}}/{{target_output_name}}_c.pdb"
-      command = "ninja -t msvc -e $env -- $cl /nologo /showIncludes /FC @$rspfile /c {{source}} /Fo{{output}} /Fd$pdbname"
+      flags = ""
+      if (invoker.current_cpu == "x86") {
+        flags = "-m32"
+      }
+      command = "ninja -t msvc -e $env -- $cl $flags /nologo /showIncludes /FC @$rspfile /c {{source}} /Fo{{output}} /Fd$pdbname"
       depsformat = "msvc"
       description = "CC {{output}}"
       outputs = [
@@ -89,7 +95,11 @@ template("msvc_toolchain") {
 
       # The PDB name needs to be different between C and C++ compiled files.
       pdbname = "{{target_out_dir}}/{{target_output_name}}_cc.pdb"
-      command = "ninja -t msvc -e $env -- $cl /nologo /showIncludes /FC @$rspfile /c {{source}} /Fo{{output}} /Fd$pdbname"
+      flags = ""
+      if (invoker.current_cpu == "x86") {
+        flags = "-m32"
+      }
+      command = "ninja -t msvc -e $env -- $cl $flags /nologo /showIncludes /FC @$rspfile /c {{source}} /Fo{{output}} /Fd$pdbname"
       depsformat = "msvc"
       description = "CXX {{output}}"
       outputs = [
@@ -138,9 +148,10 @@ template("msvc_toolchain") {
     }
 
     tool("solink") {
-      dllname = "{{root_out_dir}}/{{target_output_name}}{{output_extension}}"  # e.g. foo.dll
-      libname =
-          "{{root_out_dir}}/{{target_output_name}}{{output_extension}}.lib"  # e.g. foo.dll.lib
+      dllname = "{{root_out_dir}}/{{target_output_name}}{{output_extension}}"  # e.g.
+                                                                               # foo.dll
+      libname = "{{root_out_dir}}/{{target_output_name}}{{output_extension}}.lib"  # e.g.
+                                                                                   # foo.dll.lib
       rspfile = "${dllname}.rsp"
 
       link_command = "$python_path $tool_wrapper_path link-wrapper $env False link.exe /nologo /IMPLIB:$libname /DLL /OUT:$dllname /PDB:${dllname}.pdb @$rspfile"
@@ -165,7 +176,9 @@ template("msvc_toolchain") {
     }
 
     tool("solink_module") {
-      dllname = "{{output_dir}}/{{target_output_name}}{{output_extension}}"  # e.g. foo.dll
+      dllname =
+          "{{output_dir}}/{{target_output_name}}{{output_extension}}"  # e.g.
+                                                                       # foo.dll
       pdbname = "${dllname}.pdb"
       rspfile = "${dllname}.rsp"
 
@@ -182,6 +195,8 @@ template("msvc_toolchain") {
       # The use of inputs_newline is to work around a fixed per-line buffer
       # size in the linker.
       rspfile_content = "{{libs}} {{solibs}} {{inputs_newline}} {{ldflags}}"
+
+      restat = true
     }
 
     tool("link") {
@@ -206,6 +221,8 @@ template("msvc_toolchain") {
       # The use of inputs_newline is to work around a fixed per-line buffer
       # size in the linker.
       rspfile_content = "{{inputs_newline}} {{libs}} {{solibs}} {{ldflags}}"
+
+      restat = true
     }
 
     tool("stamp") {
@@ -243,8 +260,7 @@ if (current_cpu == "x86") {
   msvc_toolchain("clang_x86") {
     environment = "environment.x86"
     current_cpu = "x86"
-    prefix = rebase_path("//third_party/llvm-build/Release+Asserts/bin",
-                         root_build_dir)
+    prefix = rebase_path("//buildtools/win-x64/clang/bin", root_build_dir)
     cl = "${goma_prefix}$prefix/clang-cl.exe"
     is_clang = true
   }
@@ -260,8 +276,7 @@ if (current_cpu == "x64") {
   msvc_toolchain("clang_x64") {
     environment = "environment.x64"
     current_cpu = "x64"
-    prefix = rebase_path("//third_party/llvm-build/Release+Asserts/bin",
-                         root_build_dir)
+    prefix = rebase_path("//buildtools/win-x64/clang/bin", root_build_dir)
     cl = "${goma_prefix}$prefix/clang-cl.exe"
     is_clang = true
   }

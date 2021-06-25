@@ -4,6 +4,8 @@
 //
 // Tests socket exceptions.
 
+// @dart = 2.9
+
 import "dart:async";
 import "dart:io";
 
@@ -28,10 +30,9 @@ void serverSocketExceptionTest() {
     Expect.equals(true, !wrongExceptionCaught);
 
     // Test invalid host.
-    ServerSocket
-        .bind("__INVALID_HOST__", 0)
-        .then((server) {})
-        .catchError((e) => e is SocketException);
+    ServerSocket.bind("__INVALID_HOST__", 0).then((server) {
+      Expect.fail('Connection succeeded.');
+    }).catchError((e) => Expect.isTrue(e is SocketException));
   });
 }
 

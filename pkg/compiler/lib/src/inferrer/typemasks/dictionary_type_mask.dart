@@ -4,14 +4,12 @@
 
 part of masks;
 
-/**
- * A [DictionaryTypeMask] is a [TypeMask] for a specific allocation
- * site of a map (currently only internal Map class) that is used as
- * a dictionary, i.e. a mapping from a set of statically known strings
- * to values. These typemasks only come into existence after the
- * [TypeGraphInferrer] has successfully identified such a usage. Otherwise,
- * the more general [MapTypeMask] is used.
- */
+/// A [DictionaryTypeMask] is a [TypeMask] for a specific allocation
+/// site of a map (currently only internal Map class) that is used as
+/// a dictionary, i.e. a mapping from a set of statically known strings
+/// to values. These typemasks only come into existence after the
+/// [TypeGraphInferrer] has successfully identified such a usage. Otherwise,
+/// the more general [MapTypeMask] is used.
 class DictionaryTypeMask extends MapTypeMask {
   /// Tag used for identifying serialized [DictionaryTypeMask] objects in a
   /// debugging data stream.
@@ -22,7 +20,7 @@ class DictionaryTypeMask extends MapTypeMask {
 
   DictionaryTypeMask(
       TypeMask forwardTo,
-      ir.TreeNode allocationNode,
+      ir.Node allocationNode,
       MemberEntity allocationElement,
       TypeMask keyType,
       TypeMask valueType,
@@ -31,21 +29,22 @@ class DictionaryTypeMask extends MapTypeMask {
 
   /// Deserializes a [DictionaryTypeMask] object from [source].
   factory DictionaryTypeMask.readFromDataSource(
-      DataSource source, JClosedWorld closedWorld) {
+      DataSource source, CommonMasks domain) {
     source.begin(tag);
-    TypeMask forwardTo = new TypeMask.readFromDataSource(source, closedWorld);
+    TypeMask forwardTo = new TypeMask.readFromDataSource(source, domain);
     ir.TreeNode allocationNode = source.readTreeNodeOrNull();
     MemberEntity allocationElement = source.readMemberOrNull();
-    TypeMask keyType = new TypeMask.readFromDataSource(source, closedWorld);
-    TypeMask valueType = new TypeMask.readFromDataSource(source, closedWorld);
-    Map<String, AbstractValue> typeMap = source.readStringMap(
-        () => new TypeMask.readFromDataSource(source, closedWorld));
+    TypeMask keyType = new TypeMask.readFromDataSource(source, domain);
+    TypeMask valueType = new TypeMask.readFromDataSource(source, domain);
+    Map<String, AbstractValue> typeMap = source
+        .readStringMap(() => new TypeMask.readFromDataSource(source, domain));
     source.end(tag);
     return new DictionaryTypeMask(forwardTo, allocationNode, allocationElement,
         keyType, valueType, typeMap);
   }
 
   /// Serializes this [DictionaryTypeMask] to [sink].
+  @override
   void writeToDataSink(DataSink sink) {
     sink.writeEnum(TypeMaskKind.dictionary);
     sink.begin(tag);
@@ -61,6 +60,7 @@ class DictionaryTypeMask extends MapTypeMask {
     sink.end(tag);
   }
 
+  @override
   TypeMask nullable() {
     return isNullable
         ? this
@@ -68,6 +68,7 @@ class DictionaryTypeMask extends MapTypeMask {
             allocationElement, keyType, valueType, _typeMap);
   }
 
+  @override
   TypeMask nonNullable() {
     return isNullable
         ? new DictionaryTypeMask(forwardTo.nonNullable(), allocationNode,
@@ -75,13 +76,16 @@ class DictionaryTypeMask extends MapTypeMask {
         : this;
   }
 
+  @override
   bool get isDictionary => true;
+  @override
   bool get isExact => true;
 
   bool containsKey(String key) => _typeMap.containsKey(key);
 
   TypeMask getValueForKey(String key) => _typeMap[key];
 
+  @override
   bool equalsDisregardNull(other) {
     if (other is! DictionaryTypeMask) return false;
     return allocationNode == other.allocationNode &&
@@ -92,13 +96,15 @@ class DictionaryTypeMask extends MapTypeMask {
             (k) => _typeMap.containsKey(k) && _typeMap[k] == other._typeMap[k]);
   }
 
-  TypeMask intersection(TypeMask other, JClosedWorld closedWorld) {
-    TypeMask forwardIntersection = forwardTo.intersection(other, closedWorld);
+  @override
+  TypeMask intersection(TypeMask other, CommonMasks domain) {
+    TypeMask forwardIntersection = forwardTo.intersection(other, domain);
     if (forwardIntersection.isEmptyOrNull) return forwardIntersection;
     return forwardIntersection.isNullable ? nullable() : nonNullable();
   }
 
-  TypeMask union(dynamic other, JClosedWorld closedWorld) {
+  @override
+  TypeMask union(dynamic other, CommonMasks domain) {
     if (this == other) {
       return this;
     } else if (equalsDisregardNull(other)) {
@@ -106,9 +112,9 @@ class DictionaryTypeMask extends MapTypeMask {
     } else if (other.isEmptyOrNull) {
       return other.isNullable ? this.nullable() : this;
     } else if (other.isDictionary) {
-      TypeMask newForwardTo = forwardTo.union(other.forwardTo, closedWorld);
-      TypeMask newKeyType = keyType.union(other.keyType, closedWorld);
-      TypeMask newValueType = valueType.union(other.valueType, closedWorld);
+      TypeMask newForwardTo = forwardTo.union(other.forwardTo, domain);
+      TypeMask newKeyType = keyType.union(other.keyType, domain);
+      TypeMask newValueType = valueType.union(other.valueType, domain);
       Map<String, TypeMask> mappings = <String, TypeMask>{};
       _typeMap.forEach((k, dynamic v) {
         if (!other._typeMap.containsKey(k)) {
@@ -117,7 +123,7 @@ class DictionaryTypeMask extends MapTypeMask {
       });
       other._typeMap.forEach((k, v) {
         if (_typeMap.containsKey(k)) {
-          mappings[k] = v.union(_typeMap[k], closedWorld);
+          mappings[k] = v.union(_typeMap[k], domain);
         } else {
           mappings[k] = v.nullable();
         }
@@ -127,22 +133,25 @@ class DictionaryTypeMask extends MapTypeMask {
     } else if (other.isMap &&
         (other.keyType != null) &&
         (other.valueType != null)) {
-      TypeMask newForwardTo = forwardTo.union(other.forwardTo, closedWorld);
-      TypeMask newKeyType = keyType.union(other.keyType, closedWorld);
-      TypeMask newValueType = valueType.union(other.valueType, closedWorld);
+      TypeMask newForwardTo = forwardTo.union(other.forwardTo, domain);
+      TypeMask newKeyType = keyType.union(other.keyType, domain);
+      TypeMask newValueType = valueType.union(other.valueType, domain);
       return new MapTypeMask(
           newForwardTo, null, null, newKeyType, newValueType);
     } else {
-      return forwardTo.union(other, closedWorld);
+      return forwardTo.union(other, domain);
     }
   }
 
+  @override
   bool operator ==(other) => super == other;
 
+  @override
   int get hashCode {
     return computeHashCode(allocationNode, isNullable, _typeMap, forwardTo);
   }
 
+  @override
   String toString() {
     return 'Dictionary($forwardTo, key: $keyType, '
         'value: $valueType, map: $_typeMap)';

@@ -4,33 +4,22 @@
 
 part of js_backend.namer;
 
-/**
- * Assigns JavaScript identifiers to Dart variables, class-names and members.
- */
+/// Assigns JavaScript identifiers to Dart variables, class-names and members.
 class MinifyNamer extends Namer
     with
         _MinifiedFieldNamer,
         _MinifyConstructorBodyNamer,
         _MinifiedOneShotInterceptorNamer {
-  MinifyNamer(JClosedWorld closedWorld, CodegenWorldBuilder codegenWorldBuilder)
-      : super(closedWorld, codegenWorldBuilder) {
+  MinifyNamer(JClosedWorld closedWorld, FixedNames fixedNames)
+      : super(closedWorld, fixedNames) {
     reserveBackendNames();
     fieldRegistry = new _FieldNamingRegistry(this);
   }
 
+  @override
   _FieldNamingRegistry fieldRegistry;
 
-  String get isolateName => 'I';
-  String get isolatePropertiesName => 'p';
-  bool get shouldMinify => true;
-
-  final String getterPrefix = 'g';
-  final String setterPrefix = 's';
-  final String callPrefix = ''; // this will create function names $<n>
-  String get callCatchAllName => r'$C';
-  String get requiredParameterField => r'$R';
-  String get defaultValuesField => r'$D';
-  String get operatorSignature => r'$S';
+  @override
   String get genericInstantiationPrefix => r'$I';
 
   final ALPHABET_CHARACTERS = 52; // a-zA-Z.
@@ -183,7 +172,7 @@ class MinifyNamer extends Namer
       r'JSArray',
       r'createInvocationMirror',
       r'String',
-      r'setRuntimeTypeInfo',
+      r'setArrayType',
       r'createRuntimeType'
     ]);
   }
@@ -378,7 +367,7 @@ abstract class _MinifyConstructorBodyNamer implements Namer {
   @override
   jsAst.Name constructorBodyName(ConstructorBodyEntity method) {
     _ConstructorBodyNamingScope scope = new _ConstructorBodyNamingScope(
-        method.enclosingClass, _constructorBodyScopes, elementEnvironment);
+        method.enclosingClass, _constructorBodyScopes, _elementEnvironment);
     String key = scope.constructorBodyKeyFor(method);
     return _disambiguateMemberByKey(
         key, () => _proposeNameForConstructorBody(method));
@@ -389,17 +378,21 @@ abstract class _MinifiedOneShotInterceptorNamer implements Namer {
   /// Property name used for the one-shot interceptor method for the given
   /// [selector] and return-type specialization.
   @override
-  jsAst.Name nameForGetOneShotInterceptor(
+  jsAst.Name nameForOneShotInterceptor(
       Selector selector, Iterable<ClassEntity> classes) {
     String root = selector.isOperator
         ? operatorNameToIdentifier(selector.name)
         : privateName(selector.memberName);
-    String prefix =
-        selector.isGetter ? r"$get" : selector.isSetter ? r"$set" : "";
+    String prefix = selector.isGetter
+        ? r"$get"
+        : selector.isSetter
+            ? r"$set"
+            : "";
     String callSuffix = selector.isCall
         ? Namer.callSuffixForStructure(selector.callStructure).join()
         : "";
-    String suffix = suffixForGetInterceptor(classes);
+    String suffix =
+        suffixForGetInterceptor(_commonElements, _nativeData, classes);
     String fullName = "\$intercepted$prefix\$$root$callSuffix\$$suffix";
     return _disambiguateInternalGlobal(fullName);
   }

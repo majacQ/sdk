@@ -242,10 +242,10 @@ static void native_echo(Dart_NativeArguments args) {
   EXPECT_VALID(toString);
   const char* c_str = NULL;
   EXPECT_VALID(Dart_StringToCString(toString, &c_str));
-  if (saved_echo) {
+  if (saved_echo != nullptr) {
     free(saved_echo);
   }
-  saved_echo = strdup(c_str);
+  saved_echo = Utils::StrDup(c_str);
   OS::PrintErr("-- (isolate=%p) %s\n", Dart_CurrentIsolate(), c_str);
   Dart_ExitScope();
 }
@@ -262,7 +262,7 @@ static void CustomIsolateImpl_start(Dart_NativeArguments args) {
   EXPECT(Dart_IsString(param));
   const char* isolate_main = NULL;
   EXPECT_VALID(Dart_StringToCString(param, &isolate_main));
-  isolate_main = strdup(isolate_main);
+  isolate_main = Utils::StrDup(isolate_main);
 
   // Save current isolate.
   Dart_Isolate saved_isolate = Dart_CurrentIsolate();
@@ -333,7 +333,7 @@ VM_UNIT_TEST_CASE(CustomIsolates) {
 
   OS::PrintErr("-- Starting event loop --\n");
   Event* event = event_queue->Get();
-  while (event) {
+  while (event != nullptr) {
     event->Process();
     delete event;
     event = event_queue->Get();

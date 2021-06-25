@@ -5,14 +5,18 @@
 import 'dart:async';
 import 'dart:developer';
 import 'package:observatory/service_io.dart';
-import 'package:unittest/unittest.dart';
+import 'package:test/test.dart';
 import 'service_test_common.dart';
 import 'test_helper.dart';
 
-primeDartTimeline() {
+primeDartTimeline() async {
   while (true) {
     Timeline.startSync('apple');
     Timeline.finishSync();
+    // Give the VM a chance to send the timeline events. This test is
+    // significantly slower if we loop without yielding control after each
+    // iteration.
+    await Future.delayed(const Duration(milliseconds: 1));
   }
 }
 
@@ -22,18 +26,26 @@ List filterEvents(List events, filter) {
   return events.where(filter).toList();
 }
 
-Completer completer = new Completer();
+late Completer<void> completer;
 int eventCount = 0;
 
 onTimelineEvent(ServiceEvent event) {
+  if (event.kind != ServiceEvent.kTimelineEvents) {
+    return;
+  }
   eventCount++;
-  expect(filterEvents(event.timelineEvents, isDart).length, greaterThan(0));
+  expect(filterEvents(event.timelineEvents!, isDart).length, greaterThan(0));
   if (eventCount == 5) {
     completer.complete(eventCount);
   }
 }
 
 var tests = <IsolateTest>[
+  (Isolate isolate) async {
+    // Clear global state.
+    eventCount = 0;
+    completer = Completer<void>();
+  },
   (Isolate isolate) async {
     // Subscribe to the Timeline stream.
     await subscribeToStream(isolate.vm, VM.kTimelineStream, onTimelineEvent);
@@ -45,7 +57,7 @@ var tests = <IsolateTest>[
   },
   (Isolate isolate) async {
     // Get the flags.
-    Map flags = await isolate.vm.invokeRpcNoUpgrade('_getVMTimelineFlags', {});
+    Map flags = await isolate.vm.invokeRpcNoUpgrade('getVMTimelineFlags', {});
     expect(flags['type'], 'TimelineFlags');
     // Confirm that 'Dart' is available.
     expect(flags['availableStreams'].contains('Dart'), isTrue);
@@ -54,7 +66,7 @@ var tests = <IsolateTest>[
   },
   (Isolate isolate) async {
     // Enable the Dart category.
-    await isolate.vm.invokeRpcNoUpgrade('_setVMTimelineFlags', {
+    await isolate.vm.invokeRpcNoUpgrade('setVMTimelineFlags', {
       "recordedStreams": ["Dart"]
     });
   },

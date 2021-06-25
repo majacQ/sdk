@@ -17,13 +17,11 @@ part of $LIBRARYNAME;
   * and prints its length:
   *
   *     var path = 'myData.json';
-  *     HttpRequest.getString(path)
-  *         .then((String fileContents) {
-  *           print(fileContents.length);
-  *         })
-  *         .catchError((Error error) {
-  *           print(error.toString());
-  *         });
+  *     HttpRequest.getString(path).then((String fileContents) {
+  *       print(fileContents.length);
+  *     }).catchError((error) {
+  *       print(error.toString());
+  *     });
   *
   * ## Fetching data from other servers
   *
@@ -35,19 +33,12 @@ part of $LIBRARYNAME;
   * as the requested resource.
   * In the example above, the myData.json file must be co-located with the
   * app that uses it.
-  * You might be able to
-  * [get around this restriction](http://www.dartlang.org/articles/json-web-service/#a-note-on-cors-and-httprequest)
-  * by using CORS headers or JSONP.
   *
   * ## Other resources
   *
-  * * [Fetch Data Dynamically](https://www.dartlang.org/docs/tutorials/fetchdata/),
-  * a tutorial from _A Game of Darts_,
-  * shows two different ways to use HttpRequest to get a JSON file.
-  * * [Get Input from a Form](https://www.dartlang.org/docs/tutorials/forms/),
-  * another tutorial from _A Game of Darts_,
-  * shows using HttpRequest with a custom server.
-  * * [Dart article on using HttpRequests](http://www.dartlang.org/articles/json-web-service/#getting-data)
+  * * [Fetch data dynamically](https://dart.dev/tutorials/web/fetch-data/),
+  * a tutorial shows how to load data from a static file or from a server.
+  * * [Dart article on using HttpRequests](https://dart.dev/guides/libraries/library-tour#using-http-resources-with-httprequest)
   * * [JS XMLHttpRequest](https://developer.mozilla.org/en-US/docs/DOM/XMLHttpRequest)
   * * [Using XMLHttpRequest](https://developer.mozilla.org/en-US/docs/DOM/XMLHttpRequest/Using_XMLHttpRequest)
  */
@@ -75,9 +66,10 @@ $(ANNOTATIONS)$(NATIVESPEC)$(CLASS_MODIFIERS)class $CLASSNAME$EXTENDS$IMPLEMENTS
    * * [request]
    */
   static Future<String> getString(String url,
-      {bool withCredentials, void onProgress(ProgressEvent e)}) {
+      {bool$NULLABLE withCredentials, void onProgress(ProgressEvent e)$NULLABLE}) {
     return request(url, withCredentials: withCredentials,
-        onProgress: onProgress).then((HttpRequest xhr) => xhr.responseText);
+        onProgress: onProgress).then(
+            (HttpRequest xhr) => xhr.responseText$NULLASSERT);
   }
 
   /**
@@ -106,9 +98,9 @@ $(ANNOTATIONS)$(NATIVESPEC)$(CLASS_MODIFIERS)class $CLASSNAME$EXTENDS$IMPLEMENTS
    * * [request]
    */
   static Future<HttpRequest> postFormData(String url, Map<String, String> data,
-      {bool withCredentials, String responseType,
-      Map<String, String> requestHeaders,
-      void onProgress(ProgressEvent e)}) {
+      {bool$NULLABLE withCredentials, String$NULLABLE responseType,
+      Map<String, String>$NULLABLE requestHeaders,
+      void onProgress(ProgressEvent e)$NULLABLE}) {
 
     var parts = [];
     data.forEach((key, value) {
@@ -134,7 +126,7 @@ $(ANNOTATIONS)$(NATIVESPEC)$(CLASS_MODIFIERS)class $CLASSNAME$EXTENDS$IMPLEMENTS
    *
    * By default `request` will perform an HTTP GET request, but a different
    * method (`POST`, `PUT`, `DELETE`, etc) can be used by specifying the
-   * [method] parameter. (See also [HttpRequest.postFormData] for `POST` 
+   * [method] parameter. (See also [HttpRequest.postFormData] for `POST`
    * requests only.
    *
    * The Future is completed when the response is available.
@@ -143,8 +135,8 @@ $(ANNOTATIONS)$(NATIVESPEC)$(CLASS_MODIFIERS)class $CLASSNAME$EXTENDS$IMPLEMENTS
    * [Blob], [Document], [String], or [FormData] along with the HttpRequest.
    *
    * If specified, [responseType] sets the desired response format for the
-   * request. By default it is [String], but can also be 'arraybuffer', 'blob', 
-   * 'document', 'json', or 'text'. See also [HttpRequest.responseType] 
+   * request. By default it is [String], but can also be 'arraybuffer', 'blob',
+   * 'document', 'json', or 'text'. See also [HttpRequest.responseType]
    * for more information.
    *
    * The [withCredentials] parameter specified that credentials such as a cookie
@@ -184,9 +176,10 @@ $(ANNOTATIONS)$(NATIVESPEC)$(CLASS_MODIFIERS)class $CLASSNAME$EXTENDS$IMPLEMENTS
    * See also: [authorization headers](http://en.wikipedia.org/wiki/Basic_access_authentication).
    */
   static Future<HttpRequest> request(String url,
-      {String method, bool withCredentials, String responseType,
-      String mimeType, Map<String, String> requestHeaders, sendData,
-      void onProgress(ProgressEvent e)}) {
+      {String$NULLABLE method, bool$NULLABLE withCredentials,
+      String$NULLABLE responseType, String$NULLABLE mimeType,
+      Map<String, String>$NULLABLE requestHeaders, sendData,
+      void onProgress(ProgressEvent e)$NULLABLE}) {
     var completer = new Completer<HttpRequest>();
 
     var xhr = new HttpRequest();
@@ -218,16 +211,17 @@ $(ANNOTATIONS)$(NATIVESPEC)$(CLASS_MODIFIERS)class $CLASSNAME$EXTENDS$IMPLEMENTS
     }
 
     xhr.onLoad.listen((e) {
-      var accepted = xhr.status >= 200 && xhr.status < 300;
-      var fileUri = xhr.status == 0; // file:// URIs have status of 0.
-      var notModified = xhr.status == 304;
+      var status = xhr.status$NULLASSERT;
+      var accepted = status >= 200 && status < 300;
+      var fileUri = status == 0; // file:// URIs have status of 0.
+      var notModified = status == 304;
       // Redirect status is specified up to 307, but others have been used in
       // practice. Notably Google Drive uses 308 Resume Incomplete for
       // resumable uploads, and it's also been used as a redirect. The
       // redirect case will be handled by the browser before it gets to us,
       // so if we see it we should pass it through to the user.
-      var unknownRedirect = xhr.status > 307 && xhr.status < 400;
-      
+      var unknownRedirect = status > 307 && status < 400;
+
       if (accepted || fileUri || notModified || unknownRedirect) {
         completer.complete(xhr);
       } else {
@@ -290,10 +284,10 @@ $(ANNOTATIONS)$(NATIVESPEC)$(CLASS_MODIFIERS)class $CLASSNAME$EXTENDS$IMPLEMENTS
    * cross-origin support is not required then [request] should be used instead.
    */
   static Future<String> requestCrossOrigin(String url,
-      {String method, String sendData}) {
+      {String$NULLABLE method, String$NULLABLE sendData}) {
     if (supportsCrossOrigin) {
       return request(url, method: method, sendData: sendData).then((xhr) {
-        return xhr.responseText;
+        return xhr.responseText$NULLASSERT;
       });
     }
     var completer = new Completer<String>();
@@ -304,7 +298,7 @@ $(ANNOTATIONS)$(NATIVESPEC)$(CLASS_MODIFIERS)class $CLASSNAME$EXTENDS$IMPLEMENTS
     JS('', '#.open(#, #)', xhr, method, url);
     JS('', '#.onload = #', xhr, convertDartClosureToJS((e) {
       var response = JS('String', '#.responseText', xhr);
-      completer.complete(response);
+      completer.complete(response $#NULLSAFECAST(as FutureOr<String>$NULLABLE));
     }, 1));
     JS('', '#.onerror = #', xhr, convertDartClosureToJS((e) {
       completer.completeError(e);
@@ -377,7 +371,8 @@ $(ANNOTATIONS)$(NATIVESPEC)$(CLASS_MODIFIERS)class $CLASSNAME$EXTENDS$IMPLEMENTS
    * `open` method is intended only for more complex HTTP requests where
    * finer-grained control is needed.
    */
-  void open(String method, String url, {bool async, String user, String password}) native;
+  void open(String method, String url, {bool$NULLABLE async,
+      String$NULLABLE user, String$NULLABLE password}) native;
 
 $!MEMBERS
 }

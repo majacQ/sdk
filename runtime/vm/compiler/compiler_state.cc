@@ -4,10 +4,12 @@
 
 #include "vm/compiler/compiler_state.h"
 
-#ifndef DART_PRECOMPILED_RUNTIME
-
 #include <functional>
 
+#include "vm/compiler/aot/precompiler.h"
+#include "vm/compiler/backend/il_printer.h"
+#include "vm/compiler/backend/slot.h"
+#include "vm/growable_array.h"
 #include "vm/scopes.h"
 
 namespace dart {
@@ -52,29 +54,48 @@ LocalVariable* CompilerState::GetDummyCapturedVariable(intptr_t context_id,
       });
 }
 
-const GrowableArray<LocalVariable*>& CompilerState::GetDummyContextVariables(
+const ZoneGrowableArray<const Slot*>& CompilerState::GetDummyContextSlots(
     intptr_t context_id,
     intptr_t num_context_variables) {
-  return PutIfAbsent<LocalScope>(
-             thread(), &dummy_scopes_, num_context_variables,
-             [&]() {
-               Zone* const Z = thread()->zone();
+  return *PutIfAbsent<ZoneGrowableArray<const Slot*>>(
+      thread(), &dummy_slots_, num_context_variables, [&]() {
+        Zone* const Z = thread()->zone();
 
-               LocalScope* scope = new (Z) LocalScope(
-                   /*parent=*/NULL, /*function_level=*/0, /*loop_level=*/0);
-               scope->set_context_level(0);
+        auto slots =
+            new (Z) ZoneGrowableArray<const Slot*>(num_context_variables);
+        for (intptr_t i = 0; i < num_context_variables; i++) {
+          LocalVariable* var = GetDummyCapturedVariable(context_id, i);
+          slots->Add(&Slot::GetContextVariableSlotFor(thread(), *var));
+        }
 
-               for (intptr_t i = 0; i < num_context_variables; i++) {
-                 LocalVariable* var = GetDummyCapturedVariable(context_id, i);
-                 scope->AddVariable(var);
-                 scope->AddContextVariable(var);
-               }
+        return slots;
+      });
+}
 
-               return scope;
-             })
-      ->context_variables();
+CompilerTracing CompilerState::ShouldTrace(const Function& func) {
+  return FlowGraphPrinter::ShouldPrint(func) ? CompilerTracing::kOn
+                                             : CompilerTracing::kOff;
+}
+
+const Class& CompilerState::ComparableClass() {
+  if (comparable_class_ == nullptr) {
+    Thread* thread = Thread::Current();
+    Zone* zone = thread->zone();
+
+    // When obfuscation is enabled we need to obfuscate the name of the
+    // class before looking it up.
+    String& name = String::Handle(zone, Symbols::New(thread, "Comparable"));
+    if (thread->isolate_group()->obfuscate()) {
+      Obfuscator obfuscator(thread, Object::null_string());
+      name = obfuscator.Rename(name);
+    }
+
+    const Library& lib = Library::Handle(zone, Library::CoreLibrary());
+    const Class& cls = Class::ZoneHandle(zone, lib.LookupClass(name));
+    ASSERT(!cls.IsNull());
+    comparable_class_ = &cls;
+  }
+  return *comparable_class_;
 }
 
 }  // namespace dart
-
-#endif  // DART_PRECOMPILED_RUNTIME

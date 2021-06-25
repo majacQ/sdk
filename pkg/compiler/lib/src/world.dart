@@ -12,24 +12,23 @@ import 'common_elements.dart'
         JElementEnvironment,
         KCommonElements,
         KElementEnvironment;
-import 'constants/constant_system.dart';
 import 'deferred_load.dart';
 import 'diagnostics/diagnostic_listener.dart';
 import 'elements/entities.dart';
+import 'elements/names.dart';
 import 'elements/types.dart';
+import 'inferrer/abstract_value_domain.dart';
 import 'ir/static_type.dart';
 import 'js_backend/annotations.dart';
-import 'js_backend/allocator_analysis.dart'
-    show JAllocatorAnalysis, KAllocatorAnalysis;
+import 'js_backend/field_analysis.dart' show JFieldAnalysis, KFieldAnalysis;
 import 'js_backend/backend_usage.dart' show BackendUsage;
 import 'js_backend/interceptor_data.dart' show InterceptorData;
 import 'js_backend/native_data.dart' show NativeData;
 import 'js_backend/no_such_method_registry.dart' show NoSuchMethodData;
-import 'js_backend/runtime_types.dart' show RuntimeTypesNeed;
-import 'js_model/locals.dart';
+import 'js_backend/runtime_types_resolution.dart' show RuntimeTypesNeed;
 import 'js_emitter/sorter.dart';
-import 'types/abstract_value_domain.dart';
 import 'universe/class_hierarchy.dart';
+import 'universe/member_usage.dart';
 import 'universe/selector.dart' show Selector;
 
 /// Common superinterface for [OpenWorld] and [JClosedWorld].
@@ -45,7 +44,7 @@ abstract class World {}
 /// optimizations and other compiler decisions during code generation.
 // TODO(johnniwinther): Maybe this should just be called the JWorld.
 abstract class JClosedWorld implements World {
-  JAllocatorAnalysis get allocatorAnalysis;
+  JFieldAnalysis get fieldAnalysis;
 
   BackendUsage get backendUsage;
 
@@ -62,8 +61,6 @@ abstract class JClosedWorld implements World {
   /// Returns the [AbstractValueDomain] used in the global type inference.
   AbstractValueDomain get abstractValueDomain;
 
-  ConstantSystem get constantSystem;
-
   RuntimeTypesNeed get rtiNeed;
 
   NoSuchMethodData get noSuchMethodData;
@@ -72,11 +69,14 @@ abstract class JClosedWorld implements World {
 
   Iterable<MemberEntity> get processedMembers;
 
+  /// Returns the set of interfaces passed as type arguments to the internal
+  /// `extractTypeArguments` function.
+  Set<ClassEntity> get extractTypeArgumentsInterfacesNewRti;
+
   ClassHierarchy get classHierarchy;
 
   AnnotationsData get annotationsData;
 
-  GlobalLocalsMap get globalLocalsMap;
   ClosureData get closureDataLookup;
 
   OutputUnitData get outputUnitData;
@@ -166,13 +166,21 @@ abstract class JClosedWorld implements World {
   bool needsNoSuchMethod(ClassEntity cls, Selector selector, ClassQuery query);
 
   /// Returns whether [element] will be the one used at runtime when being
-  /// invoked on an instance of [cls]. [selector] is used to ensure library
+  /// invoked on an instance of [cls]. [name] is used to ensure library
   /// privacy is taken into account.
-  bool hasElementIn(
-      covariant ClassEntity cls, Selector selector, covariant Entity element);
+  bool hasElementIn(ClassEntity cls, Name name, MemberEntity element);
 
   /// Returns `true` if the field [element] is known to be effectively final.
   bool fieldNeverChanges(MemberEntity element);
+
+  /// Returns `true` if [selector] on [receiver] can hit a `call` method on a
+  /// subclass of `Closure` using the [abstractValueDomain].
+  ///
+  /// Every implementation of `Closure` has a 'call' method with its own
+  /// signature so it cannot be modelled by a [FunctionEntity]. Also,
+  /// call-methods for tear-off are not part of the element model.
+  bool includesClosureCallInDomain(Selector selector, AbstractValue receiver,
+      AbstractValueDomain abstractValueDomain);
 
   /// Returns `true` if [selector] on [receiver] can hit a `call` method on a
   /// subclass of `Closure`.
@@ -192,6 +200,13 @@ abstract class JClosedWorld implements World {
   AbstractValue computeReceiverType(Selector selector, AbstractValue receiver);
 
   /// Returns all the instance members that may be invoked with the [selector]
+  /// on the given [receiver] using the [abstractValueDomain]. The returned elements may include noSuchMethod
+  /// handlers that are potential targets indirectly through the noSuchMethod
+  /// mechanism.
+  Iterable<MemberEntity> locateMembersInDomain(Selector selector,
+      AbstractValue receiver, AbstractValueDomain abstractValueDomain);
+
+  /// Returns all the instance members that may be invoked with the [selector]
   /// on the given [receiver]. The returned elements may include noSuchMethod
   /// handlers that are potential targets indirectly through the noSuchMethod
   /// mechanism.
@@ -202,19 +217,18 @@ abstract class JClosedWorld implements World {
   /// [receiver]. If multiple targets exist, `null` is returned.
   MemberEntity locateSingleMember(Selector selector, AbstractValue receiver);
 
-  /// Returns the single field that matches a call to [selector] on the
-  /// [receiver]. If multiple targets exist or the single target is not a field,
-  /// `null` is returned.
-  FieldEntity locateSingleField(Selector selector, AbstractValue receiver);
+  /// Returns the set of read, write, and invocation accesses found on [member]
+  /// during the closed world computation.
+  MemberAccess getMemberAccess(MemberEntity member);
+
+  /// Registers [interface] as a type argument to `extractTypeArguments`.
+  void registerExtractTypeArguments(ClassEntity interface);
 }
 
 abstract class OpenWorld implements World {
   void registerUsedElement(MemberEntity element);
 
   KClosedWorld closeWorld(DiagnosticReporter reporter);
-
-  /// Returns an iterable over all mixin applications that mixin [cls].
-  Iterable<ClassEntity> allMixinUsesOf(ClassEntity cls);
 
   /// Returns `true` if [member] is inherited into a subtype of [type].
   ///
@@ -233,14 +247,71 @@ abstract class OpenWorld implements World {
       MemberEntity member, ClassEntity type, ClassRelation relation);
 }
 
-abstract class KClosedWorld {
+/// A [BuiltWorld] is an immutable result of a [WorldBuilder].
+abstract class BuiltWorld {
+  ClassHierarchy get classHierarchy;
+
+  /// Calls [f] for each live generic method.
+  void forEachGenericMethod(void Function(FunctionEntity) f);
+
+  /// All types that are checked either through is, as or checked mode checks.
+  Iterable<DartType> get isChecks;
+
+  /// All type variables named in recipes.
+  Set<TypeVariableType> get namedTypeVariablesNewRti;
+
+  /// All directly instantiated types, that is, the types of
+  /// [directlyInstantiatedClasses].
+  // TODO(johnniwinther): Improve semantic precision.
+  Iterable<InterfaceType> get instantiatedTypes;
+
+  // TODO(johnniwinther): Clean up these getters.
+  /// Methods in instantiated classes that are potentially closurized.
+  Iterable<FunctionEntity> get closurizedMembers;
+
+  /// Static or top level methods that are closurized.
+  Iterable<FunctionEntity> get closurizedStatics;
+
+  /// Properties (fields and getters) which can be called as generic functions.
+  Map<MemberEntity, DartType> get genericCallableProperties;
+
+  /// Type variables used as type literals.
+  Iterable<TypeVariableType> get typeVariableTypeLiterals;
+
+  /// Live user-defined 'noSuchMethod' implementations.
+  Iterable<FunctionEntity> get userNoSuchMethods;
+
+  AnnotationsData get annotationsData;
+
+  /// Calls [f] for each live generic instance methods.
+  void forEachGenericInstanceMethod(void Function(FunctionEntity) f);
+
+  /// Live generic local functions.
+  Iterable<Local> get genericLocalFunctions;
+
+  /// Call [f] for each generic [function] with the type arguments passed
+  /// through static calls to [function].
+  void forEachStaticTypeArgument(
+      void f(Entity function, Set<DartType> typeArguments));
+
+  /// Call [f] for each generic [selector] with the type arguments passed
+  /// through dynamic calls to [selector].
+  void forEachDynamicTypeArgument(
+      void f(Selector selector, Set<DartType> typeArguments));
+}
+
+// TODO(johnniwinther): Rename this to `ResolutionWorld` or `KWorld`?
+// The immutable result of the [ResolutionWorldBuilder].
+abstract class KClosedWorld implements BuiltWorld {
   DartTypes get dartTypes;
-  KAllocatorAnalysis get allocatorAnalysis;
+  KFieldAnalysis get fieldAnalysis;
   BackendUsage get backendUsage;
   NativeData get nativeData;
   InterceptorData get interceptorData;
   KElementEnvironment get elementEnvironment;
   KCommonElements get commonElements;
+
+  @override
   ClassHierarchy get classHierarchy;
 
   /// Returns `true` if [cls] is implemented by an instantiated class.
@@ -254,9 +325,26 @@ abstract class KClosedWorld {
   Iterable<MemberEntity> get assignedInstanceMembers;
 
   Iterable<ClassEntity> get liveNativeClasses;
-  Iterable<MemberEntity> get processedMembers;
+  Map<MemberEntity, MemberUsage> get liveMemberUsage;
   RuntimeTypesNeed get rtiNeed;
   NoSuchMethodData get noSuchMethodData;
 
+  @override
   AnnotationsData get annotationsData;
+
+  /// Set of live closurized members whose signatures reference type variables.
+  ///
+  /// A closurized method is considered live if the enclosing class has been
+  /// instantiated.
+  Iterable<FunctionEntity> get closurizedMembersWithFreeTypeVariables;
+
+  /// Set of (live) local functions (closures).
+  ///
+  /// A live function is one whose enclosing member function has been enqueued.
+  Iterable<Local> get localFunctions;
+
+  /// Returns `true` if [member] has been marked as used (called, read, etc.) in
+  /// this world builder.
+  // TODO(johnniwinther): Maybe this should be part of [ClosedWorld] (instead).
+  bool isMemberUsed(MemberEntity member);
 }

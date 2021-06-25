@@ -2,7 +2,7 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'package:analyzer/dart/ast/ast.dart';
+import 'package:analyzer/src/dart/ast/ast.dart';
 import 'package:analyzer/src/dart/error/syntactic_errors.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
@@ -19,10 +19,8 @@ main() {
   });
 }
 
-/**
- * Test how well the parser recovers when the clauses in a class declaration are
- * out of order.
- */
+/// Test how well the parser recovers when the clauses in a class declaration
+/// are out of order.
 @reflectiveTest
 class ClassDeclarationTest extends AbstractRecoveryTest {
   void test_implementsBeforeExtends() {
@@ -91,7 +89,7 @@ class UnrelatedClass extends Bar {}
     testRecovery('''
 class Foo extends CurrentlyTypingHere
 class UnrelatedClass extends Bar {}
-''', [ParserErrorCode.MISSING_CLASS_BODY], '''
+''', [ParserErrorCode.EXPECTED_BODY], '''
 class Foo extends CurrentlyTypingHere {}
 class UnrelatedClass extends Bar {}
 ''');
@@ -106,10 +104,8 @@ class A extends C with B {}
   }
 }
 
-/**
- * Test how well the parser recovers when the members of a compilation unit are
- * out of order.
- */
+/// Test how well the parser recovers when the members of a compilation unit are
+/// out of order.
 @reflectiveTest
 class CompilationUnitMemberTest extends AbstractRecoveryTest {
   void test_declarationBeforeDirective_export() {
@@ -202,22 +198,20 @@ part 'foo.dart';
 ''', adjustValidUnitBeforeComparison: _moveFirstDirectiveToEnd);
   }
 
-  CompilationUnit _moveFirstDirectiveToEnd(CompilationUnit unit) {
+  CompilationUnitImpl _moveFirstDirectiveToEnd(CompilationUnitImpl unit) {
     unit.directives.add(unit.directives.removeAt(0));
     unit.beginToken = unit.directives[0].beginToken;
     return unit;
   }
 
-  CompilationUnit _updateBeginToken(CompilationUnit unit) {
+  CompilationUnitImpl _updateBeginToken(CompilationUnitImpl unit) {
     unit.beginToken = unit.declarations[0].beginToken;
     return unit;
   }
 }
 
-/**
- * Test how well the parser recovers when the members of an import directive are
- * out of order.
- */
+/// Test how well the parser recovers when the members of an import directive
+/// are out of order.
 @reflectiveTest
 class ImportDirectiveTest extends AbstractRecoveryTest {
   void test_combinatorsBeforeAndAfterPrefix() {
@@ -299,9 +293,7 @@ import 'bar.dart' deferred as p;
   }
 }
 
-/**
- * Test how well the parser recovers when metadata appears in invalid places.
- */
+/// Test how well the parser recovers when metadata appears in invalid places.
 @reflectiveTest
 class MisplacedMetadataTest extends AbstractRecoveryTest {
   @failingTest
@@ -327,10 +319,8 @@ class B {
   }
 }
 
-/**
- * Test how well the parser recovers when the clauses in a mixin declaration are
- * out of order.
- */
+/// Test how well the parser recovers when the clauses in a mixin declaration
+/// are out of order.
 @reflectiveTest
 class MixinDeclarationTest extends AbstractRecoveryTest {
   void test_implementsBeforeOn() {
@@ -372,17 +362,15 @@ mixin UnrelatedMixin on Bar {}
     testRecovery('''
 mixin Foo implements CurrentlyTypingHere
 mixin UnrelatedMixin on Bar {}
-''', [ParserErrorCode.MISSING_CLASS_BODY], '''
+''', [ParserErrorCode.EXPECTED_BODY], '''
 mixin Foo implements CurrentlyTypingHere {}
 mixin UnrelatedMixin on Bar {}
 ''');
   }
 }
 
-/**
- * Test how well the parser recovers when the clauses in a try statement are
- * out of order.
- */
+/// Test how well the parser recovers when the clauses in a try statement are
+/// out of order.
 @reflectiveTest
 class TryStatementTest extends AbstractRecoveryTest {
   @failingTest

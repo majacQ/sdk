@@ -9,10 +9,32 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'fix_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
+    defineReflectiveTests(ReplaceBooleanWithBoolMultiTest);
     defineReflectiveTests(ReplaceBooleanWithBoolTest);
   });
+}
+
+@reflectiveTest
+class ReplaceBooleanWithBoolMultiTest extends FixProcessorTest {
+  @override
+  FixKind get kind => DartFixKind.REPLACE_BOOLEAN_WITH_BOOL_MULTI;
+
+  Future<void> test_all() async {
+    await resolveTestCode('''
+main() {
+  boolean v;
+  boolean w;
+}
+''');
+    await assertHasFixAllFix(CompileTimeErrorCode.UNDEFINED_CLASS_BOOLEAN, '''
+main() {
+  bool v;
+  bool w;
+}
+''');
+  }
 }
 
 @reflectiveTest
@@ -20,23 +42,8 @@ class ReplaceBooleanWithBoolTest extends FixProcessorTest {
   @override
   FixKind get kind => DartFixKind.REPLACE_BOOLEAN_WITH_BOOL;
 
-  test_all() async {
-    await resolveTestUnit('''
-main() {
-  boolean v;
-  boolean w;
-}
-''');
-    await assertHasFixAllFix(StaticWarningCode.UNDEFINED_CLASS_BOOLEAN, '''
-main() {
-  bool v;
-  bool w;
-}
-''');
-  }
-
-  test_single() async {
-    await resolveTestUnit('''
+  Future<void> test_single() async {
+    await resolveTestCode('''
 main() {
   boolean v;
   print(v);

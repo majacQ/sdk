@@ -2,13 +2,14 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 // Error in class finalization triggered via mirror in a static initializer.
 // Simply check that we do not crash.
 // This is a regression test for the VM.
 
 library mirror_in_static_init_test;
 
-@MirrorsUsed(targets: "mirror_in_static_init_test")
 import 'dart:mirrors';
 
 // This class is only loaded during initialization of `staticField`.

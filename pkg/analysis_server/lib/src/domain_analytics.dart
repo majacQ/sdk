@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -15,27 +15,29 @@ import 'package:telemetry/telemetry.dart';
 class AnalyticsDomainHandler implements RequestHandler {
   final AnalysisServer server;
 
-  Analytics get analytics => server.analytics;
-
   AnalyticsDomainHandler(this.server);
 
+  Analytics? get analytics => server.analytics;
+
+  String get _clientId => server.options.clientId ?? 'client';
+
   Response handleEnable(Request request) {
-    AnalyticsEnableParams params =
-        new AnalyticsEnableParams.fromRequest(request);
+    var params = AnalyticsEnableParams.fromRequest(request);
+    final analytics = this.analytics;
     if (analytics != null) {
       analytics.enabled = params.value;
     }
-    return new AnalyticsEnableResult().toResponse(request.id);
+    return AnalyticsEnableResult().toResponse(request.id);
   }
 
   Response handleIsEnabled(Request request) {
-    return new AnalyticsIsEnabledResult(analytics?.enabled ?? false)
+    return AnalyticsIsEnabledResult(analytics?.enabled ?? false)
         .toResponse(request.id);
   }
 
   @override
-  Response handleRequest(Request request) {
-    String requestName = request.method;
+  Response? handleRequest(Request request) {
+    var requestName = request.method;
 
     if (requestName == ANALYTICS_REQUEST_IS_ENABLED) {
       return handleIsEnabled(request);
@@ -51,26 +53,24 @@ class AnalyticsDomainHandler implements RequestHandler {
   }
 
   Response handleSendEvent(Request request) {
+    final analytics = this.analytics;
     if (analytics == null) {
-      return new AnalyticsSendEventResult().toResponse(request.id);
+      return AnalyticsSendEventResult().toResponse(request.id);
     }
 
-    AnalyticsSendEventParams params =
-        new AnalyticsSendEventParams.fromRequest(request);
+    var params = AnalyticsSendEventParams.fromRequest(request);
     analytics.sendEvent(_clientId, params.action);
-    return new AnalyticsSendEventResult().toResponse(request.id);
+    return AnalyticsSendEventResult().toResponse(request.id);
   }
 
   Response handleSendTiming(Request request) {
+    final analytics = this.analytics;
     if (analytics == null) {
-      return new AnalyticsSendTimingResult().toResponse(request.id);
+      return AnalyticsSendTimingResult().toResponse(request.id);
     }
 
-    AnalyticsSendTimingParams params =
-        new AnalyticsSendTimingParams.fromRequest(request);
+    var params = AnalyticsSendTimingParams.fromRequest(request);
     analytics.sendTiming(params.event, params.millis, category: _clientId);
-    return new AnalyticsSendTimingResult().toResponse(request.id);
+    return AnalyticsSendTimingResult().toResponse(request.id);
   }
-
-  String get _clientId => server.options.clientId ?? 'client';
 }

@@ -1,162 +1,130 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'dart:async';
-import 'dart:collection';
-
+import 'package:analysis_server/protocol/protocol.dart';
 import 'package:analysis_server/protocol/protocol_constants.dart';
 import 'package:analysis_server/src/analysis_server.dart';
 import 'package:analysis_server/src/protocol_server.dart' as protocol;
 import 'package:analysis_server/src/search/element_references.dart';
 import 'package:analysis_server/src/search/type_hierarchy.dart';
+import 'package:analysis_server/src/search/workspace_symbols.dart' as search;
 import 'package:analysis_server/src/services/search/search_engine.dart';
 import 'package:analyzer/dart/element/element.dart';
-import 'package:analyzer/src/dart/analysis/search.dart' as search;
 
-/**
- * Instances of the class [SearchDomainHandler] implement a [RequestHandler]
- * that handles requests in the search domain.
- */
+/// Instances of the class [SearchDomainHandler] implement a [RequestHandler]
+/// that handles requests in the search domain.
 class SearchDomainHandler implements protocol.RequestHandler {
-  /**
-   * The analysis server that is using this handler to process requests.
-   */
+  /// The analysis server that is using this handler to process requests.
   final AnalysisServer server;
 
-  /**
-   * The [SearchEngine] for this server.
-   */
-  final SearchEngine searchEngine;
-
-  /**
-   * The next search response id.
-   */
+  /// The next search response id.
   int _nextSearchId = 0;
 
-  /**
-   * Initialize a newly created handler to handle requests for the given [server].
-   */
-  SearchDomainHandler(AnalysisServer server)
-      : server = server,
-        searchEngine = server.searchEngine;
+  /// Initialize a newly created handler to handle requests for the given
+  /// [server].
+  SearchDomainHandler(this.server);
 
-  Future findElementReferences(protocol.Request request) async {
-    // TODO(brianwilkerson) Determine whether this await is necessary.
-    await null;
+  Future<void> findElementReferences(protocol.Request request) async {
+    final searchEngine = server.searchEngine;
     var params =
-        new protocol.SearchFindElementReferencesParams.fromRequest(request);
-    String file = params.file;
+        protocol.SearchFindElementReferencesParams.fromRequest(request);
+    var file = params.file;
     // prepare element
-    Element element = await server.getElementAtOffset(file, params.offset);
+    var element = await server.getElementAtOffset(file, params.offset);
     if (element is ImportElement) {
-      element = (element as ImportElement).prefix;
+      element = element.prefix;
     }
     if (element is FieldFormalParameterElement) {
-      element = (element as FieldFormalParameterElement).field;
+      element = element.field;
     }
     if (element is PropertyAccessorElement) {
-      element = (element as PropertyAccessorElement).variable;
+      element = element.variable;
     }
     // respond
-    String searchId = (_nextSearchId++).toString();
-    var result = new protocol.SearchFindElementReferencesResult();
+    var searchId = (_nextSearchId++).toString();
+    var result = protocol.SearchFindElementReferencesResult();
     if (element != null) {
       result.id = searchId;
-      result.element = protocol.convertElement(element);
+      var withNullability = element.library?.isNonNullableByDefault ?? false;
+      result.element =
+          protocol.convertElement(element, withNullability: withNullability);
     }
     _sendSearchResult(request, result);
     // search elements
     if (element != null) {
-      var computer = new ElementReferencesComputer(searchEngine);
-      List<protocol.SearchResult> results =
-          await computer.compute(element, params.includePotential);
+      var computer = ElementReferencesComputer(searchEngine);
+      var results = await computer.compute(element, params.includePotential);
       _sendSearchNotification(searchId, true, results);
     }
   }
 
   Future findMemberDeclarations(protocol.Request request) async {
-    // TODO(brianwilkerson) Determine whether this await is necessary.
-    await null;
+    final searchEngine = server.searchEngine;
     var params =
-        new protocol.SearchFindMemberDeclarationsParams.fromRequest(request);
+        protocol.SearchFindMemberDeclarationsParams.fromRequest(request);
     await server.onAnalysisComplete;
     // respond
-    String searchId = (_nextSearchId++).toString();
+    var searchId = (_nextSearchId++).toString();
     _sendSearchResult(
-        request, new protocol.SearchFindMemberDeclarationsResult(searchId));
+        request, protocol.SearchFindMemberDeclarationsResult(searchId));
     // search
-    List<SearchMatch> matches =
-        await searchEngine.searchMemberDeclarations(params.name);
-    matches = SearchMatch.withNotNullElement(matches);
+    var matches = await searchEngine.searchMemberDeclarations(params.name);
     _sendSearchNotification(searchId, true, matches.map(toResult));
   }
 
   Future findMemberReferences(protocol.Request request) async {
-    // TODO(brianwilkerson) Determine whether this await is necessary.
-    await null;
-    var params =
-        new protocol.SearchFindMemberReferencesParams.fromRequest(request);
+    final searchEngine = server.searchEngine;
+    var params = protocol.SearchFindMemberReferencesParams.fromRequest(request);
     await server.onAnalysisComplete;
     // respond
-    String searchId = (_nextSearchId++).toString();
+    var searchId = (_nextSearchId++).toString();
     _sendSearchResult(
-        request, new protocol.SearchFindMemberReferencesResult(searchId));
+        request, protocol.SearchFindMemberReferencesResult(searchId));
     // search
-    List<SearchMatch> matches =
-        await searchEngine.searchMemberReferences(params.name);
-    matches = SearchMatch.withNotNullElement(matches);
+    var matches = await searchEngine.searchMemberReferences(params.name);
     _sendSearchNotification(searchId, true, matches.map(toResult));
   }
 
   Future findTopLevelDeclarations(protocol.Request request) async {
-    // TODO(brianwilkerson) Determine whether this await is necessary.
-    await null;
+    final searchEngine = server.searchEngine;
     var params =
-        new protocol.SearchFindTopLevelDeclarationsParams.fromRequest(request);
+        protocol.SearchFindTopLevelDeclarationsParams.fromRequest(request);
     try {
       // validate the regex
-      new RegExp(params.pattern);
+      RegExp(params.pattern);
     } on FormatException catch (exception) {
-      server.sendResponse(new protocol.Response.invalidParameter(
+      server.sendResponse(protocol.Response.invalidParameter(
           request, 'pattern', exception.message));
       return;
     }
 
     await server.onAnalysisComplete;
     // respond
-    String searchId = (_nextSearchId++).toString();
+    var searchId = (_nextSearchId++).toString();
     _sendSearchResult(
-        request, new protocol.SearchFindTopLevelDeclarationsResult(searchId));
+        request, protocol.SearchFindTopLevelDeclarationsResult(searchId));
     // search
-    List<SearchMatch> matches =
-        await searchEngine.searchTopLevelDeclarations(params.pattern);
-    matches = SearchMatch.withNotNullElement(matches);
+    var matches = await searchEngine.searchTopLevelDeclarations(params.pattern);
     _sendSearchNotification(searchId, true, matches.map(toResult));
   }
 
-  /**
-   * Implement the `search.getDeclarations` request.
-   */
+  /// Implement the `search.getDeclarations` request.
   Future getDeclarations(protocol.Request request) async {
-    // TODO(brianwilkerson) Determine whether this await is necessary.
-    await null;
     var params =
-        new protocol.SearchGetElementDeclarationsParams.fromRequest(request);
+        protocol.SearchGetElementDeclarationsParams.fromRequest(request);
 
-    RegExp regExp;
-    if (params.pattern != null) {
+    RegExp? regExp;
+    var pattern = params.pattern;
+    if (pattern != null) {
       try {
-        regExp = new RegExp(params.pattern);
+        regExp = RegExp(pattern);
       } on FormatException catch (exception) {
-        server.sendResponse(new protocol.Response.invalidParameter(
+        server.sendResponse(protocol.Response.invalidParameter(
             request, 'pattern', exception.message));
         return;
       }
     }
-
-    var files = new LinkedHashSet<String>();
-    var declarations = <search.Declaration>[];
 
     protocol.ElementKind getElementKind(search.DeclarationKind kind) {
       switch (kind) {
@@ -191,24 +159,23 @@ class SearchDomainHandler implements protocol.RequestHandler {
       }
     }
 
-    int remainingMaxResults = params.maxResults;
-    for (var driver in server.driverMap.values.toList()) {
-      var driverDeclarations = await driver.search.declarations(
-          regExp, remainingMaxResults, files,
-          onlyForFile: params.file);
-      declarations.addAll(driverDeclarations);
-
-      if (remainingMaxResults != null) {
-        remainingMaxResults -= driverDeclarations.length;
-        if (remainingMaxResults <= 0) {
-          break;
-        }
-      }
+    var tracker = server.declarationsTracker;
+    if (tracker == null) {
+      server.sendResponse(Response.unsupportedFeature(
+          request.id, 'Completion is not enabled.'));
+      return;
     }
+    var files = <String>{};
+    var remainingMaxResults = params.maxResults;
+    var declarations = search.WorkspaceSymbols(tracker).declarations(
+      regExp,
+      remainingMaxResults,
+      files,
+      onlyForFile: params.file,
+    );
 
-    List<protocol.ElementDeclaration> elementDeclarations =
-        declarations.map((declaration) {
-      return new protocol.ElementDeclaration(
+    var elementDeclarations = declarations.map((declaration) {
+      return protocol.ElementDeclaration(
           declaration.name,
           getElementKind(declaration.kind),
           declaration.fileIndex,
@@ -222,50 +189,44 @@ class SearchDomainHandler implements protocol.RequestHandler {
           parameters: declaration.parameters);
     }).toList();
 
-    server.sendResponse(new protocol.SearchGetElementDeclarationsResult(
+    server.sendResponse(protocol.SearchGetElementDeclarationsResult(
             elementDeclarations, files.toList())
         .toResponse(request.id));
   }
 
-  /**
-   * Implement the `search.getTypeHierarchy` request.
-   */
+  /// Implement the `search.getTypeHierarchy` request.
   Future getTypeHierarchy(protocol.Request request) async {
-    // TODO(brianwilkerson) Determine whether this await is necessary.
-    await null;
-    var params = new protocol.SearchGetTypeHierarchyParams.fromRequest(request);
-    String file = params.file;
+    final searchEngine = server.searchEngine;
+    var params = protocol.SearchGetTypeHierarchyParams.fromRequest(request);
+    var file = params.file;
     // prepare element
-    Element element = await server.getElementAtOffset(file, params.offset);
+    var element = await server.getElementAtOffset(file, params.offset);
     if (element == null) {
       _sendTypeHierarchyNull(request);
       return;
     }
     // maybe supertype hierarchy only
     if (params.superOnly == true) {
-      TypeHierarchyComputer computer =
-          new TypeHierarchyComputer(searchEngine, element);
-      List<protocol.TypeHierarchyItem> items = computer.computeSuper();
-      protocol.Response response =
-          new protocol.SearchGetTypeHierarchyResult(hierarchyItems: items)
+      var computer = TypeHierarchyComputer(searchEngine, element);
+      var items = computer.computeSuper();
+      var response =
+          protocol.SearchGetTypeHierarchyResult(hierarchyItems: items)
               .toResponse(request.id);
       server.sendResponse(response);
       return;
     }
     // prepare type hierarchy
-    TypeHierarchyComputer computer =
-        new TypeHierarchyComputer(searchEngine, element);
-    List<protocol.TypeHierarchyItem> items = await computer.compute();
-    protocol.Response response =
-        new protocol.SearchGetTypeHierarchyResult(hierarchyItems: items)
-            .toResponse(request.id);
+    var computer = TypeHierarchyComputer(searchEngine, element);
+    var items = await computer.compute();
+    var response = protocol.SearchGetTypeHierarchyResult(hierarchyItems: items)
+        .toResponse(request.id);
     server.sendResponse(response);
   }
 
   @override
-  protocol.Response handleRequest(protocol.Request request) {
+  protocol.Response? handleRequest(protocol.Request request) {
     try {
-      String requestName = request.method;
+      var requestName = request.method;
       if (requestName == SEARCH_REQUEST_FIND_ELEMENT_REFERENCES) {
         findElementReferences(request);
         return protocol.Response.DELAYED_RESPONSE;
@@ -294,21 +255,19 @@ class SearchDomainHandler implements protocol.RequestHandler {
   void _sendSearchNotification(
       String searchId, bool isLast, Iterable<protocol.SearchResult> results) {
     server.sendNotification(
-        new protocol.SearchResultsParams(searchId, results.toList(), isLast)
+        protocol.SearchResultsParams(searchId, results.toList(), isLast)
             .toNotification());
   }
 
-  /**
-   * Send a search response with the given [result] to the given [request].
-   */
+  /// Send a search response with the given [result] to the given [request].
   void _sendSearchResult(protocol.Request request, result) {
     protocol.Response response = result.toResponse(request.id);
     server.sendResponse(response);
   }
 
   void _sendTypeHierarchyNull(protocol.Request request) {
-    protocol.Response response =
-        new protocol.SearchGetTypeHierarchyResult().toResponse(request.id);
+    var response =
+        protocol.SearchGetTypeHierarchyResult().toResponse(request.id);
     server.sendResponse(response);
   }
 

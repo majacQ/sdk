@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import "package:expect/expect.dart";
 
 // Dart test program for RegExp.allMatches.
@@ -10,6 +12,7 @@ class RegExpAllMatchesTest {
   static testIterator() {
     var matches = new RegExp("foo").allMatches("foo foo");
     Iterator it = matches.iterator;
+    Expect.isNull(it.current);
     Expect.isTrue(it.moveNext());
     Expect.equals('foo', it.current.group(0));
     Expect.isTrue(it.moveNext());

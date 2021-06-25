@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'assist_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(ConvertPartOfToUriTest);
   });
@@ -19,29 +19,37 @@ class ConvertPartOfToUriTest extends AssistProcessorTest {
   @override
   AssistKind get kind => DartAssistKind.CONVERT_PART_OF_TO_URI;
 
-  test_nonSibling() async {
-    addSource('/pkg/lib/foo.dart', '''
+  Future<void> test_nonSibling() async {
+    addSource('/home/test/lib/foo.dart', '''
 library foo;
 part 'src/bar.dart';
 ''');
-    testFile = convertPath('/pkg/lib/src/bar.dart');
-    await resolveTestUnit('''
+
+    testFile = convertPath('/home/test/lib/src/bar.dart');
+    addTestSource('''
 part of foo;
 ''');
+
+    await analyzeTestPackageFiles();
+    await resolveTestFile();
     await assertHasAssistAt('foo', '''
 part of '../foo.dart';
 ''');
   }
 
-  test_sibling() async {
-    addSource('/pkg/foo.dart', '''
+  Future<void> test_sibling() async {
+    addSource('/home/test/lib/foo.dart', '''
 library foo;
 part 'bar.dart';
 ''');
-    testFile = convertPath('/pkg/bar.dart');
-    await resolveTestUnit('''
+
+    testFile = convertPath('/home/test/lib/bar.dart');
+    addTestSource('''
 part of foo;
 ''');
+
+    await analyzeTestPackageFiles();
+    await resolveTestFile();
     await assertHasAssistAt('foo', '''
 part of 'foo.dart';
 ''');

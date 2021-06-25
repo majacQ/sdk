@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'assist_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(FlutterWrapRowTest);
   });
@@ -19,20 +19,27 @@ class FlutterWrapRowTest extends AssistProcessorTest {
   @override
   AssistKind get kind => DartAssistKind.FLUTTER_WRAP_ROW;
 
-  test_twoWidgets() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  @override
+  void setUp() {
+    super.setUp();
+    writeTestPackageConfig(
+      flutter: true,
+    );
+  }
+
+  Future<void> test_twoWidgets() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 
 class FakeFlutter {
   main() {
-    return new Column(children: [
-      new Text('aaa'),
+    return Column(children: [
+      Text('aaa'),
 // start
-      new Text('bbb'),
-      new Text('ccc'),
+      Text('bbb'),
+      Text('ccc'),
 // end
-      new Text('ddd'),
+      Text('ddd'),
     ]);
   }
 }
@@ -42,17 +49,15 @@ import 'package:flutter/widgets.dart';
 
 class FakeFlutter {
   main() {
-    return new Column(children: [
-      new Text('aaa'),
-// start
+    return Column(children: [
+      Text('aaa'),
       Row(
-        children: <Widget>[
-          new Text('bbb'),
-          new Text('ccc'),
+        children: [
+          Text('bbb'),
+          Text('ccc'),
         ],
       ),
-// end
-      new Text('ddd'),
+      Text('ddd'),
     ]);
   }
 }

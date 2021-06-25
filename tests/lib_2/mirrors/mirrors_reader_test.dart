@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 // Test that everything reachable from a [MirrorSystem] can be accessed.
 
 library test.mirrors.reader;
@@ -31,7 +33,7 @@ class RuntimeMirrorsReader extends MirrorsReader {
   }
 
   bool allowUnsupported(var receiver, String tag, UnsupportedError exception) {
-    if (mirrorSystemType == '_LocalMirrorSystem') {
+    if (mirrorSystemType == '_MirrorSystem') {
       // VM mirror system.
       if (tag.endsWith('location')) {
         return receiver is ParameterMirror;
@@ -49,7 +51,7 @@ class RuntimeMirrorsReader extends MirrorsReader {
     // [DeclarationMirror.location] is intentionally not supported in runtime
     // mirrors.
 
-    if (mirrorSystemType == '_LocalMirrorSystem') {
+    if (mirrorSystemType == '_MirrorSystem') {
       // VM mirror system.
     } else if (mirrorSystemType == 'JsMirrorSystem') {
       // Dart2js runtime mirror system.

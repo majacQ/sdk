@@ -1,3 +1,5 @@
+// @dart = 2.9
+
 import 'package:front_end/src/api_unstable/ddc.dart' as fe;
 import 'package:testing/testing.dart';
 
@@ -12,18 +14,21 @@ Future<ChainContext> createContext(
 
 class StackTraceContext extends ChainContextWithCleanupHelper
     implements WithCompilerState {
+  @override
   fe.InitializedCompilerState compilerState;
 
   List<Step> _steps;
 
+  @override
   List<Step> get steps {
     return _steps ??= <Step>[
       const Setup(),
       const SetCwdToSdkRoot(),
-      TestStackTrace(
-          ddk.DevCompilerRunner(this, false), "ddk.", const ["ddk.", "ddc."]),
+      TestStackTrace(ddk.DevCompilerRunner(this, debugging: false), 'ddk',
+          const ['ddk', 'ddc']),
     ];
   }
 }
 
-main(List<String> arguments) => runMe(arguments, createContext, "testing.json");
+void main(List<String> arguments) =>
+    runMe(arguments, createContext, configurationPath: 'testing.json');

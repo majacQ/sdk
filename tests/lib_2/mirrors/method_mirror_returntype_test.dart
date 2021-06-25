@@ -2,9 +2,10 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library lib;
 
-@MirrorsUsed(targets: "lib")
 import "dart:mirrors";
 
 import "package:expect/expect.dart";
@@ -42,7 +43,7 @@ main() {
   Expect.equals(const Symbol("void"), mm.returnType.simpleName);
 
   ClassMirror cm = reflectClass(C);
-  mm = cm.declarations[#getE];
+  mm = cm.declarations[#getE] as MethodMirror;
   Expect.equals(true, mm.returnType is TypeMirror);
   // The spec for this is ambiguous and needs to be updated before it is clear
   // what has to be returned.

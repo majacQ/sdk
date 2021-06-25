@@ -2,20 +2,26 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart=2.9
+
 library fasta.tool.entry_points;
 
-import 'dart:async' show Future, Stream;
-
-import 'dart:convert' show jsonDecode, jsonEncode, LineSplitter, utf8;
+import 'dart:convert' show LineSplitter, jsonDecode, jsonEncode, utf8;
 
 import 'dart:io' show File, Platform, exitCode, stderr, stdin, stdout;
+
+import 'package:_fe_analyzer_shared/src/util/relativize.dart'
+    show isWindows, relativizeUri;
+
+import 'package:front_end/src/fasta/fasta_codes.dart'
+    show LocatedMessage, codeInternalProblemVerificationError;
 
 import 'package:kernel/kernel.dart'
     show CanonicalName, Library, Component, Source, loadComponentFromBytes;
 
 import 'package:kernel/target/targets.dart' show Target, TargetFlags, getTarget;
 
-import 'package:vm/bytecode/gen_bytecode.dart' show generateBytecode;
+import 'package:kernel/src/types.dart' show Types;
 
 import 'package:front_end/src/api_prototype/compiler_options.dart'
     show CompilerOptions;
@@ -42,12 +48,12 @@ import 'package:front_end/src/fasta/ticker.dart' show Ticker;
 
 import 'package:front_end/src/fasta/uri_translator.dart' show UriTranslator;
 
-import 'package:front_end/src/fasta/util/relativize.dart' show relativizeUri;
-
 import 'package:front_end/src/kernel_generator_impl.dart'
     show generateKernelInternal;
 
 import 'additional_targets.dart' show installAdditionalTargets;
+
+import 'bench_maker.dart' show BenchMaker;
 
 import 'command_line.dart' show runProtectedFromAbort, withGlobalOptions;
 
@@ -70,6 +76,10 @@ compileEntryPoint(List<String> arguments) async {
     stopwatch.stop();
 
     elapsedTimes.add(stopwatch.elapsedMilliseconds.toDouble());
+    List<Object> typeChecks = Types.typeChecksForTesting;
+    if (typeChecks?.isNotEmpty ?? false) {
+      BenchMaker.writeTypeChecks("type_checks.json", typeChecks);
+    }
   }
 
   if (summary) {
@@ -86,6 +96,17 @@ outlineEntryPoint(List<String> arguments) async {
       print("\n");
     }
     await outline(arguments);
+  }
+}
+
+depsEntryPoint(List<String> arguments) async {
+  installAdditionalTargets();
+
+  for (int i = 0; i < iterations; i++) {
+    if (i > 1) {
+      print("\n");
+    }
+    await deps(arguments);
   }
 }
 
@@ -107,11 +128,13 @@ batchEntryPoint(List<String> arguments) {
 }
 
 class BatchCompiler {
-  final Stream lines;
+  final Stream<String> lines;
 
   Uri platformUri;
 
   Component platformComponent;
+
+  bool hadVerifyError = false;
 
   BatchCompiler(this.lines);
 
@@ -153,17 +176,20 @@ class BatchCompiler {
     ProcessedOptions options = c.options;
     bool verbose = options.verbose;
     Ticker ticker = new Ticker(isVerbose: verbose);
-    if (platformComponent == null || platformUri != options.sdkSummary) {
+    if (platformComponent == null ||
+        platformUri != options.sdkSummary ||
+        hadVerifyError) {
       platformUri = options.sdkSummary;
       platformComponent = await options.loadSdkSummary(null);
       if (platformComponent == null) {
         throw "platformComponent is null";
       }
+      hadVerifyError = false;
     } else {
       options.sdkSummaryComponent = platformComponent;
     }
     CompileTask task = new CompileTask(c, ticker);
-    await task.compile(omitPlatform: true);
+    await task.compile(omitPlatform: true, supportAdditionalDills: false);
     CanonicalName root = platformComponent.root;
     for (Library library in platformComponent.libraries) {
       library.parent = platformComponent;
@@ -172,7 +198,13 @@ class BatchCompiler {
         root.adoptChild(name);
       }
     }
-    root.unbindAll();
+    for (Object error in c.errors) {
+      if (error is LocatedMessage) {
+        if (error.messageObject.code == codeInternalProblemVerificationError) {
+          hadVerifyError = true;
+        }
+      }
+    }
     return c.errors.isEmpty;
   }
 }
@@ -184,6 +216,7 @@ incrementalEntryPoint(List<String> arguments) async {
     // TODO(ahe): Extend this entry point so it can replace
     // batchEntryPoint.
     new IncrementalCompiler(c);
+    return Future<void>.value();
   });
 }
 
@@ -196,7 +229,8 @@ Future<KernelTarget> outline(List<String> arguments) async {
       }
       CompileTask task =
           new CompileTask(c, new Ticker(isVerbose: c.options.verbose));
-      return await task.buildOutline(c.options.output);
+      return await task.buildOutline(
+          output: c.options.output, omitPlatform: c.options.omitPlatform);
     });
   });
 }
@@ -211,6 +245,20 @@ Future<Uri> compile(List<String> arguments) async {
       CompileTask task =
           new CompileTask(c, new Ticker(isVerbose: c.options.verbose));
       return await task.compile(omitPlatform: c.options.omitPlatform);
+    });
+  });
+}
+
+Future<Uri> deps(List<String> arguments) async {
+  return await runProtectedFromAbort<Uri>(() async {
+    return await withGlobalOptions("deps", arguments, true,
+        (CompilerContext c, _) async {
+      if (c.options.verbose) {
+        print("Computing deps: ${arguments.join(' ')}");
+      }
+      CompileTask task =
+          new CompileTask(c, new Ticker(isVerbose: c.options.verbose));
+      return await task.buildDeps(c.options.output);
     });
   });
 }
@@ -230,43 +278,105 @@ class CompileTask {
     return new KernelTarget(c.fileSystem, false, dillTarget, uriTranslator);
   }
 
-  Future<KernelTarget> buildOutline([Uri output]) async {
+  Future<Uri> buildDeps([Uri output]) async {
     UriTranslator uriTranslator = await c.options.getUriTranslator();
     ticker.logMs("Read packages file");
     DillTarget dillTarget = createDillTarget(uriTranslator);
     KernelTarget kernelTarget = createKernelTarget(dillTarget, uriTranslator);
     Uri platform = c.options.sdkSummary;
     if (platform != null) {
+      // TODO(CFE-Team): Probably this should be read through the filesystem as
+      // well and the recording would be automatic.
       _appendDillForUri(dillTarget, platform);
+      CompilerContext.recordDependency(platform);
     }
+    kernelTarget.setEntryPoints(c.options.inputs);
+    await dillTarget.buildOutlines();
+    await kernelTarget.loader.buildOutlines();
+
+    Uri dFile;
+    if (output != null) {
+      dFile = new File(new File.fromUri(output).path + ".d").uri;
+      await writeDepsFile(output, dFile, c.dependencies);
+    }
+    return dFile;
+  }
+
+  Future<KernelTarget> buildOutline(
+      {Uri output,
+      bool omitPlatform: false,
+      bool supportAdditionalDills: true}) async {
+    UriTranslator uriTranslator = await c.options.getUriTranslator();
+    ticker.logMs("Read packages file");
+    DillTarget dillTarget = createDillTarget(uriTranslator);
+    KernelTarget kernelTarget = createKernelTarget(dillTarget, uriTranslator);
+
+    if (supportAdditionalDills) {
+      Component sdkSummary = await c.options.loadSdkSummary(null);
+      if (sdkSummary != null) {
+        dillTarget.loader.appendLibraries(sdkSummary);
+      }
+
+      CanonicalName nameRoot = sdkSummary?.root ?? new CanonicalName.root();
+      for (Component additionalDill
+          in await c.options.loadAdditionalDills(nameRoot)) {
+        dillTarget.loader.appendLibraries(additionalDill);
+      }
+    } else {
+      Component sdkSummary = await c.options.loadSdkSummary(null);
+      if (sdkSummary != null) {
+        dillTarget.loader.appendLibraries(sdkSummary);
+      }
+    }
+
     kernelTarget.setEntryPoints(c.options.inputs);
     await dillTarget.buildOutlines();
     var outline = await kernelTarget.buildOutlines();
     if (c.options.debugDump && output != null) {
-      printComponentText(outline, libraryFilter: kernelTarget.isSourceLibrary);
+      printComponentText(outline,
+          libraryFilter: kernelTarget.isSourceLibraryForDebugging);
     }
     if (output != null) {
+      if (omitPlatform) {
+        outline.computeCanonicalNames();
+        Component userCode = new Component(
+            nameRoot: outline.root,
+            uriToSource: new Map<Uri, Source>.from(outline.uriToSource));
+        userCode.setMainMethodAndMode(
+            outline.mainMethodName, true, outline.mode);
+        for (Library library in outline.libraries) {
+          if (library.importUri.scheme != "dart") {
+            userCode.libraries.add(library);
+          }
+        }
+        outline = userCode;
+      }
+
       await writeComponentToFile(outline, output);
       ticker.logMs("Wrote outline to ${output.toFilePath()}");
     }
     return kernelTarget;
   }
 
-  Future<Uri> compile({bool omitPlatform: false}) async {
-    KernelTarget kernelTarget = await buildOutline();
+  Future<Uri> compile(
+      {bool omitPlatform: false, bool supportAdditionalDills: true}) async {
+    c.options.reportNullSafetyCompilationModeInfo();
+    KernelTarget kernelTarget =
+        await buildOutline(supportAdditionalDills: supportAdditionalDills);
     Uri uri = c.options.output;
     Component component =
         await kernelTarget.buildComponent(verify: c.options.verify);
     if (c.options.debugDump) {
       printComponentText(component,
-          libraryFilter: kernelTarget.isSourceLibrary);
+          libraryFilter: kernelTarget.isSourceLibraryForDebugging);
     }
     if (omitPlatform) {
       component.computeCanonicalNames();
       Component userCode = new Component(
           nameRoot: component.root,
           uriToSource: new Map<Uri, Source>.from(component.uriToSource));
-      userCode.mainMethodName = component.mainMethodName;
+      userCode.setMainMethodAndMode(
+          component.mainMethodName, true, component.mode);
       for (Library library in component.libraries) {
         if (library.importUri.scheme != "dart") {
           userCode.libraries.add(library);
@@ -284,15 +394,17 @@ class CompileTask {
 
 /// Load the [Component] from the given [uri] and append its libraries
 /// to the [dillTarget].
-void _appendDillForUri(DillTarget dillTarget, Uri uri) {
+Component _appendDillForUri(DillTarget dillTarget, Uri uri) {
   var bytes = new File.fromUri(uri).readAsBytesSync();
   var platformComponent = loadComponentFromBytes(bytes);
   dillTarget.loader.appendLibraries(platformComponent, byteCount: bytes.length);
+  return platformComponent;
 }
 
-Future compilePlatform(List<String> arguments) async {
+Future<void> compilePlatform(List<String> arguments) async {
   await withGlobalOptions("compile_platform", arguments, false,
       (CompilerContext c, List<String> restArguments) {
+    c.compilingPlatform = true;
     Uri hostPlatform = Uri.base.resolveUri(new Uri.file(restArguments[2]));
     Uri outlineOutput = Uri.base.resolveUri(new Uri.file(restArguments[4]));
     return compilePlatformInternal(
@@ -300,7 +412,7 @@ Future compilePlatform(List<String> arguments) async {
   });
 }
 
-Future compilePlatformInternal(CompilerContext c, Uri fullOutput,
+Future<void> compilePlatformInternal(CompilerContext c, Uri fullOutput,
     Uri outlineOutput, Uri hostPlatform) async {
   if (c.options.verbose) {
     print("Generating outline of ${c.options.sdkRoot} into $outlineOutput");
@@ -318,26 +430,23 @@ Future compilePlatformInternal(CompilerContext c, Uri fullOutput,
   new File.fromUri(outlineOutput).writeAsBytesSync(result.summary);
   c.options.ticker.logMs("Wrote outline to ${outlineOutput.toFilePath()}");
 
-  if (c.options.bytecode) {
-    generateBytecode(result.component);
-  }
-
-  await writeComponentToFile(result.component, fullOutput,
-      filter: (lib) => !lib.isExternal);
+  await writeComponentToFile(result.component, fullOutput);
 
   c.options.ticker.logMs("Wrote component to ${fullOutput.toFilePath()}");
 
-  List<Uri> deps = result.deps.toList();
-  for (Uri dependency in await computeHostDependencies(hostPlatform)) {
-    // Add the dependencies of the compiler's own sources.
-    if (dependency != outlineOutput) {
-      // We're computing the dependencies for [outlineOutput], so we shouldn't
-      // include it in the deps file.
-      deps.add(dependency);
+  if (c.options.emitDeps) {
+    List<Uri> deps = result.deps.toList();
+    for (Uri dependency in await computeHostDependencies(hostPlatform)) {
+      // Add the dependencies of the compiler's own sources.
+      if (dependency != outlineOutput) {
+        // We're computing the dependencies for [outlineOutput], so we shouldn't
+        // include it in the deps file.
+        deps.add(dependency);
+      }
     }
+    await writeDepsFile(fullOutput,
+        new File(new File.fromUri(fullOutput).path + ".d").uri, deps);
   }
-  await writeDepsFile(
-      fullOutput, new File(new File.fromUri(fullOutput).path + ".d").uri, deps);
 }
 
 Future<List<Uri>> computeHostDependencies(Uri hostPlatform) async {
@@ -351,7 +460,7 @@ Future<List<Uri>> computeHostDependencies(Uri hostPlatform) async {
       platform: hostPlatform, target: hostTarget);
 }
 
-Future writeDepsFile(
+Future<void> writeDepsFile(
     Uri output, Uri depsFile, List<Uri> allDependencies) async {
   if (allDependencies.isEmpty) return;
   String toRelativeFilePath(Uri uri) {
@@ -374,13 +483,13 @@ Future writeDepsFile(
     //
     //     ninja explain: expected depfile 'vm_platform.dill.d' to mention \
     //     'vm_platform.dill', got '/.../xcodebuild/ReleaseX64/vm_platform.dill'
-    return Uri.parse(relativizeUri(uri, base: Uri.base)).toFilePath();
+    return Uri.parse(relativizeUri(Uri.base, uri, isWindows)).toFilePath();
   }
 
   StringBuffer sb = new StringBuffer();
   sb.write(toRelativeFilePath(output));
   sb.write(":");
-  List<String> paths = new List<String>(allDependencies.length);
+  List<String> paths = new List<String>.filled(allDependencies.length, null);
   for (int i = 0; i < allDependencies.length; i++) {
     paths[i] = toRelativeFilePath(allDependencies[i]);
   }

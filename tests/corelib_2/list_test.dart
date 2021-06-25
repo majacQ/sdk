@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import "dart:collection";
 import "dart:typed_data";
 import "package:expect/expect.dart";
@@ -56,7 +58,7 @@ void testErrors() {
   testIndexError(list, index, name) {
     try {
       list[list.length];
-    } catch (err, s) {
+    } on RangeError catch (err, s) {
       Expect.isTrue(err is RangeError, "$name[$index]");
       Expect.equals(list.length, err.invalidValue, "$name[$index] value");
       Expect.equals(list.length - 1, err.end, "$name[$index] end");
@@ -83,7 +85,7 @@ void testErrors() {
     var result;
     try {
       result = list.sublist(start, end);
-    } catch (actualError) {
+    } on RangeError catch (actualError) {
       Expect.isNotNull(realError, "$name should not fail");
       Expect.isTrue(actualError is RangeError, "$name is-error: $actualError");
       Expect.equals(realError.name, actualError.name, "$name name");

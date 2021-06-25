@@ -30,18 +30,25 @@ server calls. This file is validated by `coverage_test.dart`.
 - [x] analysis.overrides
 
 ## completion domain
+- [ ] completion.availableSuggestions
+- [ ] completion.existingImports
+- [ ] completion.getSuggestionDetails
 - [x] completion.getSuggestions
+- [ ] completion.registerLibraryPaths
 - [ ] completion.results
+- [ ] completion.setSubscriptions
 
 ## diagnostic domain
 - [x] diagnostic.getDiagnostics
 - [x] diagnostic.getServerPort
 
 ## edit domain
-- [ ] edit.dartfix
+- [x] edit.bulkFixes
+- [x] edit.dartfix
 - [x] edit.format
 - [x] edit.getAssists
 - [x] edit.getAvailableRefactorings
+- [x] edit.getDartfixInfo
 - [x] edit.getFixes
 - [x] edit.getPostfixCompletion
 - [x] edit.getRefactoring
@@ -75,6 +82,7 @@ server calls. This file is validated by `coverage_test.dart`.
 - [x] server.setSubscriptions
 - [ ] server.connected
 - [ ] server.error
+- [ ] server.log
 - [x] server.status
 
 ## analytics domain
@@ -90,3 +98,5 @@ server calls. This file is validated by `coverage_test.dart`.
 - [ ] flutter.getChangeAddForDesignTimeConstructor
 - [ ] flutter.setSubscriptions
 - [ ] flutter.outline
+- [ ] flutter.getWidgetDescription
+- [ ] flutter.setWidgetPropertyValue

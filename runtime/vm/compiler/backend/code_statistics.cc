@@ -119,7 +119,8 @@ int CombinedCodeStatistics::CompareEntries(const void* a, const void* b) {
   }
 }
 
-CodeStatistics::CodeStatistics(Assembler* assembler) : assembler_(assembler) {
+CodeStatistics::CodeStatistics(compiler::Assembler* assembler)
+    : assembler_(assembler) {
   memset(entries_, 0, CombinedCodeStatistics::kNumEntries * sizeof(Entry));
   instruction_bytes_ = 0;
   unaccounted_bytes_ = 0;
@@ -166,14 +167,14 @@ void CodeStatistics::Finalize() {
   intptr_t function_size = assembler_->CodeSize();
   unaccounted_bytes_ = function_size - instruction_bytes_;
   ASSERT(unaccounted_bytes_ >= 0);
+
+  const intptr_t unaligned_bytes = Instructions::HeaderSize() + function_size;
   alignment_bytes_ =
-      Utils::RoundUp(function_size, OS::PreferredCodeAlignment()) -
-      function_size;
+      Utils::RoundUp(unaligned_bytes, kObjectAlignment) - unaligned_bytes;
   assembler_ = NULL;
 }
 
 void CodeStatistics::AppendTo(CombinedCodeStatistics* stat) {
-  intptr_t sum = 0;
   bool returns_constant = true;
   bool returns_const_with_load_field_ = true;
 
@@ -181,7 +182,6 @@ void CodeStatistics::AppendTo(CombinedCodeStatistics* stat) {
     intptr_t bytes = entries_[i].bytes;
     stat->entries_[i].count += entries_[i].count;
     if (bytes > 0) {
-      sum += bytes;
       stat->entries_[i].bytes += bytes;
       if (i != CombinedCodeStatistics::kTagParallelMove &&
           i != CombinedCodeStatistics::kTagReturn &&

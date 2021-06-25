@@ -2,10 +2,14 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import 'dart:collection';
 import 'package:kernel/core_types.dart';
 import 'package:kernel/kernel.dart';
 import 'constants.dart';
+import 'kernel_helpers.dart';
+import 'target.dart' show allowedNativeTest;
 
 /// Contains information about native JS types (those types provided by the
 /// implementation) that are also provided by the Dart SDK.
@@ -36,7 +40,7 @@ class NativeTypeSet {
   final _nativeTypes = HashSet<Class>.identity();
   final _pendingLibraries = HashSet<Library>.identity();
 
-  NativeTypeSet(this.coreTypes, this.constants) {
+  NativeTypeSet(this.coreTypes, this.constants, Component component) {
     // First, core types:
     // TODO(vsm): If we're analyzing against the main SDK, those
     // types are not explicitly annotated.
@@ -45,6 +49,8 @@ class NativeTypeSet {
     _addExtensionType(coreTypes.doubleClass, true);
     _addExtensionType(coreTypes.boolClass, true);
     _addExtensionType(coreTypes.stringClass, true);
+    // Allow `Function.==` to be recognized as a symbolized member.
+    _addExtensionType(coreTypes.functionClass, false);
 
     var sdk = coreTypes.index;
     _addExtensionTypes(sdk.getLibrary('dart:_interceptors'));
@@ -52,8 +58,12 @@ class NativeTypeSet {
 
     // These are used natively by dart:html but also not annotated.
     _addExtensionTypesForLibrary('dart:core', ['Comparable', 'Map']);
-    _addExtensionTypesForLibrary('dart:collection', ['ListMixin']);
+    _addExtensionTypesForLibrary('dart:collection', ['ListMixin', 'MapMixin']);
     _addExtensionTypesForLibrary('dart:math', ['Rectangle']);
+
+    // TODO(39612) Validate that after this point no types from the SDK are
+    // added as native extensions (excluding types from dart:html and "friends"
+    // listed below).
 
     // Second, html types - these are only searched if we use dart:html, etc.:
     _addPendingExtensionTypes(sdk.getLibrary('dart:html'));
@@ -62,6 +72,14 @@ class NativeTypeSet {
     _addPendingExtensionTypes(sdk.getLibrary('dart:web_audio'));
     _addPendingExtensionTypes(sdk.getLibrary('dart:web_gl'));
     _addPendingExtensionTypes(sdk.getLibrary('dart:web_sql'));
+
+    // For testing purposes only, we add extension types outside the Dart SDK.
+    // These are only allowed for native tests (see allowedNativeTest).
+    for (var library in component.libraries) {
+      if (allowedNativeTest(library.importUri)) {
+        _addExtensionTypes(library);
+      }
+    }
   }
 
   void _addExtensionType(Class c, [bool mustBeNative = false]) {
@@ -69,7 +87,7 @@ class NativeTypeSet {
     if (_extensibleTypes.contains(c) || _nativeTypes.contains(c)) {
       return;
     }
-    bool isNative = mustBeNative || _isNative(c);
+    var isNative = mustBeNative || _isNative(c);
     if (isNative) {
       _nativeTypes.add(c);
     } else {
@@ -125,25 +143,33 @@ class NativeTypeSet {
   /// referring to the JavaScript built-in `Array` type.
   List<String> getNativePeers(Class c) {
     if (c == coreTypes.objectClass) return ['Object'];
-    var names = constants.getNameFromAnnotation(_getNativeAnnotation(c));
-    if (names == null) return const [];
 
-    // Omit the special name "!nonleaf" and any future hacks starting with "!"
-    return names.split(',').where((peer) => !peer.startsWith("!")).toList();
+    for (var annotation in c.annotations) {
+      var names = _getNativeAnnotationName(annotation);
+      if (names != null) {
+        // Omit the special name "!nonleaf" and any future dart2js hacks
+        // starting with "!"
+        return names.split(',').where((peer) => !peer.startsWith('!')).toList();
+      }
+    }
+    return const [];
+  }
+
+  /// If this [annotation] is `@Native` or `@JsPeerInterface`, returns the "name"
+  /// field (which is also the constructor parameter).
+  String _getNativeAnnotationName(Expression annotation) {
+    if (!_isNativeAnnotation(annotation)) return null;
+    return constants.getFieldValueFromAnnotation(annotation, 'name') as String;
   }
 }
 
-bool _isNative(Class c) => _getNativeAnnotation(c) != null;
+/// Whether class [c] has any `@Native` or `@JsPeerInterface` annotations.
+bool _isNative(Class c) => c.annotations.any(_isNativeAnnotation);
 
-ConstructorInvocation _getNativeAnnotation(Class c) {
-  for (var annotation in c.annotations) {
-    if (annotation is ConstructorInvocation) {
-      var c = annotation.target.enclosingClass;
-      if ((c.name == 'Native' || c.name == 'JsPeerInterface') &&
-          c.enclosingLibrary.importUri.scheme == 'dart') {
-        return annotation;
-      }
-    }
-  }
-  return null;
+/// Whether this [annotation] is `@Native` or `@JsPeerInterface`.
+bool _isNativeAnnotation(Expression annotation) {
+  var c = getAnnotationClass(annotation);
+  return c != null &&
+      (c.name == 'Native' || c.name == 'JsPeerInterface') &&
+      c.enclosingLibrary.importUri.scheme == 'dart';
 }

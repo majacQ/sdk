@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart=2.9
+
 /// Test to ensure that incremental_perf.dart is running without errors.
 
 import 'dart:io';
@@ -12,7 +14,7 @@ import 'incremental_perf.dart' as m show main;
 main() async {
   var sdkOutline = computePlatformBinariesLocation(forceBuildDir: true).resolve(
       // TODO(sigmund): switch to `vm_outline.dill` (issue #29881).
-      "vm_platform.dill");
+      "vm_platform_strong.dill");
 
   final ikgBenchmarks = Platform.script.resolve('../benchmarks/ikg/');
   final helloEntry = ikgBenchmarks.resolve('hello.dart');
@@ -28,7 +30,6 @@ main() async {
     '--no-loop',
     '--sdk-summary',
     '$sdkOutline',
-    '--mode=legacy',
     '$helloEntry',
     '$helloEdits'
   ]);
@@ -54,7 +55,6 @@ main() async {
     '--no-loop',
     '--sdk-summary',
     '$sdkOutline',
-    '--mode=legacy',
     '--implementation=default',
     '$dart2jsEntry',
     '$dart2jsEdits'
@@ -63,7 +63,6 @@ main() async {
     '--no-loop',
     '--sdk-summary',
     '$sdkOutline',
-    '--mode=legacy',
     '--implementation=minimal',
     '$dart2jsEntry',
     '$dart2jsEdits'

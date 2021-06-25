@@ -2,12 +2,13 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE.md file.
 
+// @dart = 2.9
+
 import 'package:async_helper/async_helper.dart' show asyncTest;
 
 import 'package:expect/expect.dart' show Expect;
 
-import 'package:front_end/src/fasta/builder/builder.dart'
-    show InvalidTypeBuilder;
+import 'package:front_end/src/fasta/builder/invalid_type_declaration_builder.dart';
 
 import 'package:front_end/src/fasta/compiler_context.dart' show CompilerContext;
 
@@ -21,20 +22,23 @@ import 'package:kernel/ast.dart'
 
 main() async {
   await asyncTest(() async {
-    Library library = new Library(Uri.parse("org.dartlang.fasta:library"));
-    Field field = new Field(new Name("_exports#", library),
-        initializer: new StringLiteral('{"main":"Problem with main"}'));
-    library.addMember(field);
+    Uri uri = Uri.parse("org.dartlang.fasta:library");
+    Library library = new Library(uri, fileUri: uri);
+    Field field = new Field.immutable(new Name("_exports#", library),
+        initializer: new StringLiteral('{"main":"Problem with main"}'),
+        fileUri: library.fileUri);
+    library.addField(field);
     Component component = new Component(libraries: <Library>[library]);
     await CompilerContext.runWithDefaultOptions((CompilerContext c) async {
-      DillTarget target =
-          new DillTarget(c.options.ticker, null, c.options.target);
+      DillTarget target = new DillTarget(c.options.ticker,
+          await c.options.getUriTranslator(), c.options.target);
       target.loader.appendLibraries(component);
       DillLibraryBuilder builder = target.loader.read(library.importUri, -1);
       await target.loader.buildOutline(builder);
-      builder.finalizeExports();
-      var mainExport = builder.exportScope.local["main"];
-      Expect.isTrue(mainExport is InvalidTypeBuilder);
+      builder.markAsReadyToFinalizeExports();
+      var mainExport =
+          builder.exportScope.lookupLocalMember("main", setter: false);
+      Expect.isTrue(mainExport is InvalidTypeDeclarationBuilder);
     });
   });
 }

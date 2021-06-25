@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 // This test reflectively enumerates all the methods in the system and tries to
 // invoke them with various basic values (nulls, ints, etc). This may result in
 // Dart exceptions or hangs, but should never result in crashes or JavaScript
@@ -11,9 +13,10 @@ library test.invoke_natives;
 
 import 'dart:mirrors';
 import 'dart:async';
+import 'dart:io';
 
 // Methods to be skipped, by qualified name.
-var blacklist = [
+var denylist = [
   // Don't recurse on this test.
   'test.invoke_natives',
 
@@ -30,31 +33,17 @@ var blacklist = [
   'dart.developer.debugger',
 
   // Don't run blocking io calls.
-  new RegExp(r".*Sync$"),
-
-  // These prevent the test from exiting.
   'dart.io.sleep',
-  'dart._http.HttpServer.HttpServer.listenOn',
-
-  // These either cause the VM to segfault or throw uncatchable API errors.
-  // TODO(15274): Fix them and remove from blacklist.
-  'dart.io.SystemEncoding.decode', // Windows only
-  'dart.io.SystemEncoding.encode', // Windows only
-
-  // These construct an object with an uninitialized native field.
-  // TODO(23869): We could make this safer, but making the failure non-fatal
-  //   would we worthless aside from this test.
-  'dart.io.X509Certificate.X509Certificate._',
-  'dart.io._X509Impl._X509Impl',
+  new RegExp(r".*Sync$"),
 
   // Don't call private methods in dart.async as they may circumvent the zoned
   // error handling below.
   new RegExp(r"^dart\.async\._.*$"),
 ];
 
-bool isBlacklisted(Symbol qualifiedSymbol) {
+bool isDenylisted(Symbol qualifiedSymbol) {
   var qualifiedString = MirrorSystem.getName(qualifiedSymbol);
-  for (var pattern in blacklist) {
+  for (var pattern in denylist) {
     if (qualifiedString.contains(pattern)) {
       print('Skipping $qualifiedString');
       return true;
@@ -64,14 +53,14 @@ bool isBlacklisted(Symbol qualifiedSymbol) {
 }
 
 class Task {
-  var name;
-  var action;
+  dynamic name;
+  dynamic action;
 }
 
 var queue = new List<Task>();
 
 checkMethod(MethodMirror m, ObjectMirror target, [origin]) {
-  if (isBlacklisted(m.qualifiedName)) return;
+  if (isDenylisted(m.qualifiedName)) return;
 
   var task = new Task();
   task.name = '${MirrorSystem.getName(m.qualifiedName)} from $origin';
@@ -110,7 +99,7 @@ checkClass(classMirror) {
   classMirror.declarations.values
       .where((d) => d is MethodMirror && d.isConstructor)
       .forEach((m) {
-    if (isBlacklisted(m.qualifiedName)) return;
+    if (isDenylisted(m.qualifiedName)) return;
     var task = new Task();
     task.name = MirrorSystem.getName(m.qualifiedName);
 
@@ -125,7 +114,7 @@ checkClass(classMirror) {
 
 checkLibrary(libraryMirror) {
   print(libraryMirror.simpleName);
-  if (isBlacklisted(libraryMirror.qualifiedName)) return;
+  if (isDenylisted(libraryMirror.qualifiedName)) return;
 
   libraryMirror.declarations.values
       .where((d) => d is ClassMirror)
@@ -141,7 +130,8 @@ var testZone;
 doOneTask() {
   if (queue.length == 0) {
     print('Done');
-    return;
+    // Forcibly exit as we likely opened sockets and timers during the fuzzing.
+    exit(0);
   }
 
   var task = queue.removeLast();

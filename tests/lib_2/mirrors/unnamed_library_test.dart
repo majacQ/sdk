@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 // No library declaration.
 
 import 'dart:mirrors';
@@ -12,7 +14,7 @@ class Class {}
 
 main() {
   ClassMirror cm = reflectClass(Class);
-  LibraryMirror lm = cm.owner;
+  LibraryMirror lm = cm.owner as LibraryMirror;
 
   Expect.equals('Class', MirrorSystem.getName(cm.simpleName));
   Expect.equals('.Class', MirrorSystem.getName(cm.qualifiedName));

@@ -16,84 +16,94 @@ import 'package:analysis_server_client/protocol.dart';
 /// Clients may mix-in this class, but may not implement it.
 mixin NotificationHandler {
   void handleEvent(Notification notification) {
-    Map<String, Object> params = notification.params;
-    ResponseDecoder decoder = new ResponseDecoder(null);
+    var params = notification.params;
+    var decoder = ResponseDecoder(null);
     switch (notification.event) {
       case ANALYSIS_NOTIFICATION_ANALYZED_FILES:
-        onAnalysisAnalyzedFiles(new AnalysisAnalyzedFilesParams.fromJson(
-            decoder, 'params', params));
+        onAnalysisAnalyzedFiles(
+            AnalysisAnalyzedFilesParams.fromJson(decoder, 'params', params));
         break;
       case ANALYSIS_NOTIFICATION_CLOSING_LABELS:
-        onAnalysisClosingLabels(new AnalysisClosingLabelsParams.fromJson(
-            decoder, 'params', params));
+        onAnalysisClosingLabels(
+            AnalysisClosingLabelsParams.fromJson(decoder, 'params', params));
         break;
       case ANALYSIS_NOTIFICATION_ERRORS:
         onAnalysisErrors(
-            new AnalysisErrorsParams.fromJson(decoder, 'params', params));
+            AnalysisErrorsParams.fromJson(decoder, 'params', params));
         break;
       case ANALYSIS_NOTIFICATION_FLUSH_RESULTS:
         onAnalysisFlushResults(
-            new AnalysisFlushResultsParams.fromJson(decoder, 'params', params));
+            AnalysisFlushResultsParams.fromJson(decoder, 'params', params));
         break;
       case ANALYSIS_NOTIFICATION_FOLDING:
         onAnalysisFolding(
-            new AnalysisFoldingParams.fromJson(decoder, 'params', params));
+            AnalysisFoldingParams.fromJson(decoder, 'params', params));
         break;
       case ANALYSIS_NOTIFICATION_HIGHLIGHTS:
         onAnalysisHighlights(
-            new AnalysisHighlightsParams.fromJson(decoder, 'params', params));
+            AnalysisHighlightsParams.fromJson(decoder, 'params', params));
         break;
       case ANALYSIS_NOTIFICATION_IMPLEMENTED:
         onAnalysisImplemented(
-            new AnalysisImplementedParams.fromJson(decoder, 'params', params));
+            AnalysisImplementedParams.fromJson(decoder, 'params', params));
         break;
       case ANALYSIS_NOTIFICATION_INVALIDATE:
         onAnalysisInvalidate(
-            new AnalysisInvalidateParams.fromJson(decoder, 'params', params));
+            AnalysisInvalidateParams.fromJson(decoder, 'params', params));
         break;
       case ANALYSIS_NOTIFICATION_NAVIGATION:
         onAnalysisNavigation(
-            new AnalysisNavigationParams.fromJson(decoder, 'params', params));
+            AnalysisNavigationParams.fromJson(decoder, 'params', params));
         break;
       case ANALYSIS_NOTIFICATION_OCCURRENCES:
         onAnalysisOccurrences(
-            new AnalysisOccurrencesParams.fromJson(decoder, 'params', params));
+            AnalysisOccurrencesParams.fromJson(decoder, 'params', params));
         break;
       case ANALYSIS_NOTIFICATION_OUTLINE:
         onAnalysisOutline(
-            new AnalysisOutlineParams.fromJson(decoder, 'params', params));
+            AnalysisOutlineParams.fromJson(decoder, 'params', params));
         break;
       case ANALYSIS_NOTIFICATION_OVERRIDES:
         onAnalysisOverrides(
-            new AnalysisOverridesParams.fromJson(decoder, 'params', params));
+            AnalysisOverridesParams.fromJson(decoder, 'params', params));
+        break;
+      case COMPLETION_NOTIFICATION_AVAILABLE_SUGGESTIONS:
+        onCompletionAvailableSuggestions(
+            CompletionAvailableSuggestionsParams.fromJson(
+                decoder, 'params', params));
+        break;
+      case COMPLETION_NOTIFICATION_EXISTING_IMPORTS:
+        onCompletionExistingImports(CompletionExistingImportsParams.fromJson(
+            decoder, 'params', params));
         break;
       case COMPLETION_NOTIFICATION_RESULTS:
         onCompletionResults(
-            new CompletionResultsParams.fromJson(decoder, 'params', params));
+            CompletionResultsParams.fromJson(decoder, 'params', params));
         break;
       case EXECUTION_NOTIFICATION_LAUNCH_DATA:
         onExecutionLaunchData(
-            new ExecutionLaunchDataParams.fromJson(decoder, 'params', params));
+            ExecutionLaunchDataParams.fromJson(decoder, 'params', params));
         break;
       case FLUTTER_NOTIFICATION_OUTLINE:
         onFlutterOutline(
-            new FlutterOutlineParams.fromJson(decoder, 'params', params));
+            FlutterOutlineParams.fromJson(decoder, 'params', params));
         break;
       case SEARCH_NOTIFICATION_RESULTS:
         onSearchResults(
-            new SearchResultsParams.fromJson(decoder, 'params', params));
+            SearchResultsParams.fromJson(decoder, 'params', params));
         break;
       case SERVER_NOTIFICATION_CONNECTED:
         onServerConnected(
-            new ServerConnectedParams.fromJson(decoder, 'params', params));
+            ServerConnectedParams.fromJson(decoder, 'params', params));
         break;
       case SERVER_NOTIFICATION_ERROR:
-        onServerError(
-            new ServerErrorParams.fromJson(decoder, 'params', params));
+        onServerError(ServerErrorParams.fromJson(decoder, 'params', params));
+        break;
+      case SERVER_NOTIFICATION_LOG:
+        onServerLog(ServerLogParams.fromJson(decoder, 'params', params));
         break;
       case SERVER_NOTIFICATION_STATUS:
-        onServerStatus(
-            new ServerStatusParams.fromJson(decoder, 'params', params));
+        onServerStatus(ServerStatusParams.fromJson(decoder, 'params', params));
         break;
       default:
         onUnknownNotification(notification.event, params);
@@ -206,6 +216,21 @@ mixin NotificationHandler {
   /// request.
   void onAnalysisOverrides(AnalysisOverridesParams params) {}
 
+  /// Reports the pre-computed, candidate completions from symbols defined
+  /// in a corresponding library. This notification may be sent multiple times.
+  /// When a notification is processed, clients should replace any previous
+  /// information about the libraries in the list of changedLibraries, discard
+  /// any information about the libraries in the list of removedLibraries, and
+  /// preserve any previously received information about any libraries that are
+  /// not included in either list.
+  void onCompletionAvailableSuggestions(
+      CompletionAvailableSuggestionsParams params) {}
+
+  /// Reports existing imports in a library. This notification may be sent
+  /// multiple times for a library. When a notification is processed, clients
+  /// should replace any previous information for the library.
+  void onCompletionExistingImports(CompletionExistingImportsParams params) {}
+
   /// Reports the completion suggestions that should be presented
   /// to the user. The set of suggestions included in the
   /// notification is always a complete list that supersedes any
@@ -253,6 +278,9 @@ mixin NotificationHandler {
   /// It is not possible to subscribe to or unsubscribe from this
   /// notification.
   void onServerError(ServerErrorParams params) {}
+
+  /// The stream of entries describing events happened in the server.
+  void onServerLog(ServerLogParams params) {}
 
   /// Reports the current status of the server. Parameters are
   /// omitted if there has been no change in the status

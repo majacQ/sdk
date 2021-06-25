@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -9,7 +9,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import '../support/integration_tests.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(OutlineTest);
   });
@@ -17,9 +17,9 @@ main() {
 
 @reflectiveTest
 class OutlineTest extends AbstractAnalysisServerIntegrationTest {
-  test_outline() {
-    String pathname = sourcePath('test.dart');
-    String text = r'''
+  Future<void> test_outline() async {
+    var pathname = sourcePath('test.dart');
+    var text = r'''
 class Class1 {
   int field;
 
@@ -45,27 +45,26 @@ class Class2 {
     sendAnalysisSetSubscriptions({
       AnalysisService.OUTLINE: [pathname]
     });
-    Outline outline;
-    onAnalysisOutline.listen((AnalysisOutlineParams params) {
-      expect(params.file, equals(pathname));
-      outline = params.outline;
-    });
-    return analysisFinished.then((_) {
-      expect(outline.element.kind, equals(ElementKind.COMPILATION_UNIT));
-      expect(outline.offset, equals(0));
-      expect(outline.length, equals(text.length));
-      List<Outline> classes = outline.children;
-      expect(classes, hasLength(2));
-      expect(classes[0].element.name, equals('Class1'));
-      expect(classes[1].element.name, equals('Class2'));
 
-      List<Outline> members = classes[0].children;
-      expect(members, hasLength(5));
-      expect(members[0].element.name, equals('field'));
-      expect(members[1].element.name, equals('method'));
-      expect(members[2].element.name, equals('staticMethod'));
-      expect(members[3].element.name, equals('getter'));
-      expect(members[4].element.name, equals('setter'));
-    });
+    var params = await onAnalysisOutline.first;
+    expect(params.file, equals(pathname));
+    var outline = params.outline;
+
+    expect(outline.element.kind, equals(ElementKind.COMPILATION_UNIT));
+    expect(outline.offset, equals(0));
+    expect(outline.length, equals(text.length));
+
+    var classes = outline.children!;
+    expect(classes, hasLength(2));
+    expect(classes[0].element.name, equals('Class1'));
+    expect(classes[1].element.name, equals('Class2'));
+
+    var members = classes[0].children!;
+    expect(members, hasLength(5));
+    expect(members[0].element.name, equals('field'));
+    expect(members[1].element.name, equals('method'));
+    expect(members[2].element.name, equals('staticMethod'));
+    expect(members[3].element.name, equals('getter'));
+    expect(members[4].element.name, equals('setter'));
   }
 }

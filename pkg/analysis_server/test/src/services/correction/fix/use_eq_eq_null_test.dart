@@ -9,32 +9,20 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'fix_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
+    defineReflectiveTests(UseEqEqNullMultiTest);
     defineReflectiveTests(UseEqEqNullTest);
   });
 }
 
 @reflectiveTest
-class UseEqEqNullTest extends FixProcessorTest {
+class UseEqEqNullMultiTest extends FixProcessorTest {
   @override
-  FixKind get kind => DartFixKind.USE_EQ_EQ_NULL;
+  FixKind get kind => DartFixKind.USE_EQ_EQ_NULL_MULTI;
 
-  test_isNull() async {
-    await resolveTestUnit('''
-main(p) {
-  p is Null;
-}
-''');
-    await assertHasFix('''
-main(p) {
-  p == null;
-}
-''');
-  }
-
-  test_isNull_all() async {
-    await resolveTestUnit('''
+  Future<void> test_isNull_all() async {
+    await resolveTestCode('''
 main(p, q) {
   p is Null;
   q is Null;
@@ -44,6 +32,25 @@ main(p, q) {
 main(p, q) {
   p == null;
   q == null;
+}
+''');
+  }
+}
+
+@reflectiveTest
+class UseEqEqNullTest extends FixProcessorTest {
+  @override
+  FixKind get kind => DartFixKind.USE_EQ_EQ_NULL;
+
+  Future<void> test_isNull() async {
+    await resolveTestCode('''
+main(p) {
+  p is Null;
+}
+''');
+    await assertHasFix('''
+main(p) {
+  p == null;
 }
 ''');
   }

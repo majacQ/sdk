@@ -9,16 +9,11 @@ import 'package:analyzer/file_system/file_system.dart';
 import 'package:analyzer/file_system/memory_file_system.dart';
 import 'package:analyzer/source/error_processor.dart';
 import 'package:analyzer/src/analysis_options/analysis_options_provider.dart';
-import 'package:analyzer/src/analysis_options/error/option_codes.dart';
-import 'package:analyzer/src/dart/error/hint_codes.dart';
 import 'package:analyzer/src/error/codes.dart';
-import 'package:analyzer/src/file_system/file_system.dart';
 import 'package:analyzer/src/generated/engine.dart';
 import 'package:analyzer/src/generated/source.dart';
 import 'package:analyzer/src/lint/linter.dart';
 import 'package:analyzer/src/lint/registry.dart';
-import 'package:analyzer/src/task/api/general.dart';
-import 'package:analyzer/src/task/api/model.dart';
 import 'package:analyzer/src/task/options.dart';
 import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
@@ -26,33 +21,82 @@ import 'package:yaml/yaml.dart';
 
 import '../../generated/test_support.dart';
 import '../../resource_utils.dart';
-import '../context/abstract_context.dart';
 
 main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(ContextConfigurationTest);
     defineReflectiveTests(ErrorCodeValuesTest);
-    defineReflectiveTests(GenerateNewOptionsErrorsTaskTest);
-    defineReflectiveTests(GenerateOldOptionsErrorsTaskTest);
     defineReflectiveTests(OptionsFileValidatorTest);
     defineReflectiveTests(OptionsProviderTest);
   });
 }
 
-final isGenerateOptionsErrorsTask =
-    new TypeMatcher<GenerateOptionsErrorsTask>();
-
 @reflectiveTest
-class ContextConfigurationTest extends AbstractContextTest {
-  final AnalysisOptionsProvider optionsProvider = new AnalysisOptionsProvider();
+class ContextConfigurationTest {
+  final AnalysisOptionsImpl analysisOptions = AnalysisOptionsImpl();
 
-  AnalysisOptions get analysisOptions => context.analysisOptions;
+  final AnalysisOptionsProvider optionsProvider = AnalysisOptionsProvider();
 
   void configureContext(String optionsSource) =>
       applyToAnalysisOptions(analysisOptions, parseOptions(optionsSource));
 
   YamlMap parseOptions(String source) =>
       optionsProvider.getOptionsFromString(source);
+
+  test_configure_cannotIgnore() {
+    configureContext('''
+analyzer:
+  cannot-ignore:
+    - one_error_code
+    - another
+''');
+
+    var unignorableNames = analysisOptions.unignorableNames;
+    expect(unignorableNames, unorderedEquals(['ONE_ERROR_CODE', 'ANOTHER']));
+  }
+
+  test_configure_cannotIgnore_severity() {
+    configureContext('''
+analyzer:
+  cannot-ignore:
+    - error
+''');
+
+    var unignorableNames = analysisOptions.unignorableNames;
+    expect(unignorableNames, contains('INVALID_ANNOTATION'));
+    expect(unignorableNames.length, greaterThan(500));
+  }
+
+  test_configure_cannotIgnore_severity_withProcessor() {
+    configureContext('''
+analyzer:
+  errors:
+    unused_import: error
+  cannot-ignore:
+    - error
+''');
+
+    var unignorableNames = analysisOptions.unignorableNames;
+    expect(unignorableNames, contains('UNUSED_IMPORT'));
+  }
+
+  test_configure_chromeos_checks() {
+    configureContext('''
+analyzer:
+  optional-checks:
+    chrome-os-manifest-checks
+''');
+    expect(true, analysisOptions.chromeOsManifestChecks);
+  }
+
+  test_configure_chromeos_checks_map() {
+    configureContext('''
+analyzer:
+  optional-checks:
+    chrome-os-manifest-checks : true
+''');
+    expect(true, analysisOptions.chromeOsManifestChecks);
+  }
 
   test_configure_error_processors() {
     configureContext('''
@@ -65,12 +109,12 @@ analyzer:
     List<ErrorProcessor> processors = analysisOptions.errorProcessors;
     expect(processors, hasLength(2));
 
-    var unused_local = new AnalysisError(
-        new TestSource(), 0, 1, HintCode.UNUSED_LOCAL_VARIABLE, [
+    var unused_local =
+        AnalysisError(TestSource(), 0, 1, HintCode.UNUSED_LOCAL_VARIABLE, [
       ['x']
     ]);
-    var invalid_assignment =
-        new AnalysisError(new TestSource(), 0, 1, HintCode.INVALID_ASSIGNMENT, [
+    var invalid_assignment = AnalysisError(
+        TestSource(), 0, 1, CompileTimeErrorCode.INVALID_ASSIGNMENT, [
       ['x'],
       ['y']
     ]);
@@ -91,6 +135,19 @@ analyzer:
   exclude:
     - foo/bar.dart
     - 'test/**'
+''');
+
+    List<String> excludes = analysisOptions.excludePatterns;
+    expect(excludes, unorderedEquals(['foo/bar.dart', 'test/**']));
+  }
+
+  test_configure_excludes_withNonStrings() {
+    configureContext('''
+analyzer:
+  exclude:
+    - foo/bar.dart
+    - 'test/**'
+    - a: b
 ''');
 
     List<String> excludes = analysisOptions.excludePatterns;
@@ -136,14 +193,18 @@ analyzer:
 @reflectiveTest
 class ErrorCodeValuesTest {
   test_errorCodes() {
+    // Now that we're using unique names for comparison, the only reason to
+    // split the codes by class is to find all of the classes that need to be
+    // checked against `errorCodeValues`.
     var errorTypeMap = <Type, List<ErrorCode>>{};
     for (ErrorCode code in errorCodeValues) {
-      errorTypeMap.putIfAbsent(code.runtimeType, () => <ErrorCode>[]).add(code);
+      Type type = code.runtimeType;
+      errorTypeMap.putIfAbsent(type, () => <ErrorCode>[]).add(code);
     }
 
-    int missingErrorCodeCount = 0;
+    StringBuffer missingCodes = StringBuffer();
     errorTypeMap.forEach((Type errorType, List<ErrorCode> codes) {
-      var listedNames = codes.map((ErrorCode code) => code.name).toSet();
+      var listedNames = codes.map((ErrorCode code) => code.uniqueName).toSet();
 
       var declaredNames = reflectClass(errorType)
           .declarations
@@ -152,98 +213,23 @@ class ErrorCodeValuesTest {
         String name = declarationMirror.simpleName.toString();
         //TODO(danrubel): find a better way to extract the text from the symbol
         assert(name.startsWith('Symbol("') && name.endsWith('")'));
-        return name.substring(8, name.length - 2);
+        return errorType.toString() + '.' + name.substring(8, name.length - 2);
       }).where((String name) {
         return name == name.toUpperCase();
       }).toList();
 
-      // Remove declared names that are not supposed to be in errorCodeValues
-
-      if (errorType == AnalysisOptionsErrorCode) {
-        declaredNames
-            .remove(AnalysisOptionsErrorCode.INCLUDED_FILE_PARSE_ERROR.name);
-      } else if (errorType == AnalysisOptionsWarningCode) {
-        declaredNames
-            .remove(AnalysisOptionsWarningCode.INCLUDE_FILE_NOT_FOUND.name);
-        declaredNames
-            .remove(AnalysisOptionsWarningCode.INCLUDED_FILE_WARNING.name);
-        declaredNames
-            .remove(AnalysisOptionsWarningCode.INVALID_SECTION_FORMAT.name);
-      } else if (errorType == StaticWarningCode) {
-        declaredNames.remove(
-            StaticWarningCode.FINAL_NOT_INITIALIZED_CONSTRUCTOR_3_PLUS.name +
-                '_PLUS');
-      } else if (errorType == StrongModeCode) {
-        void removeCode(StrongModeCode code) {
-          String name = code.name;
-          declaredNames.remove(name);
-          if (name.startsWith('STRONG_MODE_')) {
-            declaredNames.remove(name.substring(12));
-          }
-        }
-
-        removeCode(StrongModeCode.DOWN_CAST_COMPOSITE);
-        removeCode(StrongModeCode.DOWN_CAST_IMPLICIT);
-        removeCode(StrongModeCode.DOWN_CAST_IMPLICIT_ASSIGN);
-        removeCode(StrongModeCode.DYNAMIC_CAST);
-        removeCode(StrongModeCode.ASSIGNMENT_CAST);
-        removeCode(StrongModeCode.INVALID_PARAMETER_DECLARATION);
-        removeCode(StrongModeCode.COULD_NOT_INFER);
-        removeCode(StrongModeCode.INFERRED_TYPE);
-        removeCode(StrongModeCode.INFERRED_TYPE_LITERAL);
-        removeCode(StrongModeCode.INFERRED_TYPE_ALLOCATION);
-        removeCode(StrongModeCode.INFERRED_TYPE_CLOSURE);
-        removeCode(StrongModeCode.INVALID_CAST_LITERAL);
-        removeCode(StrongModeCode.INVALID_CAST_LITERAL_LIST);
-        removeCode(StrongModeCode.INVALID_CAST_LITERAL_MAP);
-        removeCode(StrongModeCode.INVALID_CAST_LITERAL_SET);
-        removeCode(StrongModeCode.INVALID_CAST_FUNCTION_EXPR);
-        removeCode(StrongModeCode.INVALID_CAST_NEW_EXPR);
-        removeCode(StrongModeCode.INVALID_CAST_METHOD);
-        removeCode(StrongModeCode.INVALID_CAST_FUNCTION);
-        removeCode(StrongModeCode.INVALID_SUPER_INVOCATION);
-        removeCode(StrongModeCode.NON_GROUND_TYPE_CHECK_INFO);
-        removeCode(StrongModeCode.DYNAMIC_INVOKE);
-        removeCode(StrongModeCode.INVALID_FIELD_OVERRIDE);
-        removeCode(StrongModeCode.IMPLICIT_DYNAMIC_PARAMETER);
-        removeCode(StrongModeCode.IMPLICIT_DYNAMIC_RETURN);
-        removeCode(StrongModeCode.IMPLICIT_DYNAMIC_VARIABLE);
-        removeCode(StrongModeCode.IMPLICIT_DYNAMIC_FIELD);
-        removeCode(StrongModeCode.IMPLICIT_DYNAMIC_TYPE);
-        removeCode(StrongModeCode.IMPLICIT_DYNAMIC_LIST_LITERAL);
-        removeCode(StrongModeCode.IMPLICIT_DYNAMIC_MAP_LITERAL);
-        removeCode(StrongModeCode.IMPLICIT_DYNAMIC_FUNCTION);
-        removeCode(StrongModeCode.IMPLICIT_DYNAMIC_METHOD);
-        removeCode(StrongModeCode.IMPLICIT_DYNAMIC_INVOKE);
-        removeCode(StrongModeCode.NO_DEFAULT_BOUNDS);
-        removeCode(StrongModeCode.NOT_INSTANTIATED_BOUND);
-        removeCode(StrongModeCode.TOP_LEVEL_CYCLE);
-        removeCode(StrongModeCode.TOP_LEVEL_FUNCTION_LITERAL_BLOCK);
-        removeCode(StrongModeCode.TOP_LEVEL_IDENTIFIER_NO_TYPE);
-        removeCode(StrongModeCode.TOP_LEVEL_INSTANCE_GETTER);
-        removeCode(StrongModeCode.TOP_LEVEL_INSTANCE_METHOD);
-        removeCode(StrongModeCode.TOP_LEVEL_UNSUPPORTED);
-      } else if (errorType == TodoCode) {
-        declaredNames.remove('TODO_REGEX');
-      }
-
-      // Assert that all remaining declared names are in errorCodeValues
+      // Assert that all declared names are in errorCodeValues
 
       for (String declaredName in declaredNames) {
         if (!listedNames.contains(declaredName)) {
-          ++missingErrorCodeCount;
-          print('   errorCodeValues is missing $errorType $declaredName');
+          missingCodes.writeln();
+          missingCodes.write('  $declaredName');
         }
       }
     });
-    expect(missingErrorCodeCount, 0, reason: 'missing error code names');
-
-    // Apparently, duplicate error codes are allowed
-    //    expect(
-    //      ErrorFilterOptionValidator.errorCodes.length,
-    //      errorCodeValues.length,
-    //      reason: 'some errorCodeValues have the same name',
-    //    );
+    if (missingCodes.isNotEmpty) {
+      fail('Missing error codes:$missingCodes');
+    }
   }
 }
 
@@ -265,230 +251,59 @@ class ErrorProcessorMatcher extends Matcher {
 }
 
 @reflectiveTest
-class GenerateNewOptionsErrorsTaskTest extends AbstractContextTest {
-  Source source;
-
-  String get optionsFilePath => '/${AnalysisEngine.ANALYSIS_OPTIONS_YAML_FILE}';
-
-  LineInfo lineInfo(String source) =>
-      GenerateOptionsErrorsTask.computeLineInfo(source);
-
-  @override
-  setUp() {
-    super.setUp();
-    source = newSource(optionsFilePath);
-  }
-
-  test_buildInputs() {
-    Map<String, TaskInput> inputs =
-        GenerateOptionsErrorsTask.buildInputs(source);
-    expect(inputs, isNotNull);
-    expect(inputs.keys,
-        unorderedEquals([GenerateOptionsErrorsTask.CONTENT_INPUT_NAME]));
-  }
-
-  test_compute_lineInfo() {
-    expect(lineInfo('foo\nbar').getLocation(4).lineNumber, 2);
-    expect(lineInfo('foo\nbar').getLocation(4).columnNumber, 1);
-    expect(lineInfo('foo\r\nbar').getLocation(5).lineNumber, 2);
-    expect(lineInfo('foo\r\nbar').getLocation(5).columnNumber, 1);
-    expect(lineInfo('foo\rbar').getLocation(4).lineNumber, 2);
-    expect(lineInfo('foo\rbar').getLocation(4).columnNumber, 1);
-    expect(lineInfo('foo').getLocation(0).lineNumber, 1);
-    expect(lineInfo('foo').getLocation(0).columnNumber, 1);
-    expect(lineInfo('').getLocation(1).lineNumber, 1);
-  }
-
-  test_constructor() {
-    GenerateOptionsErrorsTask task =
-        new GenerateOptionsErrorsTask(context, source);
-    expect(task, isNotNull);
-    expect(task.context, context);
-    expect(task.target, source);
-  }
-
-  test_createTask() {
-    GenerateOptionsErrorsTask task =
-        GenerateOptionsErrorsTask.createTask(context, source);
-    expect(task, isNotNull);
-    expect(task.context, context);
-    expect(task.target, source);
-  }
-
-  test_description() {
-    GenerateOptionsErrorsTask task =
-        new GenerateOptionsErrorsTask(null, source);
-    expect(task.description, isNotNull);
-  }
-
-  test_descriptor() {
-    TaskDescriptor descriptor = GenerateOptionsErrorsTask.DESCRIPTOR;
-    expect(descriptor, isNotNull);
-  }
-
-  @failingTest
-  test_perform_bad_yaml() {
-    // We have lost the ability to detect this kind of error.
-    String code = r'''
-:
-''';
-    AnalysisTarget target = newSource(optionsFilePath, code);
-    computeResult(target, ANALYSIS_OPTIONS_ERRORS);
-    expect(task, isGenerateOptionsErrorsTask);
-    List<AnalysisError> errors =
-        outputs[ANALYSIS_OPTIONS_ERRORS] as List<AnalysisError>;
-    expect(errors, hasLength(1));
-    expect(errors[0].errorCode, AnalysisOptionsErrorCode.PARSE_ERROR);
-  }
-
-  test_perform_include() {
-    newSource('/other_options.yaml', '');
-    String code = r'''
-include: other_options.yaml
-''';
-    AnalysisTarget target = newSource(optionsFilePath, code);
-    computeResult(target, ANALYSIS_OPTIONS_ERRORS);
-    expect(task, isGenerateOptionsErrorsTask);
-    List<AnalysisError> errors =
-        outputs[ANALYSIS_OPTIONS_ERRORS] as List<AnalysisError>;
-    expect(errors, hasLength(0));
-  }
-
-  test_perform_include_bad_value() {
-    newSource('/other_options.yaml', '''
-analyzer:
-  errors:
-    unused_local_variable: ftw
-''');
-    String code = r'''
-include: other_options.yaml
-''';
-    AnalysisTarget target = newSource(optionsFilePath, code);
-    computeResult(target, ANALYSIS_OPTIONS_ERRORS);
-    expect(task, isGenerateOptionsErrorsTask);
-    List<AnalysisError> errors =
-        outputs[ANALYSIS_OPTIONS_ERRORS] as List<AnalysisError>;
-    expect(errors, hasLength(1));
-    AnalysisError error = errors[0];
-    expect(error.errorCode, AnalysisOptionsWarningCode.INCLUDED_FILE_WARNING);
-    expect(error.source, target.source);
-    expect(error.offset, 10);
-    expect(error.length, 18);
-    expect(error.message, contains('other_options.yaml(47..49)'));
-  }
-
-  @failingTest
-  test_perform_include_bad_yaml() {
-    // We have lost the ability to detect this kind of error.
-    newSource('/other_options.yaml', ':');
-    String code = r'''
-include: other_options.yaml
-''';
-    AnalysisTarget target = newSource(optionsFilePath, code);
-    computeResult(target, ANALYSIS_OPTIONS_ERRORS);
-    expect(task, isGenerateOptionsErrorsTask);
-    List<AnalysisError> errors =
-        outputs[ANALYSIS_OPTIONS_ERRORS] as List<AnalysisError>;
-    expect(errors, hasLength(1));
-    AnalysisError error = errors[0];
-    expect(error.errorCode, AnalysisOptionsErrorCode.INCLUDED_FILE_PARSE_ERROR);
-    expect(error.source, target.source);
-    expect(error.offset, 10);
-    expect(error.length, 18);
-    expect(error.message, contains('other_options.yaml(0..0)'));
-  }
-
-  test_perform_include_missing() {
-    String code = r'''
-include: other_options.yaml
-''';
-    AnalysisTarget target = newSource(optionsFilePath, code);
-    computeResult(target, ANALYSIS_OPTIONS_ERRORS);
-    expect(task, isGenerateOptionsErrorsTask);
-    List<AnalysisError> errors =
-        outputs[ANALYSIS_OPTIONS_ERRORS] as List<AnalysisError>;
-    expect(errors, hasLength(1));
-    AnalysisError error = errors[0];
-    expect(error.errorCode, AnalysisOptionsWarningCode.INCLUDE_FILE_NOT_FOUND);
-    expect(error.offset, 10);
-    expect(error.length, 18);
-  }
-
-  test_perform_OK() {
-    String code = r'''
-analyzer:
-  strong-mode: true
-''';
-    AnalysisTarget target = newSource(optionsFilePath, code);
-    computeResult(target, ANALYSIS_OPTIONS_ERRORS);
-    expect(task, isGenerateOptionsErrorsTask);
-    expect(outputs[ANALYSIS_OPTIONS_ERRORS], hasLength(1));
-    expect(outputs[ANALYSIS_OPTIONS_ERRORS].first.errorCode,
-        AnalysisOptionsHintCode.STRONG_MODE_SETTING_DEPRECATED);
-
-    LineInfo lineInfo = outputs[LINE_INFO];
-    expect(lineInfo, isNotNull);
-    expect(lineInfo.getLocation(1).lineNumber, 1);
-    expect(lineInfo.getLocation(10).lineNumber, 2);
-  }
-
-  test_perform_unsupported_analyzer_option() {
-    String code = r'''
-analyzer:
-  not_supported: true
-''';
-    AnalysisTarget target = newSource(optionsFilePath, code);
-    computeResult(target, ANALYSIS_OPTIONS_ERRORS);
-    expect(task, isGenerateOptionsErrorsTask);
-    List<AnalysisError> errors =
-        outputs[ANALYSIS_OPTIONS_ERRORS] as List<AnalysisError>;
-    expect(errors, hasLength(1));
-    expect(errors[0].errorCode,
-        AnalysisOptionsWarningCode.UNSUPPORTED_OPTION_WITH_LEGAL_VALUES);
-  }
-}
-
-@reflectiveTest
-class GenerateOldOptionsErrorsTaskTest extends AbstractContextTest {
-  final AnalysisOptionsProvider optionsProvider = new AnalysisOptionsProvider();
-
-  String get optionsFilePath => '/${AnalysisEngine.ANALYSIS_OPTIONS_FILE}';
-
-  test_does_analyze_old_options_files() {
-    validate('''
-analyzer:
-  strong-mode: true
-    ''', [
-      AnalysisOptionsHintCode.DEPRECATED_ANALYSIS_OPTIONS_FILE_NAME,
-      AnalysisOptionsHintCode.STRONG_MODE_SETTING_DEPRECATED
-    ]);
-  }
-
-  test_finds_issues_in_old_options_files() {
-    validate('''
-analyzer:
-  strong_mode: true
-    ''', [
-      AnalysisOptionsHintCode.DEPRECATED_ANALYSIS_OPTIONS_FILE_NAME,
-      AnalysisOptionsWarningCode.UNSUPPORTED_OPTION_WITH_LEGAL_VALUES
-    ]);
-  }
-
-  void validate(String content, List<ErrorCode> expected) {
-    final Source source = newSource(optionsFilePath, content);
-    var options = optionsProvider.getOptionsFromSource(source);
-    final OptionsFileValidator validator = new OptionsFileValidator(source);
-    var errors = validator.validate(options);
-    expect(errors.map((AnalysisError e) => e.errorCode),
-        unorderedEquals(expected));
-  }
-}
-
-@reflectiveTest
 class OptionsFileValidatorTest {
-  final OptionsFileValidator validator =
-      new OptionsFileValidator(new TestSource());
-  final AnalysisOptionsProvider optionsProvider = new AnalysisOptionsProvider();
+  final OptionsFileValidator validator = OptionsFileValidator(TestSource());
+  final AnalysisOptionsProvider optionsProvider = AnalysisOptionsProvider();
+
+  test_analyzer_cannotIgnore_badValue() {
+    validate('''
+analyzer:
+  cannot-ignore:
+    - not_an_error_code
+''', [AnalysisOptionsWarningCode.UNRECOGNIZED_ERROR_CODE]);
+  }
+
+  test_analyzer_cannotIgnore_goodValue() {
+    validate('''
+analyzer:
+  cannot-ignore:
+    - invalid_annotation
+''', []);
+  }
+
+  test_analyzer_cannotIgnore_lintRule() {
+    Registry.ruleRegistry.register(TestRule());
+    validate('''
+analyzer:
+  cannot-ignore:
+    - fantastic_test_rule
+''', []);
+  }
+
+  test_analyzer_cannotIgnore_notAList() {
+    validate('''
+analyzer:
+  cannot-ignore:
+    one_error_code: true
+''', [AnalysisOptionsWarningCode.INVALID_SECTION_FORMAT]);
+  }
+
+  test_analyzer_cannotIgnore_severity() {
+    validate('''
+analyzer:
+  cannot-ignore:
+    - error
+''', []);
+  }
+
+  test_analyzer_cannotIgnore_valueNotAString() {
+    validate('''
+analyzer:
+  cannot-ignore:
+    one_error_code:
+      foo: bar
+''', [AnalysisOptionsWarningCode.INVALID_SECTION_FORMAT]);
+  }
 
   test_analyzer_enableExperiment_badValue() {
     validate('''
@@ -533,6 +348,24 @@ analyzer:
     ''', [AnalysisOptionsWarningCode.UNRECOGNIZED_ERROR_CODE]);
   }
 
+  test_analyzer_errors_notAMap() {
+    validate('''
+analyzer:
+  errors:
+    - invalid_annotation
+    - unused_import
+    ''', [AnalysisOptionsWarningCode.INVALID_SECTION_FORMAT]);
+  }
+
+  test_analyzer_errors_valueNotAScalar() {
+    validate('''
+analyzer:
+  errors:
+    invalid_annotation: ignore
+    unused_import: [1, 2, 3]
+    ''', [AnalysisOptionsWarningCode.INVALID_SECTION_FORMAT]);
+  }
+
   test_analyzer_language_bad_format_list() {
     validate('''
 analyzer:
@@ -560,31 +393,23 @@ analyzer:
 analyzer:
   language:
     unsupported: true
-''', [AnalysisOptionsWarningCode.UNSUPPORTED_OPTION_WITHOUT_VALUES]);
-  }
-
-  test_analyzer_language_unsupported_value() {
-    validate('''
-analyzer:
-  strong-mode:
-    implicit-dynamic: foo
-''', [AnalysisOptionsWarningCode.UNSUPPORTED_VALUE]);
+''', [AnalysisOptionsWarningCode.UNSUPPORTED_OPTION_WITH_LEGAL_VALUES]);
   }
 
   test_analyzer_lint_codes_recognized() {
-    Registry.ruleRegistry.register(new TestRule());
+    Registry.ruleRegistry.register(TestRule());
     validate('''
 analyzer:
   errors:
     fantastic_test_rule: ignore
-    ''', []);
+''', []);
   }
 
   test_analyzer_strong_mode_deprecated() {
     validate('''
 analyzer:
   strong-mode: true
-    ''', [AnalysisOptionsHintCode.STRONG_MODE_SETTING_DEPRECATED]);
+''', [AnalysisOptionsHintCode.STRONG_MODE_SETTING_DEPRECATED]);
   }
 
   test_analyzer_strong_mode_deprecated_key() {
@@ -599,7 +424,7 @@ analyzer:
     validate('''
 analyzer:
   errors:
-    strong_mode_assignment_cast: ignore
+    invalid_cast_method: ignore
 ''', []);
   }
 
@@ -607,7 +432,15 @@ analyzer:
     validate('''
 analyzer:
   strong-mode: false
-    ''', [AnalysisOptionsWarningCode.SPEC_MODE_REMOVED]);
+''', [AnalysisOptionsWarningCode.SPEC_MODE_REMOVED]);
+  }
+
+  test_analyzer_strong_mode_notAMap() {
+    validate('''
+analyzer:
+  strong-mode:
+    - implicit_casts
+''', [AnalysisOptionsWarningCode.INVALID_SECTION_FORMAT]);
   }
 
   test_analyzer_strong_mode_unsupported_key() {
@@ -618,30 +451,62 @@ analyzer:
 ''', [AnalysisOptionsWarningCode.UNSUPPORTED_OPTION_WITH_LEGAL_VALUES]);
   }
 
+  test_analyzer_strong_mode_unsupported_value() {
+    validate('''
+analyzer:
+  strong-mode:
+    implicit-dynamic: foo
+''', [AnalysisOptionsWarningCode.UNSUPPORTED_VALUE]);
+  }
+
   test_analyzer_supported_exclude() {
     validate('''
 analyzer:
   exclude:
     - test/_data/p4/lib/lib1.dart
-    ''', []);
+''', []);
   }
 
   test_analyzer_supported_strong_mode_supported_bad_value() {
     validate('''
 analyzer:
   strong-mode: w00t
-    ''', [AnalysisOptionsWarningCode.UNSUPPORTED_VALUE]);
+''', [AnalysisOptionsWarningCode.UNSUPPORTED_VALUE]);
   }
 
   test_analyzer_unsupported_option() {
     validate('''
 analyzer:
   not_supported: true
-    ''', [AnalysisOptionsWarningCode.UNSUPPORTED_OPTION_WITH_LEGAL_VALUES]);
+''', [AnalysisOptionsWarningCode.UNSUPPORTED_OPTION_WITH_LEGAL_VALUES]);
+  }
+
+  test_chromeos_manifest_checks() {
+    validate('''
+analyzer:
+  optional-checks:
+    chrome-os-manifest-checks
+''', []);
+  }
+
+  test_chromeos_manifest_checks_invalid() {
+    validate('''
+analyzer:
+  optional-checks:
+    chromeos-manifest
+''', [AnalysisOptionsWarningCode.UNSUPPORTED_OPTION_WITH_LEGAL_VALUE]);
+  }
+
+  test_chromeos_manifest_checks_notAMap() {
+    validate('''
+analyzer:
+  optional-checks:
+    - chrome-os-manifest-checks
+''', [AnalysisOptionsWarningCode.INVALID_SECTION_FORMAT]);
   }
 
   test_linter_supported_rules() {
-    Registry.ruleRegistry.register(new TestRule());
+    Registry.ruleRegistry.register(TestRule());
     validate('''
 linter:
   rules:
@@ -666,19 +531,19 @@ linter:
 
 @reflectiveTest
 class OptionsProviderTest {
-  TestPathTranslator pathTranslator;
-  ResourceProvider resourceProvider;
+  late final TestPathTranslator pathTranslator;
+  late final ResourceProvider resourceProvider;
 
-  AnalysisOptionsProvider provider;
+  late final AnalysisOptionsProvider provider;
 
   String get optionsFilePath => '/analysis_options.yaml';
 
   void setUp() {
-    var rawProvider = new MemoryResourceProvider();
-    resourceProvider = new TestResourceProvider(rawProvider);
-    pathTranslator = new TestPathTranslator(rawProvider);
-    provider = new AnalysisOptionsProvider(new SourceFactory([
-      new ResourceUriResolver(rawProvider),
+    var rawProvider = MemoryResourceProvider();
+    resourceProvider = TestResourceProvider(rawProvider);
+    pathTranslator = TestPathTranslator(rawProvider);
+    provider = AnalysisOptionsProvider(SourceFactory([
+      ResourceUriResolver(rawProvider),
     ]));
   }
 
@@ -712,8 +577,8 @@ linter:
 ''';
     pathTranslator.newFile(optionsFilePath, code);
 
-    final lowlevellint = new TestRule.withName('lowlevellint');
-    final toplevellint = new TestRule.withName('toplevellint');
+    final lowlevellint = TestRule.withName('lowlevellint');
+    final toplevellint = TestRule.withName('toplevellint');
     Registry.ruleRegistry.register(lowlevellint);
     Registry.ruleRegistry.register(toplevellint);
     final options = _getOptionsObject('/');
@@ -726,28 +591,40 @@ linter:
     expect(
         options.errorProcessors,
         unorderedMatches([
-          new ErrorProcessorMatcher(
-              new ErrorProcessor('toplevelerror', ErrorSeverity.WARNING)),
-          new ErrorProcessorMatcher(
-              new ErrorProcessor('lowlevelerror', ErrorSeverity.WARNING))
+          ErrorProcessorMatcher(
+              ErrorProcessor('toplevelerror', ErrorSeverity.WARNING)),
+          ErrorProcessorMatcher(
+              ErrorProcessor('lowlevelerror', ErrorSeverity.WARNING))
         ]));
   }
 
-  YamlMap _getOptions(String posixPath, {bool crawlUp: false}) {
-    Resource resource = pathTranslator.getResource(posixPath);
-    return provider.getOptions(resource, crawlUp: crawlUp);
+  YamlMap _getOptions(String posixPath) {
+    var resource = pathTranslator.getResource(posixPath) as Folder;
+    return provider.getOptions(resource);
   }
 
-  AnalysisOptions _getOptionsObject(String posixPath, {bool crawlUp: false}) {
-    final map = _getOptions(posixPath, crawlUp: crawlUp);
-    final options = new AnalysisOptionsImpl();
+  AnalysisOptions _getOptionsObject(String posixPath) {
+    final map = _getOptions(posixPath);
+    final options = AnalysisOptionsImpl();
     applyToAnalysisOptions(options, map);
     return options;
   }
 }
 
 class TestRule extends LintRule {
-  TestRule() : super(name: 'fantastic_test_rule');
+  TestRule()
+      : super(
+          name: 'fantastic_test_rule',
+          description: '',
+          details: '',
+          group: Group.style,
+        );
 
-  TestRule.withName(String name) : super(name: name);
+  TestRule.withName(String name)
+      : super(
+          name: name,
+          description: '',
+          details: '',
+          group: Group.style,
+        );
 }

@@ -1,9 +1,10 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 import 'dart:io';
 
+import 'package:analyzer/src/dart/analysis/driver.dart';
 import 'package:analyzer/src/lint/project.dart';
 import 'package:test/test.dart';
 
@@ -17,7 +18,7 @@ defineTests() {
       // TODO(brianwilkerson) These tests fail on the bots because the cwd is
       // not the same there as when we run tests locally.
       group('cwd', () async {
-        var project = await DartProject.create(null, null);
+        var project = await DartProject.create(_AnalysisDriverMock(), []);
         test('name', () {
           expect(project.name, 'analyzer');
         });
@@ -58,4 +59,9 @@ defineTests() {
 //      });
     });
   });
+}
+
+class _AnalysisDriverMock implements AnalysisDriver {
+  @override
+  noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

@@ -2,14 +2,16 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 /*Debugger:stepOver*/
 
-main() {
+void main() {
   /*bl*/
   try {
-    /*sl:1*/ var value = "world";
+    /*sl:1*/ var value = 'world';
     // Comment
-    /*sl:2*/ /*nbb:2:7*/ throw "Hello, $value";
+    /*sl:2*/ /*nbb:2:7*/ throw 'Hello, $value';
   }
   // Comment
   catch (e, /*s:3*/ st) {
@@ -18,7 +20,7 @@ main() {
   }
   try {
     // Comment
-    /*sl:6*/ /*nbb:6:7*/ throw "Hello, world";
+    /*sl:6*/ /*nbb:6:7*/ throw 'Hello, world';
   } catch (e) {
     /*sl:7*/ print(e);
   }

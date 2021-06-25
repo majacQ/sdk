@@ -9,6 +9,8 @@
 // VMOptions=--short_socket_write
 // VMOptions=--short_socket_read --short_socket_write
 
+// @dart = 2.9
+
 import "dart:io";
 
 import "package:async_helper/async_helper.dart";
@@ -67,7 +69,7 @@ testFileToFilePipe1() {
   String dstFileName = tempDir.path + "/readline_test1.dat";
   new File(dstFileName).createSync();
   var output = new File(dstFileName).openWrite();
-  srcStream.pipe(output).then((_) {
+  srcStream.cast<List<int>>().pipe(output).then((_) {
     bool result = compareFileContent(srcFileName, dstFileName);
     new File(dstFileName).deleteSync();
     tempDir.deleteSync();
@@ -92,7 +94,7 @@ testFileToFilePipe2() {
   var dstFile = new File(dstFileName);
   dstFile.createSync();
   var output = dstFile.openWrite();
-  output.addStream(srcStream).then((_) {
+  output.addStream(srcStream.cast<List<int>>()).then((_) {
     output.add([32]);
     output.close();
     output.done.then((_) {
@@ -131,9 +133,9 @@ testFileToFilePipe3() {
   var dstFile = new File(dstFileName);
   dstFile.createSync();
   var output = dstFile.openWrite();
-  output.addStream(srcStream).then((_) {
+  output.addStream(srcStream.cast<List<int>>()).then((_) {
     var srcStream2 = srcFile.openRead();
-    output.addStream(srcStream2).then((_) {
+    output.addStream(srcStream2.cast<List<int>>()).then((_) {
       output.close();
       output.done.then((_) {
         var src = srcFile.openSync();

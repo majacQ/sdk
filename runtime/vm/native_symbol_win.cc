@@ -7,6 +7,7 @@
 
 #include "vm/lockers.h"
 #include "vm/native_symbol.h"
+#include "vm/os.h"
 #include "vm/os_thread.h"
 
 #include <dbghelp.h>  // NOLINT
@@ -22,13 +23,20 @@ void NativeSymbolResolver::Init() {
     lock_ = new Mutex();
   }
   running_ = true;
+
+// Symbol resolution API's used in this file are not supported
+// when compiled in UWP.
+#ifndef TARGET_OS_WINDOWS_UWP
   SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
   HANDLE hProcess = GetCurrentProcess();
   if (!SymInitialize(hProcess, NULL, TRUE)) {
     DWORD error = GetLastError();
-    printf("Failed to init NativeSymbolResolver (SymInitialize %d)\n", error);
+    OS::PrintErr("Failed to init NativeSymbolResolver (SymInitialize %" Pu32
+                 ")\n",
+                 error);
     return;
   }
+#endif
 }
 
 void NativeSymbolResolver::Cleanup() {
@@ -37,14 +45,21 @@ void NativeSymbolResolver::Cleanup() {
     return;
   }
   running_ = false;
+#ifndef TARGET_OS_WINDOWS_UWP
   HANDLE hProcess = GetCurrentProcess();
   if (!SymCleanup(hProcess)) {
     DWORD error = GetLastError();
-    printf("Failed to shutdown NativeSymbolResolver (SymCleanup  %d)\n", error);
+    OS::PrintErr("Failed to shutdown NativeSymbolResolver (SymCleanup  %" Pu32
+                 ")\n",
+                 error);
   }
+#endif
 }
 
-char* NativeSymbolResolver::LookupSymbolName(uintptr_t pc, uintptr_t* start) {
+char* NativeSymbolResolver::LookupSymbolName(uword pc, uword* start) {
+#ifdef TARGET_OS_WINDOWS_UWP
+  return NULL;
+#else
   static const intptr_t kMaxNameLength = 2048;
   static const intptr_t kSymbolInfoSize = sizeof(SYMBOL_INFO);  // NOLINT.
   static char buffer[kSymbolInfoSize + kMaxNameLength];
@@ -70,7 +85,8 @@ char* NativeSymbolResolver::LookupSymbolName(uintptr_t pc, uintptr_t* start) {
   if (start != NULL) {
     *start = pc - displacement;
   }
-  return strdup(pSymbol->Name);
+  return Utils::StrDup(pSymbol->Name);
+#endif  // ifdef TARGET_OS_WINDOWS_UWP
 }
 
 void NativeSymbolResolver::FreeSymbolName(char* name) {
@@ -81,6 +97,12 @@ bool NativeSymbolResolver::LookupSharedObject(uword pc,
                                               uword* dso_base,
                                               char** dso_name) {
   return false;
+}
+
+void NativeSymbolResolver::AddSymbols(const char* dso_name,
+                                      void* buffer,
+                                      size_t size) {
+  OS::PrintErr("warning: Dart_AddSymbols has no effect on Windows\n");
 }
 
 }  // namespace dart

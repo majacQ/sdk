@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'assist_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(FlutterConvertToChildrenTest);
   });
@@ -19,106 +19,103 @@ class FlutterConvertToChildrenTest extends AssistProcessorTest {
   @override
   AssistKind get kind => DartAssistKind.FLUTTER_CONVERT_TO_CHILDREN;
 
-  test_childUnresolved() async {
-    addFlutterPackage();
+  @override
+  void setUp() {
+    super.setUp();
+    writeTestPackageConfig(
+      flutter: true,
+    );
+  }
+
+  Future<void> test_childUnresolved() async {
     verifyNoTestUnitErrors = false;
-    await resolveTestUnit('''
+    await resolveTestCode('''
 import 'package:flutter/material.dart';
 build() {
-  return new Row(
-    /*caret*/child: new Container()
+  return Row(
+    /*caret*/child: Container()
   );
 }
 ''');
     await assertNoAssist();
   }
 
-  test_multiLine() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  Future<void> test_multiLine() async {
+    await resolveTestCode('''
 import 'package:flutter/material.dart';
 build() {
-  return new Scaffold(
-// start
-    body: new Center(
-      /*caret*/child: new Container(
+  return Scaffold(
+    body: Center(
+      /*caret*/child: Container(
         width: 200.0,
         height: 300.0,
       ),
-      key: null,
+      key: Key('x'),
     ),
-// end
   );
 }
 ''');
     await assertHasAssist('''
 import 'package:flutter/material.dart';
 build() {
-  return new Scaffold(
-// start
-    body: new Center(
-      /*caret*/children: <Widget>[
-        new Container(
+  return Scaffold(
+    body: Center(
+      children: [
+        Container(
           width: 200.0,
           height: 300.0,
         ),
       ],
-      key: null,
+      key: Key('x'),
     ),
-// end
   );
 }
 ''');
   }
 
-  test_newlineChild() async {
+  Future<void> test_newlineChild() async {
     // This case could occur with deeply nested constructors, common in Flutter.
-    addFlutterPackage();
-    await resolveTestUnit('''
+
+    await resolveTestCode('''
 import 'package:flutter/material.dart';
 build() {
-  return new Scaffold(
-// start
-    body: new Center(
+  return Scaffold(
+    body: Center(
       /*caret*/child:
-          new Container(
+          Container(
         width: 200.0,
         height: 300.0,
       ),
-      key: null,
+      key: Key('x'),
     ),
-// end
   );
 }
 ''');
     await assertHasAssist('''
 import 'package:flutter/material.dart';
 build() {
-  return new Scaffold(
-// start
-    body: new Center(
-      /*caret*/children: <Widget>[
-        new Container(
+  return Scaffold(
+    body: Center(
+      children: [
+        Container(
           width: 200.0,
           height: 300.0,
         ),
       ],
-      key: null,
+      key: Key('x'),
     ),
-// end
   );
 }
 ''');
   }
 
-  test_notOnChild() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  Future<void> test_notOnChild() async {
+    await resolveTestCode('''
 import 'package:flutter/material.dart';
 build() {
-  return new Scaffold(
-    body: /*caret*/new Center(
-      child: new Container(),
+  return Scaffold(
+    body: /*caret*/Center(
+      child: Container(),
     ),
   );
 }
@@ -126,31 +123,26 @@ build() {
     await assertNoAssist();
   }
 
-  test_singleLine() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  Future<void> test_singleLine() async {
+    await resolveTestCode('''
 import 'package:flutter/material.dart';
 build() {
-  return new Scaffold(
-// start
-    body: new Center(
-      /*caret*/child: new GestureDetector(),
-      key: null,
+  return Scaffold(
+    body: Center(
+      /*caret*/child: GestureDetector(),
+      key: Key('x'),
     ),
-// end
   );
 }
 ''');
     await assertHasAssist('''
 import 'package:flutter/material.dart';
 build() {
-  return new Scaffold(
-// start
-    body: new Center(
-      /*caret*/children: <Widget>[new GestureDetector()],
-      key: null,
+  return Scaffold(
+    body: Center(
+      children: [GestureDetector()],
+      key: Key('x'),
     ),
-// end
   );
 }
 ''');

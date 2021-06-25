@@ -6,29 +6,27 @@ import 'dart:html';
 import 'dart:async';
 import 'package:observatory/models.dart' as M;
 import 'package:observatory/src/elements/helpers/rendering_scheduler.dart';
-import 'package:observatory/src/elements/helpers/tag.dart';
+import 'package:observatory/src/elements/helpers/custom_element.dart';
 
-class MetricDetailsElement extends HtmlElement implements Renderable {
-  static const tag = const Tag<MetricDetailsElement>('metric-details');
-
-  RenderingScheduler<MetricDetailsElement> _r;
+class MetricDetailsElement extends CustomElement implements Renderable {
+  late RenderingScheduler<MetricDetailsElement> _r;
 
   Stream<RenderedEvent<MetricDetailsElement>> get onRendered => _r.onRendered;
 
-  M.IsolateRef _isolate;
-  M.Metric _metric;
-  M.MetricRepository _metrics;
+  late M.IsolateRef _isolate;
+  late M.Metric _metric;
+  late M.MetricRepository _metrics;
 
   M.IsolateRef get isolate => _isolate;
   M.Metric get metric => _metric;
 
   factory MetricDetailsElement(
       M.IsolateRef isolate, M.Metric metric, M.MetricRepository metrics,
-      {RenderingQueue queue}) {
+      {RenderingQueue? queue}) {
     assert(isolate != null);
     assert(metric != null);
     assert(metrics != null);
-    MetricDetailsElement e = document.createElement(tag.name);
+    MetricDetailsElement e = new MetricDetailsElement.created();
     e._r = new RenderingScheduler<MetricDetailsElement>(e, queue: queue);
     e._isolate = isolate;
     e._metric = metric;
@@ -36,7 +34,7 @@ class MetricDetailsElement extends HtmlElement implements Renderable {
     return e;
   }
 
-  MetricDetailsElement.created() : super.created();
+  MetricDetailsElement.created() : super.created('metric-details');
 
   @override
   void attached() {

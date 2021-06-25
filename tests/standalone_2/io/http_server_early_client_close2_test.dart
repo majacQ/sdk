@@ -7,6 +7,8 @@
 // VMOptions=--short_socket_write
 // VMOptions=--short_socket_read --short_socket_write
 
+// @dart = 2.9
+
 import "dart:async";
 import "dart:io";
 import "dart:isolate";
@@ -18,6 +20,7 @@ main() {
       String name = Platform.script.toFilePath();
       new File(name)
           .openRead()
+          .cast<List<int>>()
           .pipe(request.response)
           .catchError((e) {/* ignore */});
     });

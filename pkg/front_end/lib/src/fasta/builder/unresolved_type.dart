@@ -2,13 +2,18 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library fasta.unresolved_type;
 
-import 'builder.dart' show LibraryBuilder, Scope, TypeBuilder;
+import '../scope.dart';
+
+import 'library_builder.dart';
+import 'type_builder.dart';
 
 /// A wrapper around a type that is yet to be resolved.
-class UnresolvedType<T extends TypeBuilder> {
-  final T builder;
+class UnresolvedType {
+  final TypeBuilder builder;
   final int charOffset;
   final Uri fileUri;
 
@@ -18,10 +23,9 @@ class UnresolvedType<T extends TypeBuilder> {
       builder.resolveIn(scope, charOffset, fileUri, library);
 
   /// Performs checks on the type after it's resolved.
-  void checkType() => builder.check(charOffset, fileUri);
-
-  /// Normalizes the type arguments in accordance with Dart 1 semantics.
-  void normalizeType() => builder.normalize(charOffset, fileUri);
+  void checkType(LibraryBuilder library) {
+    return builder.check(library, charOffset, fileUri);
+  }
 
   String toString() => "UnresolvedType(@$charOffset, $builder)";
 }

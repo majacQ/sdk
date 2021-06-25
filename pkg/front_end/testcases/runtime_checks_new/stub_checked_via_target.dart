@@ -1,7 +1,7 @@
 // Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-
+// @dart=2.9
 /*@testedFeatures=checks*/
 library test;
 
@@ -26,7 +26,7 @@ class B {
 }
 
 abstract class I {
-  int f(covariant Object /*@covariance=explicit*/ x);
+  int f(covariant Object x);
 }
 
 // Not a compile time error, because B.f satisfies the interface contract of I.f
@@ -35,8 +35,7 @@ abstract class I {
 // Note that even though the forwarding stub's type is `(Object) -> int`, it
 // must check that `x` is an `int`, since it forwards to a method whose type is
 // `(int) -> int`.
-class /*@forwardingStub=int f(covariance=(explicit) Object x)*/ C extends B
-    implements I {}
+class C extends B implements I {}
 
 void g(C c) {
   // Not a compile time error, because C's interface inherits I.f (since it has

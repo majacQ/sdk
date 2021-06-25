@@ -8,7 +8,6 @@
 #include "vm/os.h"
 
 #include <android/log.h>   // NOLINT
-#include <endian.h>        // NOLINT
 #include <errno.h>         // NOLINT
 #include <limits.h>        // NOLINT
 #include <malloc.h>        // NOLINT
@@ -25,6 +24,12 @@
 #include "vm/zone.h"
 
 namespace dart {
+
+DEFINE_FLAG(bool,
+            android_log_to_stderr,
+            false,
+            "Send Dart VM logs to stdout and stderr instead of the Android "
+            "system logs.");
 
 // Android CodeObservers.
 
@@ -172,13 +177,17 @@ int64_t OS::GetCurrentThreadCPUMicros() {
   return result;
 }
 
+int64_t OS::GetCurrentThreadCPUMicrosForTimeline() {
+  return OS::GetCurrentThreadCPUMicros();
+}
+
 // TODO(5411554):  May need to hoist these architecture dependent code
 // into a architecture specific file e.g: os_ia32_linux.cc
 intptr_t OS::ActivationFrameAlignment() {
 #if defined(TARGET_ARCH_IA32) || defined(TARGET_ARCH_X64) ||                   \
     defined(TARGET_ARCH_ARM64)
   const int kMinimumAlignment = 16;
-#elif defined(TARGET_ARCH_ARM) || defined(TARGET_ARCH_DBC)
+#elif defined(TARGET_ARCH_ARM)
   const int kMinimumAlignment = 8;
 #else
 #error Unsupported architecture.
@@ -189,25 +198,6 @@ intptr_t OS::ActivationFrameAlignment() {
   // Flags::DebugIsInt("stackalign", &alignment);
   ASSERT(Utils::IsPowerOfTwo(alignment));
   ASSERT(alignment >= kMinimumAlignment);
-  return alignment;
-}
-
-intptr_t OS::PreferredCodeAlignment() {
-#if defined(TARGET_ARCH_IA32) || defined(TARGET_ARCH_X64) ||                   \
-    defined(TARGET_ARCH_ARM64) || defined(TARGET_ARCH_DBC)
-  const int kMinimumAlignment = 32;
-#elif defined(TARGET_ARCH_ARM)
-  const int kMinimumAlignment = 16;
-#else
-#error Unsupported architecture.
-#endif
-  intptr_t alignment = kMinimumAlignment;
-  // TODO(5411554): Allow overriding default code alignment for
-  // testing purposes.
-  // Flags::DebugIsInt("codealign", &alignment);
-  ASSERT(Utils::IsPowerOfTwo(alignment));
-  ASSERT(alignment >= kMinimumAlignment);
-  ASSERT(alignment <= OS::kMaxPreferredCodeAlignment);
   return alignment;
 }
 
@@ -249,35 +239,15 @@ DART_NOINLINE uintptr_t OS::GetProgramCounter() {
       __builtin_extract_return_addr(__builtin_return_address(0)));
 }
 
-uint16_t HostToBigEndian16(uint16_t value) {
-  return htobe16(value);
-}
-
-uint32_t HostToBigEndian32(uint32_t value) {
-  return htobe32(value);
-}
-
-uint64_t HostToBigEndian64(uint64_t value) {
-  return htobe64(value);
-}
-
-uint16_t HostToLittleEndian16(uint16_t value) {
-  return htole16(value);
-}
-
-uint32_t HostToLittleEndian32(uint32_t value) {
-  return htole32(value);
-}
-
-uint64_t HostToLittleEndian64(uint64_t value) {
-  return htole64(value);
-}
-
 void OS::Print(const char* format, ...) {
   va_list args;
   va_start(args, format);
-  // Forward to the Android log for remote access.
-  __android_log_vprint(ANDROID_LOG_INFO, "DartVM", format, args);
+  if (FLAG_android_log_to_stderr) {
+    vfprintf(stderr, format, args);
+  } else {
+    // Forward to the Android log for remote access.
+    __android_log_vprint(ANDROID_LOG_INFO, "DartVM", format, args);
+  }
   va_end(args);
 }
 
@@ -353,8 +323,12 @@ void OS::RegisterCodeObservers() {
 void OS::PrintErr(const char* format, ...) {
   va_list args;
   va_start(args, format);
-  // Forward to the Android log for remote access.
-  __android_log_vprint(ANDROID_LOG_ERROR, "DartVM", format, args);
+  if (FLAG_android_log_to_stderr) {
+    vfprintf(stderr, format, args);
+  } else {
+    // Forward to the Android log for remote access.
+    __android_log_vprint(ANDROID_LOG_ERROR, "DartVM", format, args);
+  }
   va_end(args);
 }
 
@@ -362,7 +336,10 @@ void OS::Init() {}
 
 void OS::Cleanup() {}
 
+void OS::PrepareToAbort() {}
+
 void OS::Abort() {
+  PrepareToAbort();
   abort();
 }
 

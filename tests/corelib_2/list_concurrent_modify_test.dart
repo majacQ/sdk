@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import "dart:collection";
 import "dart:typed_data";
 import "package:expect/expect.dart";
@@ -23,9 +25,6 @@ void main() {
   testConcurrentModification(new Int16List(0).toList());
   testConcurrentModification(new Uint32List(0).toList());
   testConcurrentModification(new Int32List(0).toList());
-
-  testConcurrentAddSelf([]);
-  testConcurrentAddSelf([1, 2, 3]);
 }
 
 void testConcurrentModification(List<int> list) {
@@ -77,12 +76,6 @@ void testConcurrentModification(List<int> list) {
     testModification(() => list.removeRange(i, i + 1));
     testModification(() => list.replaceRange(i, i + 1, [5, 6]));
   }
-}
-
-testConcurrentAddSelf(List list) {
-  Expect.throws(() {
-    list.addAll(list);
-  }, (e) => e is ConcurrentModificationError, "testConcurrentAddSelf($list)");
 }
 
 class MyList<E> extends ListBase<E> {

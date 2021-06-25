@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'fix_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(MakeFieldNotFinalTest);
   });
@@ -19,8 +19,8 @@ class MakeFieldNotFinalTest extends FixProcessorTest {
   @override
   FixKind get kind => DartFixKind.MAKE_FIELD_NOT_FINAL;
 
-  test_hasType() async {
-    await resolveTestUnit('''
+  Future<void> test_hasType() async {
+    await resolveTestCode('''
 class A {
   final int fff = 1;
   main() {
@@ -38,8 +38,8 @@ class A {
 ''');
   }
 
-  test_noType() async {
-    await resolveTestUnit('''
+  Future<void> test_noType() async {
+    await resolveTestCode('''
 class A {
   final fff = 1;
   main() {

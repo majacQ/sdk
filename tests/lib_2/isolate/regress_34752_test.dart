@@ -2,6 +2,11 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
+// VMOptions=--enable-isolate-groups --experimental-enable-isolate-groups-jit
+// VMOptions=--no-enable-isolate-groups
+
 // Verifies that large BigInt can be passed through a message port and
 // simple arithmetic operations still work after that.
 // This is a regression test for https://github.com/dart-lang/sdk/issues/34752.

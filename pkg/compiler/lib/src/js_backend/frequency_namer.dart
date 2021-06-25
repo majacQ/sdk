@@ -7,32 +7,17 @@ part of js_backend.namer;
 class FrequencyBasedNamer extends Namer
     with _MinifiedFieldNamer, _MinifiedOneShotInterceptorNamer
     implements jsAst.TokenFinalizer {
+  @override
   _FieldNamingRegistry fieldRegistry;
-  List<TokenName> tokens = new List<TokenName>();
+  List<TokenName> tokens = [];
 
-  Map<NamingScope, TokenScope> _tokenScopes =
-      new Maplet<NamingScope, TokenScope>();
+  Map<NamingScope, TokenScope> _tokenScopes = {};
 
-  // Some basic settings for smaller names
-  String get isolateName => 'I';
-  String get isolatePropertiesName => 'p';
-  bool get shouldMinify => true;
-
-  final String getterPrefix = 'g';
-  final String setterPrefix = 's';
-  final String callPrefix = ''; // this will create function names $<n>
-  String get callCatchAllName => r'$C';
-  String get requiredParameterField => r'$R';
-  String get defaultValuesField => r'$D';
-  String get operatorSignature => r'$S';
+  @override
   String get genericInstantiationPrefix => r'$I';
 
-  jsAst.Name get staticsPropertyName =>
-      _staticsPropertyName ??= getFreshName(instanceScope, 'static');
-
-  FrequencyBasedNamer(
-      JClosedWorld closedWorld, CodegenWorldBuilder codegenWorldBuilder)
-      : super(closedWorld, codegenWorldBuilder) {
+  FrequencyBasedNamer(JClosedWorld closedWorld, FixedNames fixedNames)
+      : super(closedWorld, fixedNames) {
     fieldRegistry = new _FieldNamingRegistry(this);
   }
 
@@ -45,9 +30,9 @@ class FrequencyBasedNamer extends Namer
           illegalNames.add(illegal.substring(1));
         }
       }
-      return new TokenScope(illegalNames);
+      return new TokenScope(illegalNames: illegalNames);
     } else {
-      return new TokenScope(jsReserved);
+      return new TokenScope(illegalNames: jsReserved);
     }
   }
 
@@ -93,10 +78,13 @@ class FrequencyBasedNamer extends Namer
 }
 
 class TokenScope {
-  List<int> _nextName = [$a];
+  int initialChar;
+  List<int> _nextName;
   final Set<String> illegalNames;
 
-  TokenScope([this.illegalNames = const ImmutableEmptySet()]);
+  TokenScope({this.illegalNames = const {}, this.initialChar: $a}) {
+    _nextName = [initialChar];
+  }
 
   /// Increments the letter at [pos] in the current name. Also takes care of
   /// overflows to the left. Returns the carry bit, i.e., it returns `true`
@@ -120,7 +108,7 @@ class TokenScope {
       value = $A;
     } else if (value == $Z) {
       overflow = _incrementPosition(pos - 1);
-      value = (pos > 0) ? $_ : $a;
+      value = (pos > 0) ? $_ : initialChar;
     } else {
       value++;
     }

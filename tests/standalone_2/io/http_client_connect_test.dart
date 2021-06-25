@@ -7,6 +7,8 @@
 // VMOptions=--short_socket_write
 // VMOptions=--short_socket_read --short_socket_write
 
+// @dart = 2.9
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -17,7 +19,7 @@ import "package:expect/expect.dart";
 void testGetEmptyRequest() {
   HttpServer.bind("127.0.0.1", 0).then((server) {
     server.listen((request) {
-      request.pipe(request.response);
+      request.cast<List<int>>().pipe(request.response);
     });
 
     var client = new HttpClient();
@@ -35,7 +37,7 @@ void testGetDataRequest() {
     var data = "lalala".codeUnits;
     server.listen((request) {
       request.response.add(data);
-      request.pipe(request.response);
+      request.cast<List<int>>().pipe(request.response);
     });
 
     var client = new HttpClient();
@@ -163,7 +165,7 @@ void testOpenEmptyRequest() {
     HttpServer.bind("127.0.0.1", 0).then((server) {
       server.listen((request) {
         Expect.equals(method[1], request.method);
-        request.pipe(request.response);
+        request.cast<List<int>>().pipe(request.response);
       });
 
       Callback1 cb = method[0] as Callback1;
@@ -192,7 +194,7 @@ void testOpenUrlEmptyRequest() {
     HttpServer.bind("127.0.0.1", 0).then((server) {
       server.listen((request) {
         Expect.equals(method[1], request.method);
-        request.pipe(request.response);
+        request.cast<List<int>>().pipe(request.response);
       });
 
       Callback2 cb = method[0] as Callback2;
@@ -220,8 +222,10 @@ void testNoBuffer() {
         .get("127.0.0.1", server.port, "/")
         .then((request) => request.close())
         .then((clientResponse) {
-      var iterator = new StreamIterator(
-          clientResponse.transform(utf8.decoder).transform(new LineSplitter()));
+      var iterator = new StreamIterator(clientResponse
+          .cast<List<int>>()
+          .transform(utf8.decoder)
+          .transform(new LineSplitter()));
       iterator.moveNext().then((hasValue) {
         Expect.isTrue(hasValue);
         Expect.equals('init', iterator.current);
@@ -281,7 +285,150 @@ void testMaxConnectionsPerHost(int connectionCap, int connections) {
   });
 }
 
-void main() {
+Future<void> testMaxConnectionsWithFailure() async {
+  // When DNS lookup failed, counter for connecting doesn't decrement which
+  // prevents the following connections.
+  final client = HttpClient();
+  client.maxConnectionsPerHost = 1;
+  try {
+    await client.getUrl(Uri.parse('http://domain.invalid'));
+  } catch (e) {
+    if (e is! SocketException) {
+      Expect.fail("Unexpected exception $e is thrown");
+    }
+  }
+  try {
+    await client.getUrl(Uri.parse('http://domain.invalid'));
+    Expect.fail("Calls exceed client's maxConnectionsPerHost should throw "
+        "exceptions as well");
+  } catch (e) {
+    if (e is! SocketException) {
+      Expect.fail("Unexpected exception $e is thrown");
+    }
+  }
+}
+
+Future<void> testHttpAbort() async {
+  // Test that abort() is called after request is sent.
+  asyncStart();
+  final completer = Completer<void>();
+  final server = await HttpServer.bind("127.0.0.1", 0);
+  server.listen((request) {
+    completer.complete();
+    request.response.close();
+  });
+
+  final request = await HttpClient().get("127.0.0.1", server.port, "/");
+  request.headers.add(HttpHeaders.contentLengthHeader, "8");
+  request.write('somedata');
+  completer.future.then((_) {
+    request.abort();
+    asyncStart();
+    Future.delayed(Duration(milliseconds: 500), () {
+      server.close();
+      asyncEnd();
+    });
+  });
+  request.close().then((response) {
+    Expect.fail('abort() prevents a response being returned');
+  }, onError: (e) {
+    Expect.type<HttpException>(e);
+    Expect.isTrue(e.toString().contains('abort'));
+    asyncEnd();
+  });
+}
+
+Future<void> testHttpAbortBeforeWrite() async {
+  // Test that abort() is called before write(). No message should be sent from
+  // HttpClientRequest.
+  asyncStart();
+  final completer = Completer<Socket>();
+  final server = await ServerSocket.bind("127.0.0.1", 0);
+  server.listen((s) async {
+    s.listen((data) {
+      Expect.fail('No message should be received');
+    });
+    await Future.delayed(Duration(milliseconds: 500));
+    completer.complete(s);
+  });
+
+  final request = await HttpClient().get("127.0.0.1", server.port, "/");
+  request.headers.add(HttpHeaders.contentLengthHeader, "8");
+  // This HttpException will go to onError callback.
+  request.abort(HttpException('Error'));
+  asyncStart();
+  request.write('somedata');
+  completer.future.then((socket) {
+    socket.destroy();
+    server.close();
+    asyncEnd();
+  });
+  request.close().then((response) {
+    Expect.fail('abort() prevents a response being returned');
+  }, onError: (e) {
+    Expect.type<HttpException>(e);
+    asyncEnd();
+  });
+}
+
+Future<void> testHttpAbortBeforeClose() async {
+  // Test that abort() is called after write(). Some messages added prior to
+  // abort() are sent.
+  final completer = new Completer<void>();
+  asyncStart();
+  final server = await ServerSocket.bind("127.0.0.1", 0);
+  server.listen((s) {
+    StringBuffer buffer = StringBuffer();
+    s.listen((data) {
+      buffer.write(utf8.decode(data));
+      if (buffer.toString().contains("content-length: 8")) {
+        completer.complete();
+        s.destroy();
+        server.close();
+      }
+    });
+  });
+
+  final request = await HttpClient().get("127.0.0.1", server.port, "/");
+  // Add an additional header field for server to verify.
+  request.headers.add(HttpHeaders.contentLengthHeader, "8");
+  request.write('somedata');
+  await completer.future;
+  final string = 'abort message';
+  request.abort(string);
+  request.close().then((response) {
+    Expect.fail('abort() prevents a response being returned');
+  }, onError: (e) {
+    Expect.type<String>(e);
+    Expect.equals(string, e);
+    asyncEnd();
+  });
+}
+
+Future<void> testHttpAbortAfterClose() async {
+  // Test that abort() is called after response is received. It should not
+  // affect HttpClientResponse.
+  asyncStart();
+  final value = 'someRandomData';
+  final server = await HttpServer.bind("127.0.0.1", 0);
+  server.listen((request) {
+    request.response.write(value);
+    request.response.close();
+  });
+
+  final request = await HttpClient().get("127.0.0.1", server.port, "/");
+  request.close().then((response) {
+    request.abort();
+    response.listen((data) {
+      Expect.equals(utf8.decode(data), value);
+    }, onDone: () {
+      asyncEnd();
+      server.close();
+    });
+  });
+}
+
+void main() async {
   testGetEmptyRequest();
   testGetDataRequest();
   testGetInvalidHost();
@@ -296,4 +443,9 @@ void main() {
   testMaxConnectionsPerHost(1, 10);
   testMaxConnectionsPerHost(5, 10);
   testMaxConnectionsPerHost(10, 50);
+  testMaxConnectionsWithFailure();
+  await testHttpAbort();
+  await testHttpAbortBeforeWrite();
+  await testHttpAbortBeforeClose();
+  await testHttpAbortAfterClose();
 }

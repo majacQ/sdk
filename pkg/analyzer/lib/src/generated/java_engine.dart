@@ -7,34 +7,17 @@ import 'package:analyzer/src/generated/java_core.dart';
 
 export 'package:analyzer/exception/exception.dart';
 
-/**
- * A predicate is a one-argument function that returns a boolean value.
- */
-typedef bool Predicate<E>(E argument);
-
-class FileNameUtilities {
-  static String getExtension(String fileName) {
-    if (fileName == null) {
-      return "";
-    }
-    int index = fileName.lastIndexOf('.');
-    if (index >= 0) {
-      return fileName.substring(index + 1);
-    }
-    return "";
-  }
-}
+/// A predicate is a one-argument function that returns a boolean value.
+typedef Predicate<E> = bool Function(E argument);
 
 class StringUtilities {
   static const String EMPTY = '';
-  static const List<String> EMPTY_ARRAY = const <String>[];
+  static const List<String> EMPTY_ARRAY = <String>[];
 
-  static Interner INTERNER = new NullInterner();
+  static Interner INTERNER = NullInterner();
 
-  /**
-   * Compute line starts for the given [content].
-   * Lines end with `\r`, `\n` or `\r\n`.
-   */
+  /// Compute line starts for the given [content].
+  /// Lines end with `\r`, `\n` or `\r\n`.
   static List<int> computeLineStarts(String content) {
     List<int> lineStarts = <int>[0];
     int length = content.length;
@@ -58,7 +41,7 @@ class StringUtilities {
     return lineStarts;
   }
 
-  static endsWith3(String str, int c1, int c2, int c3) {
+  static bool endsWith3(String str, int c1, int c2, int c3) {
     var length = str.length;
     return length >= 3 &&
         str.codeUnitAt(length - 3) == c1 &&
@@ -66,7 +49,7 @@ class StringUtilities {
         str.codeUnitAt(length - 1) == c3;
   }
 
-  static endsWithChar(String str, int c) {
+  static bool endsWithChar(String str, int c) {
     int length = str.length;
     return length > 0 && str.codeUnitAt(length - 1) == c;
   }
@@ -128,11 +111,9 @@ class StringUtilities {
     return -1;
   }
 
-  /**
-   * Return the index of the first not letter/digit character in the [string]
-   * that is at or after the [startIndex]. Return the length of the [string] if
-   * all characters to the end are letters/digits.
-   */
+  /// Return the index of the first not letter/digit character in the [string]
+  /// that is at or after the [startIndex]. Return the length of the [string] if
+  /// all characters to the end are letters/digits.
   static int indexOfFirstNotLetterDigit(String string, int startIndex) {
     int index = startIndex;
     int last = string.length;
@@ -147,12 +128,12 @@ class StringUtilities {
   }
 
   static String intern(String string) => INTERNER.intern(string);
-  static bool isEmpty(String s) {
+  static bool isEmpty(String? s) {
     return s == null || s.isEmpty;
   }
 
-  static bool isTagName(String s) {
-    if (s == null || s.length == 0) {
+  static bool isTagName(String? s) {
+    if (s == null || s.isEmpty) {
       return false;
     }
     int sz = s.length;
@@ -170,22 +151,22 @@ class StringUtilities {
     return true;
   }
 
-  /**
-   * Produce a string containing all of the names in the given array, surrounded by single quotes,
-   * and separated by commas. The list must contain at least two elements.
-   *
-   * @param names the names to be printed
-   * @return the result of printing the names
-   */
-  static String printListOfQuotedNames(List<String> names) {
+  /// Produce a string containing all of the names in the given array,
+  /// surrounded by single quotes, and separated by commas.
+  ///
+  /// The list must contain at least two elements.
+  ///
+  /// @param names the names to be printed
+  /// @return the result of printing the names
+  static String printListOfQuotedNames(List<String>? names) {
     if (names == null) {
-      throw new ArgumentError("The list must not be null");
+      throw ArgumentError("The list must not be null");
     }
     int count = names.length;
     if (count < 2) {
-      throw new ArgumentError("The list must contain at least two names");
+      throw ArgumentError("The list must contain at least two names");
     }
-    StringBuffer buffer = new StringBuffer();
+    StringBuffer buffer = StringBuffer();
     buffer.write("'");
     buffer.write(names[0]);
     buffer.write("'");
@@ -200,20 +181,21 @@ class StringUtilities {
     return buffer.toString();
   }
 
-  static startsWith2(String str, int start, int c1, int c2) {
+  static bool startsWith2(String str, int start, int c1, int c2) {
     return str.length - start >= 2 &&
         str.codeUnitAt(start) == c1 &&
         str.codeUnitAt(start + 1) == c2;
   }
 
-  static startsWith3(String str, int start, int c1, int c2, int c3) {
+  static bool startsWith3(String str, int start, int c1, int c2, int c3) {
     return str.length - start >= 3 &&
         str.codeUnitAt(start) == c1 &&
         str.codeUnitAt(start + 1) == c2 &&
         str.codeUnitAt(start + 2) == c3;
   }
 
-  static startsWith4(String str, int start, int c1, int c2, int c3, int c4) {
+  static bool startsWith4(
+      String str, int start, int c1, int c2, int c3, int c4) {
     return str.length - start >= 4 &&
         str.codeUnitAt(start) == c1 &&
         str.codeUnitAt(start + 1) == c2 &&
@@ -221,7 +203,7 @@ class StringUtilities {
         str.codeUnitAt(start + 3) == c4;
   }
 
-  static startsWith5(
+  static bool startsWith5(
       String str, int start, int c1, int c2, int c3, int c4, int c5) {
     return str.length - start >= 5 &&
         str.codeUnitAt(start) == c1 &&
@@ -231,7 +213,7 @@ class StringUtilities {
         str.codeUnitAt(start + 4) == c5;
   }
 
-  static startsWith6(
+  static bool startsWith6(
       String str, int start, int c1, int c2, int c3, int c4, int c5, int c6) {
     return str.length - start >= 6 &&
         str.codeUnitAt(start) == c1 &&
@@ -242,11 +224,7 @@ class StringUtilities {
         str.codeUnitAt(start + 5) == c6;
   }
 
-  static startsWithChar(String str, int c) {
-    return str.length != 0 && str.codeUnitAt(0) == c;
-  }
-
-  static String substringBefore(String str, String separator) {
+  static String? substringBefore(String? str, String? separator) {
     if (str == null || str.isEmpty) {
       return str;
     }
@@ -273,9 +251,14 @@ class StringUtilities {
 }
 
 class UUID {
-  static int __nextId = 0;
+  static const int __nextId = 0;
+
   final String id;
+
   UUID(this.id);
+
+  @override
   String toString() => id;
-  static UUID randomUUID() => new UUID((__nextId).toString());
+
+  static UUID randomUUID() => UUID((__nextId).toString());
 }

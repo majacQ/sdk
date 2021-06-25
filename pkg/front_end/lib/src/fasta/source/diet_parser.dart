@@ -4,15 +4,16 @@
 
 library fasta.diet_parser;
 
-import '../../scanner/token.dart' show Token;
+import 'package:_fe_analyzer_shared/src/scanner/token.dart' show Token;
 
-import '../parser.dart' show ClassMemberParser, Listener, MemberKind;
+import 'package:_fe_analyzer_shared/src/parser/parser.dart'
+    show ClassMemberParser, Listener, MemberKind;
 
 // TODO(ahe): Move this to parser package.
 class DietParser extends ClassMemberParser {
   DietParser(Listener listener) : super(listener);
 
-  Token parseFormalParameters(Token token, MemberKind kind) {
-    return skipFormalParameters(token, kind);
+  Token parseFormalParametersRest(Token token, MemberKind kind) {
+    return skipFormalParametersRest(token, kind);
   }
 }

@@ -5,12 +5,14 @@
 #ifndef RUNTIME_VM_OS_THREAD_H_
 #define RUNTIME_VM_OS_THREAD_H_
 
-#include "platform/address_sanitizer.h"
+#include "platform/atomic.h"
 #include "platform/globals.h"
 #include "platform/safe_stack.h"
+#include "platform/utils.h"
 #include "vm/allocation.h"
 #include "vm/globals.h"
 
+// On iOS, thread_local requires iOS 9+.
 #if !HOST_OS_IOS
 #define HAS_C11_THREAD_LOCAL 1
 #endif
@@ -35,8 +37,37 @@ namespace dart {
 // Forward declarations.
 class Log;
 class Mutex;
-class Thread;
+class ThreadState;
 class TimelineEventBlock;
+
+class Mutex {
+ public:
+  explicit Mutex(NOT_IN_PRODUCT(const char* name = "anonymous mutex"));
+  ~Mutex();
+
+  bool IsOwnedByCurrentThread() const;
+
+ private:
+  void Lock();
+  bool TryLock();  // Returns false if lock is busy and locking failed.
+  void Unlock();
+
+  MutexData data_;
+  NOT_IN_PRODUCT(const char* name_);
+#if defined(DEBUG)
+  ThreadId owner_;
+#endif  // defined(DEBUG)
+
+  friend class MallocLocker;
+  friend class MutexLocker;
+  friend class SafepointMutexLocker;
+  friend class OSThreadIterator;
+  friend class TimelineEventBlockIterator;
+  friend class TimelineEventRecorder;
+  friend class PageSpace;
+  friend void Dart_TestMutex();
+  DISALLOW_COPY_AND_ASSIGN(Mutex);
+};
 
 class BaseThread {
  public:
@@ -44,11 +75,11 @@ class BaseThread {
 
  private:
   explicit BaseThread(bool is_os_thread) : is_os_thread_(is_os_thread) {}
-  ~BaseThread() {}
+  virtual ~BaseThread() {}
 
   bool is_os_thread_;
 
-  friend class Thread;
+  friend class ThreadState;
   friend class OSThread;
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(BaseThread);
@@ -68,7 +99,7 @@ class OSThread : public BaseThread {
     return id_;
   }
 
-#ifndef PRODUCT
+#ifdef SUPPORT_TIMELINE
   ThreadId trace_id() const {
     ASSERT(trace_id_ != OSThread::kInvalidThreadId);
     return trace_id_;
@@ -83,10 +114,10 @@ class OSThread : public BaseThread {
     ASSERT(OSThread::Current() == this);
     ASSERT(name_ == NULL);
     ASSERT(name != NULL);
-    name_ = strdup(name);
+    name_ = Utils::StrDup(name);
   }
 
-  Mutex* timeline_block_lock() const { return timeline_block_lock_; }
+  Mutex* timeline_block_lock() const { return &timeline_block_lock_; }
 
   // Only safe to access when holding |timeline_block_lock_|.
   TimelineEventBlock* timeline_block() const { return timeline_block_; }
@@ -100,22 +131,14 @@ class OSThread : public BaseThread {
 
   uword stack_base() const { return stack_base_; }
   uword stack_limit() const { return stack_limit_; }
-  uword stack_limit_with_headroom() const {
-    return stack_limit_ + kStackSizeBuffer;
-  }
+  uword overflow_stack_limit() const { return stack_limit_ + stack_headroom_; }
 
-  bool HasStackHeadroom(intptr_t headroom = kStackSizeBuffer) {
+  bool HasStackHeadroom() { return HasStackHeadroom(stack_headroom_); }
+  bool HasStackHeadroom(intptr_t headroom) {
     return GetCurrentStackPointer() > (stack_limit_ + headroom);
   }
 
-  void RefineStackBoundsFromSP(uword sp) {
-    if (sp > stack_base_) {
-      stack_base_ = sp;
-      stack_limit_ = sp - GetSpecifiedStackSize();
-    }
-  }
-
-  // May fail for the main thread on Linux and Android.
+  // May fail for the main thread on Linux if resources are low.
   static bool GetCurrentStackBounds(uword* lower, uword* upper);
 
   // Returns the current C++ stack pointer. Equivalent taking the address of a
@@ -142,7 +165,7 @@ class OSThread : public BaseThread {
       if (thread->is_os_thread()) {
         os_thread = reinterpret_cast<OSThread*>(thread);
       } else {
-        Thread* vm_thread = reinterpret_cast<Thread*>(thread);
+        ThreadState* vm_thread = reinterpret_cast<ThreadState*>(thread);
         os_thread = GetOSThreadFromThread(vm_thread);
       }
     }
@@ -161,14 +184,16 @@ class OSThread : public BaseThread {
   static void SetCurrent(OSThread* current) { SetCurrentTLS(current); }
 
 #if defined(HAS_C11_THREAD_LOCAL)
-  static Thread* CurrentVMThread() { return current_vm_thread_; }
+  static ThreadState* CurrentVMThread() { return current_vm_thread_; }
 #endif
 
   // TODO(5411455): Use flag to override default value and Validate the
   // stack size by querying OS.
   static uword GetSpecifiedStackSize() {
-    ASSERT(OSThread::kStackSizeBuffer < OSThread::GetMaxStackSize());
-    uword stack_size = OSThread::GetMaxStackSize() - OSThread::kStackSizeBuffer;
+    intptr_t headroom =
+        OSThread::CalculateHeadroom(OSThread::GetMaxStackSize());
+    ASSERT(headroom < OSThread::GetMaxStackSize());
+    uword stack_size = OSThread::GetMaxStackSize() - headroom;
     return stack_size;
   }
   static BaseThread* GetCurrentTLS() {
@@ -211,7 +236,8 @@ class OSThread : public BaseThread {
   static void DisableOSThreadCreation();
   static void EnableOSThreadCreation();
 
-  static const intptr_t kStackSizeBuffer = (4 * KB * kWordSize);
+  static const intptr_t kStackSizeBufferMax = (16 * KB * kWordSize);
+  static constexpr float kStackSizeBufferFraction = 0.5;
 
   static const ThreadId kInvalidThreadId;
   static const ThreadJoinId kInvalidThreadJoinId;
@@ -227,17 +253,22 @@ class OSThread : public BaseThread {
   // in the windows thread interrupter which is used for profiling.
   // We could eliminate this requirement if the windows thread interrupter
   // is implemented differently.
-  Thread* thread() const { return thread_; }
-  void set_thread(Thread* value) { thread_ = value; }
+  ThreadState* thread() const { return thread_; }
+  void set_thread(ThreadState* value) { thread_ = value; }
 
   static void Cleanup();
-#ifndef PRODUCT
+#ifdef SUPPORT_TIMELINE
   static ThreadId GetCurrentThreadTraceId();
 #endif  // PRODUCT
-  static OSThread* GetOSThreadFromThread(Thread* thread);
+  static OSThread* GetOSThreadFromThread(ThreadState* thread);
   static void AddThreadToListLocked(OSThread* thread);
   static void RemoveThreadFromList(OSThread* thread);
   static OSThread* CreateAndSetUnknownThread();
+
+  static uword CalculateHeadroom(uword stack_size) {
+    uword headroom = kStackSizeBufferFraction * stack_size;
+    return (headroom > kStackSizeBufferMax) ? kStackSizeBufferMax : headroom;
+  }
 
   static ThreadLocalKey thread_key_;
 
@@ -247,22 +278,27 @@ class OSThread : public BaseThread {
   // only called once per OSThread.
   ThreadJoinId join_id_;
 #endif
-#ifndef PRODUCT
+#ifdef SUPPORT_TIMELINE
   const ThreadId trace_id_;  // Used to interface with tracing tools.
 #endif
   char* name_;  // A name for this thread.
 
-  Mutex* timeline_block_lock_;
+  mutable Mutex timeline_block_lock_;
   TimelineEventBlock* timeline_block_;
 
   // All |Thread|s are registered in the thread list.
   OSThread* thread_list_next_;
 
-  uintptr_t thread_interrupt_disabled_;
+  RelaxedAtomic<uintptr_t> thread_interrupt_disabled_;
   Log* log_;
   uword stack_base_;
   uword stack_limit_;
-  Thread* thread_;
+  uword stack_headroom_;
+  ThreadState* thread_;
+  // The ThreadPool::Worker which owns this OSThread. If this OSThread was not
+  // started by a ThreadPool it will be nullptr. This TLS value is not
+  // protected and should only be read/written by the OSThread itself.
+  void* owning_thread_pool_worker_ = nullptr;
 
   // thread_list_lock_ cannot have a static lifetime because the order in which
   // destructors run is undefined. At the moment this lock cannot be deleted
@@ -274,13 +310,14 @@ class OSThread : public BaseThread {
   static bool creation_enabled_;
 
 #if defined(HAS_C11_THREAD_LOCAL)
-  static thread_local Thread* current_vm_thread_;
+  static thread_local ThreadState* current_vm_thread_;
 #endif
 
-  friend class Isolate;  // to access set_thread(Thread*).
+  friend class IsolateGroup;  // to access set_thread(Thread*).
   friend class OSThreadIterator;
   friend class ThreadInterrupterWin;
   friend class ThreadInterrupterFuchsia;
+  friend class ThreadPool;  // to access owning_thread_pool_worker_
 };
 
 // Note that this takes the thread list lock, prohibiting threads from coming
@@ -298,44 +335,6 @@ class OSThreadIterator : public ValueObject {
 
  private:
   OSThread* next_;
-};
-
-class Mutex {
- public:
-  explicit Mutex(NOT_IN_PRODUCT(const char* name = "anonymous mutex"));
-  ~Mutex();
-
-#if defined(DEBUG)
-  bool IsOwnedByCurrentThread() const {
-    return owner_ == OSThread::GetCurrentThreadId();
-  }
-#else
-  bool IsOwnedByCurrentThread() const {
-    UNREACHABLE();
-    return false;
-  }
-#endif
-
- private:
-  void Lock();
-  bool TryLock();  // Returns false if lock is busy and locking failed.
-  void Unlock();
-
-  MutexData data_;
-  NOT_IN_PRODUCT(const char* name_);
-#if defined(DEBUG)
-  ThreadId owner_;
-#endif  // defined(DEBUG)
-
-  friend class MallocLocker;
-  friend class MutexLocker;
-  friend class SafepointMutexLocker;
-  friend class OSThreadIterator;
-  friend class TimelineEventBlockIterator;
-  friend class TimelineEventRecorder;
-  friend class PageSpace;
-  friend void Dart_TestMutex();
-  DISALLOW_COPY_AND_ASSIGN(Mutex);
 };
 
 class Monitor {
@@ -378,9 +377,19 @@ class Monitor {
 
   friend class MonitorLocker;
   friend class SafepointMonitorLocker;
+  friend class SafepointRwLock;
   friend void Dart_TestMonitor();
   DISALLOW_COPY_AND_ASSIGN(Monitor);
 };
+
+inline bool Mutex::IsOwnedByCurrentThread() const {
+#if defined(DEBUG)
+  return owner_ == OSThread::GetCurrentThreadId();
+#else
+  UNREACHABLE();
+  return false;
+#endif
+}
 
 }  // namespace dart
 

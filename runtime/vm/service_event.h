@@ -14,6 +14,7 @@ class ActivationFrame;
 class Breakpoint;
 class Instance;
 class Isolate;
+class IsolateGroup;
 class Object;
 class StreamInfo;
 class String;
@@ -22,14 +23,14 @@ class TimelineEventBlock;
 class ServiceEvent {
  public:
   enum EventKind {
-    kVMUpdate,  // VM identity information has changed
+    kVMUpdate,      // VM identity information has changed
+    kVMFlagUpdate,  // VM flags updated
 
     kIsolateStart,           // New isolate has started
     kIsolateRunnable,        // Isolate is ready to run
     kIsolateExit,            // Isolate has exited
     kIsolateUpdate,          // Isolate identity information has changed
     kIsolateReload,          // Result of a reload request
-    kIsolateSpawn,           // Result of an isolate spawn request
     kServiceExtensionAdded,  // A service extension was registered
 
     kPauseStart,  // --pause-isolates-on-start
@@ -43,6 +44,7 @@ class ServiceEvent {
     kBreakpointAdded,
     kBreakpointResolved,
     kBreakpointRemoved,
+    kBreakpointUpdated,
     kInspect,
     kDebuggerSettingsUpdate,
 
@@ -55,6 +57,10 @@ class ServiceEvent {
     kExtension,
 
     kTimelineEvents,
+    // Sent when SetVMTimelineFlags is called.
+    kTimelineStreamSubscriptionsUpdate,
+
+    kUserTagChanged,
 
     kIllegal,
   };
@@ -75,9 +81,12 @@ class ServiceEvent {
     const String* event_data;
   };
 
+  explicit ServiceEvent(EventKind event_kind);
+  ServiceEvent(IsolateGroup* isolate_group, EventKind event_kind);
   ServiceEvent(Isolate* isolate, EventKind event_kind);
 
   Isolate* isolate() const { return isolate_; }
+  IsolateGroup* isolate_group() const { return isolate_group_; }
 
   // Used by the C embedding api.
   Dart_Port isolate_id() const { return isolate_->main_port(); }
@@ -98,6 +107,20 @@ class ServiceEvent {
     }
   }
 
+  const char* flag_name() const { return flag_name_; }
+  void set_flag_name(const char* flag) { flag_name_ = flag; }
+
+  const char* flag_new_value() const { return flag_new_value_; }
+  void set_flag_new_value(const char* value) { flag_new_value_ = value; }
+
+  const char* previous_tag() const { return previous_tag_; }
+  void set_previous_tag(const char* previous_tag) {
+    previous_tag_ = previous_tag;
+  }
+
+  const char* updated_tag() const { return updated_tag_; }
+  void set_updated_tag(const char* updated_tag) { updated_tag_ = updated_tag; }
+
   const char* embedder_kind() const { return embedder_kind_; }
 
   const char* KindAsCString() const;
@@ -116,7 +139,8 @@ class ServiceEvent {
   Breakpoint* breakpoint() const { return breakpoint_; }
   void set_breakpoint(Breakpoint* bpt) {
     ASSERT(kind() == kPauseBreakpoint || kind() == kBreakpointAdded ||
-           kind() == kBreakpointResolved || kind() == kBreakpointRemoved);
+           kind() == kBreakpointResolved || kind() == kBreakpointRemoved ||
+           kind() == kBreakpointUpdated);
     breakpoint_ = bpt;
   }
 
@@ -146,24 +170,6 @@ class ServiceEvent {
   void set_reload_error(const Error* error) {
     ASSERT(kind_ == kIsolateReload);
     reload_error_ = error;
-  }
-
-  const String* spawn_token() const {
-    ASSERT(kind_ == kIsolateSpawn);
-    return spawn_token_;
-  }
-  void set_spawn_token(const String* error) {
-    ASSERT(kind_ == kIsolateSpawn);
-    spawn_token_ = error;
-  }
-
-  const String* spawn_error() const {
-    ASSERT(kind_ == kIsolateSpawn);
-    return spawn_error_;
-  }
-  void set_spawn_error(const String* error) {
-    ASSERT(kind_ == kIsolateSpawn);
-    spawn_error_ = error;
   }
 
   bool at_async_jump() const { return at_async_jump_; }
@@ -212,8 +218,17 @@ class ServiceEvent {
   void PrintJSONHeader(JSONObject* jsobj) const;
 
  private:
+  ServiceEvent(IsolateGroup* isolate_group,
+               Isolate* isolate,
+               EventKind event_kind);
+
   Isolate* isolate_;
+  IsolateGroup* isolate_group_;
   EventKind kind_;
+  const char* flag_name_;
+  const char* flag_new_value_;
+  const char* previous_tag_;
+  const char* updated_tag_;
   const char* embedder_kind_;
   const char* embedder_stream_id_;
   Breakpoint* breakpoint_;

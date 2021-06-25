@@ -2,35 +2,31 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'dart:async';
-
 import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/dart/ast/ast.dart';
-import 'package:analyzer/dart/ast/standard_resolution_map.dart';
 import 'package:analyzer/dart/element/element.dart';
 import 'package:analyzer/dart/element/type.dart';
 import 'package:analyzer/error/error.dart';
+import 'package:analyzer/src/context/packages.dart';
 import 'package:analyzer/src/dart/analysis/byte_store.dart';
 import 'package:analyzer/src/dart/analysis/driver.dart';
-import 'package:analyzer/src/dart/analysis/file_state.dart';
 import 'package:analyzer/src/dart/analysis/performance_logger.dart';
 import 'package:analyzer/src/dart/analysis/status.dart';
-import 'package:analyzer/src/dart/analysis/top_level_declaration.dart';
+import 'package:analyzer/src/dart/ast/extensions.dart';
 import 'package:analyzer/src/dart/constant/evaluation.dart';
 import 'package:analyzer/src/dart/element/element.dart';
 import 'package:analyzer/src/error/codes.dart';
 import 'package:analyzer/src/file_system/file_system.dart';
 import 'package:analyzer/src/generated/engine.dart' show AnalysisOptionsImpl;
-import 'package:analyzer/src/generated/resolver.dart' show ResolverErrorCode;
 import 'package:analyzer/src/generated/sdk.dart';
 import 'package:analyzer/src/generated/source.dart';
 import 'package:analyzer/src/summary/idl.dart';
-import 'package:analyzer/src/summary/package_bundle_reader.dart';
 import 'package:analyzer/src/test_utilities/mock_sdk.dart';
 import 'package:analyzer/src/test_utilities/resource_provider_mixin.dart';
 import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
+import '../../../util/element_type_matchers.dart';
 import '../../../utils.dart';
 import 'base.dart';
 
@@ -38,59 +34,54 @@ main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(AnalysisDriverSchedulerTest);
     defineReflectiveTests(AnalysisDriverTest);
-    defineReflectiveTests(CacheAllAnalysisDriverTest);
   });
 }
 
-/**
- * Returns a [Future] that completes after pumping the event queue [times]
- * times. By default, this should pump the event queue enough times to allow
- * any code to run, as long as it's not waiting on some external event.
- */
+/// Returns a [Future] that completes after pumping the event queue [times]
+/// times. By default, this should pump the event queue enough times to allow
+/// any code to run, as long as it's not waiting on some external event.
 Future pumpEventQueue([int times = 5000]) {
-  if (times == 0) return new Future.value();
+  if (times == 0) return Future.value();
   // We use a delayed future to allow microtask events to finish. The
   // Future.value or Future() constructors use scheduleMicrotask themselves and
   // would therefore not wait for microtask callbacks that are scheduled after
   // invoking this method.
-  return new Future.delayed(Duration.zero, () => pumpEventQueue(times - 1));
+  return Future.delayed(Duration.zero, () => pumpEventQueue(times - 1));
 }
 
 @reflectiveTest
 class AnalysisDriverSchedulerTest with ResourceProviderMixin {
-  DartSdk sdk;
-  final ByteStore byteStore = new MemoryByteStore();
-  final FileContentOverlay contentOverlay = new FileContentOverlay();
+  late DartSdk sdk;
+  final ByteStore byteStore = MemoryByteStore();
 
-  final StringBuffer logBuffer = new StringBuffer();
-  PerformanceLog logger;
+  final StringBuffer logBuffer = StringBuffer();
+  late final PerformanceLog logger;
 
-  AnalysisDriverScheduler scheduler;
+  late final AnalysisDriverScheduler scheduler;
 
   List<ResolvedUnitResult> allResults = [];
 
   AnalysisDriver newDriver() {
-    sdk = new MockSdk(resourceProvider: resourceProvider);
-    AnalysisDriver driver = new AnalysisDriver(
-        scheduler,
-        logger,
-        resourceProvider,
-        byteStore,
-        contentOverlay,
-        null,
-        new SourceFactory([
-          new DartUriResolver(sdk),
-          new ResourceUriResolver(resourceProvider)
-        ], null, resourceProvider),
-        new AnalysisOptionsImpl());
+    sdk = MockSdk(resourceProvider: resourceProvider);
+    AnalysisDriver driver = AnalysisDriver.tmp1(
+      scheduler: scheduler,
+      logger: logger,
+      resourceProvider: resourceProvider,
+      byteStore: byteStore,
+      sourceFactory: SourceFactory(
+        [DartUriResolver(sdk), ResourceUriResolver(resourceProvider)],
+      ),
+      analysisOptions: AnalysisOptionsImpl(),
+      packages: Packages.empty,
+    );
     driver.results.forEach(allResults.add);
     return driver;
   }
 
   void setUp() {
-    sdk = new MockSdk(resourceProvider: resourceProvider);
-    logger = new PerformanceLog(logBuffer);
-    scheduler = new AnalysisDriverScheduler(logger);
+    sdk = MockSdk(resourceProvider: resourceProvider);
+    logger = PerformanceLog(logBuffer);
+    scheduler = AnalysisDriverScheduler(logger);
     scheduler.start();
   }
 
@@ -200,7 +191,7 @@ class AnalysisDriverSchedulerTest with ResourceProviderMixin {
     driver1.priorityFiles = [a];
     driver2.priorityFiles = [a];
 
-    ResolvedUnitResult result = await driver2.getResult(b);
+    var result = await driver2.getResult2(b) as ResolvedUnitResult;
     expect(result.path, b);
 
     await scheduler.status.firstWhere((status) => status.isIdle);
@@ -289,8 +280,10 @@ class AnalysisDriverSchedulerTest with ResourceProviderMixin {
     driver2.addFile(b);
     driver2.addFile(c);
 
-    Monitor idleStatusMonitor = new Monitor();
+    Monitor idleStatusMonitor = Monitor();
     List<AnalysisStatus> allStatuses = [];
+    // awaiting times out.
+    // ignore: unawaited_futures
     scheduler.status.forEach((status) {
       allStatuses.add(status);
       if (status.isIdle) {
@@ -318,8 +311,10 @@ class AnalysisDriverSchedulerTest with ResourceProviderMixin {
     driver1.addFile(a);
     driver2.addFile(b);
 
-    Monitor idleStatusMonitor = new Monitor();
+    Monitor idleStatusMonitor = Monitor();
     List<AnalysisStatus> allStatuses = [];
+    // awaiting times out.
+    // ignore: unawaited_futures
     scheduler.status.forEach((status) {
       allStatuses.add(status);
       if (status.isIdle) {
@@ -342,9 +337,9 @@ class AnalysisDriverSchedulerTest with ResourceProviderMixin {
 
 @reflectiveTest
 class AnalysisDriverTest extends BaseAnalysisDriverTest {
-  void configurePreviewDart2() {
-    driver.configure(
-        analysisOptions: new AnalysisOptionsImpl.from(driver.analysisOptions));
+  void assertType(DartType type, String expected) {
+    var typeStr = type.getDisplayString(withNullability: false);
+    expect(typeStr, expected);
   }
 
   test_addedFiles() async {
@@ -361,10 +356,9 @@ class AnalysisDriverTest extends BaseAnalysisDriverTest {
   }
 
   test_addFile_notAbsolutePath() async {
-    try {
+    expect(() {
       driver.addFile('not_absolute.dart');
-      fail('ArgumentError expected.');
-    } on ArgumentError {}
+    }, throwsArgumentError);
   }
 
   test_addFile_shouldRefresh() async {
@@ -446,17 +440,17 @@ part of lib;
 part of 'lib.dart';
 ''');
 
-    ResolvedUnitResult libResult = await driver.getResult(lib);
-    ResolvedUnitResult partResult1 = await driver.getResult(part1);
-    ResolvedUnitResult partResult2 = await driver.getResult(part2);
+    ResolvedUnitResult libResult = await driver.getResultValid(lib);
+    ResolvedUnitResult partResult1 = await driver.getResultValid(part1);
+    ResolvedUnitResult partResult2 = await driver.getResultValid(part2);
 
-    CompilationUnit libUnit = libResult.unit;
-    CompilationUnit partUnit1 = partResult1.unit;
-    CompilationUnit partUnit2 = partResult2.unit;
+    CompilationUnit libUnit = libResult.unit!;
+    CompilationUnit partUnit1 = partResult1.unit!;
+    CompilationUnit partUnit2 = partResult2.unit!;
 
-    CompilationUnitElement unitElement = libUnit.declaredElement;
-    CompilationUnitElement partElement1 = partUnit1.declaredElement;
-    CompilationUnitElement partElement2 = partUnit2.declaredElement;
+    CompilationUnitElement unitElement = libUnit.declaredElement!;
+    CompilationUnitElement partElement1 = partUnit1.declaredElement!;
+    CompilationUnitElement partElement2 = partUnit2.declaredElement!;
 
     LibraryElement libraryElement = unitElement.library;
     {
@@ -493,10 +487,10 @@ part of lib;
 
     driver.addFile(lib);
 
-    ResolvedUnitResult libResult = await driver.getResult(lib);
+    ResolvedUnitResult libResult = await driver.getResultValid(lib);
     List<AnalysisError> errors = libResult.errors;
     expect(errors, hasLength(1));
-    expect(errors[0].errorCode, ResolverErrorCode.PART_OF_UNNAMED_LIBRARY);
+    expect(errors[0].errorCode, CompileTimeErrorCode.PART_OF_UNNAMED_LIBRARY);
   }
 
   test_analyze_resolveDirectives_error_partOfDifferentLibrary_byName() async {
@@ -512,10 +506,10 @@ part of someOtherLib;
 
     driver.addFile(lib);
 
-    ResolvedUnitResult libResult = await driver.getResult(lib);
+    ResolvedUnitResult libResult = await driver.getResultValid(lib);
     List<AnalysisError> errors = libResult.errors;
     expect(errors, hasLength(1));
-    expect(errors[0].errorCode, StaticWarningCode.PART_OF_DIFFERENT_LIBRARY);
+    expect(errors[0].errorCode, CompileTimeErrorCode.PART_OF_DIFFERENT_LIBRARY);
   }
 
   test_analyze_resolveDirectives_error_partOfDifferentLibrary_byUri() async {
@@ -531,10 +525,10 @@ part of 'other_lib.dart';
 
     driver.addFile(lib);
 
-    ResolvedUnitResult libResult = await driver.getResult(lib);
+    ResolvedUnitResult libResult = await driver.getResultValid(lib);
     List<AnalysisError> errors = libResult.errors;
     expect(errors, hasLength(1));
-    expect(errors[0].errorCode, StaticWarningCode.PART_OF_DIFFERENT_LIBRARY);
+    expect(errors[0].errorCode, CompileTimeErrorCode.PART_OF_DIFFERENT_LIBRARY);
   }
 
   test_analyze_resolveDirectives_error_partOfNonPart() async {
@@ -550,7 +544,7 @@ part 'part.dart';
 
     driver.addFile(lib);
 
-    ResolvedUnitResult libResult = await driver.getResult(lib);
+    ResolvedUnitResult libResult = await driver.getResultValid(lib);
     List<AnalysisError> errors = libResult.errors;
     expect(errors, hasLength(1));
     expect(errors[0].errorCode, CompileTimeErrorCode.PART_OF_NON_PART);
@@ -562,7 +556,7 @@ part 'part.dart';
 
     driver.priorityFiles = [a];
 
-    ResolvedUnitResult result1 = await driver.getResult(a);
+    ResolvedUnitResult result1 = await driver.getResultValid(a);
     expect(driver.test.priorityResults, containsPair(a, result1));
 
     await waitForIdleWithoutExceptions();
@@ -570,15 +564,14 @@ part 'part.dart';
 
     // Get the (cached) result, not reported to the stream.
     {
-      ResolvedUnitResult result2 = await driver.getResult(a);
+      ResolvedUnitResult result2 = await driver.getResultValid(a);
       expect(result2, same(result1));
       expect(allResults, isEmpty);
     }
 
     // Get the (cached) result, reported to the stream.
     {
-      ResolvedUnitResult result2 =
-          await driver.getResult(a, sendCachedToStream: true);
+      var result2 = await driver.getResult2(a, sendCachedToStream: true);
       expect(result2, same(result1));
 
       expect(allResults, hasLength(1));
@@ -594,21 +587,21 @@ part 'part.dart';
 
     driver.priorityFiles = [a];
 
-    ResolvedUnitResult result1 = await driver.getResult(a);
+    ResolvedUnitResult result1 = await driver.getResultValid(a);
     expect(driver.test.priorityResults, containsPair(a, result1));
 
     // Change a file.
     // The cache is flushed.
     driver.changeFile(a);
     expect(driver.test.priorityResults, isEmpty);
-    ResolvedUnitResult result2 = await driver.getResult(a);
+    ResolvedUnitResult result2 = await driver.getResultValid(a);
     expect(driver.test.priorityResults, containsPair(a, result2));
 
     // Add a file.
     // The cache is flushed.
     driver.addFile(b);
     expect(driver.test.priorityResults, isEmpty);
-    ResolvedUnitResult result3 = await driver.getResult(a);
+    ResolvedUnitResult result3 = await driver.getResultValid(a);
     expect(driver.test.priorityResults, containsPair(a, result3));
 
     // Remove a file.
@@ -625,7 +618,7 @@ part 'part.dart';
 
     driver.priorityFiles = [a];
 
-    ResolvedUnitResult result1 = await driver.getResult(a);
+    ResolvedUnitResult result1 = await driver.getResultValid(a);
     expect(driver.test.priorityResults, hasLength(1));
     expect(driver.test.priorityResults, containsPair(a, result1));
 
@@ -636,7 +629,7 @@ part 'part.dart';
     expect(driver.test.priorityResults, containsPair(a, result1));
 
     // Get the result for "b".
-    ResolvedUnitResult result2 = await driver.getResult(b);
+    ResolvedUnitResult result2 = await driver.getResultValid(b);
     expect(driver.test.priorityResults, hasLength(2));
     expect(driver.test.priorityResults, containsPair(a, result1));
     expect(driver.test.priorityResults, containsPair(b, result2));
@@ -652,11 +645,11 @@ part 'part.dart';
     var a = convertPath('/test/bin/a.dart');
     newFile(a, content: 'var a = 1;');
 
-    ResolvedUnitResult result1 = await driver.getResult(a);
+    ResolvedUnitResult result1 = await driver.getResultValid(a);
     expect(driver.test.priorityResults, isEmpty);
 
     // The file is not priority, so its result is not cached.
-    ResolvedUnitResult result2 = await driver.getResult(a);
+    ResolvedUnitResult result2 = await driver.getResultValid(a);
     expect(result2, isNot(same(result1)));
   }
 
@@ -677,7 +670,7 @@ var A = B;
     expect(allResults, hasLength(1));
     {
       ResolvedUnitResult ar = allResults.firstWhere((r) => r.path == a);
-      expect(_getTopLevelVarType(ar.unit, 'A'), 'int');
+      _assertTopLevelVarType(ar.unit!, 'A', 'int');
     }
     allResults.clear();
 
@@ -694,15 +687,14 @@ var A = B;
     expect(allResults, hasLength(1));
     {
       ResolvedUnitResult ar = allResults.firstWhere((r) => r.path == a);
-      expect(_getTopLevelVarType(ar.unit, 'A'), 'double');
+      _assertTopLevelVarType(ar.unit!, 'A', 'double');
     }
   }
 
   test_changeFile_notAbsolutePath() async {
-    try {
+    expect(() {
       driver.changeFile('not_absolute.dart');
-      fail('ArgumentError expected.');
-    } on ArgumentError {}
+    }, throwsArgumentError);
   }
 
   test_changeFile_notUsed() async {
@@ -749,12 +741,12 @@ var B1 = A1;
     expect(allResults, hasLength(2));
     {
       ResolvedUnitResult ar = allResults.firstWhere((r) => r.path == a);
-      expect(_getTopLevelVarType(ar.unit, 'A1'), 'int');
-      expect(_getTopLevelVarType(ar.unit, 'A2'), 'int');
+      _assertTopLevelVarType(ar.unit!, 'A1', 'int');
+      _assertTopLevelVarType(ar.unit!, 'A2', 'int');
     }
     {
       ResolvedUnitResult br = allResults.firstWhere((r) => r.path == b);
-      expect(_getTopLevelVarType(br.unit, 'B1'), 'int');
+      _assertTopLevelVarType(br.unit!, 'B1', 'int');
     }
 
     // Clear the results and update "a".
@@ -772,12 +764,12 @@ var A2 = B1;
     expect(allResults, hasLength(2));
     {
       ResolvedUnitResult ar = allResults.firstWhere((r) => r.path == a);
-      expect(_getTopLevelVarType(ar.unit, 'A1'), 'double');
-      expect(_getTopLevelVarType(ar.unit, 'A2'), 'double');
+      _assertTopLevelVarType(ar.unit!, 'A1', 'double');
+      _assertTopLevelVarType(ar.unit!, 'A2', 'double');
     }
     {
       ResolvedUnitResult br = allResults.firstWhere((r) => r.path == b);
-      expect(_getTopLevelVarType(br.unit, 'B1'), 'double');
+      _assertTopLevelVarType(br.unit!, 'B1', 'double');
     }
   }
 
@@ -790,7 +782,7 @@ var A2 = B1;
       expect(allResults, hasLength(1));
       ResolvedUnitResult result = allResults[0];
       expect(result.path, testFile);
-      expect(_getTopLevelVarType(result.unit, 'V'), 'int');
+      _assertTopLevelVarType(result.unit!, 'V', 'int');
     }
 
     // Update the file, but don't notify the driver.
@@ -813,7 +805,7 @@ var A2 = B1;
       expect(allResults, hasLength(1));
       ResolvedUnitResult result = allResults[0];
       expect(result.path, testFile);
-      expect(_getTopLevelVarType(result.unit, 'V'), 'double');
+      _assertTopLevelVarType(result.unit!, 'V', 'double');
     }
   }
 
@@ -827,10 +819,10 @@ class A {
 @A(5)
 class C {}
 ''');
-    var result = await driver.getResult(testFile);
-    var atD = AstFinder.getClass(result.unit, 'C').metadata[0];
+    var result = await driver.getResultValid(testFile);
+    var atD = AstFinder.getClass(result.unit!, 'C').metadata[0];
     var atDI = atD.elementAnnotation as ElementAnnotationImpl;
-    var value = atDI.evaluationResult.value;
+    var value = atDI.evaluationResult!.value;
     // That is illegal.
     expect(value, isNull);
   }
@@ -844,16 +836,15 @@ class D {
   final value;
 }
 ''');
-    var result = await driver.getResult(testFile);
-    var atD = AstFinder.getClass(result.unit, 'C').metadata[0];
+    var result = await driver.getResultValid(testFile);
+    var atD = AstFinder.getClass(result.unit!, 'C').metadata[0];
     var atDI = atD.elementAnnotation as ElementAnnotationImpl;
-    var value = atDI.evaluationResult.value;
-    expect(value, isNotNull);
+    var value = atDI.evaluationResult!.value!;
     expect(value.type, isNotNull);
-    expect(value.type.name, 'D');
-    expect(value.fields.keys, ['value']);
-    expect(value.getField('value').toIntValue(), 1);
-    expect(atDI.evaluationResult.errors, isEmpty);
+    assertType(value.type, 'D');
+    expect(value.fields!.keys, ['value']);
+    expect(value.getField('value')!.toIntValue(), 1);
+    expect(atDI.evaluationResult!.errors, isEmpty);
   }
 
   test_const_annotation_withoutArgs() async {
@@ -861,9 +852,9 @@ class D {
 const x = 1;
 @x class C {}
 ''');
-    var result = await driver.getResult(testFile);
-    Annotation at_x = AstFinder.getClass(result.unit, 'C').metadata[0];
-    expect(at_x.elementAnnotation.constantValue.toIntValue(), 1);
+    var result = await driver.getResultValid(testFile);
+    Annotation at_x = AstFinder.getClass(result.unit!, 'C').metadata[0];
+    expect(at_x.elementAnnotation!.computeConstantValue()!.toIntValue(), 1);
   }
 
   test_const_circular_reference() async {
@@ -871,10 +862,10 @@ const x = 1;
 const x = y + 1;
 const y = x + 1;
 ''');
-    var result = await driver.getResult(testFile);
-    var x = AstFinder.getTopLevelVariableElement(result.unit, 'x')
+    var result = await driver.getResultValid(testFile);
+    var x = AstFinder.getTopLevelVariableElement(result.unit!, 'x')
         as TopLevelVariableElementImpl;
-    _expectCircularityError(x.evaluationResult);
+    _expectCircularityError(x.evaluationResult!);
   }
 
   test_const_dependency_sameUnit() async {
@@ -882,11 +873,11 @@ const y = x + 1;
 const x = y + 1;
 const y = 1;
 ''');
-    var result = await driver.getResult(testFile);
-    var x = AstFinder.getTopLevelVariableElement(result.unit, 'x');
-    var y = AstFinder.getTopLevelVariableElement(result.unit, 'y');
-    expect(x.constantValue.toIntValue(), 2);
-    expect(y.constantValue.toIntValue(), 1);
+    var result = await driver.getResultValid(testFile);
+    var x = AstFinder.getTopLevelVariableElement(result.unit!, 'x');
+    var y = AstFinder.getTopLevelVariableElement(result.unit!, 'y');
+    expect(x.computeConstantValue()!.toIntValue(), 2);
+    expect(y.computeConstantValue()!.toIntValue(), 1);
   }
 
   test_const_externalConstFactory() async {
@@ -899,14 +890,12 @@ class C extends B {
 
 class B {}
 ''');
-    var result = await driver.getResult(testFile);
-    var x = AstFinder.getTopLevelVariableElement(result.unit, 'x');
-    expect(x.constantValue, isNotNull);
+    var result = await driver.getResultValid(testFile);
+    var x = AstFinder.getTopLevelVariableElement(result.unit!, 'x');
+    expect(x.computeConstantValue(), isNotNull);
   }
 
   test_const_implicitCreation() async {
-    configurePreviewDart2();
-
     var a = convertPath('/test/bin/a.dart');
     var b = convertPath('/test/bin/b.dart');
     newFile(a, content: r'''
@@ -926,13 +915,11 @@ class D {
 const c = C.WARNING;
 const d = D.WARNING;
 ''');
-    ResolvedUnitResult result = await driver.getResult(b);
+    ResolvedUnitResult result = await driver.getResultValid(b);
     expect(result.errors, isEmpty);
   }
 
   test_const_implicitCreation_rewrite() async {
-    configurePreviewDart2();
-
     var a = convertPath('/test/bin/a.dart');
     var b = convertPath('/test/bin/b.dart');
     newFile(a, content: r'''
@@ -957,7 +944,7 @@ main() {
   const C();
 }
 ''');
-    ResolvedUnitResult result = await driver.getResult(b);
+    ResolvedUnitResult result = await driver.getResultValid(b);
     expect(result.errors, isEmpty);
   }
 
@@ -969,32 +956,32 @@ class Derived extends Base {
 }
 const x = const Derived();
 ''');
-    var result = await driver.getResult(testFile);
-    var x = AstFinder.getTopLevelVariableElement(result.unit, 'x');
-    expect(x.constantValue, isNotNull);
+    var result = await driver.getResultValid(testFile);
+    var x = AstFinder.getTopLevelVariableElement(result.unit!, 'x');
+    expect(x.computeConstantValue(), isNotNull);
   }
 
   test_const_simple_topLevelVariable() async {
     addTestFile('''
 const x = 1;
 ''');
-    var result = await driver.getResult(testFile);
-    var x = AstFinder.getTopLevelVariableElement(result.unit, 'x');
-    expect(x.constantValue.toIntValue(), 1);
+    var result = await driver.getResultValid(testFile);
+    var x = AstFinder.getTopLevelVariableElement(result.unit!, 'x');
+    expect(x.computeConstantValue()!.toIntValue(), 1);
   }
 
   test_currentSession() async {
     var a = convertPath('/a.dart');
 
     newFile(a, content: 'var V = 1;');
-    await driver.getResult(a);
+    await driver.getResultValid(a);
 
     var session1 = driver.currentSession;
     expect(session1, isNotNull);
 
     modifyFile(a, 'var V = 2;');
     driver.changeFile(a);
-    await driver.getResult(a);
+    await driver.getResultValid(a);
 
     var session2 = driver.currentSession;
     expect(session2, isNotNull);
@@ -1039,7 +1026,7 @@ const x = 1;
     await driver.discoverAvailableFiles();
 
     void assertHasDartUri(String uri) {
-      var file = sdk.mapDartUri(uri).fullName;
+      var file = sdk.mapDartUri(uri)!.fullName;
       expect(driver.knownFiles, contains(file));
     }
 
@@ -1055,7 +1042,7 @@ const x = 1;
 export 'foo.dart';
 ''');
 
-    ResolvedUnitResult result = await driver.getResult(testFile);
+    ResolvedUnitResult result = await driver.getResultValid(testFile);
     List<AnalysisError> errors = result.errors;
     expect(errors, hasLength(1));
     expect(errors[0].errorCode, CompileTimeErrorCode.URI_DOES_NOT_EXIST);
@@ -1066,7 +1053,7 @@ export 'foo.dart';
 import 'foo.dart';
 ''');
 
-    ResolvedUnitResult result = await driver.getResult(testFile);
+    ResolvedUnitResult result = await driver.getResultValid(testFile);
     List<AnalysisError> errors = result.errors;
     expect(errors, hasLength(1));
     expect(errors[0].errorCode, CompileTimeErrorCode.URI_DOES_NOT_EXIST);
@@ -1080,7 +1067,7 @@ main() {
 }
 ''', priority: true);
 
-    ResolvedUnitResult result = await driver.getResult(testFile);
+    ResolvedUnitResult result = await driver.getResultValid(testFile);
     List<AnalysisError> errors = result.errors;
     expect(errors, hasLength(1));
     expect(errors[0].errorCode, CompileTimeErrorCode.URI_DOES_NOT_EXIST);
@@ -1092,92 +1079,13 @@ library lib;
 part 'foo.dart';
 ''');
 
-    ResolvedUnitResult result = await driver.getResult(testFile);
+    ResolvedUnitResult result = await driver.getResultValid(testFile);
     List<AnalysisError> errors = result.errors;
     expect(errors, hasLength(1));
     expect(errors[0].errorCode, CompileTimeErrorCode.URI_DOES_NOT_EXIST);
   }
 
-  test_externalSummaries() async {
-    var a = convertPath('/a.dart');
-    var b = convertPath('/b.dart');
-    newFile(a, content: r'''
-class A {}
-''');
-    newFile(b, content: r'''
-import 'a.dart';
-var a = new A();
-''');
-
-    // Prepare the store with a.dart and everything it needs.
-    SummaryDataStore summaryStore =
-        await createAnalysisDriver().test.getSummaryStore(a);
-
-    // There are at least a.dart and dart:core libraries.
-    String aUri = toUri(a).toString();
-    expect(summaryStore.unlinkedMap.keys, contains(aUri));
-    expect(summaryStore.linkedMap.keys, contains(aUri));
-    expect(summaryStore.unlinkedMap.keys, contains('dart:core'));
-    expect(summaryStore.linkedMap.keys, contains('dart:core'));
-
-    // Remove a.dart from the file system.
-    deleteFile(a);
-
-    // We don't need a.dart file when we analyze with the summary store.
-    // Still no analysis errors.
-    AnalysisDriver driver =
-        createAnalysisDriver(externalSummaries: summaryStore);
-    ResolvedUnitResult result = await driver.getResult(b);
-    expect(result.errors, isEmpty);
-  }
-
-  test_externalSummaries_partReuse() async {
-    var a = convertPath('/a.dart');
-    var b = convertPath('/b.dart');
-    var c = convertPath('/c.dart');
-    newFile(a, content: r'''
-library a;
-part 'b.dart';
-class A {}
-''');
-    newFile(b, content: r'''
-part of a;
-class _B {}
-''');
-    newFile(c, content: r'''
-library a;
-import 'a.dart';
-part 'b.dart';
-var a = new A();
-var b = new _B();
-''');
-
-    // Prepare the store with a.dart and everything it needs.
-    SummaryDataStore summaryStore =
-        await createAnalysisDriver().test.getSummaryStore(a);
-
-    String aUri = toUri(a).toString();
-    String bUri = toUri(b).toString();
-    // There are unlinked units for a.dart and b.dart files.
-    expect(summaryStore.hasUnlinkedUnit(aUri), isTrue);
-    expect(summaryStore.hasUnlinkedUnit(bUri), isTrue);
-    // Only a.dart is linked, because b.dart is not a library.
-    expect(summaryStore.hasLinkedLibrary(aUri), isTrue);
-    expect(summaryStore.hasLinkedLibrary(bUri), isFalse);
-
-    // Remove a.dart from the file system.
-    // Keep b.dart, because we (re)use it as a part.
-    deleteFile(a);
-
-    // We don't need a.dart file when we analyze with the summary store.
-    // We can instantiate the class A the library a.dart.
-    // We can instantiate the class _A the part b.dart.
-    AnalysisDriver driver =
-        createAnalysisDriver(externalSummaries: summaryStore);
-    ResolvedUnitResult result = await driver.getResult(c);
-    expect(result.errors, isEmpty);
-  }
-
+  @deprecated
   test_generatedFile() async {
     Uri uri = Uri.parse('package:aaa/foo.dart');
     String templatePath = convertPath('/aaa/lib/foo.dart');
@@ -1193,10 +1101,9 @@ aaa() {}
 bbb() {}
 ''');
 
-    Source generatedSource = new _SourceMock(generatedPath, uri);
+    Source generatedSource = _SourceMock(generatedPath, uri);
 
-    generatedUriResolver.resolveAbsoluteFunction =
-        (uri, actualUri) => generatedSource;
+    generatedUriResolver.resolveAbsoluteFunction = (uri) => generatedSource;
     generatedUriResolver.restoreAbsoluteFunction = (Source source) {
       String path = source.fullName;
       if (path == templatePath || path == generatedPath) {
@@ -1212,15 +1119,82 @@ bbb() {}
     expect(allExceptions, isEmpty);
     expect(allResults, isEmpty);
 
-    var result = await driver.getResult(templatePath);
-    expect(result, isNull);
+    {
+      var result = await driver.getResult(templatePath);
+      expect(result.state, ResultState.NOT_FILE_OF_URI);
+      expect(allExceptions, isEmpty);
+      expect(allResults, isEmpty);
+    }
+
+    {
+      var result = await driver.getUnitElement(templatePath);
+      expect(result.state, ResultState.NOT_FILE_OF_URI);
+      expect(allExceptions, isEmpty);
+      expect(allResults, isEmpty);
+    }
+
+    driver.priorityFiles = [templatePath];
+    driver.changeFile(templatePath);
+    await waitForIdleWithoutExceptions();
     expect(allExceptions, isEmpty);
     expect(allResults, isEmpty);
 
-    var element = await driver.getUnitElement(templatePath);
-    expect(element, isNull);
+    expect(driver.knownFiles, isNot(contains(templatePath)));
+  }
+
+  test_generatedFile2() async {
+    Uri uri = Uri.parse('package:aaa/foo.dart');
+    String templatePath = convertPath('/aaa/lib/foo.dart');
+    String generatedPath = convertPath('/generated/aaa/lib/foo.dart');
+
+    newFile(templatePath, content: r'''
+a() {}
+b() {}
+''');
+
+    newFile(generatedPath, content: r'''
+aaa() {}
+bbb() {}
+''');
+
+    Source generatedSource = _SourceMock(generatedPath, uri);
+
+    generatedUriResolver.resolveAbsoluteFunction = (uri) => generatedSource;
+    generatedUriResolver.restoreAbsoluteFunction = (Source source) {
+      String path = source.fullName;
+      if (path == templatePath || path == generatedPath) {
+        return uri;
+      } else {
+        return null;
+      }
+    };
+
+    driver.addFile(templatePath);
+
+    await waitForIdleWithoutExceptions();
     expect(allExceptions, isEmpty);
     expect(allResults, isEmpty);
+
+    {
+      var result = await driver.getResolvedLibrary2(templatePath);
+      expect(result, isA<NotPathOfUriResult>());
+      expect(allExceptions, isEmpty);
+      expect(allResults, isEmpty);
+    }
+
+    {
+      var result = await driver.getResult2(templatePath);
+      expect(result, isA<NotPathOfUriResult>());
+      expect(allExceptions, isEmpty);
+      expect(allResults, isEmpty);
+    }
+
+    {
+      var result = await driver.getUnitElement2(templatePath);
+      expect(result, isA<NotPathOfUriResult>());
+      expect(allExceptions, isEmpty);
+      expect(allResults, isEmpty);
+    }
 
     driver.priorityFiles = [templatePath];
     driver.changeFile(templatePath);
@@ -1238,26 +1212,42 @@ bbb() {}
     expect(driver.getCachedResult(a), isNull);
 
     driver.priorityFiles = [a];
-    ResolvedUnitResult result = await driver.getResult(a);
+    ResolvedUnitResult result = await driver.getResultValid(a);
 
     expect(driver.getCachedResult(a), same(result));
   }
 
+  @deprecated
   test_getErrors() async {
     String content = 'int f() => 42 + bar();';
     addTestFile(content, priority: true);
 
-    ErrorsResult result = await driver.getErrors(testFile);
+    var result = await driver.getErrors(testFile);
     expect(result.path, testFile);
     expect(result.uri.toString(), 'package:test/test.dart');
     expect(result.errors, hasLength(1));
   }
 
+  test_getErrors2() async {
+    String content = 'int f() => 42 + bar();';
+    addTestFile(content, priority: true);
+
+    var result = await driver.getErrors2(testFile) as ErrorsResult;
+    expect(result.path, testFile);
+    expect(result.uri.toString(), 'package:test/test.dart');
+    expect(result.errors, hasLength(1));
+  }
+
+  test_getErrors2_notAbsolutePath() async {
+    var result = await driver.getErrors2('not_absolute.dart');
+    expect(result, isA<InvalidPathResult>());
+  }
+
+  @deprecated
   test_getErrors_notAbsolutePath() async {
-    try {
+    expect(() async {
       await driver.getErrors('not_absolute.dart');
-      fail('ArgumentError expected.');
-    } on ArgumentError {}
+    }, throwsArgumentError);
   }
 
   test_getFilesDefiningClassMemberName_class() async {
@@ -1363,6 +1353,105 @@ bbb() {}
     expect(files, isNot(contains(c)));
   }
 
+  test_getFileSync2_changedFile() async {
+    var a = convertPath('/test/lib/a.dart');
+    var b = convertPath('/test/lib/b.dart');
+
+    newFile(a, content: '');
+    newFile(b, content: r'''
+import 'a.dart';
+
+void f(A a) {}
+''');
+
+    // Ensure that [a.dart] library cycle is loaded.
+    // So, `a.dart` is in the library context.
+    await driver.getResultValid(a);
+
+    // Update the file, changing its API signature.
+    // Note that we don't call `changeFile`.
+    newFile(a, content: 'class A {}\n');
+
+    // Get the file.
+    // We have not called `changeFile(a)`, so we should not read the file.
+    // Moreover, doing this will create a new library cycle [a.dart].
+    // Library cycles are compared by their identity, so we would try to
+    // reload linked summary for [a.dart], and crash.
+    expect(driver.getFileSyncValid(a).lineInfo.lineCount, 1);
+
+    // We have not read `a.dart`, so `A` is still not declared.
+    expect((await driver.getResultValid(b)).errors, isNotEmpty);
+
+    // Notify the driver that the file was changed.
+    driver.changeFile(a);
+
+    // So, `class A {}` is declared now.
+    expect(driver.getFileSyncValid(a).lineInfo.lineCount, 2);
+    expect((await driver.getResultValid(b)).errors, isEmpty);
+  }
+
+  test_getFileSync2_library() async {
+    var path = convertPath('/test/lib/a.dart');
+    newFile(path);
+    var file = driver.getFileSyncValid(path);
+    expect(file.path, path);
+    expect(file.uri.toString(), 'package:test/a.dart');
+    expect(file.isPart, isFalse);
+  }
+
+  test_getFileSync2_notAbsolutePath() async {
+    var result = driver.getFileSync2('not_absolute.dart');
+    expect(result, isA<InvalidPathResult>());
+  }
+
+  test_getFileSync2_part() async {
+    var path = convertPath('/test/lib/a.dart');
+    newFile(path, content: 'part of lib;');
+    var file = driver.getFileSyncValid(path);
+    expect(file.path, path);
+    expect(file.uri.toString(), 'package:test/a.dart');
+    expect(file.isPart, isTrue);
+  }
+
+  @deprecated
+  test_getFileSync_changedFile() async {
+    var a = convertPath('/test/lib/a.dart');
+    var b = convertPath('/test/lib/b.dart');
+
+    newFile(a, content: '');
+    newFile(b, content: r'''
+import 'a.dart';
+
+void f(A a) {}
+''');
+
+    // Ensure that [a.dart] library cycle is loaded.
+    // So, `a.dart` is in the library context.
+    await driver.getResultValid(a);
+
+    // Update the file, changing its API signature.
+    // Note that we don't call `changeFile`.
+    newFile(a, content: 'class A {}\n');
+
+    // Get the file.
+    // We have not called `changeFile(a)`, so we should not read the file.
+    // Moreover, doing this will create a new library cycle [a.dart].
+    // Library cycles are compared by their identity, so we would try to
+    // reload linked summary for [a.dart], and crash.
+    expect(driver.getFileSync(a).lineInfo.lineCount, 1);
+
+    // We have not read `a.dart`, so `A` is still not declared.
+    expect((await driver.getResultValid(b)).errors, isNotEmpty);
+
+    // Notify the driver that the file was changed.
+    driver.changeFile(a);
+
+    // So, `class A {}` is declared now.
+    expect(driver.getFileSync(a).lineInfo.lineCount, 2);
+    expect((await driver.getResultValid(b)).errors, isEmpty);
+  }
+
+  @deprecated
   test_getFileSync_library() async {
     var path = convertPath('/test/lib/a.dart');
     newFile(path);
@@ -1372,13 +1461,14 @@ bbb() {}
     expect(file.isPart, isFalse);
   }
 
+  @deprecated
   test_getFileSync_notAbsolutePath() async {
-    try {
+    expect(() {
       driver.getFileSync('not_absolute.dart');
-      fail('ArgumentError expected.');
-    } on ArgumentError {}
+    }, throwsArgumentError);
   }
 
+  @deprecated
   test_getFileSync_part() async {
     var path = convertPath('/test/lib/a.dart');
     newFile(path, content: 'part of lib;');
@@ -1397,7 +1487,7 @@ main() {
 ''';
     addTestFile(content);
 
-    AnalysisDriverUnitIndex index = await driver.getIndex(testFile);
+    AnalysisDriverUnitIndex index = (await driver.getIndex(testFile))!;
 
     int unitId = index.strings.indexOf('package:test/test.dart');
     int fooId = index.strings.indexOf('foo');
@@ -1406,12 +1496,12 @@ main() {
   }
 
   test_getIndex_notAbsolutePath() async {
-    try {
+    expect(() async {
       await driver.getIndex('not_absolute.dart');
-      fail('ArgumentError expected.');
-    } on ArgumentError {}
+    }, throwsArgumentError);
   }
 
+  @deprecated
   test_getLibraryByUri() async {
     var a = '/test/lib/a.dart';
     var b = '/test/lib/b.dart';
@@ -1441,9 +1531,9 @@ class B {}
     }, throwsArgumentError);
   }
 
-  test_getLibraryByUri_external() async {
-    var a = convertPath('/test/lib/a.dart');
-    var b = convertPath('/test/lib/b.dart');
+  test_getLibraryByUri2() async {
+    var a = '/test/lib/a.dart';
+    var b = '/test/lib/b.dart';
 
     String aUriStr = 'package:test/a.dart';
     String bUriStr = 'package:test/b.dart';
@@ -1460,240 +1550,138 @@ part of 'a.dart';
 class B {}
 ''');
 
-    // Prepare the store with package:test/test.dart URI.
-    var store = await createAnalysisDriver().test.getSummaryStore(a);
-
-    // package:test/test.dart is in the store.
-    expect(store.unlinkedMap.keys, contains(aUriStr));
-    expect(store.unlinkedMap.keys, contains(bUriStr));
-    expect(store.linkedMap.keys, contains(aUriStr));
-    expect(store.linkedMap.keys, isNot(contains(bUriStr)));
-
-    // Remove the files from the file system.
-    deleteFile(a);
-    deleteFile(b);
-
-    // We can resynthesize the library from the store.
-    var driver = createAnalysisDriver(externalSummaries: store);
-
-    // Ask by URI, so we get the "external" FileState.
-    var aUri = Uri.parse(aUriStr);
-    var aFile = driver.fsState.getFileForUri(aUri);
-    expect(aFile.uri, aUri);
-    expect(aFile.path, isNull);
-
-    // We still can resynthesize the library.
-    // The URI is known to be external, so we don't talk to the file.
-    var library = await driver.getLibraryByUri(aUriStr);
-    expect(library.getType('A'), isNotNull);
-    expect(library.getType('B'), isNotNull);
+    var result = await driver.getLibraryByUri2(aUriStr);
+    result as LibraryElementResult;
+    expect(result.element.getType('A'), isNotNull);
+    expect(result.element.getType('B'), isNotNull);
 
     // It is an error to ask for a library when we know that it is a part.
+    expect(
+      await driver.getLibraryByUri2(bUriStr),
+      isA<NotLibraryButPartResult>(),
+    );
+  }
+
+  test_getLibraryByUri2_unresolvedUri() async {
+    var result = await driver.getLibraryByUri2('package:foo/foo.dart');
+    expect(result, isA<CannotResolveUriResult>());
+  }
+
+  @deprecated
+  test_getLibraryByUri_unresolvedUri() async {
     expect(() async {
-      await driver.getLibraryByUri(bUriStr);
+      await driver.getLibraryByUri('package:foo/foo.dart');
     }, throwsArgumentError);
   }
 
-  test_getLibraryByUri_sdk_analyze() async {
-    LibraryElement coreLibrary = await driver.getLibraryByUri('dart:core');
-    expect(coreLibrary, isNotNull);
-    expect(coreLibrary.getType('Object'), isNotNull);
-    expect(coreLibrary.getType('int'), isNotNull);
+  test_getParsedLibrary2() async {
+    var content = 'class A {}';
+    addTestFile(content);
+    var result = driver.getParsedLibrary2(testFile);
+    result as ParsedLibraryResult;
+    expect(result.units, hasLength(1));
+    expect(result.units![0].path, testFile);
+    expect(result.units![0].content, content);
+    expect(result.units![0].unit, isNotNull);
+    expect(result.units![0].errors, isEmpty);
   }
 
-  test_getLibraryByUri_sdk_resynthesize() async {
-    String corePath = sdk.mapDartUri('dart:core').fullName;
-    String asyncPath = sdk.mapDartUri('dart:async').fullName;
-    var sdkStore = await createAnalysisDriver().test.getSummaryStore(corePath);
-
-    // There are dart:core and dart:async in the store.
-    expect(sdkStore.unlinkedMap.keys, contains('dart:core'));
-    expect(sdkStore.unlinkedMap.keys, contains('dart:async'));
-    expect(sdkStore.linkedMap.keys, contains('dart:core'));
-    expect(sdkStore.linkedMap.keys, contains('dart:async'));
-
-    // Remove dart:core and dart:async.
-    // So, the new driver below cannot parse and summarize them.
-    deleteFile(corePath);
-    deleteFile(asyncPath);
-
-    // We still get get dart:core library element.
-    AnalysisDriver driver = createAnalysisDriver(externalSummaries: sdkStore);
-    LibraryElement coreLibrary = await driver.getLibraryByUri('dart:core');
-    expect(coreLibrary, isNotNull);
-    expect(coreLibrary.getType('Object'), isNotNull);
+  test_getParsedLibrary2_invalidPath_notAbsolute() async {
+    var result = driver.getParsedLibrary2('not_absolute.dart');
+    expect(result, isA<InvalidPathResult>());
   }
 
-  test_getParsedLibrary_external() async {
-    var a1 = convertPath('/aaa/lib/a1.dart');
-    var a2 = convertPath('/aaa/lib/a2.dart');
-
-    var a1UriStr = 'package:aaa/a1.dart';
-    var a2UriStr = 'package:aaa/a2.dart';
-
-    newFile(a1, content: "part 'a2.dart';  class A {}");
-    newFile(a2, content: "part of 'a1.dart';");
-
-    // Build the store with the library.
-    var store = await createAnalysisDriver().test.getSummaryStore(a1);
-    expect(store.unlinkedMap.keys, contains(a1UriStr));
-    expect(store.unlinkedMap.keys, contains(a2UriStr));
-    expect(store.linkedMap.keys, contains(a1UriStr));
-
-    var driver = createAnalysisDriver(externalSummaries: store);
-    var libraryElement = await driver.getLibraryByUri(a1UriStr);
-    var classA = libraryElement.library.getType('A');
-
-    var parsedLibrary = driver.getParsedLibrary(a1);
-    expect(parsedLibrary, isNotNull);
-    expect(parsedLibrary.state, ResultState.NOT_A_FILE);
-    expect(() {
-      parsedLibrary.getElementDeclaration(classA);
-    }, throwsStateError);
-
-    // It is an error to ask for a library when we know that it is a part.
-    expect(() {
-      driver.getParsedLibrary(a2);
-    }, throwsArgumentError);
+  test_getParsedLibrary2_notLibraryButPart() async {
+    addTestFile('part of my;');
+    var result = driver.getParsedLibrary2(testFile);
+    expect(result, isA<NotLibraryButPartResult>());
   }
 
-  test_getParsedLibraryByUri_external() async {
-    var a1 = convertPath('/aaa/lib/a1.dart');
-    var a2 = convertPath('/aaa/lib/a2.dart');
+  test_getParsedLibraryByUri2() async {
+    var content = 'class A {}';
+    addTestFile(content);
 
-    var a1UriStr = 'package:aaa/a1.dart';
-    var a2UriStr = 'package:aaa/a2.dart';
-
-    var a1Uri = Uri.parse(a1UriStr);
-    var a2Uri = Uri.parse(a2UriStr);
-
-    newFile(a1, content: "part 'a2.dart';  class A {}");
-    newFile(a2, content: "part of 'a1.dart';");
-
-    // Build the store with the library.
-    var store = await createAnalysisDriver().test.getSummaryStore(a1);
-    expect(store.unlinkedMap.keys, contains(a1UriStr));
-    expect(store.unlinkedMap.keys, contains(a2UriStr));
-    expect(store.linkedMap.keys, contains(a1UriStr));
-
-    var driver = createAnalysisDriver(externalSummaries: store);
-    var libraryElement = await driver.getLibraryByUri(a1UriStr);
-    var classA = libraryElement.library.getType('A');
-
-    {
-      var parsedLibrary = driver.getParsedLibraryByUri(a1Uri);
-      expect(parsedLibrary, isNotNull);
-      expect(parsedLibrary.state, ResultState.NOT_A_FILE);
-      expect(() {
-        parsedLibrary.getElementDeclaration(classA);
-      }, throwsStateError);
-    }
-
-    // We can also get the result from the session.
-    {
-      var session = driver.currentSession;
-      var parsedLibrary = session.getParsedLibraryByElement(libraryElement);
-      expect(parsedLibrary, isNotNull);
-      expect(parsedLibrary.state, ResultState.NOT_A_FILE);
-      expect(() {
-        parsedLibrary.getElementDeclaration(classA);
-      }, throwsStateError);
-    }
-
-    // It is an error to ask for a library when we know that it is a part.
-    expect(() {
-      driver.getParsedLibraryByUri(a2Uri);
-    }, throwsArgumentError);
+    var uri = Uri.parse('package:test/test.dart');
+    var result = driver.getParsedLibraryByUri2(uri);
+    result as ParsedLibraryResult;
+    expect(result.uri, uri);
+    expect(result.units, hasLength(1));
+    expect(result.units![0].uri, uri);
+    expect(result.units![0].path, testFile);
+    expect(result.units![0].content, content);
   }
 
-  test_getResolvedLibrary_external() async {
-    var a1 = convertPath('/aaa/lib/a1.dart');
-    var a2 = convertPath('/aaa/lib/a2.dart');
+  test_getParsedLibraryByUri2_notLibrary() async {
+    addTestFile('part of my;');
 
-    var a1UriStr = 'package:aaa/a1.dart';
-    var a2UriStr = 'package:aaa/a2.dart';
-
-    newFile(a1, content: "part 'a2.dart';  class A {}");
-    newFile(a2, content: "part of 'a1.dart';");
-
-    // Build the store with the library.
-    var store = await createAnalysisDriver().test.getSummaryStore(a1);
-    expect(store.unlinkedMap.keys, contains(a1UriStr));
-    expect(store.unlinkedMap.keys, contains(a2UriStr));
-    expect(store.linkedMap.keys, contains(a1UriStr));
-
-    var driver = createAnalysisDriver(externalSummaries: store);
-    var libraryElement = await driver.getLibraryByUri(a1UriStr);
-    var classA = libraryElement.library.getType('A');
-
-    var resolvedLibrary = await driver.getResolvedLibrary(a1);
-    expect(resolvedLibrary, isNotNull);
-    expect(resolvedLibrary.state, ResultState.NOT_A_FILE);
-    expect(() {
-      resolvedLibrary.getElementDeclaration(classA);
-    }, throwsStateError);
-
-    // It is an error to ask for a library when we know that it is a part.
-    expect(() async {
-      await driver.getResolvedLibrary(a2);
-    }, throwsArgumentError);
+    var uri = Uri.parse('package:test/test.dart');
+    var result = driver.getParsedLibraryByUri2(uri);
+    expect(result, isA<NotLibraryButPartResult>());
   }
 
-  test_getResolvedLibraryByUri_external() async {
-    var a1 = convertPath('/aaa/lib/a1.dart');
-    var a2 = convertPath('/aaa/lib/a2.dart');
+  test_getParsedLibraryByUri2_unresolvedUri() async {
+    var uri = Uri.parse('package:unknown/a.dart');
+    var result = driver.getParsedLibraryByUri2(uri);
+    expect(result, isA<CannotResolveUriResult>());
+  }
 
-    var a1UriStr = 'package:aaa/a1.dart';
-    var a2UriStr = 'package:aaa/a2.dart';
+  test_getResolvedLibrary2() async {
+    var content = 'class A {}';
+    addTestFile(content);
+    var result = await driver.getResolvedLibrary2(testFile);
+    result as ResolvedLibraryResult;
+    expect(result.units, hasLength(1));
+    expect(result.units![0].path, testFile);
+    expect(result.units![0].content, content);
+    expect(result.units![0].unit, isNotNull);
+    expect(result.units![0].errors, isEmpty);
+  }
 
-    var a1Uri = Uri.parse(a1UriStr);
-    var a2Uri = Uri.parse(a2UriStr);
+  test_getResolvedLibrary2_invalidPath_notAbsolute() async {
+    var result = await driver.getResolvedLibrary2('not_absolute.dart');
+    expect(result, isA<InvalidPathResult>());
+  }
 
-    newFile(a1, content: "part 'a2.dart';  class A {}");
-    newFile(a2, content: "part of 'a1.dart';");
+  test_getResolvedLibrary2_notLibraryButPart() async {
+    addTestFile('part of my;');
+    var result = await driver.getResolvedLibrary2(testFile);
+    expect(result, isA<NotLibraryButPartResult>());
+  }
 
-    // Build the store with the library.
-    var store = await createAnalysisDriver().test.getSummaryStore(a1);
-    expect(store.unlinkedMap.keys, contains(a1UriStr));
-    expect(store.unlinkedMap.keys, contains(a2UriStr));
-    expect(store.linkedMap.keys, contains(a1UriStr));
+  test_getResolvedLibraryByUri2() async {
+    var content = 'class A {}';
+    addTestFile(content);
 
-    var driver = createAnalysisDriver(externalSummaries: store);
-    var libraryElement = await driver.getLibraryByUri(a1UriStr);
-    var classA = libraryElement.library.getType('A');
+    var uri = Uri.parse('package:test/test.dart');
+    var result = await driver.getResolvedLibraryByUri2(uri);
+    result as ResolvedLibraryResult;
+    expect(result.uri, uri);
+    expect(result.element!.source.fullName, testFile);
+    expect(result.units, hasLength(1));
+    expect(result.units![0].uri, uri);
+    expect(result.units![0].path, testFile);
+    expect(result.units![0].content, content);
+  }
 
-    {
-      var resolvedLibrary = await driver.getResolvedLibraryByUri(a1Uri);
-      expect(resolvedLibrary, isNotNull);
-      expect(resolvedLibrary.state, ResultState.NOT_A_FILE);
-      expect(() {
-        resolvedLibrary.getElementDeclaration(classA);
-      }, throwsStateError);
-    }
+  test_getResolvedLibraryByUri2_notLibrary() async {
+    addTestFile('part of my;');
 
-    // We can also get the result from the session.
-    {
-      var session = driver.currentSession;
-      var resolvedLibrary =
-          await session.getResolvedLibraryByElement(libraryElement);
-      expect(resolvedLibrary, isNotNull);
-      expect(resolvedLibrary.state, ResultState.NOT_A_FILE);
-      expect(() {
-        resolvedLibrary.getElementDeclaration(classA);
-      }, throwsStateError);
-    }
+    var uri = Uri.parse('package:test/test.dart');
+    var result = await driver.getResolvedLibraryByUri2(uri);
+    expect(result, isA<NotLibraryButPartResult>());
+  }
 
-    // It is an error to ask for a library when we know that it is a part.
-    expect(() async {
-      await driver.getResolvedLibraryByUri(a2Uri);
-    }, throwsArgumentError);
+  test_getResolvedLibraryByUri2_unresolvedUri() async {
+    var uri = Uri.parse('package:unknown/a.dart');
+    var result = await driver.getResolvedLibraryByUri2(uri);
+    expect(result, isA<CannotResolveUriResult>());
   }
 
   test_getResult() async {
     String content = 'int f() => 42;';
     addTestFile(content, priority: true);
 
-    ResolvedUnitResult result = await driver.getResult(testFile);
+    ResolvedUnitResult result = await driver.getResultValid(testFile);
     expect(result.path, testFile);
     expect(result.uri.toString(), 'package:test/test.dart');
     expect(result.state, ResultState.VALID);
@@ -1701,13 +1689,18 @@ class B {}
     expect(result.unit, isNotNull);
     expect(result.errors, hasLength(0));
 
-    var f = result.unit.declarations[0] as FunctionDeclaration;
-    expect(f.name.staticType.toString(), '() → int');
-    expect(f.returnType.type.toString(), 'int');
+    var f = result.unit!.declarations[0] as FunctionDeclaration;
+    assertType(f.declaredElement!.type, 'int Function()');
+    assertType(f.returnType!.typeOrThrow, 'int');
 
     // The same result is also received through the stream.
     await waitForIdleWithoutExceptions();
     expect(allResults, [result]);
+  }
+
+  test_getResult2_invalidPath_notAbsolute() async {
+    var result = await driver.getResult2('not_absolute.dart');
+    expect(result, isA<InvalidPathResult>());
   }
 
   test_getResult_constants_defaultParameterValue_localFunction() async {
@@ -1725,14 +1718,14 @@ main() {
     driver.addFile(b);
     await waitForIdleWithoutExceptions();
 
-    ResolvedUnitResult result = await driver.getResult(b);
+    ResolvedUnitResult result = await driver.getResultValid(b);
     expect(result.errors, isEmpty);
   }
 
   test_getResult_doesNotExist() async {
     var a = convertPath('/test/lib/a.dart');
 
-    ResolvedUnitResult result = await driver.getResult(a);
+    ResolvedUnitResult result = await driver.getResultValid(a);
     expect(result.path, a);
     expect(result.uri.toString(), 'package:test/a.dart');
     expect(result.state, ResultState.NOT_A_FILE);
@@ -1743,7 +1736,7 @@ main() {
     String content = 'main() { int vv; }';
     addTestFile(content, priority: true);
 
-    ResolvedUnitResult result = await driver.getResult(testFile);
+    ResolvedUnitResult result = await driver.getResultValid(testFile);
     expect(result.path, testFile);
     expect(result.errors, hasLength(1));
     {
@@ -1752,7 +1745,7 @@ main() {
       expect(error.length, 2);
       expect(error.errorCode, HintCode.UNUSED_LOCAL_VARIABLE);
       expect(error.message, "The value of the local variable 'vv' isn't used.");
-      expect(error.correction, "Try removing the variable, or using it.");
+      expect(error.correction, "Try removing the variable or using it.");
     }
   }
 
@@ -1766,7 +1759,7 @@ class A {
 class B {}
 ''');
 
-    ResolvedUnitResult result = await driver.getResult(testFile);
+    ResolvedUnitResult result = await driver.getResultValid(testFile);
     expect(result.path, testFile);
   }
 
@@ -1778,7 +1771,7 @@ class C {
 ''';
     addTestFile(content, priority: true);
 
-    var result = await driver.getResult(testFile);
+    var result = await driver.getResultValid(testFile);
     expect(result.errors, isEmpty);
   }
 
@@ -1797,7 +1790,7 @@ class B extends A {}
 
     // No errors in b.dart
     {
-      ResolvedUnitResult result = await driver.getResult(b);
+      ResolvedUnitResult result = await driver.getResultValid(b);
       expect(result.errors, isEmpty);
     }
 
@@ -1807,7 +1800,7 @@ class B extends A {}
 
     // The unresolved URI error must be reported.
     {
-      ResolvedUnitResult result = await driver.getResult(b);
+      ResolvedUnitResult result = await driver.getResultValid(b);
       expect(
           result.errors,
           contains(predicate((AnalysisError e) =>
@@ -1820,7 +1813,7 @@ class B extends A {}
 
     // No errors in b.dart again.
     {
-      ResolvedUnitResult result = await driver.getResult(b);
+      ResolvedUnitResult result = await driver.getResultValid(b);
       expect(result.errors, isEmpty);
     }
   }
@@ -1833,8 +1826,8 @@ class C {
 ''', priority: true);
     await waitForIdleWithoutExceptions();
 
-    ResolvedUnitResult result = await driver.getResult(testFile);
-    expect(_getClassFieldType(result.unit, 'C', 'f'), 'int');
+    ResolvedUnitResult result = await driver.getResultValid(testFile);
+    _assertClassFieldType(result.unit!, 'C', 'f', 'int');
   }
 
   test_getResult_inferTypes_instanceMethod() async {
@@ -1848,9 +1841,9 @@ class B extends A {
 ''', priority: true);
     await waitForIdleWithoutExceptions();
 
-    ResolvedUnitResult result = await driver.getResult(testFile);
-    expect(_getClassMethodReturnType(result.unit, 'A', 'm'), 'int');
-    expect(_getClassMethodReturnType(result.unit, 'B', 'm'), 'int');
+    ResolvedUnitResult result = await driver.getResultValid(testFile);
+    _assertClassMethodReturnType(result.unit!, 'A', 'm', 'int');
+    _assertClassMethodReturnType(result.unit!, 'B', 'm', 'int');
   }
 
   test_getResult_invalid_annotation_functionAsConstructor() async {
@@ -1861,11 +1854,11 @@ fff() {}
 class C {}
 ''', priority: true);
 
-    ResolvedUnitResult result = await driver.getResult(testFile);
-    ClassDeclaration c = result.unit.declarations[1] as ClassDeclaration;
+    ResolvedUnitResult result = await driver.getResultValid(testFile);
+    ClassDeclaration c = result.unit!.declarations[1] as ClassDeclaration;
     Annotation a = c.metadata[0];
     expect(a.name.name, 'fff');
-    expect(a.name.staticElement, new TypeMatcher<FunctionElement>());
+    expect(a.name.staticElement, isFunctionElement);
   }
 
   test_getResult_invalidUri() async {
@@ -1888,7 +1881,7 @@ part ':[invalid uri]';
 ''';
     addTestFile(content);
 
-    ResolvedUnitResult result = await driver.getResult(testFile);
+    ResolvedUnitResult result = await driver.getResultValid(testFile);
     expect(result.path, testFile);
   }
 
@@ -1900,15 +1893,12 @@ export 'dart:math';
 ''';
     addTestFile(content, priority: true);
 
-    ResolvedUnitResult result = await driver.getResult(testFile);
+    ResolvedUnitResult result = await driver.getResultValid(testFile);
     expect(result.path, testFile);
     // Has only exports for valid URIs.
-    List<ExportElement> imports = resolutionMap
-        .elementDeclaredByCompilationUnit(result.unit)
-        .library
-        .exports;
+    List<ExportElement> imports = result.libraryElement.exports;
     expect(imports.map((import) {
-      return import.exportedLibrary?.source?.uri?.toString();
+      return import.exportedLibrary?.source.uri.toString();
     }), ['dart:async', null, 'dart:math']);
   }
 
@@ -1920,15 +1910,12 @@ import 'dart:math';
 ''';
     addTestFile(content, priority: true);
 
-    ResolvedUnitResult result = await driver.getResult(testFile);
+    ResolvedUnitResult result = await driver.getResultValid(testFile);
     expect(result.path, testFile);
     // Has only imports for valid URIs.
-    List<ImportElement> imports = resolutionMap
-        .elementDeclaredByCompilationUnit(result.unit)
-        .library
-        .imports;
+    List<ImportElement> imports = result.libraryElement.imports;
     expect(imports.map((import) {
-      return import.importedLibrary?.source?.uri?.toString();
+      return import.importedLibrary?.source.uri.toString();
     }), ['dart:async', null, 'dart:math', 'dart:core']);
   }
 
@@ -1944,7 +1931,20 @@ export '';
 part '';
 ''';
     addTestFile(content);
-    await driver.getResult(testFile);
+    await driver.getResultValid(testFile);
+  }
+
+  test_getResult_languageVersion() async {
+    var path = convertPath('/test/lib/test.dart');
+    newFile(path, content: r'''
+// @dart = 2.7
+class A{}
+''');
+
+    var result = await driver.getResultValid(path);
+    var languageVersion = result.unit!.languageVersionToken!;
+    expect(languageVersion.major, 2);
+    expect(languageVersion.minor, 7);
   }
 
   test_getResult_mix_fileAndPackageUris() async {
@@ -1978,7 +1978,7 @@ String z = "string";
     // package:my_pkg/c.dart's import is erroneous, causing y's reference to z
     // to be unresolved (and therefore have type dynamic).
     {
-      ResolvedUnitResult result = await driver.getResult(a);
+      ResolvedUnitResult result = await driver.getResultValid(a);
       expect(result.errors, isEmpty);
     }
 
@@ -1988,10 +1988,10 @@ String z = "string";
     // successfully imports file:///my_pkg/test/d.dart, causing y to have an
     // inferred type of String.
     {
-      ResolvedUnitResult result = await driver.getResult(b);
+      ResolvedUnitResult result = await driver.getResultValid(b);
       List<AnalysisError> errors = result.errors;
       expect(errors, hasLength(1));
-      expect(errors[0].errorCode, StaticTypeWarningCode.INVALID_ASSIGNMENT);
+      expect(errors[0].errorCode, CompileTimeErrorCode.INVALID_ASSIGNMENT);
     }
   }
 
@@ -2002,7 +2002,7 @@ V();
 var V;
 ''';
     addTestFile(content);
-    await driver.getResult(testFile);
+    await driver.getResultValid(testFile);
   }
 
   test_getResult_nameConflict_local_typeInference() async {
@@ -2016,23 +2016,23 @@ main() {
 }
 ''';
     addTestFile(content);
-    await driver.getResult(testFile);
+    await driver.getResultValid(testFile);
   }
 
+  @deprecated
   test_getResult_notAbsolutePath() async {
-    try {
+    expect(() async {
       await driver.getResult('not_absolute.dart');
-      fail('ArgumentError expected.');
-    } on ArgumentError {}
+    }, throwsArgumentError);
   }
 
   test_getResult_notDartFile() async {
     var path = convertPath('/test/lib/test.txt');
     newFile(path, content: 'class A {}');
 
-    ResolvedUnitResult result = await driver.getResult(path);
+    ResolvedUnitResult result = await driver.getResultValid(path);
     expect(result, isNotNull);
-    expect(result.unit.declaredElement.types.map((e) => e.name), ['A']);
+    expect(result.unit!.declaredElement!.classes.map((e) => e.name), ['A']);
   }
 
   test_getResult_recursiveFlatten() async {
@@ -2042,7 +2042,7 @@ class C<T> implements Future<C<T>> {}
 ''';
     addTestFile(content);
     // Should not throw exceptions.
-    await driver.getResult(testFile);
+    await driver.getResultValid(testFile);
   }
 
   test_getResult_sameFile_twoUris() async {
@@ -2064,19 +2064,19 @@ var VC = new A<double>();
     await waitForIdleWithoutExceptions();
 
     {
-      ResolvedUnitResult result = await driver.getResult(b);
-      expect(_getImportSource(result.unit, 0).uri.toString(),
+      ResolvedUnitResult result = await driver.getResultValid(b);
+      expect(_getImportSource(result.unit!, 0).uri.toString(),
           'package:test/a.dart');
-      expect(_getTopLevelVarType(result.unit, 'VB'), 'A<int>');
+      _assertTopLevelVarType(result.unit!, 'VB', 'A<int>');
     }
 
     {
-      ResolvedUnitResult result = await driver.getResult(c);
+      ResolvedUnitResult result = await driver.getResultValid(c);
       expect(
-        _getImportSource(result.unit, 0).uri,
-        toUri(convertPath('/test/lib/a.dart')),
+        _getImportSource(result.unit!, 0).uri,
+        toUri('/test/lib/a.dart'),
       );
-      expect(_getTopLevelVarType(result.unit, 'VC'), 'A<double>');
+      _assertTopLevelVarType(result.unit!, 'VC', 'A<double>');
     }
   }
 
@@ -2098,9 +2098,9 @@ var B1 = A1;
     await waitForIdleWithoutExceptions();
 
     {
-      ResolvedUnitResult result = await driver.getResult(a);
-      expect(_getTopLevelVarType(result.unit, 'A1'), 'int');
-      expect(_getTopLevelVarType(result.unit, 'A2'), 'int');
+      ResolvedUnitResult result = await driver.getResultValid(a);
+      _assertTopLevelVarType(result.unit!, 'A1', 'int');
+      _assertTopLevelVarType(result.unit!, 'A2', 'int');
     }
 
     // Update "a" so that "A1" is now "double".
@@ -2118,20 +2118,19 @@ var A2 = B1;
     driver.changeFile(a);
 
     {
-      ResolvedUnitResult result = await driver.getResult(a);
-      expect(_getTopLevelVarType(result.unit, 'A1'), 'double');
-      expect(_getTopLevelVarType(result.unit, 'A2'), 'double');
+      ResolvedUnitResult result = await driver.getResultValid(a);
+      _assertTopLevelVarType(result.unit!, 'A1', 'double');
+      _assertTopLevelVarType(result.unit!, 'A2', 'double');
     }
   }
 
   test_getResult_thenRemove() async {
     addTestFile('main() {}', priority: true);
 
-    Future<ResolvedUnitResult> resultFuture = driver.getResult(testFile);
+    var resultFuture = driver.getResultValid(testFile);
     driver.removeFile(testFile);
 
-    ResolvedUnitResult result = await resultFuture;
-    expect(result, isNotNull);
+    var result = await resultFuture;
     expect(result.path, testFile);
     expect(result.unit, isNotNull);
   }
@@ -2140,8 +2139,8 @@ var A2 = B1;
     String content = 'main() {}';
     addTestFile(content, priority: true);
 
-    Future<ResolvedUnitResult> future1 = driver.getResult(testFile);
-    Future<ResolvedUnitResult> future2 = driver.getResult(testFile);
+    var future1 = driver.getResultValid(testFile);
+    var future2 = driver.getResultValid(testFile);
 
     // Both futures complete, with the same result.
     ResolvedUnitResult result1 = await future1;
@@ -2151,127 +2150,93 @@ var A2 = B1;
     expect(result1.unit, isNotNull);
   }
 
+  @deprecated
+  test_getSourceKind_changedFile() async {
+    var a = convertPath('/test/lib/a.dart');
+    var b = convertPath('/test/lib/b.dart');
+
+    newFile(a, content: 'part of lib;');
+    newFile(b, content: r'''
+import 'a.dart';
+
+void f(A a) {}
+''');
+
+    // Ensure that [a.dart] library cycle is loaded.
+    // So, `a.dart` is in the library context.
+    await driver.getResultValid(a);
+
+    // Update the file, changing its API signature.
+    // Note that we don't call `changeFile`.
+    newFile(a, content: 'class A {}');
+
+    // Get the kind of the file.
+    // We have not called `changeFile(a)`, so we should not read the file.
+    // Moreover, doing this will create a new library cycle [a.dart].
+    // Library cycles are compared by their identity, so we would try to
+    // reload linked summary for [a.dart], and crash.
+    expect(await driver.getSourceKind(a), SourceKind.PART);
+
+    // We have not read `a.dart`, so `A` is still not declared.
+    expect((await driver.getResultValid(b)).errors, isNotEmpty);
+
+    // Notify the driver that the file was changed.
+    driver.changeFile(a);
+
+    // So, `class A {}` is declared now.
+    expect(await driver.getSourceKind(a), SourceKind.LIBRARY);
+    expect((await driver.getResultValid(b)).errors, isEmpty);
+  }
+
+  @deprecated
+  test_getSourceKind_changeFile() async {
+    var path = convertPath('/test/lib/test.dart');
+    expect(await driver.getSourceKind(path), SourceKind.LIBRARY);
+
+    newFile(path, content: 'part of foo;');
+    driver.changeFile(path);
+    expect(await driver.getSourceKind(path), SourceKind.PART);
+
+    newFile(path, content: '');
+    driver.changeFile(path);
+    expect(await driver.getSourceKind(path), SourceKind.LIBRARY);
+  }
+
+  @deprecated
+  test_getSourceKind_doesNotExist() async {
+    var path = convertPath('/test/lib/test.dart');
+    expect(await driver.getSourceKind(path), SourceKind.LIBRARY);
+  }
+
+  @deprecated
   test_getSourceKind_library() async {
     var path = convertPath('/test/lib/test.dart');
     newFile(path, content: 'class A {}');
     expect(await driver.getSourceKind(path), SourceKind.LIBRARY);
   }
 
+  @deprecated
   test_getSourceKind_notAbsolutePath() async {
-    try {
+    expect(() async {
       await driver.getSourceKind('not_absolute.dart');
-      fail('ArgumentError expected.');
-    } on ArgumentError {}
+    }, throwsArgumentError);
   }
 
+  @deprecated
   test_getSourceKind_notDartFile() async {
     var path = convertPath('/test/lib/test.txt');
     newFile(path, content: 'class A {}');
     expect(await driver.getSourceKind(path), isNull);
   }
 
+  @deprecated
   test_getSourceKind_part() async {
     var path = convertPath('/test/lib/test.dart');
     newFile(path, content: 'part of lib; class A {}');
     expect(await driver.getSourceKind(path), SourceKind.PART);
   }
 
-  test_getTopLevelNameDeclarations() async {
-    var a = convertPath('/test/lib/a.dart');
-    var b = convertPath('/test/lib/b.dart');
-    var c = convertPath('/test/lib/c.dart');
-    var d = convertPath('/test/lib/d.dart');
-
-    newFile(a, content: 'class A {}');
-    newFile(b, content: 'export "a.dart"; class B {}');
-    newFile(c, content: 'import "d.dart"; class C {}');
-    newFile(d, content: 'class D {}');
-
-    driver.addFile(a);
-    driver.addFile(b);
-    driver.addFile(c);
-    // Don't add d.dart, it is referenced implicitly.
-
-    _assertTopLevelDeclarations(
-        await driver.getTopLevelNameDeclarations('A'), [a, b], [false, true]);
-
-    _assertTopLevelDeclarations(
-        await driver.getTopLevelNameDeclarations('B'), [b], [false]);
-
-    _assertTopLevelDeclarations(
-        await driver.getTopLevelNameDeclarations('C'), [c], [false]);
-
-    _assertTopLevelDeclarations(
-        await driver.getTopLevelNameDeclarations('D'), [d], [false]);
-
-    _assertTopLevelDeclarations(
-        await driver.getTopLevelNameDeclarations('X'), [], []);
-  }
-
-  test_getTopLevelNameDeclarations_discover() async {
-    var t = convertPath('/test/lib/test.dart');
-    var a1 = convertPath('/aaa/lib/a1.dart');
-    var a2 = convertPath('/aaa/lib/src/a2.dart');
-    var b = convertPath('/bbb/lib/b.dart');
-    var c = convertPath('/ccc/lib/c.dart');
-
-    newFile(t, content: 'class T {}');
-    newFile(a1, content: 'class A1 {}');
-    newFile(a2, content: 'class A2 {}');
-    newFile(b, content: 'class B {}');
-    newFile(c, content: 'class C {}');
-
-    driver.addFile(t);
-    // Don't add a1.dart, a2.dart, or b.dart - they should be discovered.
-    // And c.dart is not in .packages, so should not be discovered.
-
-    _assertTopLevelDeclarations(
-        await driver.getTopLevelNameDeclarations('T'), [t], [false]);
-
-    _assertTopLevelDeclarations(
-        await driver.getTopLevelNameDeclarations('A1'), [a1], [false]);
-
-    _assertTopLevelDeclarations(
-        await driver.getTopLevelNameDeclarations('A2'), [a2], [false]);
-
-    _assertTopLevelDeclarations(
-        await driver.getTopLevelNameDeclarations('B'), [b], [false]);
-
-    _assertTopLevelDeclarations(
-        await driver.getTopLevelNameDeclarations('C'), [], []);
-  }
-
-  test_getTopLevelNameDeclarations_parts() async {
-    var a = convertPath('/test/lib/a.dart');
-    var b = convertPath('/test/lib/b.dart');
-    var c = convertPath('/test/lib/c.dart');
-
-    newFile(a, content: r'''
-library lib;
-part 'b.dart';
-part 'c.dart';
-class A {}
-''');
-    newFile(b, content: 'part of lib; class B {}');
-    newFile(c, content: 'part of lib; class C {}');
-
-    driver.addFile(a);
-    driver.addFile(b);
-    driver.addFile(c);
-
-    _assertTopLevelDeclarations(
-        await driver.getTopLevelNameDeclarations('A'), [a], [false]);
-
-    _assertTopLevelDeclarations(
-        await driver.getTopLevelNameDeclarations('B'), [a], [false]);
-
-    _assertTopLevelDeclarations(
-        await driver.getTopLevelNameDeclarations('C'), [a], [false]);
-
-    _assertTopLevelDeclarations(
-        await driver.getTopLevelNameDeclarations('X'), [], []);
-  }
-
+  @deprecated
   test_getUnitElement() async {
     String content = r'''
 foo(int p) {}
@@ -2282,28 +2247,83 @@ main() {
     addTestFile(content);
 
     UnitElementResult unitResult = await driver.getUnitElement(testFile);
-    expect(unitResult, isNotNull);
     CompilationUnitElement unitElement = unitResult.element;
     expect(unitElement.source.fullName, testFile);
     expect(unitElement.functions.map((c) => c.name),
         unorderedEquals(['foo', 'main']));
   }
 
-  test_getUnitElement_notAbsolutePath() async {
-    try {
-      await driver.getUnitElement('not_absolute.dart');
-      fail('ArgumentError expected.');
-    } on ArgumentError {}
+  test_getUnitElement2() async {
+    String content = r'''
+foo(int p) {}
+main() {
+  foo(42);
+}
+''';
+    addTestFile(content);
+
+    var unitResult = await driver.getUnitElement2(testFile);
+    unitResult as UnitElementResult;
+    CompilationUnitElement unitElement = unitResult.element;
+    expect(unitElement.source.fullName, testFile);
+    expect(unitElement.functions.map((c) => c.name),
+        unorderedEquals(['foo', 'main']));
   }
 
+  test_getUnitElement2_doesNotExist_afterResynthesized() async {
+    var a = convertPath('/test/lib/a.dart');
+    var b = convertPath('/test/lib/b.dart');
+
+    newFile(a, content: r'''
+import 'package:test/b.dart';
+''');
+
+    await driver.getResolvedLibrary2(a);
+    await driver.getUnitElement2(b);
+  }
+
+  test_getUnitElement2_invalidPath_notAbsolute() async {
+    var result = await driver.getUnitElement2('not_absolute.dart');
+    expect(result, isA<InvalidPathResult>());
+  }
+
+  test_getUnitElement2_notDart() async {
+    var path = convertPath('/test.txt');
+    newFile(path, content: 'class A {}');
+    var unitResult = await driver.getUnitElement2(path);
+    unitResult as UnitElementResult;
+    expect(unitResult.element.classes.map((e) => e.name), ['A']);
+  }
+
+  @deprecated
+  test_getUnitElement_doesNotExist_afterResynthesized() async {
+    var a = convertPath('/test/lib/a.dart');
+    var b = convertPath('/test/lib/b.dart');
+
+    newFile(a, content: r'''
+import 'package:test/b.dart';
+''');
+
+    await driver.getResolvedLibrary(a);
+    await driver.getUnitElement(b);
+  }
+
+  @deprecated
+  test_getUnitElement_notAbsolutePath() async {
+    expect(() async {
+      await driver.getUnitElement('not_absolute.dart');
+    }, throwsArgumentError);
+  }
+
+  @deprecated
   test_getUnitElement_notDart() async {
     var path = convertPath('/test.txt');
     newFile(path, content: 'class A {}');
     UnitElementResult unitResult = await driver.getUnitElement(path);
-    expect(unitResult, isNotNull);
     expect(unitResult.element.types.map((e) => e.name), ['A']);
   }
 
+  @deprecated
   test_getUnitElementSignature() async {
     var a = convertPath('/test/lib/a.dart');
 
@@ -2325,19 +2345,11 @@ main() {
   }
 
   test_hasFilesToAnalyze() async {
-    var a = convertPath('/test/lib/a.dart');
-    var b = convertPath('/test/lib/b.dart');
-    var c = convertPath('/test/lib/c.dart');
-
     // No files yet, nothing to analyze.
     expect(driver.hasFilesToAnalyze, isFalse);
 
     // Add a new file, it should be analyzed.
-    newFile(a, content: r'''
-import 'b.dart';
-main() {}
-''');
-    driver.addFile(a);
+    addTestFile('main() {}', priority: false);
     expect(driver.hasFilesToAnalyze, isTrue);
 
     // Wait for idle, nothing to do.
@@ -2345,27 +2357,21 @@ main() {}
     expect(driver.hasFilesToAnalyze, isFalse);
 
     // Ask to analyze the file, so there is a file to analyze.
-    Future<ResolvedUnitResult> future = driver.getResult(a);
+    var future = driver.getResultValid(testFile);
     expect(driver.hasFilesToAnalyze, isTrue);
 
     // Once analysis is done, there is nothing to analyze.
     await future;
     expect(driver.hasFilesToAnalyze, isFalse);
 
-    // Change a file that is not added, but referenced, so known.
-    driver.changeFile(b);
+    // Change a file, even if not added, it still might affect analysis.
+    driver.changeFile(convertPath('/not/added.dart'));
     expect(driver.hasFilesToAnalyze, isTrue);
     await waitForIdleWithoutExceptions();
     expect(driver.hasFilesToAnalyze, isFalse);
 
-    // Change a file that is not known - neither added, nor referenced.
-    driver.changeFile(c);
-    expect(driver.hasFilesToAnalyze, isFalse);
-    await waitForIdleWithoutExceptions();
-    expect(driver.hasFilesToAnalyze, isFalse);
-
     // Request of referenced names is not analysis of a file.
-    driver.getFilesReferencingName('X');
+    await driver.getFilesReferencingName('X');
     expect(driver.hasFilesToAnalyze, isFalse);
   }
 
@@ -2388,7 +2394,7 @@ var c = new C();
     driver.addFile(a);
     driver.addFile(b);
 
-    await driver.getResult(b);
+    await driver.getResultValid(b);
 
     // Modify the library, but don't notify the driver.
     // The driver should use the previous library content and elements.
@@ -2400,31 +2406,38 @@ class C {
 }
 ''');
 
-    var result = await driver.getResult(b);
-    var c = _getTopLevelVar(result.unit, 'c');
-    var typeC = c.declaredElement.type as InterfaceType;
+    var result = await driver.getResultValid(b);
+    var c = _getTopLevelVar(result.unit!, 'c');
+    var typeC = c.declaredElement!.type as InterfaceType;
     // The class C has an old field 'foo', not the new 'bar'.
     expect(typeC.element.getField('foo'), isNotNull);
     expect(typeC.element.getField('bar'), isNull);
   }
 
-  test_hermetic_overlayOnly_part() async {
+  test_importOfNonLibrary_part_afterLibrary() async {
     var a = convertPath('/test/lib/a.dart');
     var b = convertPath('/test/lib/b.dart');
-    contentOverlay[a] = r'''
-library a;
+    var c = convertPath('/test/lib/c.dart');
+
+    newFile(a, content: '''
+library my.lib;
+
 part 'b.dart';
+''');
+    newFile(b, content: '''
+part of my.lib;
+
 class A {}
-var b = new B();
-''';
-    contentOverlay[b] = 'part of a; class B {}';
+''');
+    newFile(c, content: '''
+import 'b.dart';
+''');
 
-    driver.addFile(a);
-    driver.addFile(b);
+    // This ensures that `a.dart` linked library is cached.
+    await driver.getResultValid(a);
 
-    ResolvedUnitResult result = await driver.getResult(a);
-    expect(result.errors, isEmpty);
-    expect(_getTopLevelVarType(result.unit, 'b'), 'B');
+    // Should not fail because of considering `b.dart` part as `a.dart` library.
+    await driver.getResultValid(c);
   }
 
   test_instantiateToBounds_invalid() async {
@@ -2436,41 +2449,6 @@ class B<T extends A<B>> {}
 
     driver.addFile(a);
     await waitForIdleWithoutExceptions();
-  }
-
-  test_isLibraryByUri() async {
-    var a1 = '/aaa/lib/a1.dart';
-    var a2 = '/aaa/lib/a2.dart';
-    var b1 = '/bbb/lib/b1.dart';
-    var b2 = '/bbb/lib/b2.dart';
-
-    String a1UriStr = 'package:aaa/a1.dart';
-    String a2UriStr = 'package:aaa/a2.dart';
-    String b1UriStr = 'package:bbb/b1.dart';
-    String b2UriStr = 'package:bbb/b2.dart';
-
-    newFile(a1, content: "part 'a2.dart';");
-    newFile(a2, content: "part of 'a1.dart';");
-    newFile(b1, content: "part 'b2.dart';");
-    newFile(b2, content: "part of 'b1.dart';");
-
-    // Build the store with the library.
-    var store =
-        await createAnalysisDriver().test.getSummaryStore(convertPath(a1));
-    expect(store.unlinkedMap.keys, contains(a1UriStr));
-    expect(store.unlinkedMap.keys, contains(a2UriStr));
-    expect(store.linkedMap.keys, contains(a1UriStr));
-
-    // Remove the stored files from the file system.
-    deleteFile(a1);
-    deleteFile(a2);
-
-    // We can ask isLibraryByUri() for both external and local units.
-    AnalysisDriver driver = createAnalysisDriver(externalSummaries: store);
-    expect(driver.isLibraryByUri(Uri.parse(a1UriStr)), isTrue);
-    expect(driver.isLibraryByUri(Uri.parse(a2UriStr)), isFalse);
-    expect(driver.isLibraryByUri(Uri.parse(b1UriStr)), isTrue);
-    expect(driver.isLibraryByUri(Uri.parse(b2UriStr)), isFalse);
   }
 
   test_isLibraryByUri_doesNotExist() async {
@@ -2558,11 +2536,11 @@ import 'b.dart';
   }
 
   test_missingDartLibrary_async() async {
-    var asyncPath = sdk.mapDartUri('dart:async').fullName;
+    var asyncPath = sdk.mapDartUri('dart:async')!.fullName;
     getFile(asyncPath).delete();
     addTestFile('class C {}');
 
-    ErrorsResult result = await driver.getErrors(testFile);
+    var result = await driver.getErrors2(testFile) as ErrorsResult;
     expect(result.errors, hasLength(1));
 
     AnalysisError error = result.errors[0];
@@ -2570,24 +2548,138 @@ import 'b.dart';
   }
 
   test_missingDartLibrary_core() async {
-    var corePath = sdk.mapDartUri('dart:core').fullName;
+    var corePath = sdk.mapDartUri('dart:core')!.fullName;
     getFile(corePath).delete();
     addTestFile('class C {}');
 
-    ErrorsResult result = await driver.getErrors(testFile);
+    var result = await driver.getErrors2(testFile) as ErrorsResult;
     expect(result.errors, hasLength(1));
 
     AnalysisError error = result.errors[0];
     expect(error.errorCode, CompileTimeErrorCode.MISSING_DART_LIBRARY);
   }
 
-  test_parseFile_notAbsolutePath() async {
-    try {
-      await driver.parseFile('not_absolute.dart');
-      fail('ArgumentError expected.');
-    } on ArgumentError {}
+  test_parseFile2_changedFile() async {
+    var a = convertPath('/test/lib/a.dart');
+    var b = convertPath('/test/lib/b.dart');
+
+    newFile(a, content: '');
+    newFile(b, content: r'''
+import 'a.dart';
+
+void f(A a) {}
+''');
+
+    // Ensure that [a.dart] library cycle is loaded.
+    // So, `a.dart` is in the library context.
+    await driver.getResultValid(a);
+
+    // Update the file, changing its API signature.
+    // Note that we don't call `changeFile`.
+    newFile(a, content: 'class A {}');
+
+    // Parse the file.
+    // We have not called `changeFile(a)`, so we should not read the file.
+    // Moreover, doing this will create a new library cycle [a.dart].
+    // Library cycles are compared by their identity, so we would try to
+    // reload linked summary for [a.dart], and crash.
+    {
+      var parseResult = await driver.parseFile2(a) as ParsedUnitResult;
+      expect(parseResult.unit.declarations, isEmpty);
+    }
+
+    // We have not read `a.dart`, so `A` is still not declared.
+    {
+      var bResult = await driver.getResultValid(b);
+      expect(bResult.errors, isNotEmpty);
+    }
+
+    // Notify the driver that the file was changed.
+    driver.changeFile(a);
+
+    // So, `class A {}` is declared now.
+    {
+      var parseResult = driver.parseFileSync2(a) as ParsedUnitResult;
+      expect(parseResult.unit.declarations, hasLength(1));
+    }
+    {
+      var bResult = await driver.getResultValid(b);
+      expect(bResult.errors, isEmpty);
+    }
   }
 
+  test_parseFile2_notAbsolutePath() async {
+    var result = await driver.parseFile2('not_absolute.dart');
+    expect(result, isA<InvalidPathResult>());
+  }
+
+  test_parseFile2_notDart() async {
+    var p = convertPath('/test/bin/a.txt');
+    newFile(p, content: 'class A {}');
+
+    var parseResult = await driver.parseFile2(p) as ParsedUnitResult;
+    expect(parseResult, isNotNull);
+    expect(driver.knownFiles, contains(p));
+  }
+
+  @deprecated
+  test_parseFile_changedFile() async {
+    var a = convertPath('/test/lib/a.dart');
+    var b = convertPath('/test/lib/b.dart');
+
+    newFile(a, content: '');
+    newFile(b, content: r'''
+import 'a.dart';
+
+void f(A a) {}
+''');
+
+    // Ensure that [a.dart] library cycle is loaded.
+    // So, `a.dart` is in the library context.
+    await driver.getResultValid(a);
+
+    // Update the file, changing its API signature.
+    // Note that we don't call `changeFile`.
+    newFile(a, content: 'class A {}');
+
+    // Parse the file.
+    // We have not called `changeFile(a)`, so we should not read the file.
+    // Moreover, doing this will create a new library cycle [a.dart].
+    // Library cycles are compared by their identity, so we would try to
+    // reload linked summary for [a.dart], and crash.
+    {
+      var parseResult = await driver.parseFile(a);
+      expect(parseResult.unit.declarations, isEmpty);
+    }
+
+    // We have not read `a.dart`, so `A` is still not declared.
+    {
+      var bResult = await driver.getResultValid(b);
+      expect(bResult.errors, isNotEmpty);
+    }
+
+    // Notify the driver that the file was changed.
+    driver.changeFile(a);
+
+    // So, `class A {}` is declared now.
+    {
+      var parseResult = driver.parseFileSync(a);
+      expect(parseResult.unit.declarations, hasLength(1));
+    }
+    {
+      var bResult = await driver.getResultValid(b);
+      expect(bResult.errors, isEmpty);
+    }
+  }
+
+  @deprecated
+  test_parseFile_notAbsolutePath() async {
+    expect(() async {
+      await driver.parseFile('not_absolute.dart');
+    }, throwsArgumentError);
+  }
+
+  @deprecated
   test_parseFile_notDart() async {
     var p = convertPath('/test/bin/a.txt');
     newFile(p, content: 'class A {}');
@@ -2597,30 +2689,267 @@ import 'b.dart';
     expect(driver.knownFiles, contains(p));
   }
 
-  test_parseFile_shouldRefresh() async {
-    var p = convertPath('/test/bin/a.dart');
+  test_parseFileSync2_changedFile() async {
+    var a = convertPath('/test/lib/a.dart');
+    var b = convertPath('/test/lib/b.dart');
 
+    newFile(a, content: '');
+    newFile(b, content: r'''
+import 'a.dart';
+
+void f(A a) {}
+''');
+
+    // Ensure that [a.dart] library cycle is loaded.
+    // So, `a.dart` is in the library context.
+    await driver.getResultValid(a);
+
+    // Update the file, changing its API signature.
+    // Note that we don't call `changeFile`.
+    newFile(a, content: 'class A {}');
+
+    // Parse the file.
+    // We have not called `changeFile(a)`, so we should not read the file.
+    // Moreover, doing this will create a new library cycle [a.dart].
+    // Library cycles are compared by their identity, so we would try to
+    // reload linked summary for [a.dart], and crash.
+    {
+      var parseResult = driver.parseFileSync2(a) as ParsedUnitResult;
+      expect(parseResult.unit.declarations, isEmpty);
+    }
+
+    // We have not read `a.dart`, so `A` is still not declared.
+    {
+      var bResult = await driver.getResultValid(b);
+      expect(bResult.errors, isNotEmpty);
+    }
+
+    // Notify the driver that the file was changed.
+    driver.changeFile(a);
+
+    // So, `class A {}` is declared now.
+    {
+      var parseResult = driver.parseFileSync2(a) as ParsedUnitResult;
+      expect(parseResult.unit.declarations, hasLength(1));
+    }
+    {
+      var bResult = await driver.getResultValid(b);
+      expect(bResult.errors, isEmpty);
+    }
+  }
+
+  test_parseFileSync2_doesNotReadImportedFiles() async {
+    var a = convertPath('/test/lib/a.dart');
+    var b = convertPath('/test/lib/b.dart');
+
+    newFile(a, content: '');
+    newFile(b, content: r'''
+import 'a.dart';
+''');
+
+    expect(driver.fsState.knownFilePaths, isEmpty);
+
+    // Don't read `a.dart` when parse.
+    driver.parseFileSync2(b);
+    expect(driver.fsState.knownFilePaths, unorderedEquals([b]));
+
+    // Still don't read `a.dart` when parse the second time.
+    driver.parseFileSync2(b);
+    expect(driver.fsState.knownFilePaths, unorderedEquals([b]));
+  }
+
+  test_parseFileSync2_doesNotReadPartedFiles() async {
+    var a = convertPath('/test/lib/a.dart');
+    var b = convertPath('/test/lib/b.dart');
+
+    newFile(a, content: r'''
+part of my;
+''');
+    newFile(b, content: r'''
+library my;
+part 'a.dart';
+''');
+
+    expect(driver.fsState.knownFilePaths, isEmpty);
+
+    // Don't read `a.dart` when parse.
+    driver.parseFileSync2(b);
+    expect(driver.fsState.knownFilePaths, unorderedEquals([b]));
+
+    // Still don't read `a.dart` when parse the second time.
+    driver.parseFileSync2(b);
+    expect(driver.fsState.knownFilePaths, unorderedEquals([b]));
+  }
+
+  test_parseFileSync2_languageVersion() async {
+    var path = convertPath('/test/lib/test.dart');
+
+    newFile(path, content: r'''
+// @dart = 2.7
+class A {}
+''');
+
+    var parseResult = driver.parseFileSync2(path) as ParsedUnitResult;
+    var languageVersion = parseResult.unit.languageVersionToken!;
+    expect(languageVersion.major, 2);
+    expect(languageVersion.minor, 7);
+  }
+
+  test_parseFileSync2_languageVersion_null() async {
+    var path = convertPath('/test/lib/test.dart');
+
+    newFile(path, content: r'''
+class A {}
+''');
+
+    var parseResult = driver.parseFileSync2(path) as ParsedUnitResult;
+    expect(parseResult.unit.languageVersionToken, isNull);
+  }
+
+  test_parseFileSync2_notAbsolutePath() {
+    var result = driver.parseFileSync2('not_absolute.dart');
+    expect(result, isA<InvalidPathResult>());
+  }
+
+  test_parseFileSync2_notDart() {
+    var p = convertPath('/test/bin/a.txt');
     newFile(p, content: 'class A {}');
-    driver.addFile(p);
 
-    // Get the result, so force the file reading.
-    await driver.getResult(p);
-
-    // Update the file.
-    newFile(p, content: 'class A2 {}');
-
-    ParsedUnitResult parseResult = await driver.parseFile(p);
-    var clazz = parseResult.unit.declarations[0] as ClassDeclaration;
-    expect(clazz.name.name, 'A2');
+    var parseResult = driver.parseFileSync2(p) as ParsedUnitResult;
+    expect(parseResult, isNotNull);
+    expect(driver.knownFiles, contains(p));
   }
 
-  test_parseFileSync_notAbsolutePath() async {
-    try {
+  @deprecated
+  test_parseFileSync_changedFile() async {
+    var a = convertPath('/test/lib/a.dart');
+    var b = convertPath('/test/lib/b.dart');
+
+    newFile(a, content: '');
+    newFile(b, content: r'''
+import 'a.dart';
+
+void f(A a) {}
+''');
+
+    // Ensure that [a.dart] library cycle is loaded.
+    // So, `a.dart` is in the library context.
+    await driver.getResultValid(a);
+
+    // Update the file, changing its API signature.
+    // Note that we don't call `changeFile`.
+    newFile(a, content: 'class A {}');
+
+    // Parse the file.
+    // We have not called `changeFile(a)`, so we should not read the file.
+    // Moreover, doing this will create a new library cycle [a.dart].
+    // Library cycles are compared by their identity, so we would try to
+    // reload linked summary for [a.dart], and crash.
+    {
+      var parseResult = driver.parseFileSync(a);
+      expect(parseResult.unit.declarations, isEmpty);
+    }
+
+    // We have not read `a.dart`, so `A` is still not declared.
+    {
+      var bResult = await driver.getResultValid(b);
+      expect(bResult.errors, isNotEmpty);
+    }
+
+    // Notify the driver that the file was changed.
+    driver.changeFile(a);
+
+    // So, `class A {}` is declared now.
+    {
+      var parseResult = driver.parseFileSync(a);
+      expect(parseResult.unit.declarations, hasLength(1));
+    }
+    {
+      var bResult = await driver.getResultValid(b);
+      expect(bResult.errors, isEmpty);
+    }
+  }
+
+  @deprecated
+  test_parseFileSync_doesNotReadImportedFiles() async {
+    var a = convertPath('/test/lib/a.dart');
+    var b = convertPath('/test/lib/b.dart');
+
+    newFile(a, content: '');
+    newFile(b, content: r'''
+import 'a.dart';
+''');
+
+    expect(driver.fsState.knownFilePaths, isEmpty);
+
+    // Don't read `a.dart` when parse.
+    driver.parseFileSync(b);
+    expect(driver.fsState.knownFilePaths, unorderedEquals([b]));
+
+    // Still don't read `a.dart` when parse the second time.
+    driver.parseFileSync(b);
+    expect(driver.fsState.knownFilePaths, unorderedEquals([b]));
+  }
+
+  @deprecated
+  test_parseFileSync_doesNotReadPartedFiles() async {
+    var a = convertPath('/test/lib/a.dart');
+    var b = convertPath('/test/lib/b.dart');
+
+    newFile(a, content: r'''
+part of my;
+''');
+    newFile(b, content: r'''
+library my;
+part 'a.dart';
+''');
+
+    expect(driver.fsState.knownFilePaths, isEmpty);
+
+    // Don't read `a.dart` when parse.
+    driver.parseFileSync(b);
+    expect(driver.fsState.knownFilePaths, unorderedEquals([b]));
+
+    // Still don't read `a.dart` when parse the second time.
+    driver.parseFileSync(b);
+    expect(driver.fsState.knownFilePaths, unorderedEquals([b]));
+  }
+
+  @deprecated
+  test_parseFileSync_languageVersion() async {
+    var path = convertPath('/test/lib/test.dart');
+
+    newFile(path, content: r'''
+// @dart = 2.7
+class A {}
+''');
+
+    var parseResult = driver.parseFileSync(path);
+    var languageVersion = parseResult.unit.languageVersionToken!;
+    expect(languageVersion.major, 2);
+    expect(languageVersion.minor, 7);
+  }
+
+  @deprecated
+  test_parseFileSync_languageVersion_null() async {
+    var path = convertPath('/test/lib/test.dart');
+
+    newFile(path, content: r'''
+class A {}
+''');
+
+    var parseResult = driver.parseFileSync(path);
+    expect(parseResult.unit.languageVersionToken, isNull);
+  }
+
+  @deprecated
+  test_parseFileSync_notAbsolutePath() {
+    expect(() {
       driver.parseFileSync('not_absolute.dart');
-      fail('ArgumentError expected.');
-    } on ArgumentError {}
+    }, throwsArgumentError);
   }
 
+  @deprecated
   test_parseFileSync_notDart() {
     var p = convertPath('/test/bin/a.txt');
     newFile(p, content: 'class A {}');
@@ -2628,23 +2957,6 @@ import 'b.dart';
     ParsedUnitResult parseResult = driver.parseFileSync(p);
     expect(parseResult, isNotNull);
     expect(driver.knownFiles, contains(p));
-  }
-
-  test_parseFileSync_shouldRefresh() async {
-    var p = convertPath('/test/bin/a.dart');
-
-    newFile(p, content: 'class A {}');
-    driver.addFile(p);
-
-    // Get the result, so force the file reading.
-    await driver.getResult(p);
-
-    // Update the file.
-    newFile(p, content: 'class A2 {}');
-
-    ParsedUnitResult parseResult = driver.parseFileSync(p);
-    var clazz = parseResult.unit.declarations[0] as ClassDeclaration;
-    expect(clazz.name.name, 'A2');
   }
 
   test_part_getErrors_afterLibrary() async {
@@ -2672,13 +2984,13 @@ var b = new B();
 
     // Process a.dart so that we know that it's a library for c.dart later.
     {
-      ErrorsResult result = await driver.getErrors(a);
+      var result = await driver.getErrors2(a) as ErrorsResult;
       expect(result.errors, isEmpty);
     }
 
     // c.dart does not have errors in the context of a.dart
     {
-      ErrorsResult result = await driver.getErrors(c);
+      var result = await driver.getErrors2(c) as ErrorsResult;
       expect(result.errors, isEmpty);
     }
   }
@@ -2708,7 +3020,7 @@ var b = new B();
 
     // c.dart is resolve in the context of a.dart, so have no errors
     {
-      ErrorsResult result = await driver.getErrors(c);
+      var result = await driver.getErrors2(c) as ErrorsResult;
       expect(result.errors, isEmpty);
     }
   }
@@ -2738,17 +3050,17 @@ var b = new B();
 
     // Process a.dart so that we know that it's a library for c.dart later.
     {
-      ResolvedUnitResult result = await driver.getResult(a);
+      ResolvedUnitResult result = await driver.getResultValid(a);
       expect(result.errors, isEmpty);
-      expect(_getTopLevelVarType(result.unit, 'c'), 'C');
+      _assertTopLevelVarType(result.unit!, 'c', 'C');
     }
 
     // Now c.dart can be resolved without errors in the context of a.dart
     {
-      ResolvedUnitResult result = await driver.getResult(c);
+      ResolvedUnitResult result = await driver.getResultValid(c);
       expect(result.errors, isEmpty);
-      expect(_getTopLevelVarType(result.unit, 'a'), 'A');
-      expect(_getTopLevelVarType(result.unit, 'b'), 'B');
+      _assertTopLevelVarType(result.unit!, 'a', 'A');
+      _assertTopLevelVarType(result.unit!, 'b', 'B');
     }
   }
 
@@ -2777,10 +3089,36 @@ var b = new B();
 
     // b.dart will be analyzed after a.dart is analyzed.
     // So, A and B references are resolved.
-    ResolvedUnitResult result = await driver.getResult(c);
+    ResolvedUnitResult result = await driver.getResultValid(c);
     expect(result.errors, isEmpty);
-    expect(_getTopLevelVarType(result.unit, 'a'), 'A');
-    expect(_getTopLevelVarType(result.unit, 'b'), 'B');
+    _assertTopLevelVarType(result.unit!, 'a', 'A');
+    _assertTopLevelVarType(result.unit!, 'b', 'B');
+  }
+
+  test_part_getResult_changePart_invalidatesLibraryCycle() async {
+    var a = convertPath('/test/lib/a.dart');
+    var b = convertPath('/test/lib/b.dart');
+    newFile(a, content: r'''
+import 'dart:async';
+part 'b.dart';
+''');
+    driver.addFile(a);
+
+    // Analyze the library without the part.
+    await driver.getResultValid(a);
+
+    // Create the part file.
+    // This should invalidate library file state (specifically the library
+    // cycle), so that we can re-link the library, and get new dependencies.
+    newFile(b, content: r'''
+part of 'a.dart';
+Future<int> f;
+''');
+    driver.changeFile(b);
+
+    // This should not crash.
+    var result = await driver.getResultValid(b);
+    expect(result.errors, isEmpty);
   }
 
   test_part_getResult_noLibrary() async {
@@ -2796,11 +3134,114 @@ var b = new B();
 
     // There is no library which c.dart is a part of, so it has unresolved
     // A and B references.
-    ResolvedUnitResult result = await driver.getResult(c);
+    ResolvedUnitResult result = await driver.getResultValid(c);
     expect(result.errors, isNotEmpty);
     expect(result.unit, isNotNull);
   }
 
+  test_part_getUnitElement2_afterLibrary() async {
+    var a = convertPath('/test/lib/a.dart');
+    var b = convertPath('/test/lib/b.dart');
+    var c = convertPath('/test/lib/c.dart');
+    newFile(a, content: r'''
+library a;
+import 'b.dart';
+part 'c.dart';
+class A {}
+var c = new C();
+''');
+    newFile(b, content: 'class B {}');
+    newFile(c, content: r'''
+part of a;
+class C {}
+var a = new A();
+var b = new B();
+''');
+
+    driver.addFile(a);
+    driver.addFile(b);
+    driver.addFile(c);
+
+    // Process a.dart so that we know that it's a library for c.dart later.
+    await driver.getResultValid(a);
+
+    // c.dart is resolve in the context of a.dart, knows 'A' and 'B'.
+    {
+      var result = await driver.getUnitElement2(c);
+      result as UnitElementResult;
+      var partUnit = result.element;
+
+      assertType(partUnit.topLevelVariables[0].type, 'A');
+      assertType(partUnit.topLevelVariables[1].type, 'B');
+
+      var libraryUnit = partUnit.library.definingCompilationUnit;
+      assertType(libraryUnit.topLevelVariables[0].type, 'C');
+    }
+  }
+
+  test_part_getUnitElement2_beforeLibrary() async {
+    var a = convertPath('/test/lib/a.dart');
+    var b = convertPath('/test/lib/b.dart');
+    var c = convertPath('/test/lib/c.dart');
+    newFile(a, content: r'''
+library a;
+import 'b.dart';
+part 'c.dart';
+class A {}
+var c = new C();
+''');
+    newFile(b, content: 'class B {}');
+    newFile(c, content: r'''
+part of a;
+class C {}
+var a = new A();
+var b = new B();
+''');
+
+    driver.addFile(a);
+    driver.addFile(b);
+    driver.addFile(c);
+
+    // c.dart is resolve in the context of a.dart, knows 'A' and 'B'.
+    {
+      var result = await driver.getUnitElement2(c);
+      result as UnitElementResult;
+      var partUnit = result.element;
+
+      assertType(partUnit.topLevelVariables[0].type, 'A');
+      assertType(partUnit.topLevelVariables[1].type, 'B');
+
+      var libraryUnit = partUnit.library.definingCompilationUnit;
+      assertType(libraryUnit.topLevelVariables[0].type, 'C');
+    }
+  }
+
+  test_part_getUnitElement2_noLibrary() async {
+    var c = convertPath('/test/lib/c.dart');
+    newFile(c, content: r'''
+part of a;
+var a = new A();
+var b = new B();
+''');
+
+    driver.addFile(c);
+
+    // We don't know the library of c.dart, but we should get a result.
+    // The types "A" and "B" are unresolved.
+    {
+      var result = await driver.getUnitElement2(c);
+      result as UnitElementResult;
+      var partUnit = result.element;
+
+      expect(partUnit.topLevelVariables[0].name, 'a');
+      assertType(partUnit.topLevelVariables[0].type, 'dynamic');
+
+      expect(partUnit.topLevelVariables[1].name, 'b');
+      assertType(partUnit.topLevelVariables[1].type, 'dynamic');
+    }
+  }
+
+  @deprecated
   test_part_getUnitElement_afterLibrary() async {
     var a = convertPath('/test/lib/a.dart');
     var b = convertPath('/test/lib/b.dart');
@@ -2825,21 +3266,22 @@ var b = new B();
     driver.addFile(c);
 
     // Process a.dart so that we know that it's a library for c.dart later.
-    await driver.getResult(a);
+    await driver.getResultValid(a);
 
     // c.dart is resolve in the context of a.dart, knows 'A' and 'B'.
     {
       UnitElementResult result = await driver.getUnitElement(c);
       var partUnit = result.element;
 
-      expect(partUnit.topLevelVariables[0].type.name, 'A');
-      expect(partUnit.topLevelVariables[1].type.name, 'B');
+      assertType(partUnit.topLevelVariables[0].type, 'A');
+      assertType(partUnit.topLevelVariables[1].type, 'B');
 
       var libraryUnit = partUnit.library.definingCompilationUnit;
-      expect(libraryUnit.topLevelVariables[0].type.name, 'C');
+      assertType(libraryUnit.topLevelVariables[0].type, 'C');
     }
   }
 
+  @deprecated
   test_part_getUnitElement_beforeLibrary() async {
     var a = convertPath('/test/lib/a.dart');
     var b = convertPath('/test/lib/b.dart');
@@ -2868,14 +3310,15 @@ var b = new B();
       UnitElementResult result = await driver.getUnitElement(c);
       var partUnit = result.element;
 
-      expect(partUnit.topLevelVariables[0].type.name, 'A');
-      expect(partUnit.topLevelVariables[1].type.name, 'B');
+      assertType(partUnit.topLevelVariables[0].type, 'A');
+      assertType(partUnit.topLevelVariables[1].type, 'B');
 
       var libraryUnit = partUnit.library.definingCompilationUnit;
-      expect(libraryUnit.topLevelVariables[0].type.name, 'C');
+      assertType(libraryUnit.topLevelVariables[0].type, 'C');
     }
   }
 
+  @deprecated
   test_part_getUnitElement_noLibrary() async {
     var c = convertPath('/test/lib/c.dart');
     newFile(c, content: r'''
@@ -2893,13 +3336,14 @@ var b = new B();
       var partUnit = result.element;
 
       expect(partUnit.topLevelVariables[0].name, 'a');
-      expect(partUnit.topLevelVariables[0].type.name, 'dynamic');
+      assertType(partUnit.topLevelVariables[0].type, 'dynamic');
 
       expect(partUnit.topLevelVariables[1].name, 'b');
-      expect(partUnit.topLevelVariables[1].type.name, 'dynamic');
+      assertType(partUnit.topLevelVariables[1].type, 'dynamic');
     }
   }
 
+  @deprecated
   test_part_getUnitElementSignature() async {
     var a = convertPath('/test/lib/a.dart');
     var b = convertPath('/test/lib/b.dart');
@@ -2927,7 +3371,7 @@ var b = new B();
     String signatureBefore = await driver.getUnitElementSignature(c);
 
     // Process a.dart so that we know that it's a library for c.dart later.
-    await driver.getResult(a);
+    await driver.getResultValid(a);
 
     // The before and after signatures must be the same.
     String signatureAfter = await driver.getUnitElementSignature(c);
@@ -3091,11 +3535,11 @@ var A = B;
     expect(allResults, hasLength(2));
     {
       ResolvedUnitResult ar = allResults.firstWhere((r) => r.path == a);
-      expect(_getTopLevelVarType(ar.unit, 'A'), 'int');
+      _assertTopLevelVarType(ar.unit!, 'A', 'int');
     }
     {
       ResolvedUnitResult br = allResults.firstWhere((r) => r.path == b);
-      expect(_getTopLevelVarType(br.unit, 'B'), 'int');
+      _assertTopLevelVarType(br.unit!, 'B', 'int');
     }
     allResults.clear();
 
@@ -3111,7 +3555,7 @@ var A = B;
     expect(allResults, hasLength(1));
     {
       ResolvedUnitResult ar = allResults.firstWhere((r) => r.path == a);
-      expect(_getTopLevelVarType(ar.unit, 'A'), 'double');
+      _assertTopLevelVarType(ar.unit!, 'A', 'double');
     }
   }
 
@@ -3158,10 +3602,58 @@ var A = B;
   }
 
   test_removeFile_notAbsolutePath() async {
-    try {
+    expect(() {
       driver.removeFile('not_absolute.dart');
-      fail('ArgumentError expected.');
-    } on ArgumentError {}
+    }, throwsArgumentError);
+  }
+
+  test_resetUriResolution() async {
+    var a = convertPath('/aaa/lib/a.dart');
+    var b = convertPath('/bbb/lib/b.dart');
+
+    newFile(a, content: '');
+    newFile(b, content: r'''
+import 'package:aaa/a.dart';
+A a;
+''');
+
+    // Subscribe for errors.
+    driver.addFile(b);
+
+    // `package:aaa/a.dart` does not define class `A`.
+    // So, there is an error in `b.dart`.
+    await waitForIdleWithoutExceptions();
+    expect(allResults, hasLength(1));
+    expect(allResults[0].path, b);
+    expect(allResults[0].errors, hasLength(2));
+
+    // Create generated file for `package:aaa/a.dart`.
+    var aUri = Uri.parse('package:aaa/a.dart');
+    var aGeneratedPath = convertPath('/generated/aaa/lib/a2.dart');
+    var aGeneratedFile = newFile(aGeneratedPath, content: 'class A {}');
+
+    // Configure UriResolver to provide this generated file.
+    generatedUriResolver.resolveAbsoluteFunction =
+        (uri) => aGeneratedFile.createSource(uri);
+    generatedUriResolver.restoreAbsoluteFunction = (source) {
+      String path = source.fullName;
+      if (path == a || path == aGeneratedPath) {
+        return aUri;
+      } else {
+        return null;
+      }
+    };
+
+    // Reset URI resolution, and analyze.
+    allResults.clear();
+    driver.resetUriResolution();
+
+    // `package:aaa/a.dart` is resolved differently now, so the new list of
+    // errors for `b.dart` (the empty list) is reported.
+    await waitForIdleWithoutExceptions();
+    expect(allResults, hasLength(1));
+    expect(allResults[0].path, b);
+    expect(allResults[0].errors, isEmpty);
   }
 
   test_results_order() async {
@@ -3208,7 +3700,7 @@ class F extends X {}
     driver.changeFile(b);
     await waitForIdleWithoutExceptions();
 
-    List<String> analyzedPaths = allResults.map((r) => r.path).toList();
+    List<String> analyzedPaths = allResults.map((r) => r.path!).toList();
 
     // The changed file must be the first.
     expect(analyzedPaths[0], b);
@@ -3250,7 +3742,7 @@ class F extends X {}
     driver.changeFile(a);
     await waitForIdleWithoutExceptions();
 
-    List<String> analyzedPaths = allResults.map((r) => r.path).toList();
+    List<String> analyzedPaths = allResults.map((r) => r.path!).toList();
 
     // The changed files must be the first.
     expect(analyzedPaths[0], a);
@@ -3275,9 +3767,9 @@ class F extends X {}
     expect(result.unit, isNotNull);
     expect(result.errors, hasLength(0));
 
-    var f = result.unit.declarations[0] as FunctionDeclaration;
-    expect(f.name.staticType.toString(), '() → int');
-    expect(f.returnType.type.toString(), 'int');
+    var f = result.unit!.declarations[0] as FunctionDeclaration;
+    assertType(f.declaredElement!.type, 'int Function()');
+    assertType(f.returnType!.typeOrThrow, 'int');
   }
 
   test_results_priorityFirst() async {
@@ -3313,6 +3805,28 @@ class F extends X {}
     expect(result.content, isNull);
     expect(result.unit, isNull);
     expect(result.errors, hasLength(0));
+  }
+
+  test_results_removeFile_changeFile() async {
+    var a = convertPath('/test/lib/a.dart');
+    var b = convertPath('/test/lib/b.dart');
+
+    newFile(a, content: r'''
+var v = 0;
+''');
+    driver.addFile(a);
+
+    await waitForIdleWithoutExceptions();
+    expect(allResults.singleWhere((r) => r.path == a).errors, hasLength(0));
+    allResults.clear();
+
+    newFile(a, content: r'''
+var v = 0
+''');
+    driver.removeFile(b);
+    driver.changeFile(a);
+    await waitForIdleWithoutExceptions();
+    expect(allResults.singleWhere((r) => r.path == a).errors, hasLength(1));
   }
 
   test_results_skipNotAffected() async {
@@ -3366,27 +3880,33 @@ class F extends X {}
     await scheduler.waitForIdle();
 
     if (allExceptions.isNotEmpty) {
-      var buffer = new StringBuffer();
+      var buffer = StringBuffer();
       for (var exception in allExceptions) {
-        buffer.writeln('Path: ${exception.path}');
+        buffer.writeln('Path: ${exception.filePath}');
         buffer.writeln('Exception: ${exception.exception}');
       }
       fail('Unexpected exceptions:\n$buffer');
     }
   }
 
-  void _assertTopLevelDeclarations(
-      List<TopLevelDeclarationInSource> declarations,
-      List<String> expectedFiles,
-      List<bool> expectedIsExported) {
-    expect(expectedFiles, hasLength(expectedIsExported.length));
-    for (int i = 0; i < expectedFiles.length; i++) {
-      expect(declarations,
-          contains(predicate((TopLevelDeclarationInSource declaration) {
-        return declaration.source.fullName == expectedFiles[i] &&
-            declaration.isExported == expectedIsExported[i];
-      })));
-    }
+  void _assertClassFieldType(CompilationUnit unit, String className,
+      String fieldName, String expected) {
+    var node = _getClassField(unit, className, fieldName);
+    var type = node.declaredElement!.type;
+    assertType(type, expected);
+  }
+
+  void _assertClassMethodReturnType(CompilationUnit unit, String className,
+      String fieldName, String expected) {
+    var node = _getClassMethod(unit, className, fieldName);
+    var type = node.declaredElement!.returnType;
+    assertType(type, expected);
+  }
+
+  void _assertTopLevelVarType(
+      CompilationUnit unit, String name, String expected) {
+    VariableDeclaration variable = _getTopLevelVar(unit, name);
+    assertType(variable.declaredElement!.type, expected);
   }
 
   void _expectCircularityError(EvaluationResultImpl evaluationResult) {
@@ -3423,15 +3943,6 @@ class F extends X {}
     fail('Cannot find the field $fieldName in the class $className in\n$unit');
   }
 
-  String _getClassFieldType(
-      CompilationUnit unit, String className, String fieldName) {
-    return resolutionMap
-        .elementDeclaredByVariableDeclaration(
-            _getClassField(unit, className, fieldName))
-        .type
-        .toString();
-  }
-
   MethodDeclaration _getClassMethod(
       CompilationUnit unit, String className, String methodName) {
     ClassDeclaration classDeclaration = _getClass(unit, className);
@@ -3445,23 +3956,13 @@ class F extends X {}
         '$unit');
   }
 
-  String _getClassMethodReturnType(
-      CompilationUnit unit, String className, String fieldName) {
-    return resolutionMap
-        .elementDeclaredByMethodDeclaration(
-            _getClassMethod(unit, className, fieldName))
-        .type
-        .returnType
-        .toString();
-  }
-
   ImportElement _getImportElement(CompilationUnit unit, int directiveIndex) {
     var import = unit.directives[directiveIndex] as ImportDirective;
-    return import.element as ImportElement;
+    return import.element!;
   }
 
   Source _getImportSource(CompilationUnit unit, int directiveIndex) {
-    return _getImportElement(unit, directiveIndex).importedLibrary.source;
+    return _getImportElement(unit, directiveIndex).importedLibrary!.source;
   }
 
   VariableDeclaration _getTopLevelVar(CompilationUnit unit, String name) {
@@ -3476,103 +3977,6 @@ class F extends X {}
     }
     fail('Cannot find the top-level variable $name in\n$unit');
   }
-
-  String _getTopLevelVarType(CompilationUnit unit, String name) {
-    VariableDeclaration variable = _getTopLevelVar(unit, name);
-    return resolutionMap
-        .elementDeclaredByVariableDeclaration(variable)
-        .type
-        .toString();
-  }
-}
-
-@reflectiveTest
-class CacheAllAnalysisDriverTest extends BaseAnalysisDriverTest {
-  bool get disableChangesAndCacheAllResults => true;
-
-  test_addFile() async {
-    var a = convertPath('/test/lib/a.dart');
-    var b = convertPath('/test/lib/b.dart');
-    driver.addFile(a);
-    driver.addFile(b);
-  }
-
-  test_changeFile() async {
-    var path = convertPath('/test.dart');
-    expect(() {
-      driver.changeFile(path);
-    }, throwsStateError);
-  }
-
-  test_getResult_libraryUnits() async {
-    var lib = convertPath('/lib.dart');
-    var part1 = convertPath('/part1.dart');
-    var part2 = convertPath('/part2.dart');
-
-    newFile(lib, content: r'''
-library test;
-part 'part1.dart';
-part 'part2.dart';
-''');
-    newFile(part1, content: 'part of test; class A {}');
-    newFile(part2, content: 'part of test; class B {}');
-
-    driver.addFile(lib);
-    driver.addFile(part1);
-    driver.addFile(part2);
-
-    // No analyzed libraries initially.
-    expect(driver.test.numOfAnalyzedLibraries, 0);
-
-    ResolvedUnitResult libResult = await driver.getResult(lib);
-    ResolvedUnitResult partResult1 = await driver.getResult(part1);
-    ResolvedUnitResult partResult2 = await driver.getResult(part2);
-
-    // Just one library was analyzed, results for parts are cached.
-    expect(driver.test.numOfAnalyzedLibraries, 1);
-
-    expect(libResult.path, lib);
-    expect(partResult1.path, part1);
-    expect(partResult2.path, part2);
-
-    expect(libResult.unit, isNotNull);
-    expect(partResult1.unit, isNotNull);
-    expect(partResult2.unit, isNotNull);
-
-    // The parts uses the same resynthesized library element.
-    var libLibrary = libResult.unit.declaredElement.library;
-    var partLibrary1 = partResult1.unit.declaredElement.library;
-    var partLibrary2 = partResult2.unit.declaredElement.library;
-    expect(partLibrary1, same(libLibrary));
-    expect(partLibrary2, same(libLibrary));
-  }
-
-  test_getResult_singleFile() async {
-    var path = convertPath('/test.dart');
-    newFile(path, content: 'main() {}');
-    driver.addFile(path);
-
-    ResolvedUnitResult result1 = await driver.getResult(path);
-    expect(driver.test.numOfAnalyzedLibraries, 1);
-    var unit1 = result1.unit;
-    var unitElement1 = unit1.declaredElement;
-    expect(result1.path, path);
-    expect(unit1, isNotNull);
-    expect(unitElement1, isNotNull);
-
-    ResolvedUnitResult result2 = await driver.getResult(path);
-    expect(driver.test.numOfAnalyzedLibraries, 1);
-    expect(result2.path, path);
-    expect(result2.unit, same(unit1));
-    expect(result2.unit.declaredElement, same(unitElement1));
-  }
-
-  test_removeFile() async {
-    var path = convertPath('/test.dart');
-    expect(() {
-      driver.removeFile(path);
-    }, throwsStateError);
-  }
 }
 
 class _SourceMock implements Source {
@@ -3586,6 +3990,16 @@ class _SourceMock implements Source {
 
   @override
   noSuchMethod(Invocation invocation) {
-    throw new StateError('Unexpected invocation of ${invocation.memberName}');
+    throw StateError('Unexpected invocation of ${invocation.memberName}');
+  }
+}
+
+extension on AnalysisDriver {
+  FileResult getFileSyncValid(String path) {
+    return getFileSync2(path) as FileResult;
+  }
+
+  Future<ResolvedUnitResult> getResultValid(String path) async {
+    return await getResult2(path) as ResolvedUnitResult;
   }
 }

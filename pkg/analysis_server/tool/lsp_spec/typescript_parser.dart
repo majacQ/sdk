@@ -4,26 +4,41 @@
 
 import 'dart:math';
 
-import 'package:analysis_server/src/services/correction/strings.dart'
-    show capitalize;
+import 'package:analysis_server/src/utilities/strings.dart' show capitalize;
 
 import 'codegen_dart.dart';
 import 'typescript.dart';
-
-final _validIdentifierCharacters = RegExp('[a-zA-Z0-9_]');
-
-bool isNullType(TypeBase t) => t is Type && t.name == 'null';
-
-bool isUndefinedType(TypeBase t) => t is Type && t.name == 'undefined';
 
 /// A fabricated field name for indexers in case they result in generation
 /// of type names for inline types.
 const fieldNameForIndexer = 'indexer';
 
-List<AstNode> parseFile(String input) {
-  final scanner = new Scanner(input);
+final _keywords = const <String, TokenType>{
+  'class': TokenType.CLASS_KEYWORD,
+  'const': TokenType.CONST_KEYWORD,
+  'enum': TokenType.ENUM_KEYWORD,
+  'export': TokenType.EXPORT_KEYWORD,
+  'extends': TokenType.EXTENDS_KEYWORD,
+  'interface': TokenType.INTERFACE_KEYWORD,
+  'namespace': TokenType.NAMESPACE_KEYWORD,
+  'readonly': TokenType.READONLY_KEYWORD,
+};
+
+final _validIdentifierCharacters = RegExp('[a-zA-Z0-9_]');
+
+bool isAnyType(TypeBase t) =>
+    t is Type && (t.name == 'any' || t.name == 'object');
+
+bool isLiteralType(TypeBase t) => t is LiteralType;
+
+bool isNullType(TypeBase t) => t is Type && t.name == 'null';
+
+bool isUndefinedType(TypeBase t) => t is Type && t.name == 'undefined';
+
+List<AstNode> parseString(String input) {
+  final scanner = Scanner(input);
   final tokens = scanner.scan();
-  final parser = new Parser(tokens);
+  final parser = Parser(tokens);
   return parser.parse();
 }
 
@@ -31,9 +46,9 @@ TypeBase typeOfLiteral(TokenType tokenType) {
   final typeName = tokenType == TokenType.STRING
       ? 'string'
       : tokenType == TokenType.NUMBER
-          ? 'number'
+          ? 'int' // all literal numeric values in LSP spec are ints
           : throw 'Unknown literal type $tokenType';
-  return new Type.identifier(typeName);
+  return Type.identifier(typeName);
 }
 
 class ArrayType extends TypeBase {
@@ -47,27 +62,14 @@ class ArrayType extends TypeBase {
   String get typeArgsString => '<${elementType.dartTypeWithTypeArgs}>';
 }
 
-class MapType extends TypeBase {
-  final TypeBase indexType;
-  final TypeBase valueType;
-
-  MapType(this.indexType, this.valueType);
-
-  @override
-  String get dartType => 'Map';
-  @override
-  String get typeArgsString =>
-      '<${indexType.dartTypeWithTypeArgs}, ${valueType.dartTypeWithTypeArgs}>';
-}
-
-class AstNode {
-  final Comment commentNode;
+abstract class AstNode {
+  final Comment? commentNode;
   final bool isDeprecated;
   AstNode(this.commentNode)
-      : isDeprecated = commentNode?.text?.contains('@deprecated') ?? false;
-  String get commentText => commentNode?.text;
+      : isDeprecated = commentNode?.text.contains('@deprecated') ?? false;
+  String? get commentText => commentNode?.text;
 
-  String get name => null;
+  String get name;
 }
 
 class Comment extends AstNode {
@@ -77,14 +79,19 @@ class Comment extends AstNode {
   Comment(this.token)
       : text = cleanComment(token.lexeme),
         super(null);
+
+  @override
+  String get name => throw UnsupportedError('Comments do not have a name.');
 }
 
 class Const extends Member {
   Token nameToken;
   TypeBase type;
   Token valueToken;
-  Const(Comment comment, this.nameToken, this.type, this.valueToken)
+  Const(Comment? comment, this.nameToken, this.type, this.valueToken)
       : super(comment);
+
+  @override
   String get name => nameToken.lexeme;
 
   String get valueAsLiteral {
@@ -105,20 +112,21 @@ class Field extends Member {
   final bool allowsNull;
   final bool allowsUndefined;
   Field(
-    Comment comment,
+    Comment? comment,
     this.nameToken,
     this.type,
     this.allowsNull,
     this.allowsUndefined,
   ) : super(comment);
 
+  @override
   String get name => nameToken.lexeme;
 }
 
 class FixedValueField extends Field {
   final Token valueToken;
   FixedValueField(
-    Comment comment,
+    Comment? comment,
     Token nameToken,
     this.valueToken,
     TypeBase type,
@@ -127,23 +135,24 @@ class FixedValueField extends Field {
   ) : super(comment, nameToken, type, allowsNull, allowsUndefined);
 }
 
-class InlineInterface extends Interface {
-  InlineInterface(
-    String name,
-    List<Member> members,
-  ) : super(null, new Token.identifier(name), [], [], members);
-}
-
 class Indexer extends Member {
   final TypeBase indexType;
   final TypeBase valueType;
   Indexer(
-    Comment comment,
+    Comment? comment,
     this.indexType,
     this.valueType,
   ) : super(comment);
 
+  @override
   String get name => fieldNameForIndexer;
+}
+
+class InlineInterface extends Interface {
+  InlineInterface(
+    String name,
+    List<Member> members,
+  ) : super(null, Token.identifier(name), [], [], members);
 }
 
 class Interface extends AstNode {
@@ -153,12 +162,14 @@ class Interface extends AstNode {
   final List<Member> members;
 
   Interface(
-    Comment comment,
+    Comment? comment,
     this.nameToken,
     this.typeArgs,
     this.baseTypes,
     this.members,
   ) : super(comment);
+
+  @override
   String get name => nameToken.lexeme;
   String get nameWithTypeArgs => '$name$typeArgsString';
 
@@ -167,33 +178,77 @@ class Interface extends AstNode {
       : '';
 }
 
-class Member extends AstNode {
-  Member(Comment comment) : super(comment);
+class LiteralType extends TypeBase {
+  final Type type;
+  final String literal;
+
+  LiteralType(this.type, this.literal);
+
+  @override
+  String get dartType => type.dartType;
+
+  @override
+  String get typeArgsString => type.typeArgsString;
+
+  @override
+  String get uniqueTypeIdentifier => '$literal:${super.uniqueTypeIdentifier}';
+}
+
+/// A special class of Union types where the values are all literals of the same
+/// type so the Dart field can be the base type rather than an EitherX<>.
+class LiteralUnionType extends UnionType {
+  final List<LiteralType> literalTypes;
+
+  LiteralUnionType(this.literalTypes) : super(literalTypes);
+
+  @override
+  String get dartType => types.first.dartType;
+
+  @override
+  String get typeArgsString => types.first.typeArgsString;
+}
+
+class MapType extends TypeBase {
+  final TypeBase indexType;
+  final TypeBase valueType;
+
+  MapType(this.indexType, this.valueType);
+
+  @override
+  String get dartType => 'Map';
+
+  @override
+  String get typeArgsString =>
+      '<${indexType.dartTypeWithTypeArgs}, ${valueType.dartTypeWithTypeArgs}>';
+}
+
+abstract class Member extends AstNode {
+  Member(Comment? comment) : super(comment);
 }
 
 class Namespace extends AstNode {
   final Token nameToken;
   final List<Member> members;
   Namespace(
-    Comment comment,
+    Comment? comment,
     this.nameToken,
     this.members,
   ) : super(comment);
 
+  @override
   String get name => nameToken.lexeme;
 }
 
 class Parser {
   final List<Token> _tokens;
   int _current = 0;
-  List<AstNode> _nodes;
+  final List<AstNode> _nodes = [];
   Parser(this._tokens);
 
   bool get _isAtEnd => _peek().type == TokenType.EOF;
 
   List<AstNode> parse() {
-    if (_nodes == null) {
-      _nodes = <AstNode>[];
+    if (_nodes.isEmpty) {
       while (!_isAtEnd) {
         _nodes.add(_topLevel());
       }
@@ -207,17 +262,17 @@ class Parser {
   /// Checks if the next token is [type] without advancing.
   bool _check(TokenType type) => !_isAtEnd && _peek().type == type;
 
-  Comment _comment() {
+  Comment? _comment() {
     if (_peek().type != TokenType.COMMENT) {
       return null;
     }
     return Comment(_advance());
   }
 
-  Const _const(String containerName, Comment leadingComment) {
+  Const _const(String containerName, Comment? leadingComment) {
     _eatUnwantedKeywords();
     final name = _consume(TokenType.IDENTIFIER, 'Expected identifier');
-    TypeBase type;
+    TypeBase? type;
     if (_match([TokenType.COLON])) {
       type = _type(containerName, name.lexeme);
     }
@@ -228,28 +283,29 @@ class Parser {
     }
 
     _consume(TokenType.SEMI_COLON, 'Expected ;');
-    return Const(leadingComment, name, type, value);
-  }
-
-  Indexer _indexer(String containerName, Comment leadingComment) {
-    final indexer = _field(containerName, leadingComment);
-    _consume(TokenType.RIGHT_BRACKET, 'Expected ]');
-    _consume(TokenType.COLON, 'Expected :');
-
-    TypeBase type;
-    type = _type(containerName, fieldNameForIndexer, improveTypes: true);
-
-    //_consume(TokenType.RIGHT_BRACE, 'Expected }');
-    _match([TokenType.SEMI_COLON]);
-
-    return new Indexer(leadingComment, indexer.type, type);
+    return Const(leadingComment, name, type!, value!);
   }
 
   /// Ensures the next token is [type] and moves to the next, throwing [message]
   /// if not.
   Token _consume(TokenType type, String message) {
+    // Skip over any inline comments when looking for a specific token.
+    _match([TokenType.COMMENT]);
+
     if (_check(type)) {
       return _advance();
+    }
+
+    // The scanner currently reads keywords with specific token types
+    // (eg. TokenType.NAMESPACE_KEYWORD) however v3.16 of the LSP spec also uses
+    // some of these words as identifiers. If the requested type is an identifier
+    // but we have a keyword token, then treat it as an identifier.
+    if (type == TokenType.IDENTIFIER) {
+      final next = !_isAtEnd ? _peek() : null;
+      if (next != null && _isKeyword(next.type)) {
+        _advance();
+        return Token(TokenType.IDENTIFIER, next.lexeme);
+      }
     }
 
     throw '$message\n\n${_peek()}';
@@ -260,7 +316,7 @@ class Parser {
     _match([TokenType.READONLY_KEYWORD]);
   }
 
-  Namespace _enum(Comment leadingComment) {
+  Namespace _enum(Comment? leadingComment) {
     final name = _consume(TokenType.IDENTIFIER, 'Expected identifier');
     _consume(TokenType.LEFT_BRACE, 'Expected {');
     final consts = <Const>[];
@@ -271,14 +327,13 @@ class Parser {
     }
     _consume(TokenType.RIGHT_BRACE, 'Expected }');
 
-    return new Namespace(leadingComment, name, consts);
+    return Namespace(leadingComment, name, consts);
   }
 
   Const _enumValue(String enumName) {
     final leadingComment = _comment();
-    _eatUnwantedKeywords();
     final name = _consume(TokenType.IDENTIFIER, 'Expected identifier');
-    TypeBase type;
+    TypeBase? type;
     if (_match([TokenType.COLON])) {
       type = _type(enumName, name.lexeme);
     }
@@ -287,23 +342,24 @@ class Parser {
     if (type == null && value != null) {
       type = typeOfLiteral(value.type);
     }
-    return Const(leadingComment, name, type, value);
+    return Const(leadingComment, name, type!, value!);
   }
 
-  String _joinNames(String parent, String child) {
-    return '$parent${capitalize(child)}';
-  }
-
-  Field _field(String containerName, Comment leadingComment) {
+  Field _field(String containerName, Comment? leadingComment) {
     _eatUnwantedKeywords();
     final name = _consume(TokenType.IDENTIFIER, 'Expected identifier');
     var canBeUndefined = _match([TokenType.QUESTION]);
-    var canBeNull = false;
     _consume(TokenType.COLON, 'Expected :');
     TypeBase type;
-    Token value;
+    Token? value;
     type = _type(containerName, name.lexeme,
         includeUndefined: canBeUndefined, improveTypes: true);
+
+    // Overwrite comment if we have an improved one.
+    final improvedComment = getImprovedComment(containerName, name.lexeme);
+    leadingComment = improvedComment != null
+        ? Comment(Token(TokenType.COMMENT, improvedComment))
+        : leadingComment;
 
     // Some fields have weird comments like this in the spec:
     //     {@link MessageType}
@@ -311,11 +367,11 @@ class Parser {
     // marked with number.
     final commentText = leadingComment?.text;
     if (commentText != null) {
-      final RegExp _linkTypePattern = new RegExp(r'See \{@link (\w+)\}\.?');
+      final _linkTypePattern = RegExp(r'See \{@link (\w+)\}\.?');
       final linkTypeMatch = _linkTypePattern.firstMatch(commentText);
       if (linkTypeMatch != null) {
-        type = new Type.identifier(linkTypeMatch.group(1));
-        leadingComment = new Comment(new Token(TokenType.COMMENT,
+        type = Type.identifier(linkTypeMatch.group(1)!);
+        leadingComment = Comment(Token(TokenType.COMMENT,
             '// ' + commentText.replaceAll(_linkTypePattern, '')));
       }
     }
@@ -326,19 +382,19 @@ class Parser {
 
     // Special handling for fields that have fixed values.
     if (value != null) {
-      return new FixedValueField(
-          leadingComment, name, value, type, canBeNull, canBeUndefined);
+      return FixedValueField(
+          leadingComment, name, value, type, false, canBeUndefined);
     }
 
+    var canBeNull = false;
     if (type is UnionType) {
-      UnionType union = type;
       // Since undefined and null can appear in the union type list but we want to
       // handle it specially in the code generation, we promote them to fields on
       // the Field.
-      canBeUndefined |= union.types.any(isUndefinedType);
-      canBeNull = union.types.any(isNullType);
+      canBeUndefined |= type.types.any(isUndefinedType);
+      canBeNull = type.types.any((t) => isNullType(t) || isAnyType(t));
       // Finally, we need to remove them from the union.
-      final remainingTypes = union.types
+      final remainingTypes = type.types
           .where((t) => !isNullType(t) && !isUndefinedType(t))
           .toList();
 
@@ -346,14 +402,31 @@ class Parser {
       // simplify the unions.
       remainingTypes.removeWhere((t) => !allowTypeInSignatures(t));
 
-      type = remainingTypes.length > 1
-          ? new UnionType(remainingTypes)
-          : remainingTypes.single;
+      type = _simplifyUnionTypes(remainingTypes);
+    } else if (isAnyType(type)) {
+      // There are values in the spec marked as `any` that allow nulls (for
+      // example, the result field on ResponseMessage can be null for a
+      // successful response that has no return value, eg. shutdown).
+      canBeNull = true;
     }
     return Field(leadingComment, name, type, canBeNull, canBeUndefined);
   }
 
-  Interface _interface(Comment leadingComment) {
+  Indexer _indexer(String containerName, Comment? leadingComment) {
+    final indexer = _field(containerName, leadingComment);
+    _consume(TokenType.RIGHT_BRACKET, 'Expected ]');
+    _consume(TokenType.COLON, 'Expected :');
+
+    TypeBase type;
+    type = _type(containerName, fieldNameForIndexer, improveTypes: true);
+
+    //_consume(TokenType.RIGHT_BRACE, 'Expected }');
+    _match([TokenType.SEMI_COLON]);
+
+    return Indexer(leadingComment, indexer.type, type);
+  }
+
+  Interface _interface(Comment? leadingComment) {
     final name = _consume(TokenType.IDENTIFIER, 'Expected identifier');
     final typeArgs = <Token>[];
     if (_match([TokenType.LESS])) {
@@ -382,13 +455,15 @@ class Parser {
       members.add(_member(name.lexeme));
     }
 
-    // TODO(dantup): Temporary hack until we handle indexers. Remove nulls, which
-    // are (currently) returned by _field() for indexers.
-    members.removeWhere((m) => m == null);
-
     _consume(TokenType.RIGHT_BRACE, 'Expected }');
 
-    return new Interface(leadingComment, name, typeArgs, baseTypes, members);
+    return Interface(leadingComment, name, typeArgs, baseTypes, members);
+  }
+
+  bool _isKeyword(TokenType type) => _keywords.values.contains(type);
+
+  String _joinNames(String parent, String child) {
+    return '$parent${capitalize(child)}';
   }
 
   /// Returns [true] an advances if the next token is one of [types], otherwise
@@ -417,7 +492,7 @@ class Parser {
     }
   }
 
-  Namespace _namespace(Comment leadingComment) {
+  Namespace _namespace(Comment? leadingComment) {
     final name = _consume(TokenType.IDENTIFIER, 'Expected identifier');
     _consume(TokenType.LEFT_BRACE, 'Expected {');
     final members = <Member>[];
@@ -426,11 +501,34 @@ class Parser {
     }
     _consume(TokenType.RIGHT_BRACE, 'Expected }');
 
-    return new Namespace(leadingComment, name, members);
+    return Namespace(leadingComment, name, members);
   }
 
   /// Returns the next token without advancing.
   Token _peek() => _tokenAt(_current);
+
+  /// Remove any duplicate types (for ex. if we map multiple types into dynamic)
+  /// we don't want to end up with `dynamic | dynamic`. Key on dartType to
+  /// ensure we different types that will map down to the same type.
+  TypeBase _simplifyUnionTypes(List<TypeBase> types) {
+    final uniqueTypes = Map.fromEntries(
+      types.map((t) => MapEntry(t.uniqueTypeIdentifier, t)),
+    ).values.toList();
+
+    // If our list includes something that maps to dynamic as well as other
+    // types, we should just treat the whole thing as dynamic as we get no value
+    // typing Either4<bool, String, num, dynamic> but it becomes much more
+    // difficult to use.
+    if (uniqueTypes.any(isAnyType)) {
+      return uniqueTypes.firstWhere(isAnyType);
+    }
+
+    return uniqueTypes.length == 1
+        ? uniqueTypes.single
+        : uniqueTypes.every(isLiteralType)
+            ? LiteralUnionType(uniqueTypes.cast<LiteralType>())
+            : UnionType(uniqueTypes);
+  }
 
   Token _tokenAt(int index) =>
       index < _tokens.length ? _tokens[index] : Token.EOF;
@@ -461,7 +559,7 @@ class Parser {
 
   TypeBase _type(
     String containerName,
-    String fieldName, {
+    String? fieldName, {
     bool includeUndefined = false,
     bool improveTypes = false,
   }) {
@@ -469,7 +567,9 @@ class Parser {
     if (includeUndefined) {
       types.add(Type.Undefined);
     }
+    var typeIndex = 0;
     while (true) {
+      typeIndex++;
       TypeBase type;
       if (_match([TokenType.LEFT_BRACE])) {
         // Inline interfaces.
@@ -478,47 +578,60 @@ class Parser {
           members.add(_member(containerName));
         }
 
-        // TODO(dantup): Temporary hack until we handle indexers. Remove nulls, which
-        // are (currently) returned by _field() for indexers.
-        members.removeWhere((m) => m == null);
-
         _consume(TokenType.RIGHT_BRACE, 'Expected }');
         // Some of the inline interfaces have trailing commas (and some do not!)
         _match([TokenType.COMMA]);
 
         // If we have a single member that is an indexer type, we can use a Map.
         if (members.length == 1 && members.single is Indexer) {
-          Indexer indexer = members.single;
-          type = new MapType(indexer.indexType, indexer.valueType);
+          var indexer = members.single as Indexer;
+          type = MapType(indexer.indexType, indexer.valueType);
         } else {
           // Add a synthetic interface to the parsers list of nodes to represent this type.
-          final generatedName = _joinNames(containerName, fieldName);
-          _nodes.add(new InlineInterface(generatedName, members));
+          // If we have no fieldName to base the synthetic name from, we should use
+          // the index of this type, for example in:
+          //    type Foo = { [..] } | { [...] }
+          // we will generate Foo1 and Foo2 for the types.
+          final nameSuffix = fieldName ?? '$typeIndex';
+          final generatedName = _joinNames(containerName, nameSuffix);
+          _nodes.add(InlineInterface(generatedName, members));
           // Record the type as a simple type that references this interface.
-          type = new Type.identifier(generatedName);
+          type = Type.identifier(generatedName);
         }
       } else if (_match([TokenType.LEFT_PAREN])) {
         // Some types are in (parens), so we just parse the contents as a nested type.
         type = _type(containerName, fieldName);
         _consume(TokenType.RIGHT_PAREN, 'Expected )');
-      } else if (_match([TokenType.STRING])) {
+      } else if (_check(TokenType.STRING)) {
+        final token = _advance();
         // In TS and the spec, literal strings can be types:
         // export const PlainText: 'plaintext' = 'plaintext';
         // trace?: 'off' | 'messages' | 'verbose';
-        // the best we can do is use their base type (string).
-        type = Type.identifier('string');
-      } else if (_match([TokenType.NUMBER])) {
+        type = LiteralType(Type.identifier('string'), token.lexeme);
+      } else if (_check(TokenType.NUMBER)) {
+        final token = _advance();
         // In TS and the spec, literal numbers can be types:
         // export const Invoked: 1 = 1;
-        // the best we can do is use their base type (number).
-        type = Type.identifier('number');
+        type = LiteralType(Type.identifier('number'), token.lexeme);
+      } else if (_match([TokenType.LEFT_BRACKET])) {
+        // Tuples will just be converted to List/Array.
+        final tupleElementTypes = <TypeBase>[];
+        while (!_check(TokenType.RIGHT_BRACKET)) {
+          tupleElementTypes.add(_type(containerName, fieldName));
+          // Remove commas in between.
+          _match([TokenType.COMMA]);
+        }
+        _consume(TokenType.RIGHT_BRACKET, 'Expected ]');
+
+        var tupleType = _simplifyUnionTypes(tupleElementTypes);
+        type = ArrayType(tupleType);
       } else {
         var typeName = _consume(TokenType.IDENTIFIER, 'Expected identifier');
-        final typeArgs = <Type>[];
+        final typeArgs = <TypeBase>[];
         if (_match([TokenType.LESS])) {
           while (true) {
             typeArgs.add(_type(containerName, fieldName));
-            if (_peek() != TokenType.COMMA) {
+            if (_peek().type != TokenType.COMMA) {
               _consume(TokenType.GREATER, 'Expected >');
               break;
             }
@@ -526,12 +639,12 @@ class Parser {
         }
 
         type = typeName.lexeme == 'Array'
-            ? new ArrayType(typeArgs.single)
-            : new Type(typeName, typeArgs);
+            ? ArrayType(typeArgs.single)
+            : Type(typeName, typeArgs);
       }
       if (_match([TokenType.LEFT_BRACKET])) {
         _consume(TokenType.RIGHT_BRACKET, 'Expected ]');
-        type = new ArrayType(type);
+        type = ArrayType(type);
       }
       // TODO(dantup): Handle types like This & That.
       // For now, map to any.
@@ -553,34 +666,30 @@ class Parser {
       }
     }
 
-    // Remove any duplicate types (for ex. if we map multiple types into dynamic)
-    // we don't want to end up with `dynamic | dynamic`. Key on dartType to
-    // ensure we different types that will map down to the same type.
-    final uniqueTypes = new Map.fromEntries(
-      types.map((t) => new MapEntry(t.dartTypeWithTypeArgs, t)),
-    ).values.toList();
-
-    var type = uniqueTypes.length == 1
-        ? uniqueTypes.single
-        : new UnionType(uniqueTypes);
+    var type = _simplifyUnionTypes(types);
 
     // Handle improved type mappings for things that aren't very tight in the spec.
     if (improveTypes) {
       final improvedTypeName = getImprovedType(containerName, fieldName);
       if (improvedTypeName != null) {
-        type = new Type.identifier(improvedTypeName);
+        type = improvedTypeName.endsWith('[]')
+            ? ArrayType(Type.identifier(
+                improvedTypeName.substring(0, improvedTypeName.length - 2)))
+            : Type.identifier(improvedTypeName);
       }
     }
     return type;
   }
 
-  TypeAlias _typeAlias(Comment leadingComment) {
+  TypeAlias _typeAlias(Comment? leadingComment) {
     final name = _consume(TokenType.IDENTIFIER, 'Expected identifier');
     _consume(TokenType.EQUAL, 'Expected =');
     final type = _type(name.lexeme, null);
-    _consume(TokenType.SEMI_COLON, 'Expected ;');
+    if (!_isAtEnd) {
+      _consume(TokenType.SEMI_COLON, 'Expected ;');
+    }
 
-    return new TypeAlias(leadingComment, name, type);
+    return TypeAlias(leadingComment, name, type);
   }
 }
 
@@ -602,8 +711,16 @@ class Scanner {
     return _tokens;
   }
 
-  void _addToken(TokenType type) {
-    final text = _source.substring(_startOfToken, _currentPos);
+  void _addToken(TokenType type, {bool mergeSameTypes = false}) {
+    var text = _source.substring(_startOfToken, _currentPos);
+
+    // Consecutive tokens of some types (for example Comments) are merged
+    // together.
+    if (mergeSameTypes && _tokens.isNotEmpty && type == _tokens.last.type) {
+      text = '${_tokens.last.lexeme}\n$text';
+      _tokens.removeLast();
+    }
+
     _tokens.add(Token(type, text));
   }
 
@@ -612,31 +729,23 @@ class Scanner {
       : throw 'Cannot advance past end of source';
 
   void _identifier() {
-    const keywords = <String, TokenType>{
-      'class': TokenType.CLASS_KEYWORD,
-      'const': TokenType.CONST_KEYWORD,
-      'enum': TokenType.ENUM_KEYWORD,
-      'export': TokenType.EXPORT_KEYWORD,
-      'extends': TokenType.EXTENDS_KEYWORD,
-      'interface': TokenType.INTERFACE_KEYWORD,
-      'namespace': TokenType.NAMESPACE_KEYWORD,
-      'readonly': TokenType.READONLY_KEYWORD,
-    };
     while (_isAlpha(_peek())) {
       _advance();
     }
 
     final string = _source.substring(_startOfToken, _currentPos);
-    if (keywords.containsKey(string)) {
-      _addToken(keywords[string]);
+    var keyword = _keywords[string];
+    if (keyword != null) {
+      _addToken(keyword);
     } else {
       _addToken(TokenType.IDENTIFIER);
     }
   }
 
-  bool _isAlpha(String s) => _validIdentifierCharacters.hasMatch(s);
+  bool _isAlpha(String? s) =>
+      s != null && _validIdentifierCharacters.hasMatch(s);
 
-  bool _isDigit(String s) => s != null && (s.codeUnitAt(0) ^ 0x30) <= 9;
+  bool _isDigit(String? s) => s != null && (s.codeUnitAt(0) ^ 0x30) <= 9;
 
   bool _match(String expected) {
     if (_isAtEnd || _source[_currentPos] != expected) {
@@ -666,9 +775,9 @@ class Scanner {
     _addToken(TokenType.NUMBER);
   }
 
-  String _peek() => _isAtEnd ? null : _source[_currentPos];
+  String? _peek() => _isAtEnd ? null : _source[_currentPos];
 
-  String _peekNext() => _isNextAtEnd ? null : _source[_currentPos + 1];
+  String? _peekNext() => _isNextAtEnd ? null : _source[_currentPos + 1];
 
   void _scanToken() {
     const singleCharTokens = <String, TokenType>{
@@ -690,8 +799,9 @@ class Scanner {
     };
 
     final c = _advance();
-    if (singleCharTokens.containsKey(c)) {
-      _addToken(singleCharTokens[c]);
+    var token = singleCharTokens[c];
+    if (token != null) {
+      _addToken(token);
       return;
     }
     switch (c) {
@@ -706,13 +816,13 @@ class Scanner {
             _advance();
             _advance();
           }
-          _addToken(TokenType.COMMENT);
+          _addToken(TokenType.COMMENT, mergeSameTypes: true);
         } else if (_match('/')) {
           // Single line comment.
           while (_peek() != '\n' && !_isAtEnd) {
             _advance();
           }
-          _addToken(TokenType.COMMENT);
+          _addToken(TokenType.COMMENT, mergeSameTypes: true);
         } else {
           _addToken(TokenType.SLASH);
         }
@@ -766,7 +876,7 @@ class Scanner {
 }
 
 class Token {
-  static final Token EOF = new Token(TokenType.EOF, '');
+  static final Token EOF = Token(TokenType.EOF, '');
 
   final TokenType type;
   final String lexeme;
@@ -817,19 +927,18 @@ enum TokenType {
 }
 
 class Type extends TypeBase {
-  static final TypeBase Undefined = new Type.identifier('undefined');
-  static final TypeBase Any = new Type.identifier('any');
+  static final TypeBase Undefined = Type.identifier('undefined');
+  static final TypeBase Any = Type.identifier('any');
   final Token nameToken;
   final List<TypeBase> typeArgs;
 
   Type(this.nameToken, this.typeArgs) {
-    if (this.name == 'Array' || this.name.endsWith('[]')) {
+    if (name == 'Array' || name.endsWith('[]')) {
       throw 'Type should not be used for arrays, use ArrayType instead';
     }
   }
 
-  Type.identifier(String identifier)
-      : this(new Token.identifier(identifier), []);
+  Type.identifier(String identifier) : this(Token.identifier(identifier), []);
 
   @override
   String get dartType {
@@ -843,6 +952,8 @@ class Type extends TypeBase {
       'boolean': 'bool',
       'string': 'String',
       'number': 'num',
+      'integer': 'int',
+      'uinteger': 'int',
       'any': 'dynamic',
       'object': 'dynamic',
       // Simplify MarkedString from
@@ -875,11 +986,12 @@ class TypeAlias extends AstNode {
   final Token nameToken;
   final TypeBase baseType;
   TypeAlias(
-    Comment comment,
+    Comment? comment,
     this.nameToken,
     this.baseType,
   ) : super(comment);
 
+  @override
   String get name => nameToken.lexeme;
 }
 
@@ -887,6 +999,10 @@ abstract class TypeBase {
   String get dartType;
   String get dartTypeWithTypeArgs => '$dartType$typeArgsString';
   String get typeArgsString;
+
+  /// A unique identifier for this type. Used for folding types together
+  /// (for example two types that resolve to "dynamic" in Dart).
+  String get uniqueTypeIdentifier => dartTypeWithTypeArgs;
 }
 
 class UnionType extends TypeBase {

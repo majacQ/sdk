@@ -79,7 +79,7 @@ const char* OS::GetTimeZoneName(int64_t seconds_since_epoch) {
                                          : zone_information.StandardName;
   intptr_t utf8_len =
       WideCharToMultiByte(CP_UTF8, 0, wchar_name, -1, NULL, 0, NULL, NULL);
-  char* name = Thread::Current()->zone()->Alloc<char>(utf8_len + 1);
+  char* name = ThreadState::Current()->zone()->Alloc<char>(utf8_len + 1);
   WideCharToMultiByte(CP_UTF8, 0, wchar_name, -1, name, utf8_len, NULL, NULL);
   name[utf8_len] = '\0';
   return name;
@@ -174,6 +174,10 @@ int64_t OS::GetCurrentThreadCPUMicros() {
   return -1;
 }
 
+int64_t OS::GetCurrentThreadCPUMicrosForTimeline() {
+  return OS::GetCurrentThreadCPUMicros();
+}
+
 intptr_t OS::ActivationFrameAlignment() {
 #if defined(TARGET_ARCH_ARM64)
   return 16;
@@ -185,18 +189,6 @@ intptr_t OS::ActivationFrameAlignment() {
 #else
   // No requirements on Win32.
   return 1;
-#endif
-}
-
-intptr_t OS::PreferredCodeAlignment() {
-  ASSERT(32 <= OS::kMaxPreferredCodeAlignment);
-#if defined(TARGET_ARCH_IA32) || defined(TARGET_ARCH_X64) ||                   \
-    defined(TARGET_ARCH_ARM64) || defined(TARGET_ARCH_DBC)
-  return 32;
-#elif defined(TARGET_ARCH_ARM)
-  return 16;
-#else
-#error Unsupported architecture.
 #endif
 }
 
@@ -336,9 +328,13 @@ void OS::Cleanup() {
   // ThreadLocalData::Cleanup();
 }
 
-void OS::Abort() {
+void OS::PrepareToAbort() {
   // TODO(zra): Remove once VM shuts down cleanly.
   private_flag_windows_run_tls_destructors = false;
+}
+
+void OS::Abort() {
+  PrepareToAbort();
   abort();
 }
 

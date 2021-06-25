@@ -2,6 +2,11 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
+// VMOptions=--enable-isolate-groups --experimental-enable-isolate-groups-jit
+// VMOptions=--no-enable-isolate-groups
+
 import "dart:isolate";
 import "dart:io";
 
@@ -13,7 +18,7 @@ void main(List<String> args) {
     throw "QQQ Should not be reached";
   } else {
     var exec = Platform.resolvedExecutable;
-    var args = new List();
+    var args = new List<String>();
     args.addAll(Platform.executableArguments);
     args.add(Platform.script.toFilePath());
     args.add("--child");

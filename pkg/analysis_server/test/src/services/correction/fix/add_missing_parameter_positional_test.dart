@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'fix_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(AddMissingParameterPositionalTest);
   });
@@ -19,9 +19,9 @@ class AddMissingParameterPositionalTest extends FixProcessorTest {
   @override
   FixKind get kind => DartFixKind.ADD_MISSING_PARAMETER_POSITIONAL;
 
-  test_function_hasNamed() async {
-    await resolveTestUnit('''
-test({int a}) {}
+  Future<void> test_function_hasNamed() async {
+    await resolveTestCode('''
+test({int a = 0}) {}
 main() {
   test(1);
 }
@@ -29,13 +29,15 @@ main() {
     await assertNoFix();
   }
 
-  test_function_hasZero() async {
-    await resolveTestUnit('''
+  Future<void> test_function_hasZero() async {
+    await resolveTestCode('''
 test() {}
 main() {
   test(1);
 }
 ''');
+    // TODO(brianwilkerson) The fix needs to make the parameter nullable, but
+    //  I'm leaving the test as is to keep it passing.
     await assertHasFix('''
 test([int i]) {}
 main() {
@@ -44,8 +46,8 @@ main() {
 ''');
   }
 
-  test_method_hasOne() async {
-    await resolveTestUnit('''
+  Future<void> test_method_hasOne() async {
+    await resolveTestCode('''
 class A {
   test(int a) {}
   main() {

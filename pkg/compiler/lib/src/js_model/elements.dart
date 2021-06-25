@@ -13,170 +13,6 @@ import '../serialization/serialization.dart';
 import '../universe/class_set.dart' show ClassHierarchyNodesMapKey;
 import 'closure.dart';
 
-/// Map from 'frontend' to 'backend' elements.
-///
-/// Frontend elements are what we read in, these typically represents concepts
-/// in Dart. Backend elements are what we generate, these may include elements
-/// that do not correspond to a Dart concept, such as closure classes.
-///
-/// Querying for the frontend element for a backend-only element throws an
-/// exception.
-abstract class JsToFrontendMap {
-  LibraryEntity toBackendLibrary(LibraryEntity library);
-
-  ClassEntity toBackendClass(ClassEntity cls);
-
-  /// Returns the backend member corresponding to [member]. If a member isn't
-  /// live, it doesn't have a corresponding backend member and `null` is
-  /// returned instead.
-  MemberEntity toBackendMember(MemberEntity member);
-
-  DartType toBackendType(DartType type);
-
-  Set<LibraryEntity> toBackendLibrarySet(Iterable<LibraryEntity> set) {
-    return set.map(toBackendLibrary).toSet();
-  }
-
-  Set<ClassEntity> toBackendClassSet(Iterable<ClassEntity> set) {
-    // TODO(johnniwinther): Filter unused classes.
-    return set.map(toBackendClass).toSet();
-  }
-
-  Set<MemberEntity> toBackendMemberSet(Iterable<MemberEntity> set) {
-    return set.map(toBackendMember).where((MemberEntity member) {
-      // Members that are not live don't have a corresponding backend member.
-      return member != null;
-    }).toSet();
-  }
-
-  Set<FunctionEntity> toBackendFunctionSet(Iterable<FunctionEntity> set) {
-    Set<FunctionEntity> newSet = new Set<FunctionEntity>();
-    for (FunctionEntity element in set) {
-      FunctionEntity backendFunction = toBackendMember(element);
-      if (backendFunction != null) {
-        // Members that are not live don't have a corresponding backend member.
-        newSet.add(backendFunction);
-      }
-    }
-    return newSet;
-  }
-
-  Map<LibraryEntity, V> toBackendLibraryMap<V>(
-      Map<LibraryEntity, V> map, V convert(V value)) {
-    return convertMap(map, toBackendLibrary, convert);
-  }
-
-  Map<ClassEntity, V> toBackendClassMap<V>(
-      Map<ClassEntity, V> map, V convert(V value)) {
-    return convertMap(map, toBackendClass, convert);
-  }
-
-  Map<MemberEntity, V> toBackendMemberMap<V>(
-      Map<MemberEntity, V> map, V convert(V value)) {
-    return convertMap(map, toBackendMember, convert);
-  }
-}
-
-E identity<E>(E element) => element;
-
-Map<K, V> convertMap<K, V>(
-    Map<K, V> map, K convertKey(K key), V convertValue(V value)) {
-  Map<K, V> newMap = <K, V>{};
-  map.forEach((K key, V value) {
-    K newKey = convertKey(key);
-    V newValue = convertValue(value);
-    if (newKey != null && newValue != null) {
-      // Entities that are not used don't have a corresponding backend entity.
-      newMap[newKey] = newValue;
-    }
-  });
-  return newMap;
-}
-
-abstract class JsToFrontendMapBase extends JsToFrontendMap {
-  DartType toBackendType(DartType type) =>
-      type == null ? null : const TypeConverter().visit(type, _toBackendEntity);
-
-  Entity _toBackendEntity(Entity entity) {
-    if (entity is ClassEntity) return toBackendClass(entity);
-    assert(entity is TypeVariableEntity);
-    return toBackendTypeVariable(entity);
-  }
-
-  TypeVariableEntity toBackendTypeVariable(TypeVariableEntity typeVariable);
-}
-
-typedef Entity EntityConverter(Entity cls);
-
-class TypeConverter implements DartTypeVisitor<DartType, EntityConverter> {
-  const TypeConverter();
-
-  @override
-  DartType visit(DartType type, EntityConverter converter) {
-    return type.accept(this, converter);
-  }
-
-  List<DartType> visitList(List<DartType> types, EntityConverter converter) {
-    List<DartType> list = <DartType>[];
-    for (DartType type in types) {
-      list.add(visit(type, converter));
-    }
-    return list;
-  }
-
-  @override
-  DartType visitDynamicType(DynamicType type, EntityConverter converter) {
-    return const DynamicType();
-  }
-
-  @override
-  DartType visitInterfaceType(InterfaceType type, EntityConverter converter) {
-    return new InterfaceType(
-        converter(type.element), visitList(type.typeArguments, converter));
-  }
-
-  @override
-  DartType visitTypedefType(TypedefType type, EntityConverter converter) {
-    return new TypedefType(
-        converter(type.element),
-        visitList(type.typeArguments, converter),
-        visit(type.unaliased, converter));
-  }
-
-  @override
-  DartType visitFunctionType(FunctionType type, EntityConverter converter) {
-    return new FunctionType(
-        visit(type.returnType, converter),
-        visitList(type.parameterTypes, converter),
-        visitList(type.optionalParameterTypes, converter),
-        type.namedParameters,
-        visitList(type.namedParameterTypes, converter),
-        type.typeVariables);
-  }
-
-  @override
-  DartType visitTypeVariableType(
-      TypeVariableType type, EntityConverter converter) {
-    return new TypeVariableType(converter(type.element));
-  }
-
-  @override
-  DartType visitFunctionTypeVariable(
-      FunctionTypeVariable type, EntityConverter converter) {
-    return type;
-  }
-
-  @override
-  DartType visitVoidType(VoidType type, EntityConverter converter) {
-    return const VoidType();
-  }
-
-  @override
-  DartType visitFutureOrType(FutureOrType type, EntityConverter converter) {
-    return new FutureOrType(visit(type.typeArgument, converter));
-  }
-}
-
 const String jsElementPrefix = 'j:';
 
 class JLibrary extends IndexedLibrary {
@@ -184,18 +20,23 @@ class JLibrary extends IndexedLibrary {
   /// debugging data stream.
   static const String tag = 'library';
 
+  @override
   final String name;
+  @override
   final Uri canonicalUri;
+  @override
+  final bool isNonNullableByDefault;
 
-  JLibrary(this.name, this.canonicalUri);
+  JLibrary(this.name, this.canonicalUri, this.isNonNullableByDefault);
 
   /// Deserializes a [JLibrary] object from [source].
   factory JLibrary.readFromDataSource(DataSource source) {
     source.begin(tag);
     String name = source.readString();
     Uri canonicalUri = source.readUri();
+    bool isNonNullableByDefault = source.readBool();
     source.end(tag);
-    return new JLibrary(name, canonicalUri);
+    return new JLibrary(name, canonicalUri, isNonNullableByDefault);
   }
 
   /// Serializes this [JLibrary] to [sink].
@@ -203,9 +44,11 @@ class JLibrary extends IndexedLibrary {
     sink.begin(tag);
     sink.writeString(name);
     sink.writeUri(canonicalUri);
+    sink.writeBool(isNonNullableByDefault);
     sink.end(tag);
   }
 
+  @override
   String toString() => '${jsElementPrefix}library($name)';
 }
 
@@ -217,9 +60,12 @@ class JClass extends IndexedClass with ClassHierarchyNodesMapKey {
   /// debugging data stream.
   static const String tag = 'class';
 
+  @override
   final JLibrary library;
 
+  @override
   final String name;
+  @override
   final bool isAbstract;
 
   JClass(this.library, this.name, {this.isAbstract});
@@ -256,38 +102,8 @@ class JClass extends IndexedClass with ClassHierarchyNodesMapKey {
   @override
   bool get isClosure => false;
 
+  @override
   String toString() => '${jsElementPrefix}class($name)';
-}
-
-class JTypedef extends IndexedTypedef {
-  /// Tag used for identifying serialized [JTypedef] objects in a
-  /// debugging data stream.
-  static const String tag = 'typedef';
-
-  final JLibrary library;
-
-  final String name;
-
-  JTypedef(this.library, this.name);
-
-  /// Deserializes a [JTypedef] object from [source].
-  factory JTypedef.readFromDataSource(DataSource source) {
-    source.begin(tag);
-    JLibrary library = source.readLibrary();
-    String name = source.readString();
-    source.end(tag);
-    return new JTypedef(library, name);
-  }
-
-  /// Serializes this [JTypedef] to [sink].
-  void writeToDataSink(DataSink sink) {
-    sink.begin(tag);
-    sink.writeLibrary(library);
-    sink.writeString(name);
-    sink.end(tag);
-  }
-
-  String toString() => '${jsElementPrefix}typedef($name)';
 }
 
 /// Enum used for identifying [JMember] subclasses in serialization.
@@ -307,7 +123,9 @@ enum JMemberKind {
 }
 
 abstract class JMember extends IndexedMember {
+  @override
   final JLibrary library;
+  @override
   final JClass enclosingClass;
   final Name _name;
   final bool _isStatic;
@@ -350,8 +168,10 @@ abstract class JMember extends IndexedMember {
   /// Serializes this [JMember] to [sink].
   void writeToDataSink(DataSink sink);
 
+  @override
   String get name => _name.text;
 
+  @override
   Name get memberName => _name;
 
   @override
@@ -389,14 +209,18 @@ abstract class JMember extends IndexedMember {
 
   String get _kind;
 
+  @override
   String toString() => '${jsElementPrefix}$_kind'
       '(${enclosingClass != null ? '${enclosingClass.name}.' : ''}$name)';
 }
 
 abstract class JFunction extends JMember
     implements FunctionEntity, IndexedFunction {
+  @override
   final ParameterStructure parameterStructure;
+  @override
   final bool isExternal;
+  @override
   final AsyncMarker asyncMarker;
 
   JFunction(JLibrary library, JClass enclosingClass, Name name,
@@ -407,6 +231,7 @@ abstract class JFunction extends JMember
 
 abstract class JConstructor extends JFunction
     implements ConstructorEntity, IndexedConstructor {
+  @override
   final bool isConst;
 
   JConstructor(
@@ -431,6 +256,7 @@ abstract class JConstructor extends JFunction
   @override
   bool get isFromEnvironmentConstructor => false;
 
+  @override
   String get _kind => 'constructor';
 }
 
@@ -534,23 +360,21 @@ class JConstructorBody extends JFunction implements ConstructorBodyEntity {
   /// debugging data stream.
   static const String tag = 'constructor-body';
 
+  @override
   final JConstructor constructor;
 
-  JConstructorBody(this.constructor)
-      : super(
-            constructor.library,
-            constructor.enclosingClass,
-            constructor.memberName,
-            constructor.parameterStructure,
-            AsyncMarker.SYNC,
-            isStatic: false,
-            isExternal: false);
+  JConstructorBody(this.constructor, ParameterStructure parameterStructure)
+      : super(constructor.library, constructor.enclosingClass,
+            constructor.memberName, parameterStructure, AsyncMarker.SYNC,
+            isStatic: false, isExternal: false);
 
   factory JConstructorBody.readFromDataSource(DataSource source) {
     source.begin(tag);
     JConstructor constructor = source.readMember();
+    ParameterStructure parameterStructure =
+        new ParameterStructure.readFromDataSource(source);
     source.end(tag);
-    return new JConstructorBody(constructor);
+    return new JConstructorBody(constructor, parameterStructure);
   }
 
   @override
@@ -558,9 +382,11 @@ class JConstructorBody extends JFunction implements ConstructorBodyEntity {
     sink.writeEnum(JMemberKind.constructorBody);
     sink.begin(tag);
     sink.writeMember(constructor);
+    parameterStructure.writeToDataSink(sink);
     sink.end(tag);
   }
 
+  @override
   String get _kind => 'constructor_body';
 }
 
@@ -569,6 +395,7 @@ class JMethod extends JFunction {
   /// debugging data stream.
   static const String tag = 'method';
 
+  @override
   final bool isAbstract;
 
   JMethod(JLibrary library, JClass enclosingClass, Name name,
@@ -627,6 +454,7 @@ class JMethod extends JFunction {
   @override
   bool get isFunction => true;
 
+  @override
   String get _kind => 'method';
 }
 
@@ -637,6 +465,7 @@ class JGeneratorBody extends JFunction {
 
   final JFunction function;
   final DartType elementType;
+  @override
   final int hashCode;
 
   JGeneratorBody(this.function, this.elementType)
@@ -662,6 +491,7 @@ class JGeneratorBody extends JFunction {
     sink.end(tag);
   }
 
+  @override
   String get _kind => 'generator_body';
 }
 
@@ -670,12 +500,13 @@ class JGetter extends JFunction {
   /// debugging data stream.
   static const String tag = 'getter';
 
+  @override
   final bool isAbstract;
 
   JGetter(JLibrary library, JClass enclosingClass, Name name,
       AsyncMarker asyncMarker,
       {bool isStatic, bool isExternal, this.isAbstract})
-      : super(library, enclosingClass, name, const ParameterStructure.getter(),
+      : super(library, enclosingClass, name, ParameterStructure.getter,
             asyncMarker,
             isStatic: isStatic, isExternal: isExternal);
 
@@ -726,6 +557,7 @@ class JGetter extends JFunction {
   @override
   bool get isGetter => true;
 
+  @override
   String get _kind => 'getter';
 }
 
@@ -734,11 +566,12 @@ class JSetter extends JFunction {
   /// debugging data stream.
   static const String tag = 'setter';
 
+  @override
   final bool isAbstract;
 
   JSetter(JLibrary library, JClass enclosingClass, Name name,
       {bool isStatic, bool isExternal, this.isAbstract})
-      : super(library, enclosingClass, name, const ParameterStructure.setter(),
+      : super(library, enclosingClass, name, ParameterStructure.setter,
             AsyncMarker.SYNC,
             isStatic: isStatic, isExternal: isExternal);
 
@@ -790,6 +623,7 @@ class JSetter extends JFunction {
   @override
   bool get isSetter => true;
 
+  @override
   String get _kind => 'setter';
 }
 
@@ -798,7 +632,9 @@ class JField extends JMember implements FieldEntity, IndexedField {
   /// debugging data stream.
   static const String tag = 'field';
 
+  @override
   final bool isAssignable;
+  @override
   final bool isConst;
 
   JField(JLibrary library, JClass enclosingClass, Name name,
@@ -849,6 +685,7 @@ class JField extends JMember implements FieldEntity, IndexedField {
   @override
   bool get isField => true;
 
+  @override
   String get _kind => 'field';
 }
 
@@ -884,6 +721,7 @@ class JClosureCallMethod extends JMethod {
     sink.end(tag);
   }
 
+  @override
   String get _kind => 'closure_call';
 }
 
@@ -896,7 +734,7 @@ class JSignatureMethod extends JMethod {
 
   JSignatureMethod(ClassEntity enclosingClass)
       : super(enclosingClass.library, enclosingClass, Names.signature,
-            const ParameterStructure(0, 0, const [], 0), AsyncMarker.SYNC,
+            ParameterStructure.zeroArguments, AsyncMarker.SYNC,
             isStatic: false, isExternal: false, isAbstract: false);
 
   factory JSignatureMethod.readFromDataSource(DataSource source) {
@@ -906,6 +744,7 @@ class JSignatureMethod extends JMethod {
     return new JSignatureMethod(cls);
   }
 
+  @override
   void writeToDataSink(DataSink sink) {
     sink.writeEnum(JMemberKind.signatureMethod);
     sink.begin(tag);
@@ -913,19 +752,23 @@ class JSignatureMethod extends JMethod {
     sink.end(tag);
   }
 
+  @override
   String get _kind => 'signature';
 }
 
 /// Enum used for identifying [JTypeVariable] variants in serialization.
-enum JTypeVariableKind { cls, member, typedef, local }
+enum JTypeVariableKind { cls, member, local }
 
 class JTypeVariable extends IndexedTypeVariable {
   /// Tag used for identifying serialized [JTypeVariable] objects in a
   /// debugging data stream.
   static const String tag = 'type-variable';
 
+  @override
   final Entity typeDeclaration;
+  @override
   final String name;
+  @override
   final int index;
 
   JTypeVariable(this.typeDeclaration, this.name, this.index);
@@ -941,9 +784,6 @@ class JTypeVariable extends IndexedTypeVariable {
         break;
       case JTypeVariableKind.member:
         typeDeclaration = source.readMember();
-        break;
-      case JTypeVariableKind.typedef:
-        typeDeclaration = source.readTypedef();
         break;
       case JTypeVariableKind.local:
         // Type variables declared by local functions don't point to their
@@ -969,10 +809,6 @@ class JTypeVariable extends IndexedTypeVariable {
       IndexedMember member = typeDeclaration;
       sink.writeEnum(JTypeVariableKind.member);
       sink.writeMember(member);
-    } else if (typeDeclaration is IndexedTypedef) {
-      IndexedTypedef typedef = typeDeclaration;
-      sink.writeEnum(JTypeVariableKind.typedef);
-      sink.writeTypedef(typedef);
     } else if (typeDeclaration == null) {
       sink.writeEnum(JTypeVariableKind.local);
     } else {
@@ -984,6 +820,7 @@ class JTypeVariable extends IndexedTypeVariable {
     sink.end(tag);
   }
 
+  @override
   String toString() =>
       '${jsElementPrefix}type_variable(${typeDeclaration.name}.$name)';
 }

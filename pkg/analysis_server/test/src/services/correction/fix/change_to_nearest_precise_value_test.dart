@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'fix_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(ChangeToNearestPreciseValueTest);
   });
@@ -19,8 +19,8 @@ class ChangeToNearestPreciseValueTest extends FixProcessorTest {
   @override
   FixKind get kind => DartFixKind.CHANGE_TO_NEAREST_PRECISE_VALUE;
 
-  test_impreciseIntAsDouble() async {
-    await resolveTestUnit('''
+  Future<void> test_impreciseIntAsDouble() async {
+    await resolveTestCode('''
 double x = 1000000000000000000000000;
 ''');
     await assertHasFix('''
@@ -28,8 +28,8 @@ double x = 999999999999999983222784;
 ''');
   }
 
-  test_impreciseIntAsDouble_asCapitalHex() async {
-    await resolveTestUnit('''
+  Future<void> test_impreciseIntAsDouble_asCapitalHex() async {
+    await resolveTestCode('''
 double x = 0X1000000000000000000000001;
 ''');
     await assertHasFix('''
@@ -37,8 +37,8 @@ double x = 0x1000000000000000000000000;
 ''');
   }
 
-  test_impreciseIntAsDouble_asHex() async {
-    await resolveTestUnit('''
+  Future<void> test_impreciseIntAsDouble_asHex() async {
+    await resolveTestCode('''
 double x = 0x1000000000000000000000001;
 ''');
     await assertHasFix('''
@@ -46,8 +46,8 @@ double x = 0x1000000000000000000000000;
 ''');
   }
 
-  test_impreciseIntAsDouble_maxValue() async {
-    await resolveTestUnit('''
+  Future<void> test_impreciseIntAsDouble_maxValue() async {
+    await resolveTestCode('''
 double x = 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000;
 ''');
     await assertHasFix('''
@@ -55,8 +55,8 @@ double x = 179769313486231570814527423731704356798070567525844996598917476803157
 ''');
   }
 
-  test_impreciseIntAsDouble_maxValue_asHex() async {
-    await resolveTestUnit('''
+  Future<void> test_impreciseIntAsDouble_maxValue_asHex() async {
+    await resolveTestCode('''
 double x = 0x100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000;
 ''');
     await assertHasFix('''

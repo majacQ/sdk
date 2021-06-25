@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'assist_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(ReplaceIfElseWithConditionalTest);
   });
@@ -19,8 +19,8 @@ class ReplaceIfElseWithConditionalTest extends AssistProcessorTest {
   @override
   AssistKind get kind => DartAssistKind.REPLACE_IF_ELSE_WITH_CONDITIONAL;
 
-  test_assignment() async {
-    await resolveTestUnit('''
+  Future<void> test_assignment() async {
+    await resolveTestCode('''
 main() {
   int vvv;
   if (true) {
@@ -38,8 +38,8 @@ main() {
 ''');
   }
 
-  test_expressionVsReturn() async {
-    await resolveTestUnit('''
+  Future<void> test_expressionVsReturn() async {
+    await resolveTestCode('''
 main() {
   if (true) {
     print(42);
@@ -51,8 +51,8 @@ main() {
     await assertNoAssistAt('else');
   }
 
-  test_notIfStatement() async {
-    await resolveTestUnit('''
+  Future<void> test_notIfStatement() async {
+    await resolveTestCode('''
 main() {
   print(0);
 }
@@ -60,8 +60,8 @@ main() {
     await assertNoAssistAt('print');
   }
 
-  test_notSingleStatement() async {
-    await resolveTestUnit('''
+  Future<void> test_notSingleStatement() async {
+    await resolveTestCode('''
 main() {
   int vvv;
   if (true) {
@@ -76,8 +76,8 @@ main() {
     await assertNoAssistAt('if (true)');
   }
 
-  test_return() async {
-    await resolveTestUnit('''
+  Future<void> test_return_expression_expression() async {
+    await resolveTestCode('''
 main() {
   if (true) {
     return 111;
@@ -91,5 +91,33 @@ main() {
   return true ? 111 : 222;
 }
 ''');
+  }
+
+  Future<void> test_return_expression_nothing() async {
+    verifyNoTestUnitErrors = false;
+    await resolveTestCode('''
+void f(bool c) {
+  if (c) {
+    return 111;
+  } else {
+    return;
+  }
+}
+''');
+    await assertNoAssistAt('if (c)');
+  }
+
+  Future<void> test_return_nothing_expression() async {
+    verifyNoTestUnitErrors = false;
+    await resolveTestCode('''
+void f(bool c) {
+  if (c) {
+    return;
+  } else {
+    return 222;
+  }
+}
+''');
+    await assertNoAssistAt('if (c)');
   }
 }

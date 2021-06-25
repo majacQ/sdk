@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 // GENERATED - DON'T EDIT.
 // GENERATED - DON'T EDIT.
 // GENERATED - DON'T EDIT.
@@ -15,8 +17,8 @@ import 'dart:core';
 import 'dart:core' as core;
 import 'package:expect/expect.dart';
 
-@NoInline()
-@AssumeDynamic()
+@pragma('dart2js:noInline')
+@pragma('dart2js:assumeDynamic')
 confuse(f) => f;
 
 typedef F0<T> = Function Function(core.List<core.int> x);
@@ -311,8 +313,8 @@ class U89<T> {
     }
 
     Expect.isTrue(m5 is F5<T>);
-    Expect
-        .isTrue(m5 is int Function(int x1, {List<Function> x}) Function(int x));
+    Expect.isTrue(
+        m5 is int Function(int x1, {List<Function> x}) Function(int x));
     Expect.isTrue(confuse(m5) is F5<T>);
     // In checked mode, verifies the type.
     x5 = m5;
@@ -385,8 +387,8 @@ class U89<T> {
     }
 
     Expect.isTrue(m8 is F8<T>);
-    Expect
-        .isTrue(m8 is Function Function(int x2, [List<T> x3]) Function(int x));
+    Expect.isTrue(
+        m8 is Function Function(int x2, [List<T> x3]) Function(int x));
     Expect.isTrue(confuse(m8) is F8<T>);
     // In checked mode, verifies the type.
     x8 = m8;

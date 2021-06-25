@@ -2,11 +2,13 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-main() {
+// @dart = 2.9
+
+void main() {
   /*1:main*/ test();
 }
 
-test() {
+void test() {
   try {
     /*2:test*/ throw '>ExceptionMarker<';
     // ignore: UNUSED_CATCH_CLAUSE

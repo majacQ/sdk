@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart=2.12
+
 library vm.transformations.mixin_deduplication;
 
 import 'package:kernel/ast.dart';
@@ -9,7 +11,31 @@ import 'package:kernel/ast.dart';
 /// De-duplication of identical mixin applications.
 void transformComponent(Component component) {
   final deduplicateMixins = new DeduplicateMixinsTransformer();
-  component.libraries.forEach(deduplicateMixins.visitLibrary);
+  final referenceUpdater = ReferenceUpdater(deduplicateMixins);
+
+  // Deduplicate mixins and re-resolve super initializers.
+  // (this is a shallow transformation)
+  component.libraries
+      .forEach((library) => deduplicateMixins.visitLibrary(library, null));
+
+  // Do a deep transformation to update references to the removed mixin
+  // application classes in the interface targets and types.
+  //
+  // Interface targets pointing to members of removed mixin application
+  // classes are re-resolved at the remaining mixin applications.
+  // This is necessary iff the component was assembled from individual modular
+  // kernel compilations:
+  //
+  //   * if the CFE reads in the entire program as source, interface targets
+  //     will point to the original mixin class
+  //
+  //   * if the CFE reads in dependencies as kernel, interface targets will
+  //     point to the already existing mixin application classes.
+  //
+  // TODO(dartbug.com/39375): Remove this extra O(N) pass over the AST if the
+  // CFE decides to consistently let the interface target point to the mixin
+  // class (instead of mixin application).
+  component.libraries.forEach(referenceUpdater.visitLibrary);
 }
 
 class _DeduplicateMixinKey {
@@ -29,11 +55,14 @@ class _DeduplicateMixinKey {
           otherClass.typeParameters.isNotEmpty) {
         return false;
       }
-      // Deduplicate mixin applications with matching supertype, mixed-in type
-      // and implemented interfaces.
+      // Deduplicate mixin applications with matching supertype, mixed-in type,
+      // implemented interfaces and NNBD mode (CFE may add extra signature
+      // members depending on the NNBD mode).
       return thisClass.supertype == otherClass.supertype &&
           thisClass.mixedInType == otherClass.mixedInType &&
-          listEquals(thisClass.implementedTypes, otherClass.implementedTypes);
+          listEquals(thisClass.implementedTypes, otherClass.implementedTypes) &&
+          thisClass.enclosingLibrary.isNonNullableByDefault ==
+              otherClass.enclosingLibrary.isNonNullableByDefault;
     }
     return false;
   }
@@ -53,35 +82,30 @@ class _DeduplicateMixinKey {
   }
 }
 
-class DeduplicateMixinsTransformer extends Transformer {
+class DeduplicateMixinsTransformer extends RemovingTransformer {
   final _canonicalMixins = new Map<_DeduplicateMixinKey, Class>();
   final _duplicatedMixins = new Map<Class, Class>();
 
   @override
-  TreeNode visitLibrary(Library node) {
-    if (!node.isExternal) {
-      transformList(node.classes, this, node);
-    }
+  TreeNode visitLibrary(Library node, TreeNode? removalSentinel) {
+    transformClassList(node.classes, node);
     return node;
   }
 
   @override
-  TreeNode visitClass(Class c) {
-    if (c.enclosingLibrary.isExternal) {
-      return c;
-    }
-
+  TreeNode visitClass(Class c, TreeNode? removalSentinel) {
     if (_duplicatedMixins.containsKey(c)) {
-      return null; // Class was de-duplicated already, just remove it.
+      // Class was de-duplicated already, just remove it.
+      return removalSentinel!;
     }
 
     if (c.supertype != null) {
-      c.supertype = _transformSupertype(c.supertype, c, true);
+      c.supertype = _transformSupertype(c.supertype!, c, true);
     }
     if (c.mixedInType != null) {
       throw 'All mixins should be transformed already.';
     }
-    transformSupertypeList(c.implementedTypes, this);
+    transformSupertypeList(c.implementedTypes);
 
     if (!c.isAnonymousMixin) {
       return c;
@@ -89,63 +113,163 @@ class DeduplicateMixinsTransformer extends Transformer {
 
     Class canonical =
         _canonicalMixins.putIfAbsent(new _DeduplicateMixinKey(c), () => c);
+    // ignore: unnecessary_null_comparison
     assert(canonical != null);
 
     if (canonical != c) {
-      c.canonicalName?.unbind();
+      // Ensure that kernel file writer will not be able to
+      // write a dangling reference to the deleted class.
+      c.reference.canonicalName = null;
       _duplicatedMixins[c] = canonical;
-      // print('Replacing $c with $canonical');
-      return null; // Remove class.
+      // Remove class.
+      return removalSentinel!;
     }
 
     return c;
   }
 
   @override
-  Supertype visitSupertype(Supertype node) {
+  Supertype visitSupertype(Supertype node, Supertype? removalSentinel) {
     return _transformSupertype(node, null, false);
   }
 
   Supertype _transformSupertype(
-      Supertype supertype, Class cls, bool isSuperclass) {
+      Supertype supertype, Class? cls, bool isSuperclass) {
     Class oldSuper = supertype.classNode;
-    Class newSuper = visitClass(oldSuper);
-    if (newSuper == null) {
-      Class canonicalSuper = _duplicatedMixins[oldSuper];
-      assert(canonicalSuper != null);
+    Class newSuper = visitClass(oldSuper, dummyClass) as Class;
+    if (identical(newSuper, dummyClass)) {
+      Class canonicalSuper = _duplicatedMixins[oldSuper]!;
       supertype = new Supertype(canonicalSuper, supertype.typeArguments);
       if (isSuperclass) {
-        _correctForwardingConstructors(cls, oldSuper, canonicalSuper);
+        _correctForwardingConstructors(cls!, oldSuper, canonicalSuper);
       }
     }
     return supertype;
   }
 
   @override
-  TreeNode defaultTreeNode(TreeNode node) =>
+  TreeNode defaultTreeNode(TreeNode node, TreeNode? removalSentinel) =>
       throw 'Unexpected node ${node.runtimeType}: $node';
 }
 
-/// Corrects synthetic forwarding constructors inserted by mixin resolution
-/// after replacing superclass.
+/// Rewrites references to the deduplicated mixin application
+/// classes. Updates interface targets and types.
+class ReferenceUpdater extends RecursiveVisitor {
+  final DeduplicateMixinsTransformer transformer;
+
+  ReferenceUpdater(this.transformer);
+
+  @override
+  void visitProcedure(Procedure node) {
+    super.visitProcedure(node);
+    node.stubTarget = _resolveNewInterfaceTarget(node.stubTarget);
+  }
+
+  @override
+  visitInstanceGet(InstanceGet node) {
+    node.interfaceTarget = _resolveNewInterfaceTarget(node.interfaceTarget)!;
+    super.visitInstanceGet(node);
+  }
+
+  @override
+  visitInstanceTearOff(InstanceTearOff node) {
+    node.interfaceTarget =
+        _resolveNewInterfaceTarget(node.interfaceTarget) as Procedure;
+    super.visitInstanceTearOff(node);
+  }
+
+  @override
+  visitInstanceSet(InstanceSet node) {
+    node.interfaceTarget = _resolveNewInterfaceTarget(node.interfaceTarget)!;
+    super.visitInstanceSet(node);
+  }
+
+  @override
+  visitInstanceInvocation(InstanceInvocation node) {
+    node.interfaceTarget =
+        _resolveNewInterfaceTarget(node.interfaceTarget) as Procedure;
+    super.visitInstanceInvocation(node);
+  }
+
+  @override
+  visitEqualsCall(EqualsCall node) {
+    node.interfaceTarget =
+        _resolveNewInterfaceTarget(node.interfaceTarget) as Procedure;
+    super.visitEqualsCall(node);
+  }
+
+  @override
+  visitSuperPropertyGet(SuperPropertyGet node) {
+    node.interfaceTarget = _resolveNewInterfaceTarget(node.interfaceTarget);
+    super.visitSuperPropertyGet(node);
+  }
+
+  @override
+  visitSuperPropertySet(SuperPropertySet node) {
+    node.interfaceTarget = _resolveNewInterfaceTarget(node.interfaceTarget);
+    super.visitSuperPropertySet(node);
+  }
+
+  @override
+  visitSuperMethodInvocation(SuperMethodInvocation node) {
+    node.interfaceTarget =
+        _resolveNewInterfaceTarget(node.interfaceTarget) as Procedure?;
+    super.visitSuperMethodInvocation(node);
+  }
+
+  Member? _resolveNewInterfaceTarget(Member? m) {
+    final Class? c = m?.enclosingClass;
+    if (c != null && c.isAnonymousMixin) {
+      final Class? replacement = transformer._duplicatedMixins[c];
+      if (replacement != null) {
+        // The class got removed, so we need to re-resolve the interface target.
+        return _findMember(replacement, m!);
+      }
+    }
+    return m;
+  }
+
+  Member _findMember(Class klass, Member m) {
+    if (m is Field) {
+      return klass.members.where((other) => other.name == m.name).single;
+    } else if (m is Procedure) {
+      return klass.procedures
+          .where((other) => other.kind == m.kind && other.name == m.name)
+          .single;
+    } else {
+      throw 'Hit unexpected interface target which is not a Field/Procedure';
+    }
+  }
+
+  @override
+  visitClassReference(Class node) {
+    // Safeguard against any possible leaked uses of anonymous mixin
+    // applications which are not updated.
+    if (node.isAnonymousMixin && transformer._duplicatedMixins[node] != null) {
+      throw 'Unexpected reference to removed mixin application $node';
+    }
+    super.visitClassReference(node);
+  }
+}
+
+/// Corrects forwarding constructors inserted by mixin resolution after
+/// replacing superclass.
 void _correctForwardingConstructors(Class c, Class oldSuper, Class newSuper) {
   for (var constructor in c.constructors) {
-    if (constructor.isSynthetic) {
-      for (var initializer in constructor.initializers) {
-        if ((initializer is SuperInitializer) &&
-            initializer.target.enclosingClass == oldSuper) {
-          Constructor replacement = null;
-          for (var c in newSuper.constructors) {
-            if (c.name == initializer.target.name) {
-              replacement = c;
-              break;
-            }
+    for (var initializer in constructor.initializers) {
+      if ((initializer is SuperInitializer) &&
+          initializer.target.enclosingClass == oldSuper) {
+        Constructor? replacement = null;
+        for (var c in newSuper.constructors) {
+          if (c.name == initializer.target.name) {
+            replacement = c;
+            break;
           }
-          if (replacement == null) {
-            throw 'Unable to find a replacement for $c in $newSuper';
-          }
-          initializer.target = replacement;
         }
+        if (replacement == null) {
+          throw 'Unable to find a replacement for $c in $newSuper';
+        }
+        initializer.target = replacement;
       }
     }
   }

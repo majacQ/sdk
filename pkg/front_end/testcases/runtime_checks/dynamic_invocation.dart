@@ -1,17 +1,17 @@
 // Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-
+// @dart=2.9
 /*@testedFeatures=checks*/
 library test;
 
 class C<T> {
-  void f1(T /*@covariance=genericImpl*/ x) {}
+  void f1(T x) {}
   void f2(int x) {}
 }
 
 class D extends C<num> {
-  void f1(covariant int /*@covariance=explicit*/ x) {}
+  void f1(covariant int x) {}
 }
 
 void g1(dynamic d) {

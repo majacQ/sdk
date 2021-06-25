@@ -2,8 +2,12 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import 'dart:typed_data';
 import 'package:expect/expect.dart';
+
+const bool supportsInt64 = bool.fromEnvironment('dart.isVM');
 
 List<int> intList = <int>[1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
@@ -157,8 +161,10 @@ main() {
   uint16ListTest();
   int32ListTest();
   uint32ListTest();
-  int64ListTest();
-  uint64ListTest();
+  if (supportsInt64) {
+    int64ListTest();
+    uint64ListTest();
+  }
   float32ListTest();
   float64ListTest();
   byteDataTest();

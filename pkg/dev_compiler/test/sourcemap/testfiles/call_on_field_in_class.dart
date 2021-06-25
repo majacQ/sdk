@@ -2,7 +2,9 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-main() {
+// @dart = 2.9
+
+void main() {
   /* bl */ var foo = /*sl:1*/ Foo();
   foo.foo = foo. /*sl:2*/ fooMethod;
   foo /*sl:3*/ .fooMethod();
@@ -16,10 +18,10 @@ main() {
 }
 
 class Foo {
-  var foo;
+  void Function() foo;
 
   void fooMethod() {
-    /*bl*/ /*s:4*/ /*s:6*/ print("Hello from fooMethod");
+    /*bl*/ /*s:4*/ /*s:6*/ print('Hello from fooMethod');
     /*nbb:0:4*/
   }
 }

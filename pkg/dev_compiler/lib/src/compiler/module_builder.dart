@@ -2,9 +2,11 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import 'package:args/args.dart' show ArgParser, ArgResults;
-import 'package:args/command_runner.dart' show UsageException;
-import 'package:path/path.dart' as path;
+import 'package:dev_compiler/src/compiler/shared_compiler.dart';
+import 'package:path/path.dart' as p;
 
 import '../js_ast/js_ast.dart';
 import 'js_names.dart';
@@ -20,50 +22,34 @@ enum ModuleFormat {
   /// Asynchronous Module Definition (AMD, used in browsers).
   amd,
 
-  /// Dart Dev Compiler's legacy format (deprecated).
-  legacy,
-
-  /// Like [amd] but can be concatenated into a single file.
-  amdConcat,
-
-  /// Like [legacy] but can be concatenated into a single file.
-  legacyConcat
+  /// Dart Dev Compiler's own format.
+  ddc,
 }
 
 /// Parses a string into a [ModuleFormat].
-ModuleFormat parseModuleFormat(String s) => {
-      'es6': ModuleFormat.es6,
-      'common': ModuleFormat.common,
-      'amd': ModuleFormat.amd,
-      // Deprecated:
-      'node': ModuleFormat.common,
-      'legacy': ModuleFormat.legacy
-    }[s];
+///
+/// Throws an [ArgumentError] if the module format is not recognized.
+ModuleFormat parseModuleFormat(String s) {
+  var formats = const {
+    'es6': ModuleFormat.es6,
+    'common': ModuleFormat.common,
+    'amd': ModuleFormat.amd,
+    'ddc': ModuleFormat.ddc,
+    // Deprecated:
+    'node': ModuleFormat.common,
+    'legacy': ModuleFormat.ddc
+  };
+  var selected = formats[s];
+  if (selected == null) {
+    throw ArgumentError('Invalid module format `$s`, allowed formats are: '
+        '`${formats.keys.join(', ')}`');
+  }
+  return selected;
+}
 
 /// Parse the module format option added by [addModuleFormatOptions].
 List<ModuleFormat> parseModuleFormatOption(ArgResults args) {
-  var formats =
-      (args['modules'] as List<String>).map(parseModuleFormat).toList();
-
-  if (args['single-out-file'] as bool) {
-    for (int i = 0; i < formats.length; i++) {
-      var format = formats[i];
-      switch (formats[i]) {
-        case ModuleFormat.amd:
-          formats[i] = ModuleFormat.amdConcat;
-          break;
-        case ModuleFormat.legacy:
-          formats[i] = ModuleFormat.legacyConcat;
-          break;
-        default:
-          throw UsageException(
-              'Format $format cannot be combined with '
-              'single-out-file. Only amd and legacy modes are supported.',
-              '');
-      }
-    }
-  }
-  return formats;
+  return (args['modules'] as List<String>).map(parseModuleFormat).toList();
 }
 
 /// Adds an option to the [argParser] for choosing the module format, optionally
@@ -74,7 +60,8 @@ void addModuleFormatOptions(ArgParser argParser, {bool hide = true}) {
     'es6',
     'common',
     'amd',
-    'legacy', // deprecated
+    'ddc',
+    'legacy', // renamed to ddc
     'node', // renamed to commonjs
     'all' // to emit all flavors for the SDK
   ], allowedHelp: {
@@ -84,12 +71,6 @@ void addModuleFormatOptions(ArgParser argParser, {bool hide = true}) {
   }, defaultsTo: [
     'amd'
   ]);
-
-  argParser.addFlag('single-out-file',
-      help: 'emit modules that can be concatenated into one file.\n'
-          'Only compatible with legacy and amd module formats.',
-      defaultsTo: false,
-      hide: hide);
 }
 
 /// Transforms an ES6 [module] into a given module [format].
@@ -102,19 +83,40 @@ void addModuleFormatOptions(ArgParser argParser, {bool hide = true}) {
 /// [ExportDeclaration]s.
 Program transformModuleFormat(ModuleFormat format, Program module) {
   switch (format) {
-    case ModuleFormat.legacy:
-    case ModuleFormat.legacyConcat:
+    case ModuleFormat.ddc:
       // Legacy format always generates output compatible with single file mode.
-      return LegacyModuleBuilder().build(module);
+      return DdcModuleBuilder().build(module);
     case ModuleFormat.common:
       return CommonJSModuleBuilder().build(module);
     case ModuleFormat.amd:
       return AmdModuleBuilder().build(module);
-    case ModuleFormat.amdConcat:
-      return AmdModuleBuilder(singleOutFile: true).build(module);
     case ModuleFormat.es6:
     default:
       return module;
+  }
+}
+
+/// Transforms an ES6 [function] into a given module [format].
+///
+/// If the format is [ModuleFormat.es6] this will return [function] unchanged.
+///
+/// Because JS ASTs are immutable the resulting function will share as much
+/// structure as possible with the original. The transformation is a shallow one
+/// that affects the [ImportDeclaration]s from [items].
+///
+/// Returns a new function that combines all statements from tranformed imports
+/// from [items] and the body of the [function].
+Fun transformFunctionModuleFormat(
+    List<ModuleItem> items, Fun function, ModuleFormat format) {
+  switch (format) {
+    case ModuleFormat.ddc:
+      // Legacy format always generates output compatible with single file mode.
+      return DdcModuleBuilder().buildFunctionWithImports(items, function);
+    case ModuleFormat.amd:
+      return AmdModuleBuilder().buildFunctionWithImports(items, function);
+    default:
+      throw UnsupportedError(
+          'Incremental build does not support $format module format');
   }
 }
 
@@ -129,11 +131,16 @@ abstract class _ModuleBuilder {
   final statements = <Statement>[];
 
   /// Collect [imports], [exports] and [statements] from the ES6 [module].
+  void visitProgram(Program module) {
+    visitModuleItems(module.body);
+  }
+
+  /// Collect [imports], [exports] and [statements] from the ES6 [items].
   ///
   /// For exports, this will also add their body to [statements] in the
   /// appropriate position.
-  void visitProgram(Program module) {
-    for (var item in module.body) {
+  void visitModuleItems(List<ModuleItem> items) {
+    for (var item in items) {
       if (item is ImportDeclaration) {
         visitImportDeclaration(item);
       } else if (item is ExportDeclaration) {
@@ -144,11 +151,11 @@ abstract class _ModuleBuilder {
     }
   }
 
-  visitImportDeclaration(ImportDeclaration node) {
+  void visitImportDeclaration(ImportDeclaration node) {
     imports.add(node);
   }
 
-  visitExportDeclaration(ExportDeclaration node) {
+  void visitExportDeclaration(ExportDeclaration node) {
     exports.add(node);
     var exported = node.exported;
     if (exported is! ExportClause) {
@@ -156,75 +163,140 @@ abstract class _ModuleBuilder {
     }
   }
 
-  visitStatement(Statement node) {
+  void visitStatement(Statement node) {
     statements.add(node);
+  }
+
+  void clear() {
+    imports.clear();
+    exports.clear();
+    statements.clear();
   }
 }
 
-/// Generates modules for with our legacy `dart_library.js` loading mechanism.
+/// Generates modules for with our DDC `dart_library.js` loading mechanism.
 // TODO(jmesserly): remove this and replace with something that interoperates.
-class LegacyModuleBuilder extends _ModuleBuilder {
+class DdcModuleBuilder extends _ModuleBuilder {
+  /// Build a module variable definition for [import].
+  ///
+  /// Used to load modules referenced in the expression during expression
+  /// evaluation.
+  static Statement buildLoadModule(
+          Identifier moduleVar, ImportDeclaration import) =>
+      js.statement(
+          'const # = dart_library.import(#);', [moduleVar, import.from]);
+
+  /// Build library variable definitions for all libraries from [import].
+  static List<Statement> buildImports(
+      Identifier moduleVar, ImportDeclaration import, bool deferModules) {
+    var items = <Statement>[];
+
+    for (var importName in import.namedImports) {
+      // import * is not emitted by the compiler, so we don't handle it here.
+      assert(!importName.isStar);
+      var asName = importName.asName ?? importName.name;
+      var fromName = importName.name.name;
+      // Load non-SDK modules on demand (i.e., deferred).
+      if (deferModules && import.from.valueWithoutQuotes != dartSdkModule) {
+        items.add(js.statement(
+            'let # = dart_library.defer(#, #, function (mod, lib) {'
+            '  # = mod;'
+            '  # = lib;'
+            '});',
+            [asName, moduleVar, js.string(fromName), moduleVar, asName]));
+      } else {
+        items.add(js.statement('const # = #.#', [asName, moduleVar, fromName]));
+      }
+    }
+    return items;
+  }
+
+  /// Build statements for [exports].
+  static List<Statement> buildExports(
+      Identifier exportsVar, List<ExportDeclaration> exports) {
+    var items = <Statement>[];
+
+    if (exports.isNotEmpty) {
+      items.add(js.comment('Exports:'));
+      // TODO(jmesserly): make these immutable in JS?
+      for (var export in exports) {
+        var names = export.exportedNames;
+        assert(names != null); // export * not supported in ddc modules.
+        for (var name in names) {
+          var alias = name.asName ?? name.name;
+          items.add(
+              js.statement('#.# = #;', [exportsVar, alias.name, name.name]));
+        }
+      }
+    }
+    return items;
+  }
+
+  /// Build function body with all necessary imports included.
+  ///
+  /// Used for the top level synthetic function generated during expression
+  /// compilation, in order to include all the context needed for evaluation
+  /// inside it.
+  ///
+  /// Returns a new function that combines all statements from tranformed
+  /// imports from [items] and the body of the [function].
+  Fun buildFunctionWithImports(List<ModuleItem> items, Fun function) {
+    clear();
+    visitModuleItems(items);
+
+    var moduleImports = _collectModuleImports(imports);
+    var importStatements = <Statement>[];
+
+    for (var p in moduleImports) {
+      var moduleVar = p.key;
+      var import = p.value;
+      importStatements.add(buildLoadModule(moduleVar, import));
+      importStatements.addAll(buildImports(moduleVar, import, false));
+    }
+
+    return Fun(
+      function.params,
+      Block([...importStatements, ...statements, ...function.body.statements]),
+    );
+  }
+
   Program build(Program module) {
     // Collect imports/exports/statements.
     visitProgram(module);
 
-    // Build import parameters.
     var exportsVar = TemporaryId('exports');
-    var parameters = <TemporaryId>[exportsVar];
+    var parameters = <Identifier>[exportsVar];
     var importNames = <Expression>[];
+
+    var moduleImports = _collectModuleImports(imports);
     var importStatements = <Statement>[];
-    for (var import in imports) {
+
+    for (var p in moduleImports) {
+      var moduleVar = p.key;
+      var import = p.value;
       importNames.add(import.from);
-      // TODO(jmesserly): we could use destructuring here.
-      var moduleVar =
-          TemporaryId(pathToJSIdentifier(import.from.valueWithoutQuotes));
       parameters.add(moduleVar);
-      for (var importName in import.namedImports) {
-        assert(!importName.isStar); // import * not supported in legacy modules.
-        var asName = importName.asName ?? importName.name;
-        var fromName = importName.name.name;
-        // Load non-SDK modules on demand (i.e., deferred).
-        if (import.from.valueWithoutQuotes != dartSdkModule) {
-          importStatements.add(js.statement(
-              'let # = dart_library.defer(#, #, function (mod, lib) {'
-              '  # = mod;'
-              '  # = lib;'
-              '});',
-              [asName, moduleVar, js.string(fromName), moduleVar, asName]));
-        } else {
-          importStatements.add(js.statement(
-              'const # = #.#', [asName, moduleVar, importName.name.name]));
-        }
-      }
+      importStatements.addAll(buildImports(moduleVar, import, true));
     }
+
+    // Prepend import statetements.
     statements.insertAll(0, importStatements);
 
-    if (exports.isNotEmpty) {
-      statements.add(js.comment('Exports:'));
-      // TODO(jmesserly): make these immutable in JS?
-      for (var export in exports) {
-        var names = export.exportedNames;
-        assert(names != null); // export * not supported in legacy modules.
-        for (var name in names) {
-          statements
-              .add(js.statement('#.# = #;', [exportsVar, name.name, name]));
-        }
-      }
-    }
+    // Append export statements.
+    statements.addAll(buildExports(exportsVar, exports));
 
-    var functionName =
-        'load__' + pathToJSIdentifier(module.name.replaceAll('.', '_'));
     var resultModule = NamedFunction(
-        Identifier(functionName),
+        loadFunctionIdentifier(module.name),
         js.fun("function(#) { 'use strict'; #; }", [parameters, statements]),
         true);
 
-    var moduleDef = js.statement("dart_library.library(#, #, #, #)", [
+    var moduleDef = js.statement('dart_library.library(#, #, #, #, #)', [
       js.string(module.name, "'"),
       LiteralNull(),
       js.commentExpression(
-          "Imports", ArrayInitializer(importNames, multiline: true)),
-      resultModule
+          'Imports', ArrayInitializer(importNames, multiline: true)),
+      resultModule,
+      SharedCompiler.metricsLocationID
     ]);
     return Program(<ModuleItem>[moduleDef]);
   }
@@ -266,8 +338,9 @@ class CommonJSModuleBuilder extends _ModuleBuilder {
         // export * is not emitted by the compiler, so we don't handle it here.
         assert(names != null);
         for (var name in names) {
-          statements
-              .add(js.statement('#.# = #;', [exportsVar, name.name, name]));
+          var alias = name.asName ?? name.name;
+          statements.add(
+              js.statement('#.# = #;', [exportsVar, alias.name, name.name]));
         }
       }
     }
@@ -278,35 +351,34 @@ class CommonJSModuleBuilder extends _ModuleBuilder {
 
 /// Generates AMD modules (used in browsers with RequireJS).
 class AmdModuleBuilder extends _ModuleBuilder {
-  final bool singleOutFile;
+  AmdModuleBuilder();
 
-  AmdModuleBuilder({this.singleOutFile = false});
+  /// Build a module variable definition for [import].
+  ///
+  /// Used to load modules referenced in the expression during expression
+  /// evaluation.
+  static Statement buildLoadModule(
+          Identifier moduleVar, ImportDeclaration import) =>
+      js.statement('const # = require(#);', [moduleVar, import.from]);
 
-  Program build(Program module) {
-    var importStatements = <Statement>[];
+  /// Build library variable definitions for all libraries from [import].
+  static List<Statement> buildImports(
+      Identifier moduleVar, ImportDeclaration import) {
+    var items = <Statement>[];
 
-    // Collect imports/exports/statements.
-    visitProgram(module);
-
-    var dependencies = <LiteralString>[];
-    var fnParams = <Parameter>[];
-    for (var import in imports) {
-      // TODO(jmesserly): we could use destructuring once Atom supports it.
-      var moduleVar =
-          TemporaryId(pathToJSIdentifier(import.from.valueWithoutQuotes));
-      fnParams.add(moduleVar);
-      dependencies.add(import.from);
-
-      // TODO(jmesserly): optimize for the common case of a single import.
-      for (var importName in import.namedImports) {
-        // import * is not emitted by the compiler, so we don't handle it here.
-        assert(!importName.isStar);
-        var asName = importName.asName ?? importName.name;
-        importStatements.add(js.statement(
-            'const # = #.#', [asName, moduleVar, importName.name.name]));
-      }
+    for (var importName in import.namedImports) {
+      // import * is not emitted by the compiler, so we don't handle it here.
+      assert(!importName.isStar);
+      var asName = importName.asName ?? importName.name;
+      items.add(js.statement(
+          'const # = #.#', [asName, moduleVar, importName.name.name]));
     }
-    statements.insertAll(0, importStatements);
+    return items;
+  }
+
+  /// Build statements for [exports].
+  static List<Statement> buildExports(List<ExportDeclaration> exports) {
+    var items = <Statement>[];
 
     if (exports.isNotEmpty) {
       var exportedProps = <Property>[];
@@ -315,59 +387,128 @@ class AmdModuleBuilder extends _ModuleBuilder {
         // export * is not emitted by the compiler, so we don't handle it here.
         assert(names != null);
         for (var name in names) {
-          exportedProps.add(Property(js.string(name.name), name));
+          var alias = name.asName ?? name.name;
+          exportedProps.add(Property(js.string(alias.name), name.name));
         }
       }
-      statements.add(js.comment('Exports:'));
-      statements.add(Return(ObjectInitializer(exportedProps, multiline: true)));
+      items.add(js.comment('Exports:'));
+      items.add(Return(ObjectInitializer(exportedProps, multiline: true)));
+    }
+    return items;
+  }
+
+  /// Build function body with all necessary imports included.
+  ///
+  /// Used for the top level synthetic function generated during expression
+  /// compilation, in order to include all the context needed for evaluation
+  /// inside it.
+  ///
+  /// Returns a new function that combines all statements from tranformed
+  /// imports from [items] and the body of the [function].
+  Fun buildFunctionWithImports(List<ModuleItem> items, Fun function) {
+    clear();
+    visitModuleItems(items);
+
+    var moduleImports = _collectModuleImports(imports);
+    var importStatements = <Statement>[];
+
+    for (var p in moduleImports) {
+      var moduleVar = p.key;
+      var import = p.value;
+      importStatements.add(buildLoadModule(moduleVar, import));
+      importStatements.addAll(buildImports(moduleVar, import));
     }
 
-    // TODO(vsm): Consider using an immediately invoked named function pattern
-    // (see legacy code above).
-    var block = singleOutFile
-        ? js.statement("define(#, #, function(#) { 'use strict'; #; });", [
-            js.string(module.name, "'"),
-            ArrayInitializer(dependencies),
-            fnParams,
-            statements
-          ])
-        : js.statement("define(#, function(#) { 'use strict'; #; });",
-            [ArrayInitializer(dependencies), fnParams, statements]);
+    return Fun(
+      function.params,
+      Block([...importStatements, ...statements, ...function.body.statements]),
+    );
+  }
+
+  Program build(Program module) {
+    // Collect imports/exports/statements.
+    visitProgram(module);
+
+    var moduleImports = _collectModuleImports(imports);
+    var importStatements = <Statement>[];
+    var fnParams = <Identifier>[];
+    var dependencies = <LiteralString>[];
+
+    for (var p in moduleImports) {
+      var moduleVar = p.key;
+      var import = p.value;
+      fnParams.add(moduleVar);
+      dependencies.add(import.from);
+      importStatements.addAll(buildImports(moduleVar, import));
+    }
+
+    // Prepend import statetements.
+    statements.insertAll(0, importStatements);
+
+    // Append export statements.
+    statements.addAll(buildExports(exports));
+
+    var resultModule = NamedFunction(
+        loadFunctionIdentifier(module.name),
+        js.fun("function(#) { 'use strict'; #; }", [fnParams, statements]),
+        true);
+    var block = js.statement(
+        'define(#, #);', [ArrayInitializer(dependencies), resultModule]);
 
     return Program([block]);
   }
 }
 
-/// Escape [name] to make it into a valid identifier.
-String pathToJSIdentifier(String name) {
-  return toJSIdentifier(path.basenameWithoutExtension(name));
+bool isSdkInternalRuntimeUri(Uri importUri) {
+  return importUri.scheme == 'dart' && importUri.path == '_runtime';
 }
 
-/// Escape [name] to make it into a valid identifier.
-String toJSIdentifier(String name) {
-  if (name.length == 0) return r'$';
-
-  // Escape any invalid characters
-  StringBuffer buffer = null;
-  for (int i = 0; i < name.length; i++) {
-    var ch = name[i];
-    var needsEscape = ch == r'$' || _invalidCharInIdentifier.hasMatch(ch);
-    if (needsEscape && buffer == null) {
-      buffer = StringBuffer(name.substring(0, i));
-    }
-    if (buffer != null) {
-      buffer.write(needsEscape ? '\$${ch.codeUnits.join("")}' : ch);
-    }
+String libraryUriToJsIdentifier(Uri importUri) {
+  if (importUri.scheme == 'dart') {
+    return isSdkInternalRuntimeUri(importUri) ? 'dart' : importUri.path;
   }
+  return pathToJSIdentifier(p.withoutExtension(importUri.pathSegments.last));
+}
 
-  var result = buffer != null ? '$buffer' : name;
-  // Ensure the identifier first character is not numeric and that the whole
-  // identifier is not a keyword.
-  if (result.startsWith(RegExp('[0-9]')) || invalidVariableName(result)) {
-    return '\$$result';
+/// Converts an entire arbitrary path string into a string compatible with
+/// JS identifier naming rules while conserving path information.
+///
+/// NOT guaranteed to result in a unique string. E.g.,
+///   1) '__' appears in a file name.
+///   2) An escaped '/' or '\' appears in a filename (a/b and a$47b).
+String pathToJSIdentifier(String path) {
+  path = p.normalize(path);
+  if (path.startsWith('/') || path.startsWith('\\')) {
+    path = path.substring(1, path.length);
+  }
+  return toJSIdentifier(path
+      .replaceAll('\\', '__')
+      .replaceAll('/', '__')
+      .replaceAll('..', '__')
+      .replaceAll('-', '_'));
+}
+
+/// Creates function name given [moduleName].
+String loadFunctionName(String moduleName) =>
+    'load__' + pathToJSIdentifier(moduleName.replaceAll('.', '_'));
+
+/// Creates function name identifier given [moduleName].
+Identifier loadFunctionIdentifier(String moduleName) =>
+    Identifier(loadFunctionName(moduleName));
+
+// Replacement string for path separators (i.e., '/', '\', '..').
+final encodedSeparator = '__';
+
+/// Group libraries from [imports] by modules.
+List<MapEntry<Identifier, ImportDeclaration>> _collectModuleImports(
+    List<ImportDeclaration> imports) {
+  var result = <MapEntry<Identifier, ImportDeclaration>>[];
+  for (var import in imports) {
+    // TODO(jmesserly): we could use destructuring once Atom supports it.
+    var moduleVar =
+        TemporaryId(pathToJSIdentifier(import.from.valueWithoutQuotes));
+
+    result.add(MapEntry<Identifier, ImportDeclaration>(moduleVar, import));
   }
   return result;
 }
-
-// Invalid characters for identifiers, which would need to be escaped.
-final _invalidCharInIdentifier = RegExp(r'[^A-Za-z_$0-9]');

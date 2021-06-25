@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library test.generic_function_typedef;
 
 import 'dart:mirrors';
@@ -26,15 +28,18 @@ main() {
   TypeMirror dynamicMirror = currentMirrorSystem().dynamicType;
 
   TypedefMirror predicateOfNum =
-      (reflectClass(C).declarations[#predicateOfNum] as VariableMirror).type;
+      (reflectClass(C).declarations[#predicateOfNum] as VariableMirror).type
+          as TypedefMirror;
   TypedefMirror transformOfString =
-      (reflectClass(C).declarations[#transformOfString] as VariableMirror).type;
+      (reflectClass(C).declarations[#transformOfString] as VariableMirror).type
+          as TypedefMirror;
   TypedefMirror transformOfR =
-      (reflectClass(C).declarations[#transformOfR] as VariableMirror).type;
+      (reflectClass(C).declarations[#transformOfR] as VariableMirror).type
+          as TypedefMirror;
   TypedefMirror transformOfDouble = (reflect(new C<double>())
           .type
           .declarations[#transformOfR] as VariableMirror)
-      .type;
+      .type as TypedefMirror;
 
   TypeVariableMirror tFromGenericPredicate =
       reflectTypeDeclaration(GenericPredicate).typeVariables[0];

@@ -4,24 +4,20 @@
 
 import 'dart:collection';
 
-import 'package:front_end/src/scanner/interner.dart';
+import 'package:_fe_analyzer_shared/src/scanner/interner.dart';
 
-export 'package:front_end/src/scanner/interner.dart'
+export 'package:_fe_analyzer_shared/src/scanner/interner.dart'
     show Interner, NullInterner;
 
-/**
- * The class `MappedInterner` implements an interner that uses a map to manage
- * the strings that have been interned.
- */
+/// The class `MappedInterner` implements an interner that uses a map to manage
+/// the strings that have been interned.
 class MappedInterner implements Interner {
-  /**
-   * A table mapping strings to themselves.
-   */
-  Map<String, String> _table = new HashMap<String, String>();
+  /// A table mapping strings to themselves.
+  final Map<String, String> _table = HashMap<String, String>();
 
   @override
   String intern(String string) {
-    String original = _table[string];
+    var original = _table[string];
     if (original == null) {
       _table[string] = string;
       return string;

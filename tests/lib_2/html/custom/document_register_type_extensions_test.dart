@@ -2,10 +2,11 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import 'dart:html';
 
-import 'package:unittest/html_individual_config.dart';
-import 'package:unittest/unittest.dart';
+import 'package:async_helper/async_minitest.dart';
 
 import 'utils.dart';
 
@@ -77,9 +78,7 @@ class CustomCustomDiv extends CustomDiv {
   CustomCustomDiv.created() : super.created();
 }
 
-main() {
-  useHtmlIndividualConfiguration();
-
+main() async {
   // Adapted from Blink's fast/dom/custom/document-register-type-extension test.
 
   var testForm = new FormElement()..id = 'testForm';
@@ -105,23 +104,24 @@ main() {
         'extends': 'div'});
   }
 
-  setUp(() => customElementsReady);
+  await customElementsReady;
 
   group('registration', () {
-    setUp(registerTypes);
-
     test('cannot register twice', () {
+      registerTypes();
       expect(() => document.registerElement2(FooBad.tag, {'prototype': Foo, 'extends': 'div'}),
           throws);
     });
 
     test('cannot register for non-matching tag', () {
+      registerTypes();
       expect(() {
         document.registerElement2('x-input-div', {'prototype': Bar, 'extends': 'div'});
       }, throws);
     });
 
     test('cannot register type extension for custom tag', () {
+      registerTypes();
       expect(() {
         document.registerElement2('x-custom-tag',  {'prototype': CustomCustomDiv});
       }, throws);
@@ -129,9 +129,8 @@ main() {
   });
 
   group('construction', () {
-    setUp(registerTypes);
-
     group('constructors', () {
+      registerTypes();
       test('custom tag', () {
         var fooNewed = new Foo();
         expect(fooNewed.outerHtml, anyOf(Foo.outerHtmlStrings));
@@ -167,6 +166,7 @@ main() {
     });
 
     group('single-parameter createElement', () {
+      registerTypes();
       test('custom tag', () {
         var fooCreated = new Element.tag('x-foo');
         expect(fooCreated.outerHtml, anyOf(Foo.outerHtmlStrings));
@@ -198,6 +198,7 @@ main() {
     });
 
     group('createElement with type extension', () {
+      registerTypes();
       test('does not upgrade extension of custom tag', () {
         var divFooCreated = new Element.tag("div", Foo.tag);
         expect(divFooCreated.outerHtml, '<div is="x-foo"></div>');
@@ -253,9 +254,8 @@ main() {
   });
 
   group('namespaces', () {
-    setUp(registerTypes);
-
     test('createElementNS', () {
+      registerTypes();
       var fooCreatedNS = document.createElementNS(
           "http://www.w3.org/1999/xhtml", Foo.tag, null);
       expect(fooCreatedNS.outerHtml, anyOf(Foo.outerHtmlStrings));
@@ -275,9 +275,8 @@ main() {
   });
 
   group('parsing', () {
-    setUp(registerTypes);
-
     test('parsing', () {
+      registerTypes();
       createElementFromHtml(html) {
         var container = new DivElement()
           ..setInnerHtml(html, treeSanitizer: new NullTreeSanitizer());
@@ -310,9 +309,8 @@ main() {
   });
 
   group('functional', () {
-    setUp(registerTypes);
-
     test('canvas', () {
+      registerTypes();
       var canvas = new MyCanvas();
       canvas.fillAsRed();
     });

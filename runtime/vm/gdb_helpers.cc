@@ -3,6 +3,7 @@
 // BSD-style license that can be found in the LICENSE file.
 
 #include "lib/stacktrace.h"
+#include "vm/heap/safepoint.h"
 #include "vm/object.h"
 #include "vm/stack_frame.h"
 
@@ -11,12 +12,12 @@ namespace dart {
 #if !defined(PRODUCT)
 
 DART_EXPORT
-void _printRawObject(RawObject* object) {
+void _printRawObject(ObjectPtr object) {
   OS::PrintErr("%s\n", Object::Handle(object).ToCString());
 }
 
 DART_EXPORT
-Object* _handle(RawObject* object) {
+Object* _handle(ObjectPtr object) {
   return &Object::Handle(object);
 }
 
@@ -35,11 +36,18 @@ void _printDartStackTrace() {
 // in the middle of a GC or interested in stub frames.
 DART_EXPORT
 void _printStackTrace() {
-  StackFrameIterator frames(ValidationPolicy::kDontValidateFrames,
+  StackFrame::DumpCurrentTrace();
+}
+
+// Like _printDartStackTrace, but works when stopped in generated code.
+// Must be called with the current fp, sp, and pc.
+DART_EXPORT
+void _printGeneratedStackTrace(uword fp, uword sp, uword pc) {
+  StackFrameIterator frames(fp, sp, pc, ValidationPolicy::kDontValidateFrames,
                             Thread::Current(),
                             StackFrameIterator::kNoCrossThreadIteration);
   StackFrame* frame = frames.NextFrame();
-  while (frame != NULL) {
+  while (frame != nullptr) {
     OS::PrintErr("%s\n", frame->ToCString());
     frame = frames.NextFrame();
   }
@@ -47,11 +55,21 @@ void _printStackTrace() {
 
 class PrintObjectPointersVisitor : public ObjectPointerVisitor {
  public:
-  PrintObjectPointersVisitor() : ObjectPointerVisitor(Isolate::Current()) {}
+  PrintObjectPointersVisitor()
+      : ObjectPointerVisitor(IsolateGroup::Current()) {}
 
-  void VisitPointers(RawObject** first, RawObject** last) {
-    for (RawObject** p = first; p <= last; p++) {
+  void VisitPointers(ObjectPtr* first, ObjectPtr* last) {
+    for (ObjectPtr* p = first; p <= last; p++) {
       Object& obj = Object::Handle(*p);
+      OS::PrintErr("%p: %s\n", p, obj.ToCString());
+    }
+  }
+
+  void VisitCompressedPointers(uword heap_base,
+                               CompressedObjectPtr* first,
+                               CompressedObjectPtr* last) {
+    for (CompressedObjectPtr* p = first; p <= last; p++) {
+      Object& obj = Object::Handle(p->Decompress(heap_base));
       OS::PrintErr("%p: %s\n", p, obj.ToCString());
     }
   }
@@ -64,7 +82,7 @@ void _printStackTraceWithLocals() {
                             Thread::Current(),
                             StackFrameIterator::kNoCrossThreadIteration);
   StackFrame* frame = frames.NextFrame();
-  while (frame != NULL) {
+  while (frame != nullptr) {
     OS::PrintErr("%s\n", frame->ToCString());
     frame->VisitObjectPointers(&visitor);
     frame = frames.NextFrame();

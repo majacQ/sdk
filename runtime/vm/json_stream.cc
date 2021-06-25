@@ -5,6 +5,7 @@
 #include "platform/assert.h"
 
 #include "include/dart_native_api.h"
+#include "platform/unicode.h"
 #include "vm/dart_entry.h"
 #include "vm/debugger.h"
 #include "vm/heap/safepoint.h"
@@ -16,7 +17,6 @@
 #include "vm/service_event.h"
 #include "vm/thread_registry.h"
 #include "vm/timeline.h"
-#include "vm/unicode.h"
 
 namespace dart {
 
@@ -41,7 +41,7 @@ JSONStream::JSONStream(intptr_t buf_size)
   ObjectIdRing* ring = NULL;
   Isolate* isolate = Isolate::Current();
   if (isolate != NULL) {
-    ring = isolate->object_id_ring();
+    ring = isolate->EnsureObjectIdRing();
   }
   default_id_zone_.Init(ring, ObjectIdRing::kAllocateId);
 }
@@ -54,12 +54,12 @@ void JSONStream::Setup(Zone* zone,
                        const Array& param_values,
                        bool parameters_are_dart_objects) {
   set_reply_port(reply_port);
-  seq_ = &Instance::ZoneHandle(seq.raw());
+  seq_ = &Instance::ZoneHandle(seq.ptr());
   method_ = method.ToCString();
 
   if (parameters_are_dart_objects) {
-    parameter_keys_ = &Array::ZoneHandle(param_keys.raw());
-    parameter_values_ = &Array::ZoneHandle(param_values.raw());
+    parameter_keys_ = &Array::ZoneHandle(param_keys.ptr());
+    parameter_values_ = &Array::ZoneHandle(param_values.ptr());
     ASSERT(parameter_keys_->Length() == parameter_values_->Length());
   } else if (param_keys.Length() > 0) {
     String& string_iterator = String::Handle();
@@ -136,6 +136,9 @@ static const char* GetJSONRpcErrorMessage(intptr_t code) {
       return "File system does not exist";
     case kFileDoesNotExist:
       return "File does not exist";
+    case kInvalidTimelineRequest:
+      return "The timeline related request could not be completed due to the "
+             "current configuration";
     default:
       return "Extension error";
   }
@@ -171,7 +174,6 @@ void JSONStream::PrintError(intptr_t code, const char* details_format, ...) {
       va_start(args2, details_format);
       Utils::VSNPrint(buffer, (len + 1), details_format, args2);
       va_end(args2);
-
       data.AddProperty("details", buffer);
     }
   }
@@ -179,12 +181,10 @@ void JSONStream::PrintError(intptr_t code, const char* details_format, ...) {
 
 void JSONStream::PostNullReply(Dart_Port port) {
   PortMap::PostMessage(
-      new Message(port, Object::null(), Message::kNormalPriority));
+      Message::New(port, Object::null(), Message::kNormalPriority));
 }
 
-static void Finalizer(void* isolate_callback_data,
-                      Dart_WeakPersistentHandle handle,
-                      void* buffer) {
+static void Finalizer(void* isolate_callback_data, void* buffer) {
   free(buffer);
 }
 
@@ -267,7 +267,7 @@ void JSONStream::PostReply() {
 
 const char* JSONStream::LookupParam(const char* key) const {
   for (int i = 0; i < num_params(); i++) {
-    if (!strcmp(key, param_keys_[i])) {
+    if (strcmp(key, param_keys_[i]) == 0) {
       return param_values_[i];
     }
   }
@@ -320,7 +320,7 @@ void JSONStream::PrintValue(Breakpoint* bpt) {
 
 void JSONStream::PrintValue(TokenPosition tp) {
   PrintCommaIfNeeded();
-  PrintValue(tp.value());
+  PrintValue(static_cast<intptr_t>(tp.Serialize()));
 }
 
 void JSONStream::PrintValue(const ServiceEvent* event) {
@@ -343,14 +343,9 @@ void JSONStream::PrintValue(Isolate* isolate, bool ref) {
   isolate->PrintJSON(this, ref);
 }
 
-void JSONStream::PrintValue(ThreadRegistry* reg) {
+void JSONStream::PrintValue(IsolateGroup* isolate_group, bool ref) {
   PrintCommaIfNeeded();
-  reg->PrintJSON(this);
-}
-
-void JSONStream::PrintValue(Thread* thread) {
-  PrintCommaIfNeeded();
-  thread->PrintJSON(this);
+  isolate_group->PrintJSON(this, ref);
 }
 
 void JSONStream::PrintValue(const TimelineEvent* timeline_event) {
@@ -403,16 +398,6 @@ void JSONStream::PrintProperty(const char* name, Isolate* isolate) {
   PrintValue(isolate);
 }
 
-void JSONStream::PrintProperty(const char* name, ThreadRegistry* reg) {
-  PrintPropertyName(name);
-  PrintValue(reg);
-}
-
-void JSONStream::PrintProperty(const char* name, Thread* thread) {
-  PrintPropertyName(name);
-  PrintValue(thread);
-}
-
 void JSONStream::PrintProperty(const char* name,
                                const TimelineEvent* timeline_event) {
   PrintPropertyName(name);
@@ -445,17 +430,17 @@ intptr_t JSONStream::NumObjectParameters() const {
   return parameter_keys_->Length();
 }
 
-RawObject* JSONStream::GetObjectParameterKey(intptr_t i) const {
+ObjectPtr JSONStream::GetObjectParameterKey(intptr_t i) const {
   ASSERT((i >= 0) && (i < NumObjectParameters()));
   return parameter_keys_->At(i);
 }
 
-RawObject* JSONStream::GetObjectParameterValue(intptr_t i) const {
+ObjectPtr JSONStream::GetObjectParameterValue(intptr_t i) const {
   ASSERT((i >= 0) && (i < NumObjectParameters()));
   return parameter_values_->At(i);
 }
 
-RawObject* JSONStream::LookupObjectParam(const char* c_key) const {
+ObjectPtr JSONStream::LookupObjectParam(const char* c_key) const {
   const String& key = String::Handle(String::New(c_key));
   Object& test = Object::Handle();
   const intptr_t num_object_parameters = NumObjectParameters();
@@ -500,6 +485,14 @@ void JSONObject::AddFixedServiceId(const char* format, ...) const {
   va_end(args);
 }
 
+void JSONObject::AddServiceId(const char* format, ...) const {
+  // Add the id property.
+  va_list args;
+  va_start(args, format);
+  stream_->VPrintfProperty("id", format, args);
+  va_end(args);
+}
+
 void JSONObject::AddLocation(const Script& script,
                              TokenPosition token_pos,
                              TokenPosition end_token_pos) const {
@@ -516,10 +509,9 @@ void JSONObject::AddLocation(const BreakpointLocation* bpt_loc) const {
   ASSERT(bpt_loc->IsResolved());
 
   Zone* zone = Thread::Current()->zone();
-  Library& library = Library::Handle(zone);
   Script& script = Script::Handle(zone);
   TokenPosition token_pos = TokenPosition::kNoSource;
-  bpt_loc->GetCodeLocation(&library, &script, &token_pos);
+  bpt_loc->GetCodeLocation(&script, &token_pos);
   AddLocation(script, token_pos);
 }
 
@@ -528,10 +520,9 @@ void JSONObject::AddUnresolvedLocation(
   ASSERT(!bpt_loc->IsResolved());
 
   Zone* zone = Thread::Current()->zone();
-  Library& library = Library::Handle(zone);
   Script& script = Script::Handle(zone);
   TokenPosition token_pos = TokenPosition::kNoSource;
-  bpt_loc->GetCodeLocation(&library, &script, &token_pos);
+  bpt_loc->GetCodeLocation(&script, &token_pos);
 
   JSONObject location(this, "location");
   location.AddProperty("type", "UnresolvedSourceLocation");

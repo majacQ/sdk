@@ -2,9 +2,18 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library fasta.expression_generator_helper;
 
-import '../../scanner/token.dart' show Token;
+import 'package:_fe_analyzer_shared/src/scanner/token.dart' show Token;
+
+import '../builder/builder.dart';
+import '../builder/formal_parameter_builder.dart';
+import '../builder/library_builder.dart';
+import '../builder/prefix_builder.dart';
+import '../builder/type_declaration_builder.dart';
+import '../builder/unresolved_type.dart';
 
 import '../constant_context.dart' show ConstantContext;
 
@@ -16,14 +25,11 @@ import '../scope.dart' show Scope;
 
 import '../type_inference/inference_helper.dart' show InferenceHelper;
 
-import '../type_inference/type_promotion.dart' show TypePromoter;
-
 import 'constness.dart' show Constness;
 
 import 'forest.dart' show Forest;
 
-import 'kernel_builder.dart'
-    show Declaration, KernelTypeBuilder, PrefixBuilder, UnresolvedType;
+import '../scope.dart';
 
 import 'kernel_ast_api.dart'
     show
@@ -37,21 +43,11 @@ import 'kernel_ast_api.dart'
         Name,
         Procedure,
         StaticGet,
-        TypeParameter;
-
-import 'kernel_builder.dart'
-    show
-        KernelPrefixBuilder,
-        LibraryBuilder,
-        PrefixBuilder,
-        TypeDeclarationBuilder;
+        TypeParameter,
+        VariableDeclaration;
 
 abstract class ExpressionGeneratorHelper implements InferenceHelper {
-  LibraryBuilder get library;
-
-  TypePromoter get typePromoter;
-
-  int get functionNestingLevel;
+  LibraryBuilder get libraryBuilder;
 
   ConstantContext get constantContext;
 
@@ -63,16 +59,25 @@ abstract class ExpressionGeneratorHelper implements InferenceHelper {
 
   Member lookupInstanceMember(Name name, {bool isSetter, bool isSuper});
 
+  /// `true` if we are in the type of an as expression.
+  bool get inIsOrAsOperatorType;
+
+  bool get enableExtensionTypesInLibrary;
+
+  bool get enableConstFunctionsInLibrary;
+
   scopeLookup(Scope scope, String name, Token token,
       {bool isQualified: false, PrefixBuilder prefix});
 
-  finishSend(Object receiver, Arguments arguments, int offset);
+  finishSend(Object receiver, List<UnresolvedType> typeArguments,
+      Arguments arguments, int offset,
+      {bool isTypeArgumentsInForest = false});
 
   Initializer buildInvalidInitializer(Expression expression, [int offset]);
 
-  Initializer buildFieldInitializer(bool isSynthetic, String name,
-      int fieldNameOffset, int assignmentOffset, Expression expression,
-      {DartType formalType});
+  List<Initializer> buildFieldInitializer(String name, int fieldNameOffset,
+      int assignmentOffset, Expression expression,
+      {FormalParameterBuilder formal});
 
   Initializer buildSuperInitializer(
       bool isSynthetic, Constructor constructor, Arguments arguments,
@@ -84,6 +89,10 @@ abstract class ExpressionGeneratorHelper implements InferenceHelper {
 
   Expression buildStaticInvocation(Procedure target, Arguments arguments,
       {Constness constness, int charOffset});
+
+  Expression buildExtensionMethodInvocation(
+      int fileOffset, Procedure target, Arguments arguments,
+      {bool isTearOff});
 
   Expression throwNoSuchMethodError(
       Expression receiver, String name, Arguments arguments, int offset,
@@ -100,33 +109,33 @@ abstract class ExpressionGeneratorHelper implements InferenceHelper {
   StaticGet makeStaticGet(Member readTarget, Token token);
 
   Expression wrapInDeferredCheck(
-      Expression expression, KernelPrefixBuilder prefix, int charOffset);
+      Expression expression, PrefixBuilder prefix, int charOffset);
 
   bool isIdentical(Member member);
 
   Expression buildMethodInvocation(
       Expression receiver, Name name, Arguments arguments, int offset,
-      {bool isConstantExpression,
-      bool isNullAware,
-      bool isImplicitCall,
-      bool isSuper,
-      Member interfaceTarget});
+      {bool isConstantExpression, bool isNullAware, bool isSuper});
 
   Expression buildConstructorInvocation(
-      TypeDeclarationBuilder<KernelTypeBuilder, DartType> type,
+      TypeDeclarationBuilder type,
       Token nameToken,
       Token nameLastToken,
       Arguments arguments,
       String name,
-      List<UnresolvedType<KernelTypeBuilder>> typeArguments,
+      List<UnresolvedType> typeArguments,
       int charOffset,
-      Constness constness);
+      Constness constness,
+      {bool isTypeArgumentsInForest = false,
+      TypeDeclarationBuilder typeAliasBuilder});
 
-  UnresolvedType<KernelTypeBuilder> validateTypeUse(
-      UnresolvedType<KernelTypeBuilder> unresolved,
-      bool nonInstanceAccessIsError);
+  UnresolvedType validateTypeUse(UnresolvedType unresolved,
+      {bool nonInstanceAccessIsError, bool allowPotentiallyConstantType});
 
   void addProblemErrorIfConst(Message message, int charOffset, int length);
+
+  Expression buildProblemErrorIfConst(
+      Message message, int charOffset, int length);
 
   Message warnUnresolvedGet(Name name, int charOffset, {bool isSuper});
 
@@ -142,26 +151,24 @@ abstract class ExpressionGeneratorHelper implements InferenceHelper {
   Expression evaluateArgumentsBefore(
       Arguments arguments, Expression expression);
 
-  DartType buildDartType(UnresolvedType<KernelTypeBuilder> unresolvedType,
+  DartType buildDartType(UnresolvedType unresolvedType,
       {bool nonInstanceAccessIsError});
 
-  List<DartType> buildDartTypeArguments(
-      List<UnresolvedType<KernelTypeBuilder>> unresolvedTypes);
+  List<DartType> buildDartTypeArguments(List<UnresolvedType> unresolvedTypes);
 
   void reportDuplicatedDeclaration(
-      Declaration existing, String name, int charOffset);
+      Builder existing, String name, int charOffset);
 
-  Expression wrapSyntheticExpression(Expression node, int charOffset);
+  /// Creates a synthetic variable declaration for the value of [expression].
+  VariableDeclaration createVariableDeclarationForValue(Expression expression);
 
-  Expression wrapInvalidConstructorInvocation(Expression desugared,
-      Member constructor, Arguments arguments, int charOffset);
+  /// Creates a [VariableGet] of the [variable] using [charOffset] as the file
+  /// offset of the created node.
+  Expression createVariableGet(VariableDeclaration variable, int charOffset,
+      {bool forNullGuardedAccess: false});
 
-  Expression wrapInvalidWrite(
-      Expression desugared, Expression expression, int charOffset);
-
-  Expression wrapUnresolvedTargetInvocation(
-      Expression desugared, Arguments arguments, int charOffset);
-
-  Expression wrapUnresolvedVariableAssignment(
-      Expression desugared, bool isCompound, Expression rhs, int charOffset);
+  /// Registers that [variable] is assigned to.
+  ///
+  /// This is needed for type promotion.
+  void registerVariableAssignment(VariableDeclaration variable);
 }

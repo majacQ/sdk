@@ -2,6 +2,14 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
+// ignore_for_file: slash_for_doc_comments, unnecessary_const
+// ignore_for_file: always_declare_return_types, prefer_single_quotes
+// ignore_for_file: prefer_collection_literals, omit_local_variable_types
+// ignore_for_file: prefer_final_fields
+// ignore_for_file: use_function_type_syntax_for_parameters
+
 part of js_ast;
 
 class JavaScriptPrintingOptions {
@@ -47,6 +55,7 @@ abstract class JavaScriptPrintingContext {
 class SimpleJavaScriptPrintingContext extends JavaScriptPrintingContext {
   final StringBuffer buffer = StringBuffer();
 
+  @override
   void emit(String string) {
     buffer.write(string);
   }
@@ -129,10 +138,10 @@ class Printer implements NodeVisitor {
     if (!shouldCompressOutput) out(" ");
   }
 
-  String lastAddedString = null;
+  String lastAddedString;
   int get lastCharCode {
     if (lastAddedString == null) return 0;
-    assert(lastAddedString.length != "");
+    assert(lastAddedString.isNotEmpty);
     return lastAddedString.codeUnitAt(lastAddedString.length - 1);
   }
 
@@ -233,6 +242,7 @@ class Printer implements NodeVisitor {
     nodes.forEach(visit);
   }
 
+  @override
   visitProgram(Program program) {
     if (program.scriptTag != null) {
       out('#!${program.scriptTag}\n');
@@ -284,14 +294,17 @@ class Printer implements NodeVisitor {
     if (needsNewline) lineOut();
   }
 
+  @override
   visitBlock(Block block) {
     blockOut(block, true, true);
   }
 
+  @override
   visitDebuggerStatement(node) {
     outIndentLn('debugger;');
   }
 
+  @override
   visitExpressionStatement(ExpressionStatement expressionStatement) {
     indent();
     visitNestedExpression(expressionStatement.expression, EXPRESSION,
@@ -299,6 +312,7 @@ class Printer implements NodeVisitor {
     outSemicolonLn();
   }
 
+  @override
   visitEmptyStatement(EmptyStatement nop) {
     outIndentLn(";");
   }
@@ -352,10 +366,12 @@ class Printer implements NodeVisitor {
     }
   }
 
+  @override
   visitIf(If node) {
     ifOut(node, true);
   }
 
+  @override
   visitFor(For loop) {
     outIndent("for");
     spaceOut();
@@ -380,6 +396,7 @@ class Printer implements NodeVisitor {
     blockBody(loop.body, needsSeparation: false, needsNewline: true);
   }
 
+  @override
   visitForIn(ForIn loop) {
     outIndent("for");
     spaceOut();
@@ -394,6 +411,7 @@ class Printer implements NodeVisitor {
     blockBody(loop.body, needsSeparation: false, needsNewline: true);
   }
 
+  @override
   visitForOf(ForOf loop) {
     outIndent("for");
     spaceOut();
@@ -408,6 +426,7 @@ class Printer implements NodeVisitor {
     blockBody(loop.body, needsSeparation: false, needsNewline: true);
   }
 
+  @override
   visitWhile(While loop) {
     outIndent("while");
     spaceOut();
@@ -418,6 +437,7 @@ class Printer implements NodeVisitor {
     blockBody(loop.body, needsSeparation: false, needsNewline: true);
   }
 
+  @override
   visitDo(Do loop) {
     outIndent("do");
     if (blockBody(loop.body, needsSeparation: true, needsNewline: false)) {
@@ -434,6 +454,7 @@ class Printer implements NodeVisitor {
     outSemicolonLn();
   }
 
+  @override
   visitContinue(Continue node) {
     if (node.targetLabel == null) {
       outIndent("continue");
@@ -443,6 +464,7 @@ class Printer implements NodeVisitor {
     outSemicolonLn();
   }
 
+  @override
   visitBreak(Break node) {
     if (node.targetLabel == null) {
       outIndent("break");
@@ -452,6 +474,7 @@ class Printer implements NodeVisitor {
     outSemicolonLn();
   }
 
+  @override
   visitReturn(Return node) {
     if (node.value == null) {
       outIndent("return");
@@ -464,6 +487,7 @@ class Printer implements NodeVisitor {
     outSemicolonLn();
   }
 
+  @override
   visitDartYield(DartYield node) {
     if (node.hasStar) {
       outIndent("yield*");
@@ -476,6 +500,7 @@ class Printer implements NodeVisitor {
     outSemicolonLn();
   }
 
+  @override
   visitThrow(Throw node) {
     outIndent("throw");
     pendingSpace = true;
@@ -484,6 +509,7 @@ class Printer implements NodeVisitor {
     outSemicolonLn();
   }
 
+  @override
   visitTry(Try node) {
     outIndent("try");
     blockBody(node.body, needsSeparation: true, needsNewline: false);
@@ -499,6 +525,7 @@ class Printer implements NodeVisitor {
     }
   }
 
+  @override
   visitCatch(Catch node) {
     spaceOut();
     out("catch");
@@ -510,6 +537,7 @@ class Printer implements NodeVisitor {
     blockBody(node.body, needsSeparation: false, needsNewline: false);
   }
 
+  @override
   visitSwitch(Switch node) {
     outIndent("switch");
     spaceOut();
@@ -525,6 +553,7 @@ class Printer implements NodeVisitor {
     outIndentLn("}");
   }
 
+  @override
   visitSwitchCase(SwitchCase node) {
     if (node.isDefault) {
       outIndentLn("default:");
@@ -535,11 +564,12 @@ class Printer implements NodeVisitor {
           newInForInit: false, newAtStatementBegin: false);
       outLn(":");
     }
-    if (!node.body.statements.isEmpty) {
+    if (node.body.statements.isNotEmpty) {
       blockOut(node.body, true, true);
     }
   }
 
+  @override
   visitLabeledStatement(LabeledStatement node) {
     outIndent("${node.label}:");
     blockBody(node.body, needsSeparation: false, needsNewline: true);
@@ -578,6 +608,7 @@ class Printer implements NodeVisitor {
     localNamer.leaveScope();
   }
 
+  @override
   visitFunctionDeclaration(FunctionDeclaration declaration) {
     indent();
     var f = declaration.function;
@@ -616,6 +647,7 @@ class Printer implements NodeVisitor {
     }
   }
 
+  @override
   visitVariableDeclarationList(VariableDeclarationList list) {
     // Note: keyword can be null for non-static field declarations.
     if (list.keyword != null) {
@@ -626,6 +658,7 @@ class Printer implements NodeVisitor {
         newInForInit: inForInit, newAtStatementBegin: false);
   }
 
+  @override
   visitArrayBindingPattern(ArrayBindingPattern node) {
     out("[");
     visitCommaSeparated(node.variables, EXPRESSION,
@@ -633,6 +666,7 @@ class Printer implements NodeVisitor {
     out("]");
   }
 
+  @override
   visitObjectBindingPattern(ObjectBindingPattern node) {
     out("{");
     visitCommaSeparated(node.variables, EXPRESSION,
@@ -640,6 +674,7 @@ class Printer implements NodeVisitor {
     out("}");
   }
 
+  @override
   visitDestructuredVariable(DestructuredVariable node) {
     var name = node.name;
     var property = node.property;
@@ -668,10 +703,12 @@ class Printer implements NodeVisitor {
     }
   }
 
+  @override
   visitSimpleBindingPattern(SimpleBindingPattern node) {
     visit(node.name);
   }
 
+  @override
   visitAssignment(Assignment assignment) {
     visitNestedExpression(assignment.leftHandSide, LEFT_HAND_SIDE,
         newInForInit: inForInit, newAtStatementBegin: atStatementBegin);
@@ -686,6 +723,7 @@ class Printer implements NodeVisitor {
     }
   }
 
+  @override
   visitVariableInitialization(VariableInitialization init) {
     visitNestedExpression(init.declaration, LEFT_HAND_SIDE,
         newInForInit: inForInit, newAtStatementBegin: atStatementBegin);
@@ -698,6 +736,7 @@ class Printer implements NodeVisitor {
     }
   }
 
+  @override
   visitConditional(Conditional cond) {
     visitNestedExpression(cond.condition, LOGICAL_OR,
         newInForInit: inForInit, newAtStatementBegin: atStatementBegin);
@@ -714,6 +753,7 @@ class Printer implements NodeVisitor {
         newInForInit: inForInit, newAtStatementBegin: false);
   }
 
+  @override
   visitNew(New node) {
     out("new ");
     inNewTarget = true;
@@ -726,6 +766,7 @@ class Printer implements NodeVisitor {
     out(")");
   }
 
+  @override
   visitCall(Call call) {
     visitNestedExpression(call.target, LEFT_HAND_SIDE,
         newInForInit: inForInit, newAtStatementBegin: atStatementBegin);
@@ -735,6 +776,7 @@ class Printer implements NodeVisitor {
     out(")");
   }
 
+  @override
   visitBinary(Binary binary) {
     Expression left = binary.left;
     Expression right = binary.right;
@@ -835,6 +877,7 @@ class Printer implements NodeVisitor {
         newInForInit: inForInit, newAtStatementBegin: false);
   }
 
+  @override
   visitPrefix(Prefix unary) {
     String op = unary.op;
     switch (op) {
@@ -863,8 +906,10 @@ class Printer implements NodeVisitor {
         newInForInit: inForInit, newAtStatementBegin: false);
   }
 
+  @override
   visitSpread(Spread unary) => visitPrefix(unary);
 
+  @override
   visitYield(Yield yield) {
     out(yield.star ? "yield*" : "yield");
     if (yield.value == null) return;
@@ -873,24 +918,29 @@ class Printer implements NodeVisitor {
         newInForInit: inForInit, newAtStatementBegin: false);
   }
 
+  @override
   visitPostfix(Postfix postfix) {
     visitNestedExpression(postfix.argument, LEFT_HAND_SIDE,
         newInForInit: inForInit, newAtStatementBegin: atStatementBegin);
     out(postfix.op);
   }
 
+  @override
   visitThis(This node) {
     out("this");
   }
 
+  @override
   visitSuper(Super node) {
     out("super");
   }
 
+  @override
   visitIdentifier(Identifier node) {
     out(localNamer.getName(node));
   }
 
+  @override
   visitRestParameter(RestParameter node) {
     out('...');
     visitIdentifier(node.parameter);
@@ -921,6 +971,7 @@ class Printer implements NodeVisitor {
     return options.allowKeywordsInProperties || field != '"super"';
   }
 
+  @override
   visitAccess(PropertyAccess access) {
     // Normally we can omit parens on the receiver if it is a Call, even though
     // Call expressions have lower precedence. However this optimization doesn't
@@ -943,6 +994,7 @@ class Printer implements NodeVisitor {
     propertyNameOut(access.selector, inAccess: true);
   }
 
+  @override
   visitNamedFunction(NamedFunction namedFunction) {
     var f = namedFunction.function;
     context.enterNode(f);
@@ -950,10 +1002,12 @@ class Printer implements NodeVisitor {
     context.exitNode(f);
   }
 
+  @override
   visitFun(Fun fun) {
     functionOut(fun, null);
   }
 
+  @override
   visitArrowFun(ArrowFun fun) {
     localNamer.enterScope(fun);
     if (fun.params.length == 1 && fun.params[0] is Identifier) {
@@ -972,7 +1026,7 @@ class Printer implements NodeVisitor {
       spaceOut();
       // Object initializers require parenthesis to disambiguate
       // AssignmentExpression from FunctionBody. See:
-      // https://people.mozilla.org/~jorendorff/es6-draft.html#sec-arrow-function-definitions
+      // https://tc39.github.io/ecma262/#sec-arrow-function-definitions
       var needsParen = fun.body is ObjectInitializer;
       if (needsParen) out("(");
       visitNestedExpression(body, ASSIGNMENT,
@@ -984,14 +1038,17 @@ class Printer implements NodeVisitor {
     localNamer.leaveScope();
   }
 
+  @override
   visitLiteralBool(LiteralBool node) {
     out(node.value ? "true" : "false");
   }
 
+  @override
   visitLiteralString(LiteralString node) {
     out(node.value);
   }
 
+  @override
   visitLiteralNumber(LiteralNumber node) {
     int charCode = node.value.codeUnitAt(0);
     if (charCode == charCodes.$MINUS && lastCharCode == charCodes.$MINUS) {
@@ -1000,10 +1057,12 @@ class Printer implements NodeVisitor {
     out(node.value);
   }
 
+  @override
   visitLiteralNull(LiteralNull node) {
     out("null");
   }
 
+  @override
   visitArrayInitializer(ArrayInitializer node) {
     out("[");
     indentMore();
@@ -1038,10 +1097,12 @@ class Printer implements NodeVisitor {
     out("]");
   }
 
+  @override
   visitArrayHole(ArrayHole node) {
     throw "Unreachable";
   }
 
+  @override
   visitObjectInitializer(ObjectInitializer node) {
     List<Property> properties = node.properties;
     out("{");
@@ -1067,6 +1128,7 @@ class Printer implements NodeVisitor {
     out("}");
   }
 
+  @override
   visitProperty(Property node) {
     propertyNameOut(node.name);
     out(":");
@@ -1075,10 +1137,12 @@ class Printer implements NodeVisitor {
         newInForInit: false, newAtStatementBegin: false);
   }
 
+  @override
   visitRegExpLiteral(RegExpLiteral node) {
     out(node.pattern);
   }
 
+  @override
   visitTemplateString(TemplateString node) {
     out('`');
     int len = node.interpolations.length;
@@ -1092,17 +1156,20 @@ class Printer implements NodeVisitor {
     out('`');
   }
 
+  @override
   visitTaggedTemplate(TaggedTemplate node) {
     visit(node.tag);
     visit(node.template);
   }
 
+  @override
   visitClassDeclaration(ClassDeclaration node) {
     indent();
     visit(node.classExpr);
     lineOut();
   }
 
+  @override
   visitClassExpression(ClassExpression node) {
     localNamer.enterScope(node);
     out('class ');
@@ -1130,6 +1197,7 @@ class Printer implements NodeVisitor {
     localNamer.leaveScope();
   }
 
+  @override
   visitMethod(Method node) {
     if (node.isStatic) {
       out('static ');
@@ -1189,6 +1257,7 @@ class Printer implements NodeVisitor {
     }
   }
 
+  @override
   visitImportDeclaration(ImportDeclaration node) {
     indent();
     out('import ');
@@ -1204,6 +1273,7 @@ class Printer implements NodeVisitor {
     outSemicolonLn();
   }
 
+  @override
   visitExportDeclaration(ExportDeclaration node) {
     indent();
     out('export ');
@@ -1213,6 +1283,7 @@ class Printer implements NodeVisitor {
     outSemicolonLn();
   }
 
+  @override
   visitExportClause(ExportClause node) {
     nameSpecifierListOut(node.exports, true);
     fromClauseOut(node.from);
@@ -1221,7 +1292,7 @@ class Printer implements NodeVisitor {
   nameSpecifierListOut(List<NameSpecifier> names, bool export) {
     if (names == null) return;
 
-    if (names.length == 1 && names[0].name == '*') {
+    if (names.length == 1 && names[0].name.name == '*') {
       nameSpecifierOut(names[0], export);
       return;
     }
@@ -1243,11 +1314,12 @@ class Printer implements NodeVisitor {
     if (from != null) {
       out(' from');
       spaceOut();
-      visit(from);
+      out("'${from.valueWithoutQuotes}.js'");
     }
   }
 
   /// This is unused, see [nameSpecifierOut].
+  @override
   visitNameSpecifier(NameSpecifier node) {
     throw UnsupportedError('visitNameSpecifier');
   }
@@ -1256,11 +1328,11 @@ class Printer implements NodeVisitor {
     if (node.isStar) {
       out('*');
     } else {
-      var name = node.name.name;
+      var localName = localNamer.getName(node.name);
       if (node.asName == null) {
         // If our local was renamed, generate an implicit "as".
         // This is a convenience feature so imports and exports can be renamed.
-        var localName = localNamer.getName(node.name);
+        var name = node.name.name;
         if (localName != name) {
           out(export ? localName : name);
           out(' as ');
@@ -1268,7 +1340,7 @@ class Printer implements NodeVisitor {
           return;
         }
       }
-      out(name);
+      out(localName);
     }
     if (node.asName != null) {
       out(' as ');
@@ -1276,28 +1348,17 @@ class Printer implements NodeVisitor {
     }
   }
 
+  @override
   visitModule(Module node) {
     visitAll(node.body);
   }
 
+  @override
   visitLiteralExpression(LiteralExpression node) {
-    String template = node.template;
-    List<Expression> inputs = node.inputs;
-
-    List<String> parts = template.split('#');
-    int inputsLength = inputs == null ? 0 : inputs.length;
-    if (parts.length != inputsLength + 1) {
-      context.error('Wrong number of arguments for JS: $template');
-    }
-    // Code that uses JS must take care of operator precedences, and
-    // put parenthesis if needed.
-    out(parts[0]);
-    for (int i = 0; i < inputsLength; i++) {
-      visit(inputs[i]);
-      out(parts[i + 1]);
-    }
+    out(node.template);
   }
 
+  @override
   visitLiteralStatement(LiteralStatement node) {
     outLn(node.code);
   }
@@ -1306,28 +1367,36 @@ class Printer implements NodeVisitor {
     out('#${node.nameOrPosition}');
   }
 
+  @override
   visitInterpolatedExpression(InterpolatedExpression node) =>
       visitInterpolatedNode(node);
 
+  @override
   visitInterpolatedLiteral(InterpolatedLiteral node) =>
       visitInterpolatedNode(node);
 
+  @override
   visitInterpolatedParameter(InterpolatedParameter node) =>
       visitInterpolatedNode(node);
 
+  @override
   visitInterpolatedSelector(InterpolatedSelector node) =>
       visitInterpolatedNode(node);
 
+  @override
   visitInterpolatedMethod(InterpolatedMethod node) =>
       visitInterpolatedNode(node);
 
+  @override
   visitInterpolatedIdentifier(InterpolatedIdentifier node) =>
       visitInterpolatedNode(node);
 
+  @override
   visitInterpolatedStatement(InterpolatedStatement node) {
     outLn('#${node.nameOrPosition}');
   }
 
+  @override
   void visitComment(Comment node) {
     if (shouldCompressOutput) return;
     String comment = node.comment.trim();
@@ -1341,6 +1410,7 @@ class Printer implements NodeVisitor {
     }
   }
 
+  @override
   void visitCommentExpression(CommentExpression node) {
     if (shouldCompressOutput) return;
     String comment = node.comment.trim();
@@ -1353,6 +1423,7 @@ class Printer implements NodeVisitor {
     visit(node.expression);
   }
 
+  @override
   void visitAwait(Await node) {
     out("await ");
     visit(node.expression);
@@ -1389,39 +1460,49 @@ class VarCollector extends BaseVisitor {
     }
   }
 
+  @override
   void visitFunctionDeclaration(FunctionDeclaration declaration) {
     // Note that we don't bother collecting the name of the function.
     collectVarsInFunction(declaration.function);
   }
 
+  @override
   void visitNamedFunction(NamedFunction namedFunction) {
     // Note that we don't bother collecting the name of the function.
     collectVarsInFunction(namedFunction.function);
   }
 
+  @override
   void visitMethod(Method declaration) {
     collectVarsInFunction(declaration.function);
   }
 
+  @override
   void visitFun(Fun fun) {
     collectVarsInFunction(fun);
   }
 
+  @override
   void visitArrowFun(ArrowFun fun) {
     collectVarsInFunction(fun);
   }
 
+  @override
   void visitClassExpression(ClassExpression node) {
     // Note that we don't bother collecting the name of the class.
     if (node.heritage != null) node.heritage.accept(this);
-    for (Method method in node.methods) method.accept(this);
+    for (Method method in node.methods) {
+      method.accept(this);
+    }
   }
 
+  @override
   void visitCatch(Catch node) {
     declareVariable(node.declaration);
     node.body.accept(this);
   }
 
+  @override
   void visitVariableInitialization(VariableInitialization node) {
     // TODO(jmesserly): add ES6 support. Currently not needed because
     // dart2js does not emit ES6 rest param or destructuring.
@@ -1443,30 +1524,46 @@ class DanglingElseVisitor extends BaseVisitor<bool> {
 
   DanglingElseVisitor(this.context);
 
+  @override
   bool visitProgram(Program node) => false;
 
+  @override
   bool visitNode(Node node) {
     context.error("Forgot node: $node");
     return null;
   }
 
+  @override
   bool visitBlock(Block node) => false;
+  @override
   bool visitExpressionStatement(ExpressionStatement node) => false;
+  @override
   bool visitEmptyStatement(EmptyStatement node) => false;
+  @override
   bool visitIf(If node) {
     if (!node.hasElse) return true;
     return node.otherwise.accept(this);
   }
 
+  @override
   bool visitFor(For node) => node.body.accept(this);
+  @override
   bool visitForIn(ForIn node) => node.body.accept(this);
+  @override
   bool visitForOf(ForOf node) => node.body.accept(this);
+  @override
   bool visitWhile(While node) => node.body.accept(this);
+  @override
   bool visitDo(Do node) => false;
+  @override
   bool visitContinue(Continue node) => false;
+  @override
   bool visitBreak(Break node) => false;
+  @override
   bool visitReturn(Return node) => false;
+  @override
   bool visitThrow(Throw node) => false;
+  @override
   bool visitTry(Try node) {
     if (node.finallyPart != null) {
       return node.finallyPart.accept(this);
@@ -1475,14 +1572,22 @@ class DanglingElseVisitor extends BaseVisitor<bool> {
     }
   }
 
+  @override
   bool visitCatch(Catch node) => node.body.accept(this);
+  @override
   bool visitSwitch(Switch node) => false;
+  @override
   bool visitSwitchCase(SwitchCase node) => false;
+  @override
   bool visitFunctionDeclaration(FunctionDeclaration node) => false;
+  @override
   bool visitLabeledStatement(LabeledStatement node) => node.body.accept(this);
+  @override
   bool visitLiteralStatement(LiteralStatement node) => true;
+  @override
   bool visitClassDeclaration(ClassDeclaration node) => false;
 
+  @override
   bool visitExpression(Expression node) => false;
 }
 
@@ -1493,8 +1598,11 @@ abstract class LocalNamer {
 }
 
 class IdentityNamer implements LocalNamer {
+  @override
   String getName(Identifier node) => node.name;
+  @override
   void enterScope(Node node) {}
+  @override
   void leaveScope() {}
 }
 
@@ -1505,6 +1613,7 @@ class MinifyRenamer implements LocalNamer {
   int parameterNumber = 0;
   int variableNumber = 0;
 
+  @override
   void enterScope(Node node) {
     var vars = VarCollector();
     node.accept(vars);
@@ -1515,12 +1624,14 @@ class MinifyRenamer implements LocalNamer {
     vars.forEachParam(declareParameter);
   }
 
+  @override
   void leaveScope() {
     maps.removeLast();
     variableNumber = variableNumberStack.removeLast();
     parameterNumber = parameterNumberStack.removeLast();
   }
 
+  @override
   String getName(Identifier node) {
     String oldName = node.name;
     // Go from inner scope to outer looking for mapping of name.
@@ -1625,6 +1736,7 @@ class MinifyRenamer implements LocalNamer {
 abstract class VariableDeclarationVisitor extends BaseVisitor<void> {
   declare(Identifier node);
 
+  @override
   visitFunctionExpression(FunctionExpression node) {
     node.params.forEach(_scanVariableBinding);
     node.body.accept(this);
@@ -1638,45 +1750,55 @@ abstract class VariableDeclarationVisitor extends BaseVisitor<void> {
     }
   }
 
+  @override
   visitRestParameter(RestParameter node) {
     _scanVariableBinding(node.parameter);
     super.visitRestParameter(node);
   }
 
+  @override
   visitDestructuredVariable(DestructuredVariable node) {
     var name = node.name;
     if (name is Identifier) _scanVariableBinding(name);
     super.visitDestructuredVariable(node);
   }
 
+  @override
   visitSimpleBindingPattern(SimpleBindingPattern node) {
     _scanVariableBinding(node.name);
     super.visitSimpleBindingPattern(node);
   }
 
+  @override
   visitVariableInitialization(VariableInitialization node) {
     _scanVariableBinding(node.declaration);
     if (node.value != null) node.value.accept(this);
   }
 
+  @override
   visitCatch(Catch node) {
     declare(node.declaration);
     node.body.accept(this);
   }
 
+  @override
   visitFunctionDeclaration(FunctionDeclaration node) {
     declare(node.name);
     node.function.accept(this);
   }
 
+  @override
   visitNamedFunction(NamedFunction node) {
     declare(node.name);
     node.function.accept(this);
   }
 
+  @override
   visitClassExpression(ClassExpression node) {
     declare(node.name);
     if (node.heritage != null) node.heritage.accept(this);
-    for (Method element in node.methods) element.accept(this);
+    for (Method element in node.methods) {
+      element.accept(this);
+    }
   }
 }

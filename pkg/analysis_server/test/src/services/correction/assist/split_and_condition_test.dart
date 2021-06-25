@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'assist_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(SplitAndConditionTest);
   });
@@ -19,8 +19,8 @@ class SplitAndConditionTest extends AssistProcessorTest {
   @override
   AssistKind get kind => DartAssistKind.SPLIT_AND_CONDITION;
 
-  test_hasElse() async {
-    await resolveTestUnit('''
+  Future<void> test_hasElse() async {
+    await resolveTestCode('''
 main() {
   if (1 == 1 && 2 == 2) {
     print(1);
@@ -32,8 +32,8 @@ main() {
     await assertNoAssistAt('&& 2');
   }
 
-  test_innerAndExpression() async {
-    await resolveTestUnit('''
+  Future<void> test_innerAndExpression() async {
+    await resolveTestCode('''
 main() {
   if (1 == 1 && 2 == 2 && 3 == 3) {
     print(0);
@@ -51,8 +51,8 @@ main() {
 ''');
   }
 
-  test_notAnd() async {
-    await resolveTestUnit('''
+  Future<void> test_notAnd() async {
+    await resolveTestCode('''
 main() {
   if (1 == 1 || 2 == 2) {
     print(0);
@@ -62,8 +62,8 @@ main() {
     await assertNoAssistAt('|| 2');
   }
 
-  test_notOnOperator() async {
-    await resolveTestUnit('''
+  Future<void> test_notOnOperator() async {
+    await resolveTestCode('''
 main() {
   if (1 == 1 && 2 == 2) {
     print(0);
@@ -74,8 +74,8 @@ main() {
     await assertNoAssistAt('main() {');
   }
 
-  test_notPartOfIf() async {
-    await resolveTestUnit('''
+  Future<void> test_notPartOfIf() async {
+    await resolveTestCode('''
 main() {
   print(1 == 1 && 2 == 2);
 }
@@ -83,8 +83,8 @@ main() {
     await assertNoAssistAt('&& 2');
   }
 
-  test_notTopLevelAnd() async {
-    await resolveTestUnit('''
+  Future<void> test_notTopLevelAnd() async {
+    await resolveTestCode('''
 main() {
   if (true || (1 == 1 && 2 == 2)) {
     print(0);
@@ -98,12 +98,12 @@ main() {
     await assertNoAssistAt('&& 4');
   }
 
-  test_selectionTooLarge() async {
-    await resolveTestUnit('''
+  Future<void> test_selectionTooLarge() async {
+    await resolveTestCode('''
 main() {
   if (1 == 1
 // start
-&& 2 
+&& 2
 // end
 == 2
 ) {
@@ -115,8 +115,8 @@ main() {
     await assertNoAssist();
   }
 
-  test_thenBlock() async {
-    await resolveTestUnit('''
+  Future<void> test_thenBlock() async {
+    await resolveTestCode('''
 main() {
   if (true && false) {
     print(0);
@@ -140,8 +140,8 @@ main() {
 ''');
   }
 
-  test_thenStatement() async {
-    await resolveTestUnit('''
+  Future<void> test_thenStatement() async {
+    await resolveTestCode('''
 main() {
   if (true && false)
     print(0);

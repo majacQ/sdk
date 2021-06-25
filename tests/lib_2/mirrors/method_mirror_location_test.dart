@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library test.method_location;
 
 import "dart:mirrors";
@@ -19,11 +21,11 @@ expectLocation(Mirror mirror, String uriSuffix, int line, int column) {
     methodMirror = mirror as MethodMirror;
   }
   Expect.isTrue(methodMirror is MethodMirror);
-  Uri uri = methodMirror.location.sourceUri;
-  Expect.isTrue(
-      uri.toString().endsWith(uriSuffix), "Expected suffix $uriSuffix in $uri");
-  Expect.equals(line, methodMirror.location.line, "line");
-  Expect.equals(column, methodMirror.location.column, "column");
+  final location = methodMirror.location;
+  final uri = location.sourceUri;
+  Expect.isTrue(uri.toString().endsWith(uriSuffix), "Expected suffix $uriSuffix in $uri");
+  Expect.equals(line, location.line, "line");
+  Expect.equals(column, location.column, "column");
 }
 
 class ClassInMainFile {

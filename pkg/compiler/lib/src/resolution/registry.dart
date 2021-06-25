@@ -5,8 +5,9 @@
 library dart2js.resolution.registry;
 
 import '../common/resolution.dart' show ResolutionImpact;
-import '../constants/expressions.dart';
-import '../elements/entities.dart' show ClassEntity;
+import '../constants/values.dart';
+import '../elements/entities.dart' show ClassEntity, MemberEntity;
+import '../elements/types.dart';
 import '../universe/feature.dart';
 import '../universe/world_impact.dart' show WorldImpact, WorldImpactBuilderImpl;
 import '../util/enumset.dart' show EnumSet;
@@ -14,18 +15,21 @@ import '../util/util.dart' show Setlet;
 
 class ResolutionWorldImpactBuilder extends WorldImpactBuilderImpl
     implements ResolutionImpact {
-  final String name;
+  final DartTypes _dartTypes;
+  @override
+  final MemberEntity member;
   EnumSet<Feature> _features;
   Setlet<MapLiteralUse> _mapLiterals;
+  Setlet<SetLiteralUse> _setLiterals;
   Setlet<ListLiteralUse> _listLiterals;
   Setlet<String> _constSymbolNames;
-  Setlet<ConstantExpression> _constantLiterals;
+  Setlet<ConstantValue> _constantLiterals;
   Setlet<dynamic> _nativeData;
   Setlet<ClassEntity> _seenClasses;
   Set<RuntimeTypeUse> _runtimeTypeUses;
   Set<GenericInstantiation> _genericInstantiations;
 
-  ResolutionWorldImpactBuilder(this.name);
+  ResolutionWorldImpactBuilder(this._dartTypes, this.member);
 
   @override
   bool get isEmpty => false;
@@ -40,6 +44,16 @@ class ResolutionWorldImpactBuilder extends WorldImpactBuilderImpl
   Iterable<MapLiteralUse> get mapLiterals {
     return _mapLiterals != null ? _mapLiterals : const <MapLiteralUse>[];
   }
+
+  void registerSetLiteral(SetLiteralUse setLiteralUse) {
+    assert(setLiteralUse != null);
+    _setLiterals ??= new Setlet<SetLiteralUse>();
+    _setLiterals.add(setLiteralUse);
+  }
+
+  @override
+  Iterable<SetLiteralUse> get setLiterals =>
+      _setLiterals ?? const <SetLiteralUse>[];
 
   void registerListLiteral(ListLiteralUse listLiteralUse) {
     assert(listLiteralUse != null);
@@ -87,15 +101,16 @@ class ResolutionWorldImpactBuilder extends WorldImpactBuilderImpl
         : const <Feature>[];
   }
 
-  void registerConstantLiteral(ConstantExpression constant) {
-    _constantLiterals ??= new Setlet<ConstantExpression>();
+  void registerConstantLiteral(ConstantValue constant) {
+    _constantLiterals ??= new Setlet<ConstantValue>();
     _constantLiterals.add(constant);
   }
 
-  Iterable<ConstantExpression> get constantLiterals {
+  @override
+  Iterable<ConstantValue> get constantLiterals {
     return _constantLiterals != null
         ? _constantLiterals
-        : const <ConstantExpression>[];
+        : const <ConstantValue>[];
   }
 
   void registerNativeData(dynamic nativeData) {
@@ -129,9 +144,10 @@ class ResolutionWorldImpactBuilder extends WorldImpactBuilderImpl
     return _genericInstantiations ?? const <GenericInstantiation>[];
   }
 
+  @override
   String toString() {
     StringBuffer sb = new StringBuffer();
-    sb.write('ResolutionWorldImpactBuilder($name)');
+    sb.write('ResolutionWorldImpactBuilder($member)');
     WorldImpact.printOn(sb, this);
     if (_features != null) {
       sb.write('\n features:');
@@ -145,6 +161,12 @@ class ResolutionWorldImpactBuilder extends WorldImpactBuilderImpl
         sb.write('\n  $use');
       }
     }
+    if (_setLiterals != null) {
+      sb.write('\n set-literals:');
+      for (SetLiteralUse use in _setLiterals) {
+        sb.write('\n  $use');
+      }
+    }
     if (_listLiterals != null) {
       sb.write('\n list-literals:');
       for (ListLiteralUse use in _listLiterals) {
@@ -153,8 +175,8 @@ class ResolutionWorldImpactBuilder extends WorldImpactBuilderImpl
     }
     if (_constantLiterals != null) {
       sb.write('\n const-literals:');
-      for (ConstantExpression constant in _constantLiterals) {
-        sb.write('\n  ${constant.toDartText()}');
+      for (ConstantValue constant in _constantLiterals) {
+        sb.write('\n  ${constant.toDartText(_dartTypes)}');
       }
     }
     if (_constSymbolNames != null) {

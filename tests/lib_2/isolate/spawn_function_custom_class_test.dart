@@ -2,6 +2,11 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
+// VMOptions=--enable-isolate-groups --experimental-enable-isolate-groups-jit
+// VMOptions=--no-enable-isolate-groups
+
 // Create a user-defined class in a new isolate.
 //
 // Regression test for vm bug 2235: We were forgetting to finalize
@@ -10,30 +15,36 @@
 library spawn_tests;
 
 import 'dart:isolate';
-import 'package:unittest/unittest.dart';
-import "remote_unittest_helper.dart";
+import 'package:expect/expect.dart';
 
 class MyClass {
-  var myVar = 'there';
+  final myVar = 'there';
   myFunc(msg) {
     return '$msg $myVar';
   }
 }
 
-child(args) {
-  var reply = args[1];
-  var msg = args[0];
+isolateEntryPoint(args) {
+  final reply = args[1];
+  final msg = args[0];
   reply.send('re: ${new MyClass().myFunc(msg)}');
 }
 
-void main([args, port]) {
-  if (testRemote(main, port)) return;
-  test('message - reply chain', () {
-    ReceivePort port = new ReceivePort();
-    Isolate.spawn(child, ['hi', port.sendPort]);
-    port.listen((msg) {
-      port.close();
-      expect(msg, equals('re: hi there'));
-    });
+Future<void> main([args, port]) async {
+  // message - reply chain'
+  final exitPort = ReceivePort();
+  final replyPort = ReceivePort();
+
+  Isolate.spawn(isolateEntryPoint, ['hi', replyPort.sendPort],
+      onExit: exitPort.sendPort);
+
+  replyPort.listen((msg) {
+    replyPort.close();
+    Expect.equals(msg, 're: hi there');
   });
+
+  // Explicitly await spawned isolate exit to enforce main isolate not
+  // completing (and the stand-alone runtime exiting) before the spawned
+  // isolate is done.
+  await exitPort.first;
 }

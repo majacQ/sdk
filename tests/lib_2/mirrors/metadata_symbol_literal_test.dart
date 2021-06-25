@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import 'dart:mirrors';
 import 'package:expect/expect.dart';
 
@@ -16,6 +18,7 @@ class U {
 }
 
 main() {
-  final metadata = reflectClass(U).declarations[#field].metadata;
+  final field = reflectClass(U).declarations[#field] as VariableMirror;
+  final metadata = field.metadata;
   Expect.identical((metadata.first.reflectee as T).symbol, const Symbol('x'));
 }

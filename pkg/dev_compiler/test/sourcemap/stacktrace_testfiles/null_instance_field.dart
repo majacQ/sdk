@@ -2,14 +2,16 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-main() {
+// @dart = 2.9
+
+void main() {
   /*1:main*/ test(Class());
 }
 
-test(c) {
+void test(c) {
   /*ddc.2:test*/ c.field. /*ddk.2:test*/ method();
 }
 
 class Class {
-  var field;
+  dynamic field;
 }

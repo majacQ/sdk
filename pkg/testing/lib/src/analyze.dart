@@ -137,8 +137,8 @@ class AnalyzerDiagnostic {
     return kind == null
         ? "Malformed output from dartanalyzer:\n$message"
         : "${uri.toFilePath()}:$line:$startColumn: "
-        "${kind == 'INFO' ? 'warning: hint' : kind.toLowerCase()}:\n"
-        "[$code] $message";
+            "${kind == 'INFO' ? 'warning: hint' : kind.toLowerCase()}:\n"
+            "[$code] $message";
   }
 }
 
@@ -169,10 +169,18 @@ Future<Null> analyzeUris(
   } catch (e) {
     topLevel = Uri.base.toFilePath(windows: false);
   }
+  if (Platform.isWindows) {
+    // We need lowercase comparison on Windows to match C:/path with c:/path
+    topLevel = topLevel.toLowerCase();
+  }
 
   String toFilePath(Uri uri) {
     String path = uri.toFilePath(windows: false);
-    return path.startsWith(topLevel) ? path.substring(topLevel.length) : path;
+    return (Platform.isWindows
+            ? path.toLowerCase().startsWith(topLevel)
+            : path.startsWith(topLevel))
+        ? path.substring(topLevel.length)
+        : path;
   }
 
   Set<String> filesToAnalyze = new Set<String>();
@@ -210,7 +218,7 @@ Future<Null> analyzeUris(
   List<String> arguments = <String>[
     "--packages=${toFilePath(packages)}",
     "--format=machine",
-    "--dart-sdk=${Uri.base.resolve('sdk/').toFilePath()}",
+    "--dart-sdk=${_findSdkPath()}",
   ];
   if (analysisOptions != null) {
     arguments.add("--options=${toFilePath(analysisOptions)}");
@@ -227,11 +235,7 @@ Future<Null> analyzeUris(
   }
   Stopwatch sw = new Stopwatch()..start();
   Process process = await startDart(
-      analyzer,
-      const <String>["--batch"],
-      dartArguments
-        ..remove("-c")
-        ..add("-DuseFastaScanner=true"));
+      analyzer, const <String>["--batch"], dartArguments..remove("-c"));
   process.stdin.writeln(arguments.join(" "));
   process.stdin.close();
 
@@ -263,6 +267,18 @@ Future<Null> analyzeUris(
   print("Running analyzer took: ${sw.elapsed}.");
   if (hasOutput) {
     throw "Non-empty output from analyzer.";
+  }
+}
+
+String _findSdkPath() {
+  var executableUri = Uri.file(Platform.executable);
+  if (File.fromUri(executableUri.resolve('../version')).existsSync()) {
+    return executableUri.resolve('..').toFilePath();
+  } else if (File.fromUri(executableUri.resolve('dart-sdk/version'))
+      .existsSync()) {
+    return executableUri.resolve('dart-sdk').toFilePath();
+  } else {
+    throw StateError('Cannot find dart-sdk for $executableUri');
   }
 }
 

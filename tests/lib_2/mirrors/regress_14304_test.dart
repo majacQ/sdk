@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 // Regression test for Issue 14304.
 
 import "dart:mirrors";
@@ -14,7 +16,7 @@ class A<T> {
 main() {
   ClassMirror a = reflectClass(A);
   TypeVariableMirror t = a.typeVariables[0];
-  MethodMirror m = a.declarations[#m];
+  MethodMirror m = a.declarations[#m] as MethodMirror;
 
   Expect.equals(t, m.returnType);
 }

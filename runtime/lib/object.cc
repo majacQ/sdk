@@ -10,58 +10,64 @@
 #include "vm/heap/heap.h"
 #include "vm/native_entry.h"
 #include "vm/object.h"
+#include "vm/object_store.h"
+#include "vm/resolver.h"
 #include "vm/stack_frame.h"
 #include "vm/symbols.h"
 
 namespace dart {
 
-DEFINE_NATIVE_ENTRY(DartAsync_fatal, 1) {
+DEFINE_NATIVE_ENTRY(DartAsync_fatal, 0, 1) {
   // The dart:async library code entered an unrecoverable state.
   const Instance& instance =
       Instance::CheckedHandle(zone, arguments->NativeArgAt(0));
   const char* msg = instance.ToCString();
   OS::PrintErr("Fatal error in dart:async: %s\n", msg);
-  FATAL(msg);
+  FATAL("%s", msg);
   return Object::null();
 }
 
-DEFINE_NATIVE_ENTRY(Object_equals, 1) {
+DEFINE_NATIVE_ENTRY(Object_equals, 0, 1) {
   // Implemented in the flow graph builder.
   UNREACHABLE();
   return Object::null();
 }
 
-DEFINE_NATIVE_ENTRY(Object_getHash, 1) {
-// Please note that no handle is created for the argument.
-// This is safe since the argument is only used in a tail call.
-// The performance benefit is more than 5% when using hashCode.
+static intptr_t GetHash(Isolate* isolate, const ObjectPtr obj) {
 #if defined(HASH_IN_OBJECT_HEADER)
-  return Smi::New(Object::GetCachedHash(arguments->NativeArgAt(0)));
+  return Object::GetCachedHash(obj);
 #else
-  Heap* heap = isolate->heap();
-  ASSERT(arguments->NativeArgAt(0)->IsDartInstance());
-  return Smi::New(heap->GetHash(arguments->NativeArgAt(0)));
+  Heap* heap = isolate->group()->heap();
+  ASSERT(obj->IsDartInstance());
+  return heap->GetHash(obj);
 #endif
 }
 
-DEFINE_NATIVE_ENTRY(Object_setHash, 2) {
+DEFINE_NATIVE_ENTRY(Object_getHash, 0, 1) {
+  // Please note that no handle is created for the argument.
+  // This is safe since the argument is only used in a tail call.
+  // The performance benefit is more than 5% when using hashCode.
+  return Smi::New(GetHash(isolate, arguments->NativeArgAt(0)));
+}
+
+DEFINE_NATIVE_ENTRY(Object_setHashIfNotSetYet, 0, 2) {
   GET_NON_NULL_NATIVE_ARGUMENT(Smi, hash, arguments->NativeArgAt(1));
 #if defined(HASH_IN_OBJECT_HEADER)
-  Object::SetCachedHash(arguments->NativeArgAt(0), hash.Value());
+  return Smi::New(
+      Object::SetCachedHashIfNotSet(arguments->NativeArgAt(0), hash.Value()));
 #else
   const Instance& instance =
       Instance::CheckedHandle(zone, arguments->NativeArgAt(0));
-  Heap* heap = isolate->heap();
-  heap->SetHash(instance.raw(), hash.Value());
+  Heap* heap = thread->heap();
+  return Smi::New(heap->SetHashIfNotSet(instance.ptr(), hash.Value()));
 #endif
-  return Object::null();
 }
 
-DEFINE_NATIVE_ENTRY(Object_toString, 1) {
+DEFINE_NATIVE_ENTRY(Object_toString, 0, 1) {
   const Instance& instance =
       Instance::CheckedHandle(zone, arguments->NativeArgAt(0));
   if (instance.IsString()) {
-    return instance.raw();
+    return instance.ptr();
   }
   if (instance.IsAbstractType()) {
     return AbstractType::Cast(instance).UserVisibleName();
@@ -70,7 +76,7 @@ DEFINE_NATIVE_ENTRY(Object_toString, 1) {
   return String::New(c_str);
 }
 
-DEFINE_NATIVE_ENTRY(Object_runtimeType, 1) {
+DEFINE_NATIVE_ENTRY(Object_runtimeType, 0, 1) {
   const Instance& instance =
       Instance::CheckedHandle(zone, arguments->NativeArgAt(0));
   if (instance.IsString()) {
@@ -79,11 +85,13 @@ DEFINE_NATIVE_ENTRY(Object_runtimeType, 1) {
     return Type::IntType();
   } else if (instance.IsDouble()) {
     return Type::Double();
+  } else if (instance.IsType() || instance.IsFunctionType()) {
+    return Type::DartTypeType();
   }
   return instance.GetType(Heap::kNew);
 }
 
-DEFINE_NATIVE_ENTRY(Object_haveSameRuntimeType, 2) {
+DEFINE_NATIVE_ENTRY(Object_haveSameRuntimeType, 0, 2) {
   const Instance& left =
       Instance::CheckedHandle(zone, arguments->NativeArgAt(0));
   const Instance& right =
@@ -93,45 +101,61 @@ DEFINE_NATIVE_ENTRY(Object_haveSameRuntimeType, 2) {
   const intptr_t right_cid = right.GetClassId();
 
   if (left_cid != right_cid) {
-    if (RawObject::IsIntegerClassId(left_cid)) {
-      return Bool::Get(RawObject::IsIntegerClassId(right_cid)).raw();
-    } else if (RawObject::IsStringClassId(right_cid)) {
-      return Bool::Get(RawObject::IsStringClassId(right_cid)).raw();
+    if (IsIntegerClassId(left_cid)) {
+      return Bool::Get(IsIntegerClassId(right_cid)).ptr();
+    } else if (IsStringClassId(left_cid)) {
+      return Bool::Get(IsStringClassId(right_cid)).ptr();
+    } else if (IsTypeClassId(left_cid)) {
+      return Bool::Get(IsTypeClassId(right_cid)).ptr();
     } else {
-      return Bool::False().raw();
+      return Bool::False().ptr();
     }
   }
 
   const Class& cls = Class::Handle(left.clazz());
   if (cls.IsClosureClass()) {
-    // TODO(vegorov): provide faster implementation for closure classes.
+    const Function& left_function =
+        Function::Handle(zone, Closure::Cast(left).function());
+    const Function& right_function =
+        Function::Handle(zone, Closure::Cast(right).function());
+    if (left_function.signature() == right_function.signature() &&
+        Closure::Cast(left).function_type_arguments() ==
+            Closure::Cast(right).function_type_arguments() &&
+        Closure::Cast(left).delayed_type_arguments() ==
+            Closure::Cast(right).delayed_type_arguments() &&
+        Closure::Cast(left).instantiator_type_arguments() ==
+            Closure::Cast(right).instantiator_type_arguments()) {
+      return Bool::True().ptr();
+    }
     const AbstractType& left_type =
-        AbstractType::Handle(left.GetType(Heap::kNew));
+        AbstractType::Handle(zone, left.GetType(Heap::kNew));
     const AbstractType& right_type =
-        AbstractType::Handle(right.GetType(Heap::kNew));
-    return Bool::Get(left_type.raw() == right_type.raw()).raw();
+        AbstractType::Handle(zone, right.GetType(Heap::kNew));
+    return Bool::Get(
+               left_type.IsEquivalent(right_type, TypeEquality::kSyntactical))
+        .ptr();
   }
 
   if (!cls.IsGeneric()) {
-    return Bool::True().raw();
+    return Bool::True().ptr();
   }
 
   if (left.GetTypeArguments() == right.GetTypeArguments()) {
-    return Bool::True().raw();
+    return Bool::True().ptr();
   }
   const TypeArguments& left_type_arguments =
-      TypeArguments::Handle(left.GetTypeArguments());
+      TypeArguments::Handle(zone, left.GetTypeArguments());
   const TypeArguments& right_type_arguments =
-      TypeArguments::Handle(right.GetTypeArguments());
+      TypeArguments::Handle(zone, right.GetTypeArguments());
   const intptr_t num_type_args = cls.NumTypeArguments();
   const intptr_t num_type_params = cls.NumTypeParameters();
   return Bool::Get(left_type_arguments.IsSubvectorEquivalent(
                        right_type_arguments, num_type_args - num_type_params,
-                       num_type_params))
-      .raw();
+                       num_type_params, TypeEquality::kSyntactical))
+      .ptr();
 }
 
-DEFINE_NATIVE_ENTRY(Object_instanceOf, 4) {
+DEFINE_NATIVE_ENTRY(Object_instanceOf, 0, 4) {
   const Instance& instance =
       Instance::CheckedHandle(zone, arguments->NativeArgAt(0));
   const TypeArguments& instantiator_type_arguments =
@@ -141,11 +165,8 @@ DEFINE_NATIVE_ENTRY(Object_instanceOf, 4) {
   const AbstractType& type =
       AbstractType::CheckedHandle(zone, arguments->NativeArgAt(3));
   ASSERT(type.IsFinalized());
-  ASSERT(!type.IsMalformed());
-  ASSERT(!type.IsMalbounded());
-  Error& bound_error = Error::Handle(zone, Error::null());
   const bool is_instance_of = instance.IsInstanceOf(
-      type, instantiator_type_arguments, function_type_arguments, &bound_error);
+      type, instantiator_type_arguments, function_type_arguments);
   if (FLAG_trace_type_checks) {
     const char* result_str = is_instance_of ? "true" : "false";
     OS::PrintErr("Native Object.instanceOf: result %s\n", result_str);
@@ -155,28 +176,11 @@ DEFINE_NATIVE_ENTRY(Object_instanceOf, 4) {
                  String::Handle(zone, instance_type.Name()).ToCString());
     OS::PrintErr("  test type: %s\n",
                  String::Handle(zone, type.Name()).ToCString());
-    if (!bound_error.IsNull()) {
-      OS::PrintErr("  bound error: %s\n", bound_error.ToErrorCString());
-    }
   }
-  if (!is_instance_of && !bound_error.IsNull()) {
-    // Throw a dynamic type error only if the instanceof test fails.
-    DartFrameIterator iterator(thread,
-                               StackFrameIterator::kNoCrossThreadIteration);
-    StackFrame* caller_frame = iterator.NextFrame();
-    ASSERT(caller_frame != NULL);
-    const TokenPosition location = caller_frame->GetTokenPos();
-    String& bound_error_message =
-        String::Handle(zone, String::New(bound_error.ToErrorCString()));
-    Exceptions::CreateAndThrowTypeError(location, AbstractType::Handle(zone),
-                                        AbstractType::Handle(zone),
-                                        Symbols::Empty(), bound_error_message);
-    UNREACHABLE();
-  }
-  return Bool::Get(is_instance_of).raw();
+  return Bool::Get(is_instance_of).ptr();
 }
 
-DEFINE_NATIVE_ENTRY(Object_simpleInstanceOf, 2) {
+DEFINE_NATIVE_ENTRY(Object_simpleInstanceOf, 0, 2) {
   // This native is only called when the right hand side passes
   // SimpleInstanceOfType and it is a non-negative test.
   const Instance& instance =
@@ -184,37 +188,19 @@ DEFINE_NATIVE_ENTRY(Object_simpleInstanceOf, 2) {
   const AbstractType& type =
       AbstractType::CheckedHandle(zone, arguments->NativeArgAt(1));
   ASSERT(type.IsFinalized());
-  ASSERT(!type.IsMalformed());
-  ASSERT(!type.IsMalbounded());
   ASSERT(type.IsInstantiated());
-  Error& bound_error = Error::Handle(zone, Error::null());
-  const bool is_instance_of =
-      instance.IsInstanceOf(type, Object::null_type_arguments(),
-                            Object::null_type_arguments(), &bound_error);
-  if (!is_instance_of && !bound_error.IsNull()) {
-    // Throw a dynamic type error only if the instanceof test fails.
-    DartFrameIterator iterator(thread,
-                               StackFrameIterator::kNoCrossThreadIteration);
-    StackFrame* caller_frame = iterator.NextFrame();
-    ASSERT(caller_frame != NULL);
-    const TokenPosition location = caller_frame->GetTokenPos();
-    String& bound_error_message =
-        String::Handle(zone, String::New(bound_error.ToErrorCString()));
-    Exceptions::CreateAndThrowTypeError(location, AbstractType::Handle(zone),
-                                        AbstractType::Handle(zone),
-                                        Symbols::Empty(), bound_error_message);
-    UNREACHABLE();
-  }
-  return Bool::Get(is_instance_of).raw();
+  const bool is_instance_of = instance.IsInstanceOf(
+      type, Object::null_type_arguments(), Object::null_type_arguments());
+  return Bool::Get(is_instance_of).ptr();
 }
 
-DEFINE_NATIVE_ENTRY(AbstractType_toString, 1) {
+DEFINE_NATIVE_ENTRY(AbstractType_toString, 0, 1) {
   const AbstractType& type =
       AbstractType::CheckedHandle(zone, arguments->NativeArgAt(0));
   return type.UserVisibleName();
 }
 
-DEFINE_NATIVE_ENTRY(Type_getHashCode, 1) {
+DEFINE_NATIVE_ENTRY(Type_getHashCode, 0, 1) {
   const Type& type = Type::CheckedHandle(zone, arguments->NativeArgAt(0));
   intptr_t hash_val = type.Hash();
   ASSERT(hash_val > 0);
@@ -222,48 +208,104 @@ DEFINE_NATIVE_ENTRY(Type_getHashCode, 1) {
   return Smi::New(hash_val);
 }
 
-DEFINE_NATIVE_ENTRY(LibraryPrefix_invalidateDependentCode, 1) {
-  const LibraryPrefix& prefix =
-      LibraryPrefix::CheckedHandle(zone, arguments->NativeArgAt(0));
-  prefix.InvalidateDependentCode();
-  return Bool::Get(true).raw();
+DEFINE_NATIVE_ENTRY(Type_equality, 0, 2) {
+  const Type& type = Type::CheckedHandle(zone, arguments->NativeArgAt(0));
+  const Instance& other =
+      Instance::CheckedHandle(zone, arguments->NativeArgAt(1));
+  if (type.ptr() == other.ptr()) {
+    return Bool::True().ptr();
+  }
+  return Bool::Get(type.IsEquivalent(other, TypeEquality::kSyntactical)).ptr();
 }
 
-DEFINE_NATIVE_ENTRY(LibraryPrefix_load, 1) {
-  const LibraryPrefix& prefix =
-      LibraryPrefix::CheckedHandle(zone, arguments->NativeArgAt(0));
-  bool hasCompleted = prefix.LoadLibrary();
-  return Bool::Get(hasCompleted).raw();
+DEFINE_NATIVE_ENTRY(FunctionType_getHashCode, 0, 1) {
+  const FunctionType& type =
+      FunctionType::CheckedHandle(zone, arguments->NativeArgAt(0));
+  intptr_t hash_val = type.Hash();
+  ASSERT(hash_val > 0);
+  ASSERT(Smi::IsValid(hash_val));
+  return Smi::New(hash_val);
 }
 
-DEFINE_NATIVE_ENTRY(LibraryPrefix_loadError, 1) {
-  const LibraryPrefix& prefix =
-      LibraryPrefix::CheckedHandle(zone, arguments->NativeArgAt(0));
-  // Currently all errors are Dart instances, e.g. I/O errors
-  // created by deferred loading code. LanguageErrors from
-  // failed loading or finalization attempts are propagated and result
-  // in the isolate's death.
-  const Instance& error = Instance::Handle(zone, prefix.LoadError());
-  return error.raw();
+DEFINE_NATIVE_ENTRY(FunctionType_equality, 0, 2) {
+  const FunctionType& type =
+      FunctionType::CheckedHandle(zone, arguments->NativeArgAt(0));
+  const Instance& other =
+      Instance::CheckedHandle(zone, arguments->NativeArgAt(1));
+  if (type.ptr() == other.ptr()) {
+    return Bool::True().ptr();
+  }
+  return Bool::Get(type.IsEquivalent(other, TypeEquality::kSyntactical)).ptr();
 }
 
-DEFINE_NATIVE_ENTRY(LibraryPrefix_isLoaded, 1) {
+DEFINE_NATIVE_ENTRY(LibraryPrefix_isLoaded, 0, 1) {
   const LibraryPrefix& prefix =
       LibraryPrefix::CheckedHandle(zone, arguments->NativeArgAt(0));
-  return Bool::Get(prefix.is_loaded()).raw();
+  return Bool::Get(isolate->IsPrefixLoaded(prefix)).ptr();
 }
 
-DEFINE_NATIVE_ENTRY(Internal_inquireIs64Bit, 0) {
-#if defined(ARCH_IS_64_BIT)
-  return Bool::True().raw();
+DEFINE_NATIVE_ENTRY(LibraryPrefix_setLoaded, 0, 1) {
+  const LibraryPrefix& prefix =
+      LibraryPrefix::CheckedHandle(zone, arguments->NativeArgAt(0));
+  isolate->SetPrefixIsLoaded(prefix);
+  return Instance::null();
+}
+
+DEFINE_NATIVE_ENTRY(LibraryPrefix_loadingUnit, 0, 1) {
+  const LibraryPrefix& prefix =
+      LibraryPrefix::CheckedHandle(zone, arguments->NativeArgAt(0));
+  const Library& target = Library::Handle(zone, prefix.GetLibrary(0));
+  const LoadingUnit& unit = LoadingUnit::Handle(zone, target.loading_unit());
+  return Smi::New(unit.IsNull() ? LoadingUnit::kIllegalId : unit.id());
+}
+
+DEFINE_NATIVE_ENTRY(LibraryPrefix_issueLoad, 0, 1) {
+  const Smi& id = Smi::CheckedHandle(zone, arguments->NativeArgAt(0));
+  Array& units =
+      Array::Handle(zone, isolate->group()->object_store()->loading_units());
+  if (units.IsNull()) {
+    // Not actually split.
+    const Library& lib = Library::Handle(zone, Library::CoreLibrary());
+    const String& sel = String::Handle(zone, String::New("_completeLoads"));
+    const Function& func =
+        Function::Handle(zone, lib.LookupFunctionAllowPrivate(sel));
+    ASSERT(!func.IsNull());
+    const Array& args = Array::Handle(zone, Array::New(3));
+    args.SetAt(0, id);
+    args.SetAt(1, String::Handle(zone));
+    args.SetAt(2, Bool::Get(false));
+    return DartEntry::InvokeFunction(func, args);
+  }
+  ASSERT(id.Value() != LoadingUnit::kIllegalId);
+  LoadingUnit& unit = LoadingUnit::Handle(zone);
+  unit ^= units.At(id.Value());
+  return unit.IssueLoad();
+}
+
+DEFINE_NATIVE_ENTRY(Internal_has63BitSmis, 0, 0) {
+#if defined(ARCH_IS_64_BIT) && !defined(DART_COMPRESSED_POINTERS)
+  return Bool::True().ptr();
 #else
-  return Bool::False().raw();
+  return Bool::False().ptr();
 #endif  // defined(ARCH_IS_64_BIT)
 }
 
-DEFINE_NATIVE_ENTRY(Internal_unsafeCast, 1) {
+DEFINE_NATIVE_ENTRY(Internal_unsafeCast, 0, 1) {
   UNREACHABLE();  // Should be erased at Kernel translation time.
   return arguments->NativeArgAt(0);
+}
+
+DEFINE_NATIVE_ENTRY(Internal_nativeEffect, 0, 1) {
+  UNREACHABLE();
+}
+
+DEFINE_NATIVE_ENTRY(Internal_reachabilityFence, 0, 1) {
+  UNREACHABLE();
+}
+
+DEFINE_NATIVE_ENTRY(Internal_collectAllGarbage, 0, 0) {
+  isolate->group()->heap()->CollectAllGarbage();
+  return Object::null();
 }
 
 static bool ExtractInterfaceTypeArgs(Zone* zone,
@@ -271,34 +313,29 @@ static bool ExtractInterfaceTypeArgs(Zone* zone,
                                      const TypeArguments& instance_type_args,
                                      const Class& interface_cls,
                                      TypeArguments* interface_type_args) {
-  Class& cur_cls = Class::Handle(zone, instance_cls.raw());
-  // The following code is a specialization of Class::TypeTestNonRecursive().
+  Class& cur_cls = Class::Handle(zone, instance_cls.ptr());
+  // The following code is a specialization of Class::IsSubtypeOf().
   Array& interfaces = Array::Handle(zone);
   AbstractType& interface = AbstractType::Handle(zone);
   Class& cur_interface_cls = Class::Handle(zone);
   TypeArguments& cur_interface_type_args = TypeArguments::Handle(zone);
-  Error& error = Error::Handle(zone);
   while (true) {
     // Additional subtyping rules related to 'FutureOr' are not applied.
-    if (cur_cls.raw() == interface_cls.raw()) {
-      *interface_type_args = instance_type_args.raw();
+    if (cur_cls.ptr() == interface_cls.ptr()) {
+      *interface_type_args = instance_type_args.ptr();
       return true;
     }
     interfaces = cur_cls.interfaces();
     for (intptr_t i = 0; i < interfaces.Length(); i++) {
       interface ^= interfaces.At(i);
-      ASSERT(interface.IsFinalized() && !interface.IsMalbounded());
+      ASSERT(interface.IsFinalized());
       cur_interface_cls = interface.type_class();
       cur_interface_type_args = interface.arguments();
       if (!cur_interface_type_args.IsNull() &&
           !cur_interface_type_args.IsInstantiated()) {
-        error = Error::null();
         cur_interface_type_args = cur_interface_type_args.InstantiateFrom(
             instance_type_args, Object::null_type_arguments(), kNoneFree,
-            &error, NULL, NULL, Heap::kNew);
-        if (!error.IsNull()) {
-          continue;  // Another interface may work better.
-        }
+            Heap::kNew);
       }
       if (ExtractInterfaceTypeArgs(zone, cur_interface_cls,
                                    cur_interface_type_args, interface_cls,
@@ -313,7 +350,8 @@ static bool ExtractInterfaceTypeArgs(Zone* zone,
   }
 }
 
-DEFINE_NATIVE_ENTRY(Internal_extractTypeArguments, 2) {
+// for documentation see pkg/dart_internal/lib/extract_type_arguments.dart
+DEFINE_NATIVE_ENTRY(Internal_extractTypeArguments, 0, 2) {
   const Instance& instance =
       Instance::CheckedHandle(zone, arguments->NativeArgAt(0));
   const Instance& extract =
@@ -321,11 +359,9 @@ DEFINE_NATIVE_ENTRY(Internal_extractTypeArguments, 2) {
 
   Class& interface_cls = Class::Handle(zone);
   intptr_t num_type_args = 0;
-  const TypeArguments& function_type_args =
-      TypeArguments::Handle(zone, arguments->NativeTypeArgs());
-  if (function_type_args.Length() == 1) {
+  if (arguments->NativeTypeArgCount() >= 1) {
     const AbstractType& function_type_arg =
-        AbstractType::Handle(zone, function_type_args.TypeAt(0));
+        AbstractType::Handle(zone, arguments->NativeTypeArgAt(0));
     if (function_type_arg.IsType() &&
         (function_type_arg.arguments() == TypeArguments::null())) {
       interface_cls = function_type_arg.type_class();
@@ -376,32 +412,33 @@ DEFINE_NATIVE_ENTRY(Internal_extractTypeArguments, 2) {
         type_arg = interface_type_args.TypeAt(offset + i);
         extracted_type_args.SetTypeAt(i, type_arg);
       }
-      extracted_type_args = extracted_type_args.Canonicalize();  // Can be null.
+      extracted_type_args =
+          extracted_type_args.Canonicalize(thread, nullptr);  // Can be null.
     }
   }
   // Call the closure 'extract'.
   Array& args_desc = Array::Handle(zone);
   Array& args = Array::Handle(zone);
   if (extracted_type_args.IsNull()) {
-    args_desc = ArgumentsDescriptor::New(0, 1);
+    args_desc = ArgumentsDescriptor::NewBoxed(0, 1);
     args = Array::New(1);
     args.SetAt(0, extract);
   } else {
-    args_desc = ArgumentsDescriptor::New(num_type_args, 1);
+    args_desc = ArgumentsDescriptor::NewBoxed(num_type_args, 1);
     args = Array::New(2);
     args.SetAt(0, extracted_type_args);
     args.SetAt(1, extract);
   }
   const Object& result =
-      Object::Handle(zone, DartEntry::InvokeClosure(args, args_desc));
+      Object::Handle(zone, DartEntry::InvokeClosure(thread, args, args_desc));
   if (result.IsError()) {
     Exceptions::PropagateError(Error::Cast(result));
     UNREACHABLE();
   }
-  return result.raw();
+  return result.ptr();
 }
 
-DEFINE_NATIVE_ENTRY(Internal_prependTypeArguments, 4) {
+DEFINE_NATIVE_ENTRY(Internal_prependTypeArguments, 0, 4) {
   const TypeArguments& function_type_arguments =
       TypeArguments::CheckedHandle(zone, arguments->NativeArgAt(0));
   const TypeArguments& parent_type_arguments =
@@ -416,22 +453,23 @@ DEFINE_NATIVE_ENTRY(Internal_prependTypeArguments, 4) {
 // closure.
 // Arg0: Closure object
 // Arg1: Type arguments to function
-DEFINE_NATIVE_ENTRY(Internal_boundsCheckForPartialInstantiation, 2) {
+DEFINE_NATIVE_ENTRY(Internal_boundsCheckForPartialInstantiation, 0, 2) {
   const Closure& closure =
       Closure::CheckedHandle(zone, arguments->NativeArgAt(0));
   const Function& target = Function::Handle(zone, closure.function());
-  const TypeArguments& bounds =
-      TypeArguments::Handle(zone, target.type_parameters());
-
-  // Either the bounds are all-dynamic or the function is not generic.
-  if (bounds.IsNull()) return Object::null();
+  const TypeParameters& type_params =
+      TypeParameters::Handle(zone, target.type_parameters());
+  if (type_params.IsNull() || type_params.AllDynamicBounds()) {
+    // The function is not generic or the bounds are all dynamic.
+    return Object::null();
+  }
 
   const TypeArguments& type_args_to_check =
       TypeArguments::CheckedHandle(zone, arguments->NativeArgAt(1));
 
   // This should be guaranteed by the front-end.
   ASSERT(type_args_to_check.IsNull() ||
-         bounds.Length() <= type_args_to_check.Length());
+         type_params.Length() <= type_args_to_check.Length());
 
   // The bounds on the closure may need instantiation.
   const TypeArguments& instantiator_type_args =
@@ -441,23 +479,19 @@ DEFINE_NATIVE_ENTRY(Internal_boundsCheckForPartialInstantiation, 2) {
 
   AbstractType& supertype = AbstractType::Handle(zone);
   AbstractType& subtype = AbstractType::Handle(zone);
-  TypeParameter& parameter = TypeParameter::Handle(zone);
-  Error& bound_error = Error::Handle(zone);
-  for (intptr_t i = 0; i < bounds.Length(); ++i) {
-    parameter ^= bounds.TypeAt(i);
-    supertype = parameter.bound();
-    subtype = type_args_to_check.IsNull() ? Object::dynamic_type().raw()
+  for (intptr_t i = 0; i < type_params.Length(); ++i) {
+    supertype = type_params.BoundAt(i);
+    subtype = type_args_to_check.IsNull() ? Object::dynamic_type().ptr()
                                           : type_args_to_check.TypeAt(i);
 
-    ASSERT(!subtype.IsNull() && !subtype.IsMalformedOrMalbounded());
-    ASSERT(!supertype.IsNull() && !supertype.IsMalformedOrMalbounded());
+    ASSERT(!subtype.IsNull());
+    ASSERT(!supertype.IsNull());
 
     // The supertype may not be instantiated.
     if (!AbstractType::InstantiateAndTestSubtype(
-            &subtype, &supertype, &bound_error, instantiator_type_args,
-            function_type_args)) {
+            &subtype, &supertype, instantiator_type_args, function_type_args)) {
       // Throw a dynamic type error.
-      TokenPosition location;
+      TokenPosition location = TokenPosition::kNoSource;
       {
         DartFrameIterator iterator(Thread::Current(),
                                    StackFrameIterator::kNoCrossThreadIteration);
@@ -465,13 +499,9 @@ DEFINE_NATIVE_ENTRY(Internal_boundsCheckForPartialInstantiation, 2) {
         ASSERT(caller_frame != NULL);
         location = caller_frame->GetTokenPos();
       }
-      String& bound_error_message = String::Handle(zone);
-      if (!bound_error.IsNull()) {
-        bound_error_message = String::New(bound_error.ToErrorCString());
-      }
-      String& parameter_name = String::Handle(zone, parameter.Name());
+      const auto& parameter_name = String::Handle(zone, type_params.NameAt(i));
       Exceptions::CreateAndThrowTypeError(location, subtype, supertype,
-                                          parameter_name, bound_error_message);
+                                          parameter_name);
       UNREACHABLE();
     }
   }
@@ -479,7 +509,7 @@ DEFINE_NATIVE_ENTRY(Internal_boundsCheckForPartialInstantiation, 2) {
   return Object::null();
 }
 
-DEFINE_NATIVE_ENTRY(InvocationMirror_unpackTypeArguments, 2) {
+DEFINE_NATIVE_ENTRY(InvocationMirror_unpackTypeArguments, 0, 2) {
   const TypeArguments& type_arguments =
       TypeArguments::CheckedHandle(zone, arguments->NativeArgAt(0));
   const Smi& num_type_arguments =
@@ -499,10 +529,10 @@ DEFINE_NATIVE_ENTRY(InvocationMirror_unpackTypeArguments, 2) {
     }
   }
   type_list.MakeImmutable();
-  return type_list.raw();
+  return type_list.ptr();
 }
 
-DEFINE_NATIVE_ENTRY(NoSuchMethodError_existingMethodSignature, 3) {
+DEFINE_NATIVE_ENTRY(NoSuchMethodError_existingMethodSignature, 0, 3) {
   const Instance& receiver =
       Instance::CheckedHandle(zone, arguments->NativeArgAt(0));
   GET_NON_NULL_NATIVE_ARGUMENT(String, method_name, arguments->NativeArgAt(1));
@@ -511,9 +541,14 @@ DEFINE_NATIVE_ENTRY(NoSuchMethodError_existingMethodSignature, 3) {
   InvocationMirror::Kind kind;
   InvocationMirror::DecodeType(invocation_type.Value(), &level, &kind);
 
-  Function& function = Function::Handle();
+  Function& function = Function::Handle(zone);
   if (receiver.IsType()) {
-    Class& cls = Class::Handle(Type::Cast(receiver).type_class());
+    const auto& cls = Class::Handle(zone, Type::Cast(receiver).type_class());
+    const auto& error = Error::Handle(zone, cls.EnsureIsFinalized(thread));
+    if (!error.IsNull()) {
+      Exceptions::PropagateError(error);
+      UNREACHABLE();
+    }
     if (level == InvocationMirror::kConstructor) {
       function = cls.LookupConstructor(method_name);
       if (function.IsNull()) {
@@ -525,15 +560,12 @@ DEFINE_NATIVE_ENTRY(NoSuchMethodError_existingMethodSignature, 3) {
   } else if (receiver.IsClosure()) {
     function = Closure::Cast(receiver).function();
   } else {
-    Class& cls = Class::Handle(receiver.clazz());
-    if (level != InvocationMirror::kSuper) {
-      function = cls.LookupDynamicFunction(method_name);
-    }
-    while (function.IsNull()) {
+    auto& cls = Class::Handle(zone, receiver.clazz());
+    if (level == InvocationMirror::kSuper) {
       cls = cls.SuperClass();
-      if (cls.IsNull()) break;
-      function = cls.LookupDynamicFunction(method_name);
     }
+    function = Resolver::ResolveDynamicAnyArgs(zone, cls, method_name,
+                                               /*allow_add=*/false);
   }
   if (!function.IsNull()) {
     return function.UserVisibleSignature();

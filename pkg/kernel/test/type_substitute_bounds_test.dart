@@ -1,6 +1,9 @@
 // Copyright (c) 2016, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
+
+// @dart = 2.9
+
 library kernel.type_substitute_bounds_test;
 
 import 'package:kernel/kernel.dart';
@@ -30,6 +33,7 @@ final List<TestCase> testCases = <TestCase>[
       '(<F>(String) => int) => int'),
   testCase('<E>((T) => int) => int', {'T': bound('_', 'String')},
       '<E>((String) => int) => int'),
+  testCase('(T?) =>* String', {'T': bound('int', 'int')}, '(int?) =>* String'),
 ];
 
 class TestCase {
@@ -72,9 +76,9 @@ main() {
         upperBounds[parameter] = environment.parse(bounds.upper);
         lowerBounds[parameter] = environment.parse(bounds.lower);
       });
-      var substituted = Substitution
-          .fromUpperAndLowerBounds(upperBounds, lowerBounds)
-          .substituteType(type);
+      var substituted =
+          Substitution.fromUpperAndLowerBounds(upperBounds, lowerBounds)
+              .substituteType(type);
       var expected = environment.parse(testCase.expected);
       if (substituted != expected) {
         fail('Expected `$expected` but got `$substituted`');

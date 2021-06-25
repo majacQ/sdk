@@ -1,8 +1,9 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:analyzer/src/util/yaml.dart';
+import 'package:source_span/source_span.dart';
 import 'package:test/test.dart';
 import 'package:yaml/src/event.dart';
 import 'package:yaml/yaml.dart';
@@ -97,14 +98,15 @@ main() {
   });
 }
 
-final Merger merger = new Merger();
+final Merger merger = Merger();
 
 bool containsKey(Map<dynamic, YamlNode> map, dynamic key) =>
     _getValue(map, key) != null;
 
-void expectEquals(YamlNode actual, YamlNode expected) {
+void expectEquals(YamlNode? actual, YamlNode? expected) {
   if (expected is YamlScalar) {
-    expect(actual, new TypeMatcher<YamlScalar>());
+    actual!;
+    expect(actual, TypeMatcher<YamlScalar>());
     expect(expected.value, actual.value);
   } else if (expected is YamlList) {
     if (actual is YamlList) {
@@ -150,21 +152,23 @@ Object valueOf(Object object) => object is YamlNode ? object.value : object;
 
 YamlNode wrap(Object value) {
   if (value is List) {
-    List wrappedElements = value.map((e) => wrap(e)).toList();
-    return new YamlList.internal(wrappedElements, null, CollectionStyle.BLOCK);
+    var wrappedElements = value.map((e) => wrap(e)).toList();
+    return YamlList.internal(
+        wrappedElements, _FileSpanMock.instance, CollectionStyle.BLOCK);
   } else if (value is Map) {
     Map<dynamic, YamlNode> wrappedEntries = <dynamic, YamlNode>{};
     value.forEach((k, v) {
       wrappedEntries[wrap(k)] = wrap(v);
     });
-    return new YamlMap.internal(wrappedEntries, null, CollectionStyle.BLOCK);
+    return YamlMap.internal(
+        wrappedEntries, _FileSpanMock.instance, CollectionStyle.BLOCK);
   } else {
-    return new YamlScalar.internal(
-        value, new ScalarEvent(null, '', ScalarStyle.PLAIN));
+    return YamlScalar.internal(
+        value, ScalarEvent(_FileSpanMock.instance, '', ScalarStyle.PLAIN));
   }
 }
 
-YamlNode _getValue(Map map, Object key) {
+YamlNode? _getValue(Map map, Object key) {
   Object keyValue = valueOf(key);
   for (var existingKey in map.keys) {
     if (valueOf(existingKey) == keyValue) {
@@ -172,4 +176,11 @@ YamlNode _getValue(Map map, Object key) {
     }
   }
   return null;
+}
+
+class _FileSpanMock implements FileSpan {
+  static final FileSpan instance = _FileSpanMock();
+
+  @override
+  noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

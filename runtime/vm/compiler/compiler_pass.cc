@@ -4,11 +4,10 @@
 
 #include "vm/compiler/compiler_pass.h"
 
-#ifndef DART_PRECOMPILED_RUNTIME
-
 #include "vm/compiler/backend/block_scheduler.h"
 #include "vm/compiler/backend/branch_optimizer.h"
 #include "vm/compiler/backend/constant_propagator.h"
+#include "vm/compiler/backend/flow_graph_checker.h"
 #include "vm/compiler/backend/il_printer.h"
 #include "vm/compiler/backend/inliner.h"
 #include "vm/compiler/backend/linearscan.h"
@@ -16,9 +15,13 @@
 #include "vm/compiler/backend/redundancy_elimination.h"
 #include "vm/compiler/backend/type_propagator.h"
 #include "vm/compiler/call_specializer.h"
+#include "vm/compiler/compiler_timings.h"
+#include "vm/compiler/write_barrier_elimination.h"
 #if defined(DART_PRECOMPILER)
 #include "vm/compiler/aot/aot_call_specializer.h"
+#include "vm/compiler/aot/precompiler.h"
 #endif
+#include "vm/thread.h"
 #include "vm/timeline.h"
 
 #define COMPILER_PASS_REPEAT(Name, Body)                                       \
@@ -30,7 +33,7 @@
                                                                                \
    protected:                                                                  \
     virtual bool DoBody(CompilerPassState* state) const {                      \
-      FlowGraph* flow_graph = state->flow_graph;                               \
+      FlowGraph* flow_graph = state->flow_graph();                             \
       USE(flow_graph);                                                         \
       Body;                                                                    \
     }                                                                          \
@@ -45,6 +48,31 @@
 
 namespace dart {
 
+CompilerPassState::CompilerPassState(
+    Thread* thread,
+    FlowGraph* flow_graph,
+    SpeculativeInliningPolicy* speculative_policy,
+    Precompiler* precompiler)
+    : thread(thread),
+      precompiler(precompiler),
+      inlining_depth(0),
+      sinking(NULL),
+      call_specializer(NULL),
+      speculative_policy(speculative_policy),
+      reorder_blocks(false),
+      sticky_flags(0),
+      flow_graph_(flow_graph) {
+  // Top scope function is at inlining id 0.
+  inline_id_to_function.Add(&flow_graph->parsed_function().function());
+  // Top scope function has no caller (-1).
+  caller_inline_id.Add(-1);
+  // We do not add a token position for the top scope function to
+  // |inline_id_to_token_pos| because it is not (currently) inlined into
+  // another graph at a given token position. A side effect of this is that
+  // the length of |inline_id_to_function| and |caller_inline_id| is always
+  // larger than the length of |inline_id_to_token_pos| by one.
+}
+
 CompilerPass* CompilerPass::passes_[CompilerPass::kNumPasses] = {NULL};
 
 DEFINE_OPTION_HANDLER(CompilerPass::ParseFilters,
@@ -54,6 +82,13 @@ DEFINE_OPTION_HANDLER(CompilerPass::ParseFilters,
                       "Do --compiler-passes=help for more information.");
 DECLARE_FLAG(bool, print_flow_graph);
 DECLARE_FLAG(bool, print_flow_graph_optimized);
+
+void CompilerPassState::set_flow_graph(FlowGraph* flow_graph) {
+  flow_graph_ = flow_graph;
+  if (call_specializer != nullptr) {
+    call_specializer->set_flow_graph(flow_graph);
+  }
+}
 
 static const char* kCompilerPassesUsage =
     "=== How to use --compiler-passes flag\n"
@@ -173,13 +208,18 @@ void CompilerPass::Run(CompilerPassState* state) const {
 
     PrintGraph(state, kTraceBefore, round);
     {
-      NOT_IN_PRODUCT(
-          TimelineDurationScope tds2(thread, state->compiler_timeline, name()));
-      repeat = DoBody(state);
-      DEBUG_ASSERT(state->flow_graph->VerifyUseLists());
+      TIMELINE_DURATION(thread, CompilerVerbose, name());
+      {
+        COMPILER_TIMINGS_PASS_TIMER_SCOPE(thread, id());
+        repeat = DoBody(state);
+      }
       thread->CheckForSafepoint();
     }
     PrintGraph(state, kTraceAfter, round);
+#if defined(DEBUG)
+    FlowGraphChecker(state->flow_graph(), state->inline_id_to_function)
+        .Check(name());
+#endif
   }
 }
 
@@ -187,7 +227,7 @@ void CompilerPass::PrintGraph(CompilerPassState* state,
                               Flag mask,
                               intptr_t round) const {
   const intptr_t current_flags = flags() | state->sticky_flags;
-  FlowGraph* flow_graph = state->flow_graph;
+  FlowGraph* flow_graph = state->flow_graph();
 
   if ((FLAG_print_flow_graph || FLAG_print_flow_graph_optimized) &&
       flow_graph->should_print() && ((current_flags & mask) != 0)) {
@@ -205,15 +245,72 @@ void CompilerPass::PrintGraph(CompilerPassState* state,
 #define INVOKE_PASS(Name)                                                      \
   CompilerPass::Get(CompilerPass::k##Name)->Run(pass_state);
 
-void CompilerPass::RunPipeline(PipelineMode mode,
-                               CompilerPassState* pass_state) {
-  INVOKE_PASS(ComputeSSA);
 #if defined(DART_PRECOMPILER)
-  if (mode == kAOT) {
-    INVOKE_PASS(ApplyClassIds);
-    INVOKE_PASS(TypePropagation);
+#define INVOKE_PASS_AOT(Name)                                                  \
+  if (mode == kAOT) {                                                          \
+    INVOKE_PASS(Name);                                                         \
   }
+#else
+#define INVOKE_PASS_AOT(Name)
 #endif
+
+void CompilerPass::RunGraphIntrinsicPipeline(CompilerPassState* pass_state) {
+  INVOKE_PASS(AllocateRegistersForGraphIntrinsic);
+}
+
+void CompilerPass::RunInliningPipeline(PipelineMode mode,
+                                       CompilerPassState* pass_state) {
+  INVOKE_PASS(ApplyClassIds);
+  INVOKE_PASS(TypePropagation);
+  INVOKE_PASS(ApplyICData);
+  INVOKE_PASS(Canonicalize);
+  // Run constant propagation to make sure we specialize for
+  // (optional) constant arguments passed into the inlined method.
+  INVOKE_PASS(ConstantPropagation);
+  // Constant propagation removes unreachable basic blocks and
+  // may open more opportunities for call specialization.
+  // Call specialization during inlining may cause more call
+  // sites to be discovered and more functions inlined.
+  INVOKE_PASS_AOT(ApplyClassIds);
+  // Optimize (a << b) & c patterns, merge instructions. Must occur
+  // before 'SelectRepresentations' which inserts conversion nodes.
+  INVOKE_PASS(TryOptimizePatterns);
+}
+
+FlowGraph* CompilerPass::RunForceOptimizedPipeline(
+    PipelineMode mode,
+    CompilerPassState* pass_state) {
+  INVOKE_PASS(ComputeSSA);
+  INVOKE_PASS(SetOuterInliningId);
+  INVOKE_PASS(TypePropagation);
+  INVOKE_PASS(Canonicalize);
+  INVOKE_PASS(BranchSimplify);
+  INVOKE_PASS(IfConvert);
+  INVOKE_PASS(ConstantPropagation);
+  INVOKE_PASS(TypePropagation);
+  INVOKE_PASS(WidenSmiToInt32);
+  INVOKE_PASS(SelectRepresentations);
+  INVOKE_PASS(TypePropagation);
+  INVOKE_PASS(TryCatchOptimization);
+  INVOKE_PASS(EliminateEnvironments);
+  INVOKE_PASS(EliminateDeadPhis);
+  // Currently DCE assumes that EliminateEnvironments has already been run,
+  // so it should not be lifted earlier than that pass.
+  INVOKE_PASS(DCE);
+  INVOKE_PASS(Canonicalize);
+  INVOKE_PASS_AOT(DelayAllocations);
+  INVOKE_PASS(EliminateWriteBarriers);
+  INVOKE_PASS(FinalizeGraph);
+  INVOKE_PASS(AllocateRegisters);
+  INVOKE_PASS(ReorderBlocks);
+  return pass_state->flow_graph();
+}
+
+FlowGraph* CompilerPass::RunPipeline(PipelineMode mode,
+                                     CompilerPassState* pass_state) {
+  INVOKE_PASS(ComputeSSA);
+  INVOKE_PASS_AOT(ApplyClassIds);
+  INVOKE_PASS_AOT(TypePropagation);
   INVOKE_PASS(ApplyICData);
   INVOKE_PASS(TryOptimizePatterns);
   INVOKE_PASS(SetOuterInliningId);
@@ -231,15 +328,12 @@ void CompilerPass::RunPipeline(PipelineMode mode,
   INVOKE_PASS(ConstantPropagation);
   INVOKE_PASS(OptimisticallySpecializeSmiPhis);
   INVOKE_PASS(TypePropagation);
-#if defined(DART_PRECOMPILER)
-  if (mode == kAOT) {
-    // The extra call specialization pass in AOT is able to specialize more
-    // calls after ConstantPropagation, which removes unreachable code, and
-    // TypePropagation, which can infer more accurate types after removing
-    // unreachable code.
-    INVOKE_PASS(ApplyICData);
-  }
-#endif
+  // The extra call specialization pass in AOT is able to specialize more
+  // calls after ConstantPropagation, which removes unreachable code, and
+  // TypePropagation, which can infer more accurate types after removing
+  // unreachable code.
+  INVOKE_PASS_AOT(ApplyICData);
+  INVOKE_PASS_AOT(OptimizeTypedDataAccesses);
   INVOKE_PASS(WidenSmiToInt32);
   INVOKE_PASS(SelectRepresentations);
   INVOKE_PASS(CSE);
@@ -253,19 +347,38 @@ void CompilerPass::RunPipeline(PipelineMode mode,
   INVOKE_PASS(TryCatchOptimization);
   INVOKE_PASS(EliminateEnvironments);
   INVOKE_PASS(EliminateDeadPhis);
+  // Currently DCE assumes that EliminateEnvironments has already been run,
+  // so it should not be lifted earlier than that pass.
+  INVOKE_PASS(DCE);
   INVOKE_PASS(Canonicalize);
+  INVOKE_PASS_AOT(DelayAllocations);
+  // Repeat branches optimization after DCE, as it could make more
+  // empty blocks.
+  INVOKE_PASS(OptimizeBranches);
   INVOKE_PASS(AllocationSinking_Sink);
   INVOKE_PASS(EliminateDeadPhis);
+  INVOKE_PASS(DCE);
   INVOKE_PASS(TypePropagation);
   INVOKE_PASS(SelectRepresentations);
   INVOKE_PASS(Canonicalize);
+  INVOKE_PASS(UseTableDispatch);
   INVOKE_PASS(EliminateStackOverflowChecks);
   INVOKE_PASS(Canonicalize);
   INVOKE_PASS(AllocationSinking_DetachMaterializations);
-  INVOKE_PASS(WriteBarrierElimination);
+  INVOKE_PASS(EliminateWriteBarriers);
   INVOKE_PASS(FinalizeGraph);
   INVOKE_PASS(AllocateRegisters);
   INVOKE_PASS(ReorderBlocks);
+  return pass_state->flow_graph();
+}
+
+FlowGraph* CompilerPass::RunPipelineWithPasses(
+    CompilerPassState* state,
+    std::initializer_list<CompilerPass::Id> passes) {
+  for (auto pass_id : passes) {
+    passes_[pass_id]->Run(state);
+  }
+  return state->flow_graph();
 }
 
 COMPILER_PASS(ComputeSSA, {
@@ -334,6 +447,12 @@ COMPILER_PASS(SelectRepresentations, {
   flow_graph->SelectRepresentations();
 });
 
+COMPILER_PASS(UseTableDispatch, {
+  if (FLAG_use_bare_instructions && FLAG_use_table_dispatch) {
+    state->call_specializer->ReplaceInstanceCallsWithDispatchTableCalls();
+  }
+});
+
 COMPILER_PASS_REPEAT(CSE, { return DominatorBasedCSE::Optimize(flow_graph); });
 
 COMPILER_PASS(LICM, {
@@ -361,13 +480,22 @@ COMPILER_PASS(OptimizeBranches, {
   ConstantPropagator::OptimizeBranches(flow_graph);
 });
 
-COMPILER_PASS(TryCatchOptimization,
-              { TryCatchAnalyzer::Optimize(flow_graph); });
+COMPILER_PASS(OptimizeTypedDataAccesses,
+              { TypedDataSpecializer::Optimize(flow_graph); });
+
+COMPILER_PASS(TryCatchOptimization, {
+  OptimizeCatchEntryStates(flow_graph,
+                           /*is_aot=*/CompilerState::Current().is_aot());
+});
 
 COMPILER_PASS(EliminateEnvironments, { flow_graph->EliminateEnvironments(); });
 
 COMPILER_PASS(EliminateDeadPhis,
               { DeadCodeElimination::EliminateDeadPhis(flow_graph); });
+
+COMPILER_PASS(DCE, { DeadCodeElimination::EliminateDeadCode(flow_graph); });
+
+COMPILER_PASS(DelayAllocations, { DelayAllocations::Optimize(flow_graph); });
 
 COMPILER_PASS(AllocationSinking_Sink, {
   // TODO(vegorov): Support allocation sinking with try-catch.
@@ -388,6 +516,7 @@ COMPILER_PASS(AllocationSinking_DetachMaterializations, {
 });
 
 COMPILER_PASS(AllocateRegisters, {
+  flow_graph->InsertPushArguments();
   // Ensure loop hierarchy has been computed.
   flow_graph->GetLoopHierarchy();
   // Perform register allocation on the SSA graph.
@@ -395,52 +524,35 @@ COMPILER_PASS(AllocateRegisters, {
   allocator.AllocateRegisters();
 });
 
+COMPILER_PASS(AllocateRegistersForGraphIntrinsic, {
+  // Ensure loop hierarchy has been computed.
+  flow_graph->GetLoopHierarchy();
+  // Perform register allocation on the SSA graph.
+  FlowGraphAllocator allocator(*flow_graph, /*intrinsic_mode=*/true);
+  allocator.AllocateRegisters();
+});
+
 COMPILER_PASS(ReorderBlocks, {
   if (state->reorder_blocks) {
-    state->block_scheduler->ReorderBlocks();
+    BlockScheduler::ReorderBlocks(flow_graph);
   }
 });
 
-static void WriteBarrierElimination(FlowGraph* flow_graph) {
-  for (BlockIterator block_it = flow_graph->reverse_postorder_iterator();
-       !block_it.Done(); block_it.Advance()) {
-    BlockEntryInstr* block = block_it.Current();
-    Definition* last_allocated = nullptr;
-    for (ForwardInstructionIterator it(block); !it.Done(); it.Advance()) {
-      Instruction* current = it.Current();
-      if (StoreInstanceFieldInstr* instr = current->AsStoreInstanceField()) {
-        if (!current->CanTriggerGC()) {
-          if (instr->instance()->definition() == last_allocated) {
-            instr->set_emit_store_barrier(kNoStoreBarrier);
-          }
-          continue;
-        }
-      }
-
-      AllocationInstr* alloc = current->AsAllocation();
-      if (alloc != nullptr && alloc->WillAllocateNewOrRemembered()) {
-        last_allocated = alloc;
-        continue;
-      }
-
-      if (current->CanTriggerGC()) {
-        last_allocated = nullptr;
-      }
-    }
-  }
-}
-
-COMPILER_PASS(WriteBarrierElimination,
-              { WriteBarrierElimination(flow_graph); });
+COMPILER_PASS(EliminateWriteBarriers, { EliminateWriteBarriers(flow_graph); });
 
 COMPILER_PASS(FinalizeGraph, {
-  // Compute and store graph informations (call & instruction counts)
-  // to be later used by the inliner.
-  FlowGraphInliner::CollectGraphInfo(flow_graph, true);
+  // At the end of the pipeline, force recomputing and caching graph
+  // information (instruction and call site counts) for the (assumed)
+  // non-specialized case with better values, for future inlining.
+  intptr_t instruction_count = 0;
+  intptr_t call_site_count = 0;
+  FlowGraphInliner::CollectGraphInfo(flow_graph,
+                                     /*constants_count*/ 0,
+                                     /*force*/ true, &instruction_count,
+                                     &call_site_count);
   flow_graph->function().set_inlining_depth(state->inlining_depth);
+  // Remove redefinitions for the rest of the pipeline.
   flow_graph->RemoveRedefinitions();
 });
 
 }  // namespace dart
-
-#endif  // DART_PRECOMPILED_RUNTIME

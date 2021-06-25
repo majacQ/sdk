@@ -2,12 +2,11 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 // Test that the secure random generator does not systematically generates
 // duplicates. Note that this test is flaky by definition, since duplicates
 // can occur. They should be extremely rare, though.
-
-// Library tag to allow Dartium to run the test.
-library random_secure;
 
 import "package:expect/expect.dart";
 import 'dart:math';

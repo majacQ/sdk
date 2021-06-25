@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'assist_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(FlutterWrapContainerTest);
   });
@@ -19,29 +19,35 @@ class FlutterWrapContainerTest extends AssistProcessorTest {
   @override
   AssistKind get kind => DartAssistKind.FLUTTER_WRAP_CONTAINER;
 
-  test_aroundContainer() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  @override
+  void setUp() {
+    super.setUp();
+    writeTestPackageConfig(
+      flutter: true,
+    );
+  }
+
+  Future<void> test_aroundContainer() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 main() {
-  return /*caret*/new Container();
+  return /*caret*/Container();
 }
 ''');
     await assertNoAssist();
   }
 
-  test_aroundText() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  Future<void> test_aroundText() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 main() {
-  /*caret*/new Text('a');
+  /*caret*/Text('a');
 }
 ''');
     await assertHasAssist('''
 import 'package:flutter/widgets.dart';
 main() {
-  /*caret*/Container(child: new Text('a'));
+  Container(child: Text('a'));
 }
 ''');
   }

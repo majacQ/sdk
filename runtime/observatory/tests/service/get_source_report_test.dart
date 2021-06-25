@@ -3,7 +3,7 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:observatory/service_io.dart';
-import 'package:unittest/unittest.dart';
+import 'package:test/test.dart';
 import 'test_helper.dart';
 import 'service_test_common.dart';
 import 'dart:developer';
@@ -34,6 +34,19 @@ void testFunction() {
   MyClass.myFunction(10000);
 }
 
+class MyConstClass {
+  const MyConstClass();
+  static const MyConstClass instance = null ?? const MyConstClass();
+
+  void foo() {
+    debugger();
+  }
+}
+
+void testFunction2() {
+  MyConstClass.instance.foo();
+}
+
 bool allRangesCompiled(coverage) {
   for (int i = 0; i < coverage['ranges'].length; i++) {
     if (!coverage['ranges'][i]['compiled']) {
@@ -60,12 +73,12 @@ var tests = <IsolateTest>[
 
     var expectedRange = {
       'scriptIndex': 0,
-      'startPos': ifKernel(432, 40),
-      'endPos': ifKernel(576, 89),
+      'startPos': 424,
+      'endPos': 568,
       'compiled': true,
       'coverage': {
-        'hits': ifKernel([432, 482, 533, 562], [40, 55, 73, 83]),
-        'misses': ifKernel([495], [61])
+        'hits': [424, 474, 525, 554],
+        'misses': [487],
       }
     };
 
@@ -75,8 +88,10 @@ var tests = <IsolateTest>[
       'scriptId': func.location.script.id
     };
     var coverage = await isolate.invokeRpcNoUpgrade('getSourceReport', params);
+    final numRanges = coverage['ranges'].length;
     expect(coverage['type'], equals('SourceReport'));
-    expect(coverage['ranges'].length, 6);
+
+    expect(numRanges, equals(11));
     expect(coverage['ranges'][0], equals(expectedRange));
     expect(coverage['scripts'].length, 1);
     expect(
@@ -91,7 +106,7 @@ var tests = <IsolateTest>[
     };
     coverage = await isolate.invokeRpcNoUpgrade('getSourceReport', params);
     expect(coverage['type'], equals('SourceReport'));
-    expect(coverage['ranges'].length, 6);
+    expect(coverage['ranges'].length, 12);
     expect(allRangesCompiled(coverage), isTrue);
 
     // One function

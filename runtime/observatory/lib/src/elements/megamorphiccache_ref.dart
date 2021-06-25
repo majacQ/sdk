@@ -7,37 +7,34 @@ import 'dart:async';
 import 'package:observatory/models.dart' as M
     show IsolateRef, MegamorphicCacheRef;
 import 'package:observatory/src/elements/helpers/rendering_scheduler.dart';
-import 'package:observatory/src/elements/helpers/tag.dart';
+import 'package:observatory/src/elements/helpers/custom_element.dart';
 import 'package:observatory/src/elements/helpers/uris.dart';
 
-class MegamorphicCacheRefElement extends HtmlElement implements Renderable {
-  static const tag =
-      const Tag<MegamorphicCacheRefElement>('megamorphic-cache-ref');
-
-  RenderingScheduler<MegamorphicCacheRefElement> _r;
+class MegamorphicCacheRefElement extends CustomElement implements Renderable {
+  late RenderingScheduler<MegamorphicCacheRefElement> _r;
 
   Stream<RenderedEvent<MegamorphicCacheRefElement>> get onRendered =>
       _r.onRendered;
 
-  M.IsolateRef _isolate;
-  M.MegamorphicCacheRef _cache;
+  late M.IsolateRef _isolate;
+  late M.MegamorphicCacheRef _cache;
 
   M.IsolateRef get isolate => _isolate;
   M.MegamorphicCacheRef get cache => _cache;
 
   factory MegamorphicCacheRefElement(
       M.IsolateRef isolate, M.MegamorphicCacheRef cache,
-      {RenderingQueue queue}) {
+      {RenderingQueue? queue}) {
     assert(isolate != null);
     assert(cache != null);
-    MegamorphicCacheRefElement e = document.createElement(tag.name);
+    MegamorphicCacheRefElement e = new MegamorphicCacheRefElement.created();
     e._r = new RenderingScheduler<MegamorphicCacheRefElement>(e, queue: queue);
     e._isolate = isolate;
     e._cache = cache;
     return e;
   }
 
-  MegamorphicCacheRefElement.created() : super.created();
+  MegamorphicCacheRefElement.created() : super.created('megamorphic-cache-ref');
 
   @override
   void attached() {

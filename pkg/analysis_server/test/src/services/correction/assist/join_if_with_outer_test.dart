@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'assist_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(JoinIfWithOuterTest);
   });
@@ -19,8 +19,8 @@ class JoinIfWithOuterTest extends AssistProcessorTest {
   @override
   AssistKind get kind => DartAssistKind.JOIN_IF_WITH_OUTER;
 
-  test_conditionAndOr() async {
-    await resolveTestUnit('''
+  Future<void> test_conditionAndOr() async {
+    await resolveTestCode('''
 main() {
   if (1 == 1) {
     if (2 == 2 || 3 == 3) {
@@ -38,8 +38,8 @@ main() {
 ''');
   }
 
-  test_conditionInvocation() async {
-    await resolveTestUnit('''
+  Future<void> test_conditionInvocation() async {
+    await resolveTestCode('''
 main() {
   if (1 == 1) {
     if (isCheck()) {
@@ -59,8 +59,8 @@ bool isCheck() => false;
 ''');
   }
 
-  test_conditionOrAnd() async {
-    await resolveTestUnit('''
+  Future<void> test_conditionOrAnd() async {
+    await resolveTestCode('''
 main() {
   if (1 == 1 || 2 == 2) {
     if (3 == 3) {
@@ -78,8 +78,8 @@ main() {
 ''');
   }
 
-  test_onCondition() async {
-    await resolveTestUnit('''
+  Future<void> test_onCondition() async {
+    await resolveTestCode('''
 main() {
   if (1 == 1) {
     if (2 == 2) {
@@ -97,8 +97,8 @@ main() {
 ''');
   }
 
-  test_outerNotIf() async {
-    await resolveTestUnit('''
+  Future<void> test_outerNotIf() async {
+    await resolveTestCode('''
 main() {
   if (1 == 1) {
     print(0);
@@ -108,8 +108,8 @@ main() {
     await assertNoAssistAt('if (1 == 1');
   }
 
-  test_outerWithElse() async {
-    await resolveTestUnit('''
+  Future<void> test_outerWithElse() async {
+    await resolveTestCode('''
 main() {
   if (1 == 1) {
     if (2 == 2) {
@@ -123,8 +123,8 @@ main() {
     await assertNoAssistAt('if (2 == 2');
   }
 
-  test_simpleConditions_block_block() async {
-    await resolveTestUnit('''
+  Future<void> test_simpleConditions_block_block() async {
+    await resolveTestCode('''
 main() {
   if (1 == 1) {
     if (2 == 2) {
@@ -142,8 +142,8 @@ main() {
 ''');
   }
 
-  test_simpleConditions_block_single() async {
-    await resolveTestUnit('''
+  Future<void> test_simpleConditions_block_single() async {
+    await resolveTestCode('''
 main() {
   if (1 == 1) {
     if (2 == 2)
@@ -160,8 +160,8 @@ main() {
 ''');
   }
 
-  test_simpleConditions_single_blockMulti() async {
-    await resolveTestUnit('''
+  Future<void> test_simpleConditions_single_blockMulti() async {
+    await resolveTestCode('''
 main() {
   if (1 == 1) {
     if (2 == 2) {
@@ -183,8 +183,8 @@ main() {
 ''');
   }
 
-  test_simpleConditions_single_blockOne() async {
-    await resolveTestUnit('''
+  Future<void> test_simpleConditions_single_blockOne() async {
+    await resolveTestCode('''
 main() {
   if (1 == 1)
     if (2 == 2) {
@@ -201,8 +201,8 @@ main() {
 ''');
   }
 
-  test_statementAfterInner() async {
-    await resolveTestUnit('''
+  Future<void> test_statementAfterInner() async {
+    await resolveTestCode('''
 main() {
   if (1 == 1) {
     if (2 == 2) {
@@ -215,8 +215,8 @@ main() {
     await assertNoAssistAt('if (2 == 2');
   }
 
-  test_statementBeforeInner() async {
-    await resolveTestUnit('''
+  Future<void> test_statementBeforeInner() async {
+    await resolveTestCode('''
 main() {
   if (1 == 1) {
     print(1);
@@ -229,8 +229,8 @@ main() {
     await assertNoAssistAt('if (2 == 2');
   }
 
-  test_targetNotIf() async {
-    await resolveTestUnit('''
+  Future<void> test_targetNotIf() async {
+    await resolveTestCode('''
 main() {
   print(0);
 }
@@ -238,8 +238,8 @@ main() {
     await assertNoAssistAt('print');
   }
 
-  test_targetWithElse() async {
-    await resolveTestUnit('''
+  Future<void> test_targetWithElse() async {
+    await resolveTestCode('''
 main() {
   if (1 == 1) {
     if (2 == 2) {

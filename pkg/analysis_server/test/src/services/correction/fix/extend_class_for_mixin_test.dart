@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'fix_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(ExtendClassForMixinTest);
   });
@@ -19,8 +19,8 @@ class ExtendClassForMixinTest extends FixProcessorTest {
   @override
   FixKind get kind => DartFixKind.EXTEND_CLASS_FOR_MIXIN;
 
-  test_missingClass_withExtends() async {
-    await resolveTestUnit('''
+  Future<void> test_missingClass_withExtends() async {
+    await resolveTestCode('''
 class A {}
 class B {}
 mixin M on B {}
@@ -29,8 +29,8 @@ class C extends A with M {}
     await assertNoFix();
   }
 
-  test_missingClass_withoutExtends_withImplements() async {
-    await resolveTestUnit('''
+  Future<void> test_missingClass_withoutExtends_withImplements() async {
+    await resolveTestCode('''
 class A {}
 class B {}
 mixin M on B {}
@@ -44,8 +44,8 @@ class C extends B with M implements A {}
 ''');
   }
 
-  test_missingClass_withoutExtends_withoutImplements() async {
-    await resolveTestUnit('''
+  Future<void> test_missingClass_withoutExtends_withoutImplements() async {
+    await resolveTestCode('''
 class A {}
 mixin M on A {}
 class C with M {}
@@ -57,8 +57,8 @@ class C extends A with M {}
 ''');
   }
 
-  test_missingMixin_withExtends() async {
-    await resolveTestUnit('''
+  Future<void> test_missingMixin_withExtends() async {
+    await resolveTestCode('''
 class A {}
 mixin M {}
 mixin N on M {}
@@ -68,8 +68,8 @@ class C extends A with N {}
   }
 
   @failingTest
-  test_missingMixin_withoutExtends() async {
-    await resolveTestUnit('''
+  Future<void> test_missingMixin_withoutExtends() async {
+    await resolveTestCode('''
 mixin M {}
 mixin N on M {}
 class C with N {}

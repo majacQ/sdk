@@ -10,6 +10,7 @@
 #include "vm/object.h"
 #include "vm/runtime_entry.h"
 #include "vm/stack_frame.h"
+#include "vm/thread_registry.h"
 
 namespace dart {
 
@@ -50,7 +51,7 @@ bool WeakCodeReferences::IsOptimizedCode(const Array& dependent_code,
   WeakProperty& weak_property = WeakProperty::Handle();
   for (intptr_t i = 0; i < dependent_code.Length(); i++) {
     weak_property ^= dependent_code.At(i);
-    if (code.raw() == weak_property.key()) {
+    if (code.ptr() == weak_property.key()) {
       return true;
     }
   }
@@ -59,82 +60,88 @@ bool WeakCodeReferences::IsOptimizedCode(const Array& dependent_code,
 
 void WeakCodeReferences::DisableCode() {
   Thread* thread = Thread::Current();
-  const Array& code_objects = Array::Handle(thread->zone(), array_.raw());
+  const Array& code_objects = Array::Handle(thread->zone(), array_.ptr());
 #if defined(DART_PRECOMPILED_RUNTIME)
   ASSERT(code_objects.IsNull());
   return;
 #else
+  // Ensure mutators see empty code_objects only after code was deoptimized.
+  DEBUG_ASSERT(
+      IsolateGroup::Current()->program_lock()->IsCurrentThreadWriter());
+
   if (code_objects.IsNull()) {
     return;
   }
 
-  UpdateArrayTo(Object::null_array());
-  // Disable all code on stack.
-  Code& code = Code::Handle();
-  {
-    DartFrameIterator iterator(thread,
-                               StackFrameIterator::kNoCrossThreadIteration);
-    StackFrame* frame = iterator.NextFrame();
-    while (frame != NULL) {
-      if (!frame->is_interpreted()) {
-        code = frame->LookupDartCode();
-        if (IsOptimizedCode(code_objects, code)) {
-          ReportDeoptimization(code);
-          DeoptimizeAt(code, frame);
+  auto isolate_group = IsolateGroup::Current();
+  // Deoptimize stacks and disable code with mutators stopped.
+  isolate_group->RunWithStoppedMutators([&]() {
+    Code& code = Code::Handle();
+    isolate_group->ForEachIsolate(
+        [&](Isolate* isolate) {
+          auto mutator_thread = isolate->mutator_thread();
+          DartFrameIterator iterator(
+              mutator_thread, StackFrameIterator::kAllowCrossThreadIteration);
+          StackFrame* frame = iterator.NextFrame();
+          while (frame != nullptr) {
+            code = frame->LookupDartCode();
+            if (IsOptimizedCode(code_objects, code)) {
+              ReportDeoptimization(code);
+              DeoptimizeAt(mutator_thread, code, frame);
+            }
+            frame = iterator.NextFrame();
+          }
+        },
+        /*at_safepoint=*/true);
+
+    // Switch functions that use dependent code to unoptimized code.
+    WeakProperty& weak_property = WeakProperty::Handle();
+    Object& owner = Object::Handle();
+    Function& function = Function::Handle();
+    for (intptr_t i = 0; i < code_objects.Length(); i++) {
+      weak_property ^= code_objects.At(i);
+      code ^= weak_property.key();
+      if (code.IsNull()) {
+        // Code was garbage collected already.
+        continue;
+      }
+      owner = code.owner();
+      if (owner.IsFunction()) {
+        function ^= owner.ptr();
+      } else if (owner.IsClass()) {
+        Class& cls = Class::Handle();
+        cls ^= owner.ptr();
+        cls.DisableAllocationStub();
+        continue;
+      } else if (owner.IsNull()) {
+        code.Print();
+        continue;
+      }
+
+      // Only optimized code can make dependencies (assumptions) about CHA /
+      // field guards and might need to be deoptimized if those assumptions no
+      // longer hold.
+      // See similar assertions when code gets registered in
+      // `Field::RegisterDependentCode` and `Class::RegisterCHACode`.
+      ASSERT(code.is_optimized());
+      ASSERT(function.unoptimized_code() != code.ptr());
+
+      // If function uses dependent code switch it to unoptimized.
+      if (function.CurrentCode() == code.ptr()) {
+        ReportSwitchingCode(code);
+        function.SwitchToUnoptimizedCode();
+      } else {
+        // Make non-OSR code non-entrant.
+        if (!code.IsDisabled()) {
+          ReportSwitchingCode(code);
+          code.DisableDartCode();
         }
       }
-      frame = iterator.NextFrame();
-    }
-  }
-
-  // Switch functions that use dependent code to unoptimized code.
-  WeakProperty& weak_property = WeakProperty::Handle();
-  Object& owner = Object::Handle();
-  Function& function = Function::Handle();
-  for (intptr_t i = 0; i < code_objects.Length(); i++) {
-    weak_property ^= code_objects.At(i);
-    code ^= weak_property.key();
-    if (code.IsNull()) {
-      // Code was garbage collected already.
-      continue;
-    }
-    owner = code.owner();
-    if (owner.IsFunction()) {
-      function ^= owner.raw();
-    } else if (owner.IsClass()) {
-      Class& cls = Class::Handle();
-      cls ^= owner.raw();
-      cls.DisableAllocationStub();
-      continue;
-    } else if (owner.IsNull()) {
-      code.Print();
-      continue;
     }
 
-    // If function uses dependent code switch it to unoptimized.
-    if (code.is_optimized() && (function.CurrentCode() == code.raw())) {
-      ReportSwitchingCode(code);
-      function.SwitchToUnoptimizedCode();
-    } else if (function.unoptimized_code() == code.raw()) {
-      ReportSwitchingCode(code);
-      function.SetWasCompiled(false);
-      function.ClearICDataArray();
-      // Remove the code object from the function. The next time the
-      // function is invoked, it will be compiled again.
-      function.ClearCode();
-      // Invalidate the old code object so existing references to it
-      // (from optimized code) will be patched when invoked.
-      if (!code.IsDisabled()) {
-        code.DisableDartCode();
-      }
-    } else {
-      // Make non-OSR code non-entrant.
-      if (!code.IsDisabled()) {
-        ReportSwitchingCode(code);
-        code.DisableDartCode();
-      }
-    }
-  }
+    UpdateArrayTo(Object::null_array());
+  });
+
 #endif  // defined(DART_PRECOMPILED_RUNTIME)
 }
 

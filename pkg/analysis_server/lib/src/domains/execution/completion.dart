@@ -1,63 +1,44 @@
-// Copyright (c) 2018, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2018, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'dart:async';
-
 import 'package:analysis_server/src/protocol_server.dart'
-    show
-        CompletionSuggestion,
-        RuntimeCompletionExpression,
-        RuntimeCompletionVariable,
-        SourceEdit;
-import 'package:analysis_server/src/provisional/completion/completion_core.dart';
+    show CompletionSuggestion, RuntimeCompletionExpression, SourceEdit;
 import 'package:analysis_server/src/services/completion/completion_core.dart';
 import 'package:analysis_server/src/services/completion/completion_performance.dart';
 import 'package:analysis_server/src/services/completion/dart/completion_manager.dart';
 import 'package:analyzer/dart/analysis/results.dart';
-import 'package:analyzer/file_system/file_system.dart';
+import 'package:analyzer/file_system/overlay_file_system.dart';
 import 'package:analyzer/src/dart/analysis/driver.dart';
-import 'package:analyzer/src/dart/analysis/file_state.dart';
-import 'package:analyzer_plugin/protocol/protocol_common.dart';
-import 'package:analyzer_plugin/utilities/change_builder/change_builder_dart.dart';
+import 'package:analyzer_plugin/utilities/change_builder/change_builder_core.dart';
 
 class RuntimeCompletionComputer {
-  final ResourceProvider resourceProvider;
-  final FileContentOverlay fileContentOverlay;
+  final OverlayResourceProvider resourceProvider;
   final AnalysisDriver analysisDriver;
 
   final String code;
   final int offset;
 
-  final String contextFile;
+  final String contextPath;
   final int contextOffset;
 
-  final List<RuntimeCompletionVariable> variables;
-  final List<RuntimeCompletionExpression> expressions;
-
-  RuntimeCompletionComputer(
-      this.resourceProvider,
-      this.fileContentOverlay,
-      this.analysisDriver,
-      this.code,
-      this.offset,
-      this.contextFile,
-      this.contextOffset,
-      this.variables,
-      this.expressions);
+  RuntimeCompletionComputer(this.resourceProvider, this.analysisDriver,
+      this.code, this.offset, this.contextPath, this.contextOffset);
 
   Future<RuntimeCompletionResult> compute() async {
-    // TODO(brianwilkerson) Determine whether this await is necessary.
-    await null;
-    var contextResult = await analysisDriver.getResult(contextFile);
+    var contextResult = await analysisDriver.getResult2(contextPath);
+    if (contextResult is! ResolvedUnitResult) {
+      return RuntimeCompletionResult([], []);
+    }
+
     var session = contextResult.session;
 
     const codeMarker = '__code_\_';
 
     // Insert the code being completed at the context offset.
-    var changeBuilder = new DartChangeBuilder(session);
-    int nextImportPrefixIndex = 0;
-    await changeBuilder.addFileEdit(contextFile, (builder) {
+    var changeBuilder = ChangeBuilder(session: session);
+    var nextImportPrefixIndex = 0;
+    await changeBuilder.addDartFileEdit(contextPath, (builder) {
       builder.addInsertion(contextOffset, (builder) {
         builder.writeln('{');
 
@@ -71,42 +52,86 @@ class RuntimeCompletionComputer {
     }, importPrefixGenerator: (uri) => '__prefix${nextImportPrefixIndex++}');
 
     // Compute the patched context file content.
-    String targetCode = SourceEdit.applySequence(
-      contextResult.content,
+    var targetCode = SourceEdit.applySequence(
+      contextResult.content!,
       changeBuilder.sourceChange.edits[0].edits,
     );
 
     // Insert the code being completed.
-    int targetOffset = targetCode.indexOf(codeMarker) + offset;
+    var targetOffset = targetCode.indexOf(codeMarker) + offset;
     targetCode = targetCode.replaceAll(codeMarker, code);
 
     // Update the context file content to include the code being completed.
     // Then resolve it, and restore the file to its initial state.
-    ResolvedUnitResult targetResult;
-    String contentFileOverlay = fileContentOverlay[contextFile];
-    try {
-      fileContentOverlay[contextFile] = targetCode;
-      analysisDriver.changeFile(contextFile);
-      targetResult = await analysisDriver.getResult(contextFile);
-    } finally {
-      fileContentOverlay[contextFile] = contentFileOverlay;
-      analysisDriver.changeFile(contextFile);
+    var targetResult = await _withContextFileContent(targetCode, () async {
+      return await analysisDriver.getResult2(contextPath);
+    });
+    if (targetResult is! ResolvedUnitResult) {
+      return RuntimeCompletionResult([], []);
     }
 
-    CompletionContributor contributor = new DartCompletionManager();
-    CompletionRequestImpl request = new CompletionRequestImpl(
+    var contributor = DartCompletionManager(
+        // dartdocDirectiveInfo: server.getDartdocDirectiveInfoFor(targetResult)
+        );
+    var request = CompletionRequestImpl(
       targetResult,
       targetOffset,
-      new CompletionPerformance(),
+      CompletionPerformance(),
     );
-    var suggestions = await contributor.computeSuggestions(request);
+
+    var suggestions = await request.performance.runRequestOperation(
+      (performance) async {
+        return await contributor.computeSuggestions(
+          performance,
+          request,
+        );
+      },
+    );
 
     // Remove completions with synthetic import prefixes.
     suggestions.removeWhere((s) => s.completion.startsWith('__prefix'));
 
     // TODO(scheglov) Add support for expressions.
     var expressions = <RuntimeCompletionExpression>[];
-    return new RuntimeCompletionResult(expressions, suggestions);
+    return RuntimeCompletionResult(expressions, suggestions);
+  }
+
+  Future<R> _withContextFileContent<R>(
+      String newContent, Future<R> Function() f) async {
+    if (resourceProvider.hasOverlay(contextPath)) {
+      var contextFile = resourceProvider.getFile(contextPath);
+      var prevOverlayContent = contextFile.readAsStringSync();
+      var prevOverlayStamp = contextFile.modificationStamp;
+      try {
+        resourceProvider.setOverlay(
+          contextPath,
+          content: newContent,
+          modificationStamp: 0,
+        );
+        analysisDriver.changeFile(contextPath);
+        return await f();
+      } finally {
+        resourceProvider.setOverlay(
+          contextPath,
+          content: prevOverlayContent,
+          modificationStamp: prevOverlayStamp,
+        );
+        analysisDriver.changeFile(contextPath);
+      }
+    } else {
+      try {
+        resourceProvider.setOverlay(
+          contextPath,
+          content: newContent,
+          modificationStamp: 0,
+        );
+        analysisDriver.changeFile(contextPath);
+        return await f();
+      } finally {
+        resourceProvider.removeOverlay(contextPath);
+        analysisDriver.changeFile(contextPath);
+      }
+    }
   }
 }
 

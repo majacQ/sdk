@@ -29,7 +29,33 @@ class BaseGrowableArray : public B {
     }
   }
 
+  BaseGrowableArray(BaseGrowableArray&& other)
+      : length_(other.length_),
+        capacity_(other.capacity_),
+        data_(other.data_),
+        allocator_(other.allocator_) {
+    other.length_ = 0;
+    other.capacity_ = 0;
+    other.data_ = NULL;
+  }
+
   ~BaseGrowableArray() { allocator_->template Free<T>(data_, capacity_); }
+
+  BaseGrowableArray& operator=(BaseGrowableArray&& other) {
+    intptr_t temp = other.length_;
+    other.length_ = length_;
+    length_ = temp;
+    temp = other.capacity_;
+    other.capacity_ = capacity_;
+    capacity_ = temp;
+    T* temp_data = other.data_;
+    other.data_ = data_;
+    data_ = temp_data;
+    Allocator* temp_allocator = other.allocator_;
+    other.allocator_ = allocator_;
+    allocator_ = temp_allocator;
+    return *this;
+  }
 
   intptr_t length() const { return length_; }
   T* data() const { return data_; }
@@ -38,6 +64,21 @@ class BaseGrowableArray : public B {
   void TruncateTo(intptr_t length) {
     ASSERT(length_ >= length);
     length_ = length;
+  }
+
+  inline bool Contains(const T& other,
+                       bool isEqual(const T&, const T&) = nullptr) const {
+    for (const auto& value : *this) {
+      if (value == other) {
+        // Value identity should imply isEqual.
+        ASSERT(isEqual == nullptr || isEqual(value, other));
+        return true;
+      }
+      if (isEqual != nullptr && isEqual(value, other)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   void Add(const T& value) {
@@ -134,6 +175,16 @@ class BaseGrowableArray : public B {
     RemoveLast();
   }
 
+  // Preserves array order.
+  void EraseAt(intptr_t idx) {
+    ASSERT(idx >= 0);
+    ASSERT(idx < length_);
+    for (intptr_t i = idx; i < length_ - 1; i++) {
+      data_[i] = data_[i + 1];
+    }
+    RemoveLast();
+  }
+
   // The content is uninitialized after calling it.
   void SetLength(intptr_t new_length);
 
@@ -169,6 +220,9 @@ class BaseGrowableArray : public B {
 template <typename T, typename B, typename Allocator>
 inline void BaseGrowableArray<T, B, Allocator>::Sort(int compare(const T*,
                                                                  const T*)) {
+  // Avoid calling qsort with a null array.
+  if (length_ == 0) return;
+
   typedef int (*CompareFunction)(const void*, const void*);
   qsort(data_, length_, sizeof(T), reinterpret_cast<CompareFunction>(compare));
 }
@@ -201,12 +255,12 @@ class Malloc : public AllStatic {
  public:
   template <class T>
   static inline T* Alloc(intptr_t len) {
-    return reinterpret_cast<T*>(malloc(len * sizeof(T)));
+    return reinterpret_cast<T*>(dart::malloc(len * sizeof(T)));
   }
 
   template <class T>
   static inline T* Realloc(T* old_array, intptr_t old_len, intptr_t new_len) {
-    return reinterpret_cast<T*>(realloc(old_array, new_len * sizeof(T)));
+    return reinterpret_cast<T*>(dart::realloc(old_array, new_len * sizeof(T)));
   }
 
   template <class T>
@@ -215,14 +269,13 @@ class Malloc : public AllStatic {
   }
 };
 
-class EmptyBase {};
-
 template <typename T>
-class MallocGrowableArray : public BaseGrowableArray<T, EmptyBase, Malloc> {
+class MallocGrowableArray
+    : public BaseGrowableArray<T, MallocAllocated, Malloc> {
  public:
   explicit MallocGrowableArray(intptr_t initial_capacity)
-      : BaseGrowableArray<T, EmptyBase, Malloc>(initial_capacity, NULL) {}
-  MallocGrowableArray() : BaseGrowableArray<T, EmptyBase, Malloc>(NULL) {}
+      : BaseGrowableArray<T, MallocAllocated, Malloc>(initial_capacity, NULL) {}
+  MallocGrowableArray() : BaseGrowableArray<T, MallocAllocated, Malloc>(NULL) {}
 };
 
 }  // namespace dart

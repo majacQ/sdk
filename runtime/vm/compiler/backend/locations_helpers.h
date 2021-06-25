@@ -43,6 +43,10 @@
 #ifndef RUNTIME_VM_COMPILER_BACKEND_LOCATIONS_HELPERS_H_
 #define RUNTIME_VM_COMPILER_BACKEND_LOCATIONS_HELPERS_H_
 
+#if defined(DART_PRECOMPILED_RUNTIME)
+#error "AOT runtime should not use compiler sources (including header files)"
+#endif  // defined(DART_PRECOMPILED_RUNTIME)
+
 #include "vm/compiler/backend/locations.h"
 
 namespace dart {
@@ -429,8 +433,6 @@ void InvokeEmitter(
 #elif defined(TARGET_ARCH_ARM)
 #include "vm/compiler/backend/locations_helpers_arm.h"
 #elif defined(TARGET_ARCH_ARM64)
-
-#elif defined(TARGET_ARCH_DBC)
 
 #else
 #error Unknown architecture.

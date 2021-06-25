@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 // Test expectations for 'class_mirror_type_variables_data.dart'.
 
 library class_mirror_type_variables_expect;
@@ -45,8 +47,8 @@ void testA(Env env) {
 
   TypeVariableMirror aT = a.typeVariables[0];
   TypeVariableMirror aS = a.typeVariables[1];
-  ClassMirror aTBound = aT.upperBound;
-  ClassMirror aSBound = aS.upperBound;
+  ClassMirror aTBound = aT.upperBound as ClassMirror;
+  ClassMirror aSBound = aS.upperBound as ClassMirror;
 
   Expect.isTrue(aTBound.isOriginalDeclaration);
   Expect.isTrue(aSBound.isOriginalDeclaration);
@@ -64,13 +66,12 @@ void testBAndC(Env env) {
 
   TypeVariableMirror bZ = b.typeVariables[0];
   TypeVariableMirror cZ = c.typeVariables[0];
-  ClassMirror bZBound = bZ.upperBound;
-  ClassMirror cZBound = cZ.upperBound;
+  ClassMirror bZBound = bZ.upperBound as ClassMirror;
+  ClassMirror cZBound = cZ.upperBound as ClassMirror;
 
   Expect.isFalse(bZBound.isOriginalDeclaration);
   Expect.isFalse(cZBound.isOriginalDeclaration);
 
-  Expect.notEquals(bZBound, cZBound);
   Expect.equals(b, bZBound.originalDeclaration);
   Expect.equals(b, cZBound.originalDeclaration);
 
@@ -83,10 +84,7 @@ void testBAndC(Env env) {
   Expect.equals(c, cZ.owner);
   Expect.equals(b, bZBoundTypeVariable.owner);
   Expect.equals(b, cZBoundTypeVariable.owner);
-  Expect.equals(b, bZBoundTypeArgument.owner);
-  Expect.equals(c, cZBoundTypeArgument.owner);
 
-  Expect.notEquals(bZ, cZ);
   Expect.equals(bZ, bZBoundTypeArgument);
   Expect.equals(cZ, cZBoundTypeArgument);
   Expect.equals(bZ, bZBoundTypeVariable);
@@ -100,15 +98,15 @@ testD(Env env) {
   values.forEach((e) {
     Expect.equals(true, e is TypeVariableMirror);
   });
-  Expect.equals(#R, values.elementAt(0).simpleName);
-  Expect.equals(#S, values.elementAt(1).simpleName);
-  Expect.equals(#T, values.elementAt(2).simpleName);
+
+  // Names of type variables are not preserved after type canonicalization
+  // and are therefore not compared to expected names.
 }
 
 void testE(Env env) {
   ClassMirror e = env.getE();
   TypeVariableMirror eR = e.typeVariables.single;
-  ClassMirror mapRAndHelperOfString = eR.upperBound;
+  ClassMirror mapRAndHelperOfString = eR.upperBound as ClassMirror;
 
   Expect.isFalse(mapRAndHelperOfString.isOriginalDeclaration);
   Expect.equals(eR, mapRAndHelperOfString.typeArguments.first);
@@ -119,8 +117,8 @@ void testE(Env env) {
 void testF(Env env) {
   ClassMirror f = env.getF();
   TypeVariableMirror fZ = f.typeVariables[0];
-  ClassMirror fZBound = fZ.upperBound;
-  ClassMirror fZBoundTypeArgument = fZBound.typeArguments.single;
+  ClassMirror fZBound = fZ.upperBound as ClassMirror;
+  ClassMirror fZBoundTypeArgument = fZBound.typeArguments.single as ClassMirror;
 
   Expect.equals(1, f.typeVariables.length);
   Expect.isFalse(fZBound.isOriginalDeclaration);

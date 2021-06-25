@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 // Dart2js crashed on this example. It globalized closures and created
 // top-level classes for closures (here the globalized_closure). There was a
 // name-clash with the global "main_closure" class which led to a crash.
@@ -32,6 +34,5 @@ main() {
       collectedParents.add(MirrorSystem.getName(c.superclass.simpleName));
     }
   }
-  ;
   Expect.listEquals(["Object"], collectedParents); //  //# 00: ok
 }

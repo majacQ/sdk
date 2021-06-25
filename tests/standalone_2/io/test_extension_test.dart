@@ -4,6 +4,11 @@
 //
 // Dart test program for testing native extensions.
 
+// @dart = 2.9
+
+// OtherResources=test_extension.dart
+// OtherResources=test_extension_tester.dart
+
 import "package:expect/expect.dart";
 import "package:path/path.dart";
 import 'dart:async';
@@ -21,6 +26,7 @@ Future copyFileToDirectory(String file, String directory) {
     default:
       Expect.fail('Unknown operating system ${Platform.operatingSystem}');
   }
+  throw 'Unknown operating system ${Platform.operatingSystem}';
 }
 
 // Returns a list containing the source file name in the first element and the
@@ -37,6 +43,7 @@ List<String> getExtensionNames(String arch) {
     default:
       Expect.fail('Unknown operating system ${Platform.operatingSystem}');
   }
+  throw 'Unknown operating system ${Platform.operatingSystem}';
 }
 
 String getExtensionPath(String buildDirectory, String filename) {
@@ -46,8 +53,6 @@ String getExtensionPath(String buildDirectory, String filename) {
 String getArchFromBuildDir(String buildDirectory) {
   if (buildDirectory.endsWith('SIMARM')) return '';
   if (buildDirectory.endsWith('SIMARM64')) return '';
-  if (buildDirectory.endsWith('SIMDBC')) return '';
-  if (buildDirectory.endsWith('SIMDBC64')) return '';
   if (buildDirectory.endsWith('ARM')) return '-arm';
   if (buildDirectory.endsWith('ARM64')) return '-arm64';
   if (buildDirectory.endsWith('IA32')) return '-ia32';

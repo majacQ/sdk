@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'assist_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(ConvertIntoForIndexTest);
   });
@@ -19,8 +19,8 @@ class ConvertIntoForIndexTest extends AssistProcessorTest {
   @override
   AssistKind get kind => DartAssistKind.CONVERT_INTO_FOR_INDEX;
 
-  test_bodyNotBlock() async {
-    await resolveTestUnit('''
+  Future<void> test_bodyNotBlock() async {
+    await resolveTestCode('''
 main(List<String> items) {
   for (String item in items) print(item);
 }
@@ -28,8 +28,8 @@ main(List<String> items) {
     await assertNoAssistAt('for (String');
   }
 
-  test_doesNotDeclareVariable() async {
-    await resolveTestUnit('''
+  Future<void> test_doesNotDeclareVariable() async {
+    await resolveTestCode('''
 main(List<String> items) {
   String item;
   for (item in items) {
@@ -40,8 +40,8 @@ main(List<String> items) {
     await assertNoAssistAt('for (item');
   }
 
-  test_iterableIsNotVariable() async {
-    await resolveTestUnit('''
+  Future<void> test_iterableIsNotVariable() async {
+    await resolveTestCode('''
 main() {
   for (String item in ['a', 'b', 'c']) {
     print(item);
@@ -51,8 +51,8 @@ main() {
     await assertNoAssistAt('for (String');
   }
 
-  test_iterableNotList() async {
-    await resolveTestUnit('''
+  Future<void> test_iterableNotList() async {
+    await resolveTestCode('''
 main(Iterable<String> items) {
   for (String item in items) {
     print(item);
@@ -62,8 +62,8 @@ main(Iterable<String> items) {
     await assertNoAssistAt('for (String');
   }
 
-  test_onDeclaredIdentifier_name() async {
-    await resolveTestUnit('''
+  Future<void> test_onDeclaredIdentifier_name() async {
+    await resolveTestCode('''
 main(List<String> items) {
   for (String item in items) {
     print(item);
@@ -80,8 +80,8 @@ main(List<String> items) {
 ''');
   }
 
-  test_onDeclaredIdentifier_type() async {
-    await resolveTestUnit('''
+  Future<void> test_onDeclaredIdentifier_type() async {
+    await resolveTestCode('''
 main(List<String> items) {
   for (String item in items) {
     print(item);
@@ -98,8 +98,8 @@ main(List<String> items) {
 ''');
   }
 
-  test_onFor() async {
-    await resolveTestUnit('''
+  Future<void> test_onFor() async {
+    await resolveTestCode('''
 main(List<String> items) {
   for (String item in items) {
     print(item);
@@ -116,8 +116,8 @@ main(List<String> items) {
 ''');
   }
 
-  test_usesI() async {
-    await resolveTestUnit('''
+  Future<void> test_usesI() async {
+    await resolveTestCode('''
 main(List<String> items) {
   for (String item in items) {
     int i = 0;
@@ -134,8 +134,8 @@ main(List<String> items) {
 ''');
   }
 
-  test_usesIJ() async {
-    await resolveTestUnit('''
+  Future<void> test_usesIJ() async {
+    await resolveTestCode('''
 main(List<String> items) {
   for (String item in items) {
     print(item);
@@ -154,8 +154,8 @@ main(List<String> items) {
 ''');
   }
 
-  test_usesIJK() async {
-    await resolveTestUnit('''
+  Future<void> test_usesIJK() async {
+    await resolveTestCode('''
 main(List<String> items) {
   for (String item in items) {
     print(item);

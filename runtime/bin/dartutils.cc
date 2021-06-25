@@ -12,11 +12,9 @@
 #include "bin/namespace.h"
 #include "bin/platform.h"
 #include "bin/utils.h"
-
 #include "include/dart_api.h"
 #include "include/dart_native_api.h"
 #include "include/dart_tools_api.h"
-
 #include "platform/assert.h"
 #include "platform/globals.h"
 #include "platform/memory_sanitizer.h"
@@ -66,6 +64,29 @@ static bool IsWindowsHost() {
 #else   // defined(HOST_OS_WINDOWS)
   return false;
 #endif  // defined(HOST_OS_WINDOWS)
+}
+
+Dart_Handle CommandLineOptions::CreateRuntimeOptions() {
+  Dart_Handle string_type = DartUtils::GetDartType("dart:core", "String");
+  if (Dart_IsError(string_type)) {
+    return string_type;
+  }
+  Dart_Handle dart_arguments =
+      Dart_NewListOfTypeFilled(string_type, Dart_EmptyString(), count_);
+  if (Dart_IsError(dart_arguments)) {
+    return dart_arguments;
+  }
+  for (int i = 0; i < count_; i++) {
+    Dart_Handle argument_value = DartUtils::NewString(GetArgument(i));
+    if (Dart_IsError(argument_value)) {
+      return argument_value;
+    }
+    Dart_Handle result = Dart_ListSetAt(dart_arguments, i, argument_value);
+    if (Dart_IsError(result)) {
+      return result;
+    }
+  }
+  return dart_arguments;
 }
 
 int64_t DartUtils::GetIntegerValue(Dart_Handle value_obj) {
@@ -208,7 +229,7 @@ bool DartUtils::IsHttpSchemeURL(const char* url_name) {
 
 bool DartUtils::IsDartExtensionSchemeURL(const char* url_name) {
   static const intptr_t kDartExtensionSchemeLen = strlen(kDartExtensionScheme);
-  // If the URL starts with "dartext:" then it is considered as a special
+  // If the URL starts with "dart-ext:" then it is considered as a special
   // extension library URL which is handled differently from other URLs.
   return (strncmp(url_name, kDartExtensionScheme, kDartExtensionSchemeLen) ==
           0);
@@ -242,7 +263,7 @@ const char* DartUtils::RemoveScheme(const char* url) {
 char* DartUtils::DirName(const char* url) {
   const char* slash = strrchr(url, File::PathSeparator()[0]);
   if (slash == NULL) {
-    return strdup(url);
+    return Utils::StrDup(url);
   } else {
     return Utils::StrNDup(url, slash - url + 1);
   }
@@ -273,9 +294,6 @@ void DartUtils::ReadFile(uint8_t** data, intptr_t* len, void* stream) {
   }
   *len = static_cast<intptr_t>(file_len);
   *data = reinterpret_cast<uint8_t*>(malloc(*len));
-  if (*data == NULL) {
-    OUT_OF_MEMORY();
-  }
   if (!file_stream->ReadFully(*data, *len)) {
     free(*data);
     *data = NULL;
@@ -514,31 +532,10 @@ Dart_Handle DartUtils::PrepareCLILibrary(Dart_Handle cli_lib) {
                        wait_for_event_handle);
 }
 
-Dart_Handle DartUtils::SetupServiceLoadPort() {
-  // Wait for the service isolate to initialize the load port.
-  Dart_Port load_port = Dart_ServiceWaitForLoadPort();
-  if (load_port == ILLEGAL_PORT) {
-    return Dart_NewUnhandledExceptionError(
-        NewDartUnsupportedError("Service did not return load port."));
-  }
-  return Builtin::SetLoadPort(load_port);
-}
-
-Dart_Handle DartUtils::SetupPackageRoot(const char* package_root,
-                                        const char* packages_config) {
+Dart_Handle DartUtils::SetupPackageConfig(const char* packages_config) {
   Dart_Handle result = Dart_Null();
 
-  // Set up package root if specified.
-  if (package_root != NULL) {
-    ASSERT(packages_config == NULL);
-    result = NewString(package_root);
-    RETURN_IF_ERROR(result);
-    const int kNumArgs = 1;
-    Dart_Handle dart_args[kNumArgs];
-    dart_args[0] = result;
-    result = Dart_Invoke(DartUtils::LookupBuiltinLib(),
-                         NewString("_setPackageRoot"), kNumArgs, dart_args);
-  } else if (packages_config != NULL) {
+  if (packages_config != NULL) {
     result = NewString(packages_config);
     RETURN_IF_ERROR(result);
     const int kNumArgs = 1;
@@ -634,6 +631,16 @@ Dart_Handle DartUtils::SetupIOLibrary(const char* namespc_path,
   Dart_Handle set_script_name =
       Dart_SetField(platform_type, script_name, dart_script);
   RETURN_IF_ERROR(set_script_name);
+
+#if !defined(PRODUCT)
+  Dart_Handle network_profiling_type =
+      GetDartType(DartUtils::kIOLibURL, "_NetworkProfiling");
+  RETURN_IF_ERROR(network_profiling_type);
+  Dart_Handle result =
+      Dart_Invoke(network_profiling_type,
+                  NewString("_registerServiceExtension"), 0, nullptr);
+  RETURN_IF_ERROR(result);
+#endif  // !defined(PRODUCT)
   return Dart_Null();
 }
 
@@ -663,8 +670,8 @@ bool DartUtils::PostInt64(Dart_Port port_id, int64_t value) {
 
 Dart_Handle DartUtils::GetDartType(const char* library_url,
                                    const char* class_name) {
-  return Dart_GetType(Dart_LookupLibrary(NewString(library_url)),
-                      NewString(class_name), 0, NULL);
+  return Dart_GetNonNullableType(Dart_LookupLibrary(NewString(library_url)),
+                                 NewString(class_name), 0, NULL);
 }
 
 Dart_Handle DartUtils::NewDartOSError() {
@@ -715,6 +722,10 @@ Dart_Handle DartUtils::NewDartArgumentError(const char* message) {
   return NewDartExceptionWithMessage(kCoreLibURL, "ArgumentError", message);
 }
 
+Dart_Handle DartUtils::NewDartFormatException(const char* message) {
+  return NewDartExceptionWithMessage(kCoreLibURL, "FormatException", message);
+}
+
 Dart_Handle DartUtils::NewDartUnsupportedError(const char* message) {
   return NewDartExceptionWithMessage(kCoreLibURL, "UnsupportedError", message);
 }
@@ -745,6 +756,22 @@ Dart_Handle DartUtils::NewError(const char* format, ...) {
 
 Dart_Handle DartUtils::NewInternalError(const char* message) {
   return NewDartExceptionWithMessage(kCoreLibURL, "_InternalError", message);
+}
+
+Dart_Handle DartUtils::NewStringFormatted(const char* format, ...) {
+  va_list args;
+  va_start(args, format);
+  intptr_t len = vsnprintf(NULL, 0, format, args);
+  va_end(args);
+
+  char* buffer = reinterpret_cast<char*>(Dart_ScopeAllocate(len + 1));
+  MSAN_UNPOISON(buffer, (len + 1));
+  va_list args2;
+  va_start(args2, format);
+  vsnprintf(buffer, (len + 1), format, args2);
+  va_end(args2);
+
+  return NewString(buffer);
 }
 
 bool DartUtils::SetOriginalWorkingDirectory() {
@@ -798,12 +825,12 @@ Dart_Handle DartUtils::EnvironmentCallback(Dart_Handle name) {
 // objects. As these will be used by different threads the use of
 // these depends on the fact that the marking internally in the
 // Dart_CObject structure is not marking simple value objects.
-Dart_CObject CObject::api_null_ = {Dart_CObject_kNull, {0}};
+Dart_CObject CObject::api_null_ = {Dart_CObject_kNull, {false}};
 Dart_CObject CObject::api_true_ = {Dart_CObject_kBool, {true}};
 Dart_CObject CObject::api_false_ = {Dart_CObject_kBool, {false}};
-CObject CObject::null_ = CObject(&api_null_);
-CObject CObject::true_ = CObject(&api_true_);
-CObject CObject::false_ = CObject(&api_false_);
+CObject CObject::null_(&api_null_);
+CObject CObject::true_(&api_true_);
+CObject CObject::false_(&api_false_);
 
 CObject* CObject::Null() {
   return &null_;
@@ -891,11 +918,10 @@ Dart_CObject* CObject::NewUint32Array(intptr_t length) {
   return cobject;
 }
 
-Dart_CObject* CObject::NewExternalUint8Array(
-    intptr_t length,
-    uint8_t* data,
-    void* peer,
-    Dart_WeakPersistentHandleFinalizer callback) {
+Dart_CObject* CObject::NewExternalUint8Array(intptr_t length,
+                                             uint8_t* data,
+                                             void* peer,
+                                             Dart_HandleFinalizer callback) {
   Dart_CObject* cobject = New(Dart_CObject_kExternalTypedData);
   cobject->value.as_external_typed_data.type = Dart_TypedData_kUint8;
   cobject->value.as_external_typed_data.length = length;
@@ -920,10 +946,36 @@ Dart_CObject* CObject::NewIOBuffer(int64_t length) {
                                IOBuffer::Finalizer);
 }
 
+void CObject::ShrinkIOBuffer(Dart_CObject* cobject, int64_t new_length) {
+  if (cobject == nullptr) return;
+  ASSERT(cobject->type == Dart_CObject_kExternalTypedData);
+
+  const auto old_data = cobject->value.as_external_typed_data.data;
+  const auto old_length = cobject->value.as_external_typed_data.length;
+
+  // We only shrink IOBuffers, never grow them.
+  ASSERT(0 <= new_length && new_length <= old_length);
+
+  // We only reallocate if we think the freed space is worth reallocating.
+  // We consider it worthwhile when freed space is >=25% and we have at
+  // least 100 free bytes.
+  const auto free_memory = old_length - new_length;
+  if ((old_length >> 2) <= free_memory && 100 <= free_memory) {
+    const auto new_data = IOBuffer::Reallocate(old_data, new_length);
+    if (new_data != nullptr) {
+      cobject->value.as_external_typed_data.data = new_data;
+      cobject->value.as_external_typed_data.peer = new_data;
+    }
+  }
+
+  // The typed data object always has to have the shranken length.
+  cobject->value.as_external_typed_data.length = new_length;
+}
+
 void CObject::FreeIOBufferData(Dart_CObject* cobject) {
   ASSERT(cobject->type == Dart_CObject_kExternalTypedData);
   cobject->value.as_external_typed_data.callback(
-      NULL, NULL, cobject->value.as_external_typed_data.peer);
+      NULL, cobject->value.as_external_typed_data.peer);
   cobject->value.as_external_typed_data.data = NULL;
 }
 

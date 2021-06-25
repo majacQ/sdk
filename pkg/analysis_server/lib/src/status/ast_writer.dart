@@ -1,25 +1,20 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-
-import 'dart:collection';
 
 import 'package:analysis_server/src/status/tree_writer.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:analyzer/src/dart/ast/ast.dart';
 
-/**
- * A visitor that will produce an HTML representation of an AST structure.
- */
+/// A visitor that will produce an HTML representation of an AST structure.
 class AstWriter extends UnifyingAstVisitor with TreeWriter {
-  /**
-   * Initialize a newly created element writer to write the HTML representation
-   * of visited nodes on the given [buffer].
-   */
-  AstWriter(StringBuffer buffer) {
-    this.buffer = buffer;
-  }
+  @override
+  final StringBuffer buffer;
+
+  /// Initialize a newly created element writer to write the HTML representation
+  /// of visited nodes on the given [buffer].
+  AstWriter(this.buffer);
 
   @override
   void visitNode(AstNode node) {
@@ -33,11 +28,10 @@ class AstWriter extends UnifyingAstVisitor with TreeWriter {
     }
   }
 
-  /**
-   * Write a representation of the properties of the given [node] to the buffer.
-   */
-  Map<String, Object> _computeProperties(AstNode node) {
-    Map<String, Object> properties = new HashMap<String, Object>();
+  /// Write a representation of the properties of the given [node] to the
+  /// buffer.
+  Map<String, Object?> _computeProperties(AstNode node) {
+    var properties = <String, Object?>{};
 
     properties['name'] = _getName(node);
     if (node is ArgumentListImpl) {
@@ -71,12 +65,16 @@ class AstWriter extends UnifyingAstVisitor with TreeWriter {
       properties['static keyword'] = node.staticKeyword;
     } else if (node is FormalParameter) {
       properties['declaredElement'] = node.declaredElement;
-      if (node.isNamed) {
-        properties['kind'] = 'named';
+      if (node.isRequiredPositional) {
+        properties['kind'] = 'required-positional';
+      } else if (node.isRequiredNamed) {
+        properties['kind'] = 'required-named';
       } else if (node.isOptionalPositional) {
-        properties['kind'] = 'positional';
+        properties['kind'] = 'optional-positional';
+      } else if (node.isOptionalNamed) {
+        properties['kind'] = 'optional-named';
       } else {
-        properties['kind'] = 'required';
+        properties['kind'] = 'unknown kind';
       }
     } else if (node is FunctionDeclaration) {
       properties['declaredElement'] = node.declaredElement;
@@ -96,7 +94,6 @@ class AstWriter extends UnifyingAstVisitor with TreeWriter {
       properties['static element'] = node.staticElement;
       properties['static type'] = node.staticType;
     } else if (node is InstanceCreationExpression) {
-      properties['static element'] = node.staticElement;
       properties['static type'] = node.staticType;
     } else if (node is LibraryDirective) {
       properties['element'] = node.element;
@@ -148,30 +145,26 @@ class AstWriter extends UnifyingAstVisitor with TreeWriter {
     return properties;
   }
 
-  /**
-   * Return the name of the given [node], or `null` if the given node is not a
-   * declaration.
-   */
-  String _getName(AstNode node) {
+  /// Return the name of the given [node], or `null` if the given node is not a
+  /// declaration.
+  String? _getName(AstNode node) {
     if (node is ClassTypeAlias) {
       return node.name.name;
     } else if (node is ClassDeclaration) {
       return node.name.name;
     } else if (node is ConstructorDeclaration) {
-      if (node.name == null) {
+      var name = node.name;
+      if (name == null) {
         return node.returnType.name;
       } else {
-        return node.returnType.name + '.' + node.name.name;
+        return node.returnType.name + '.' + name.name;
       }
     } else if (node is ConstructorName) {
       return node.toSource();
     } else if (node is FieldDeclaration) {
       return _getNames(node.fields);
     } else if (node is FunctionDeclaration) {
-      SimpleIdentifier nameNode = node.name;
-      if (nameNode != null) {
-        return nameNode.name;
-      }
+      return node.name.name;
     } else if (node is FunctionTypeAlias) {
       return node.name.name;
     } else if (node is Identifier) {
@@ -190,14 +183,12 @@ class AstWriter extends UnifyingAstVisitor with TreeWriter {
     return null;
   }
 
-  /**
-   * Return a string containing a comma-separated list of the names of all of
-   * the variables in the given list of [variables].
-   */
+  /// Return a string containing a comma-separated list of the names of all of
+  /// the variables in the given list of [variables].
   String _getNames(VariableDeclarationList variables) {
-    StringBuffer buffer = new StringBuffer();
-    bool first = true;
-    for (VariableDeclaration variable in variables.variables) {
+    var buffer = StringBuffer();
+    var first = true;
+    for (var variable in variables.variables) {
       if (first) {
         first = false;
       } else {
@@ -208,9 +199,7 @@ class AstWriter extends UnifyingAstVisitor with TreeWriter {
     return buffer.toString();
   }
 
-  /**
-   * Write a representation of the given [node] to the buffer.
-   */
+  /// Write a representation of the given [node] to the buffer.
   void _writeNode(AstNode node) {
     indent();
     buffer.write(node.runtimeType);

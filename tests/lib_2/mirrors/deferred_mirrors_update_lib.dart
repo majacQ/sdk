@@ -1,6 +1,7 @@
+
+// @dart = 2.9
 library lib;
 
-@MirrorsUsed(targets: "lib.C")
 import "dart:mirrors";
 
 class C {}

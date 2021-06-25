@@ -9,6 +9,7 @@
 
 #include <errno.h>           // NOLINT
 #include <fcntl.h>           // NOLINT
+#include <lib/fdio/fdio.h>   // NOLINT
 #include <lib/fdio/namespace.h>  // NOLINT
 #include <libgen.h>          // NOLINT
 #include <sys/mman.h>        // NOLINT
@@ -19,9 +20,9 @@
 
 #include "bin/builtin.h"
 #include "bin/fdutils.h"
-#include "bin/log.h"
 #include "bin/namespace.h"
 #include "platform/signal_blocker.h"
+#include "platform/syslog.h"
 #include "platform/utils.h"
 
 namespace dart {
@@ -51,8 +52,10 @@ File::~File() {
 void File::Close() {
   ASSERT(handle_->fd() >= 0);
   if (handle_->fd() == STDOUT_FILENO) {
-    // If stdout, redirect fd to /dev/null.
-    int null_fd = NO_RETRY_EXPECTED(open("/dev/null", O_WRONLY));
+    // If stdout, redirect fd to Fuchsia's equivalent of /dev/null.
+    auto* null_fdio = fdio_null_create();
+    ASSERT(null_fdio != nullptr);
+    int null_fd = NO_RETRY_EXPECTED(fdio_bind_to_fd(null_fdio, -1, 0));
     ASSERT(null_fd >= 0);
     VOID_NO_RETRY_EXPECTED(dup2(null_fd, handle_->fd()));
     VOID_NO_RETRY_EXPECTED(close(null_fd));
@@ -61,7 +64,7 @@ void File::Close() {
     if (err != 0) {
       const int kBufferSize = 1024;
       char error_buf[kBufferSize];
-      Log::PrintErr("%s\n", Utils::StrError(errno, error_buf, kBufferSize));
+      Syslog::PrintErr("%s\n", Utils::StrError(errno, error_buf, kBufferSize));
     }
   }
   handle_->set_fd(kClosedFd);
@@ -75,25 +78,37 @@ bool File::IsClosed() {
   return handle_->fd() == kClosedFd;
 }
 
-MappedMemory* File::Map(MapType type, int64_t position, int64_t length) {
+MappedMemory* File::Map(MapType type,
+                        int64_t position,
+                        int64_t length,
+                        void* start) {
   ASSERT(handle_->fd() >= 0);
   ASSERT(length > 0);
+  void* hint = nullptr;
   int prot = PROT_NONE;
+  int flags = MAP_PRIVATE;
   switch (type) {
     case kReadOnly:
       prot = PROT_READ;
       break;
     case kReadExecute:
+      // Try to allocate near the VM's binary.
+      hint = reinterpret_cast<void*>(&Dart_Initialize);
       prot = PROT_READ | PROT_EXEC;
       break;
-    default:
-      return NULL;
+    case kReadWrite:
+      prot = PROT_READ | PROT_WRITE;
+      break;
   }
-  void* addr = mmap(NULL, length, prot, MAP_PRIVATE, handle_->fd(), position);
+  if (start != nullptr) {
+    hint = start;
+    flags |= MAP_FIXED;
+  }
+  void* addr = mmap(hint, length, prot, flags, handle_->fd(), position);
   if (addr == MAP_FAILED) {
     return NULL;
   }
-  return new MappedMemory(addr, length);
+  return new MappedMemory(addr, length, /*should_unmap=*/start == nullptr);
 }
 
 void MappedMemory::Unmap() {
@@ -197,6 +212,10 @@ File* File::FileOpenW(const wchar_t* system_name, FileOpenMode mode) {
   return NULL;
 }
 
+File* File::OpenFD(int fd) {
+  return new File(new FileHandle(fd));
+}
+
 File* File::Open(Namespace* namespc, const char* name, FileOpenMode mode) {
   NamespaceScope ns(namespc, name);
   // Report errors for non-regular files.
@@ -231,18 +250,26 @@ File* File::Open(Namespace* namespc, const char* name, FileOpenMode mode) {
       return NULL;
     }
   }
-  return new File(new FileHandle(fd));
+  return OpenFD(fd);
 }
 
-File* File::OpenUri(Namespace* namespc, const char* uri, FileOpenMode mode) {
+Utils::CStringUniquePtr File::UriToPath(const char* uri) {
   const char* path = (strlen(uri) >= 8 && strncmp(uri, "file:///", 8) == 0)
       ? uri + 7 : uri;
   UriDecoder uri_decoder(path);
-  if (uri_decoder.decoded() == NULL) {
+  if (uri_decoder.decoded() == nullptr) {
     errno = EINVAL;
-    return NULL;
+    return Utils::CreateCStringUniquePtr(nullptr);
   }
-  return File::Open(namespc, uri_decoder.decoded(), mode);
+  return Utils::CreateCStringUniquePtr(strdup(uri_decoder.decoded()));
+}
+
+File* File::OpenUri(Namespace* namespc, const char* uri, FileOpenMode mode) {
+  auto path = UriToPath(uri);
+  if (path == nullptr) {
+    return nullptr;
+  }
+  return File::Open(namespc, path.get(), mode);
 }
 
 File* File::OpenStdio(int fd) {
@@ -255,9 +282,16 @@ bool File::Exists(Namespace* namespc, const char* name) {
   if (NO_RETRY_EXPECTED(fstatat(ns.fd(), ns.path(), &st, 0)) == 0) {
     // Everything but a directory and a link is a file to Dart.
     return !S_ISDIR(st.st_mode) && !S_ISLNK(st.st_mode);
-  } else {
+  }
+  return false;
+}
+
+bool File::ExistsUri(Namespace* namespc, const char* uri) {
+  auto path = UriToPath(uri);
+  if (path == nullptr) {
     return false;
   }
+  return File::Exists(namespc, path.get());
 }
 
 bool File::Create(Namespace* namespc, const char* name) {
@@ -265,14 +299,17 @@ bool File::Create(Namespace* namespc, const char* name) {
   const int fd = NO_RETRY_EXPECTED(
       openat(ns.fd(), ns.path(), O_RDONLY | O_CREAT | O_CLOEXEC, 0666));
   if (fd < 0) {
+    Syslog::PrintErr("File::Create() openat(%ld, %s) failed: %s\n", ns.fd(),
+                     ns.path(), strerror(errno));
     return false;
   }
   // File.create returns a File, so we shouldn't be giving the illusion that the
   // call has created a file or that a file already exists if there is already
   // an entity at the same path that is a directory or a link.
-  bool is_file = true;
+  bool is_file = false;
   struct stat st;
   if (NO_RETRY_EXPECTED(fstat(fd, &st)) == 0) {
+    is_file = true;
     if (S_ISDIR(st.st_mode)) {
       errno = EISDIR;
       is_file = false;
@@ -395,13 +432,13 @@ bool File::Copy(Namespace* namespc,
       openat(newns.fd(), newns.path(),
              O_WRONLY | O_TRUNC | O_CREAT | O_CLOEXEC, st.st_mode));
   if (new_fd < 0) {
-    VOID_TEMP_FAILURE_RETRY(close(old_fd));
+    close(old_fd);
     return false;
   }
   // TODO(ZX-429): Use sendfile/copyfile or equivalent when there is one.
   intptr_t result;
   const intptr_t kBufferSize = 8 * KB;
-  uint8_t buffer[kBufferSize];
+  uint8_t* buffer = reinterpret_cast<uint8_t*>(malloc(kBufferSize));
   while ((result = NO_RETRY_EXPECTED(read(old_fd, buffer, kBufferSize))) > 0) {
     int wrote = NO_RETRY_EXPECTED(write(new_fd, buffer, result));
     if (wrote != result) {
@@ -409,6 +446,7 @@ bool File::Copy(Namespace* namespc,
       break;
     }
   }
+  free(buffer);
   FDUtils::SaveErrorAndClose(old_fd);
   FDUtils::SaveErrorAndClose(new_fd);
   if (result < 0) {
@@ -452,7 +490,7 @@ static int64_t TimespecToMilliseconds(const struct timespec& t) {
 static void MillisecondsToTimespec(int64_t millis, struct timespec* t) {
   ASSERT(t != NULL);
   t->tv_sec = millis / kMillisecondsPerSecond;
-  t->tv_nsec = (millis - (t->tv_sec * kMillisecondsPerSecond)) * 1000L;
+  t->tv_nsec = (millis % kMillisecondsPerSecond) * 1000L;
 }
 
 void File::Stat(Namespace* namespc, const char* name, int64_t* data) {
@@ -528,7 +566,10 @@ bool File::SetLastModified(Namespace* namespc,
   return utimensat(ns.fd(), ns.path(), times, 0) == 0;
 }
 
-const char* File::LinkTarget(Namespace* namespc, const char* name) {
+const char* File::LinkTarget(Namespace* namespc,
+                             const char* name,
+                             char* dest,
+                             int dest_size) {
   NamespaceScope ns(namespc, name);
   struct stat link_stats;
   const int status = TEMP_FAILURE_RETRY(
@@ -550,18 +591,27 @@ const char* File::LinkTarget(Namespace* namespc, const char* name) {
   if (target_size <= 0) {
     return NULL;
   }
-  char* target_name = DartUtils::ScopedCString(target_size + 1);
-  ASSERT(target_name != NULL);
-  memmove(target_name, target, target_size);
-  target_name[target_size] = '\0';
-  return target_name;
+  if (dest == NULL) {
+    dest = DartUtils::ScopedCString(target_size + 1);
+  } else {
+    ASSERT(dest_size > 0);
+    if (dest_size <= target_size) {
+      return NULL;
+    }
+  }
+  memmove(dest, target, target_size);
+  dest[target_size] = '\0';
+  return dest;
 }
 
 bool File::IsAbsolutePath(const char* pathname) {
   return ((pathname != NULL) && (pathname[0] == '/'));
 }
 
-const char* File::GetCanonicalPath(Namespace* namespc, const char* name) {
+const char* File::GetCanonicalPath(Namespace* namespc,
+                                   const char* name,
+                                   char* dest,
+                                   int dest_size) {
   if (name == NULL) {
     return NULL;
   }
@@ -572,13 +622,17 @@ const char* File::GetCanonicalPath(Namespace* namespc, const char* name) {
     return name;
   }
   char* abs_path;
-  char* resolved_path = DartUtils::ScopedCString(PATH_MAX + 1);
-  ASSERT(resolved_path != NULL);
+  if (dest == NULL) {
+    dest = DartUtils::ScopedCString(PATH_MAX + 1);
+  } else {
+    ASSERT(dest_size >= PATH_MAX);
+  }
+  ASSERT(dest != NULL);
   do {
-    abs_path = realpath(name, resolved_path);
+    abs_path = realpath(name, dest);
   } while ((abs_path == NULL) && (errno == EINTR));
   ASSERT(abs_path == NULL || IsAbsolutePath(abs_path));
-  ASSERT(abs_path == NULL || (abs_path == resolved_path));
+  ASSERT(abs_path == NULL || (abs_path == dest));
   return abs_path;
 }
 
@@ -590,11 +644,18 @@ const char* File::StringEscapedPathSeparator() {
   return "/";
 }
 
+static int fd_is_valid(int fd) {
+    return NO_RETRY_EXPECTED(fcntl(fd, F_GETFD)) != -1 || errno != EBADF;
+}
+
 File::StdioHandleType File::GetStdioHandleType(int fd) {
   struct stat buf;
   int result = TEMP_FAILURE_RETRY(fstat(fd, &buf));
   if (result == -1) {
-    return kOther;
+    // fstat() on fds 0, 1, 2 on Fuchsia return -1 with errno ENOTSUP,
+    // but if they are opened, then we can read/write them, so pretend they
+    // are kPipe.
+    return ((errno == ENOTSUP) && fd_is_valid(fd)) ? kPipe : kTypeError;
   }
   if (S_ISCHR(buf.st_mode)) {
     return kTerminal;
@@ -611,22 +672,28 @@ File::StdioHandleType File::GetStdioHandleType(int fd) {
   return kOther;
 }
 
-File::Identical File::AreIdentical(Namespace* namespc,
+File::Identical File::AreIdentical(Namespace* namespc_1,
                                    const char* file_1,
+                                   Namespace* namespc_2,
                                    const char* file_2) {
-  NamespaceScope ns1(namespc, file_1);
-  NamespaceScope ns2(namespc, file_2);
   struct stat file_1_info;
   struct stat file_2_info;
-  int status = TEMP_FAILURE_RETRY(
-      fstatat(ns1.fd(), ns1.path(), &file_1_info, AT_SYMLINK_NOFOLLOW));
-  if (status == -1) {
-    return File::kError;
+  int status;
+  {
+    NamespaceScope ns1(namespc_1, file_1);
+    status = TEMP_FAILURE_RETRY(
+        fstatat(ns1.fd(), ns1.path(), &file_1_info, AT_SYMLINK_NOFOLLOW));
+    if (status == -1) {
+      return File::kError;
+    }
   }
-  status = TEMP_FAILURE_RETRY(
-      fstatat(ns2.fd(), ns2.path(), &file_2_info, AT_SYMLINK_NOFOLLOW));
-  if (status == -1) {
-    return File::kError;
+  {
+    NamespaceScope ns2(namespc_2, file_2);
+    status = TEMP_FAILURE_RETRY(
+        fstatat(ns2.fd(), ns2.path(), &file_2_info, AT_SYMLINK_NOFOLLOW));
+    if (status == -1) {
+      return File::kError;
+    }
   }
   return ((file_1_info.st_ino == file_2_info.st_ino) &&
           (file_1_info.st_dev == file_2_info.st_dev))

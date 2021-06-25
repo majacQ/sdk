@@ -38,6 +38,7 @@ class Zone;
 //
 //  - runtime/vm/service/vmservice.dart
 //  - runtime/observatory/lib/src/service/object.dart
+//  - pkg/dds/lib/src/rpc_error_codes.dart
 //
 enum JSONRpcErrorCode {
   kParseError = -32700,
@@ -61,6 +62,7 @@ enum JSONRpcErrorCode {
   kServiceAlreadyRegistered = 111,
   kServiceDisappeared = 112,
   kExpressionCompilationError = 113,
+  kInvalidTimelineRequest = 114,
 
   // Experimental (used in private rpcs).
   kFileSystemAlreadyExists = 1001,
@@ -107,9 +109,9 @@ class JSONStream : ValueObject {
   Dart_Port reply_port() const { return reply_port_; }
 
   intptr_t NumObjectParameters() const;
-  RawObject* GetObjectParameterKey(intptr_t i) const;
-  RawObject* GetObjectParameterValue(intptr_t i) const;
-  RawObject* LookupObjectParam(const char* key) const;
+  ObjectPtr GetObjectParameterKey(intptr_t i) const;
+  ObjectPtr GetObjectParameterValue(intptr_t i) const;
+  ObjectPtr LookupObjectParam(const char* key) const;
 
   intptr_t num_params() const { return num_params_; }
   const char* GetParamKey(intptr_t i) const { return param_keys_[i]; }
@@ -202,8 +204,7 @@ class JSONStream : ValueObject {
   void PrintValue(Metric* metric);
   void PrintValue(MessageQueue* queue);
   void PrintValue(Isolate* isolate, bool ref = true);
-  void PrintValue(ThreadRegistry* reg);
-  void PrintValue(Thread* thread);
+  void PrintValue(IsolateGroup* isolate, bool ref = true);
   void PrintValue(const TimelineEvent* timeline_event);
   void PrintValue(const TimelineEventBlock* timeline_event_block);
   void PrintValueVM(bool ref = true);
@@ -258,8 +259,6 @@ class JSONStream : ValueObject {
   void PrintProperty(const char* name, Metric* metric);
   void PrintProperty(const char* name, MessageQueue* queue);
   void PrintProperty(const char* name, Isolate* isolate);
-  void PrintProperty(const char* name, ThreadRegistry* reg);
-  void PrintProperty(const char* name, Thread* thread);
   void PrintProperty(const char* name, Zone* zone);
   void PrintProperty(const char* name, const TimelineEvent* timeline_event);
   void PrintProperty(const char* name,
@@ -307,6 +306,7 @@ class JSONObject : public ValueObject {
   void AddServiceId(const Object& o) const { stream_->PrintServiceId(o); }
 
   void AddFixedServiceId(const char* format, ...) const PRINTF_ATTRIBUTE(2, 3);
+  void AddServiceId(const char* format, ...) const PRINTF_ATTRIBUTE(2, 3);
 
   void AddLocation(
       const Script& script,
@@ -373,12 +373,6 @@ class JSONObject : public ValueObject {
   void AddProperty(const char* name, Isolate* isolate) const {
     stream_->PrintProperty(name, isolate);
   }
-  void AddProperty(const char* name, ThreadRegistry* reg) const {
-    stream_->PrintProperty(name, reg);
-  }
-  void AddProperty(const char* name, Thread* thread) const {
-    stream_->PrintProperty(name, thread);
-  }
   void AddProperty(const char* name, Zone* zone) const {
     stream_->PrintProperty(name, zone);
   }
@@ -436,8 +430,9 @@ class JSONArray : public ValueObject {
   void AddValue(Isolate* isolate, bool ref = true) const {
     stream_->PrintValue(isolate, ref);
   }
-  void AddValue(ThreadRegistry* reg) const { stream_->PrintValue(reg); }
-  void AddValue(Thread* thread) const { stream_->PrintValue(thread); }
+  void AddValue(IsolateGroup* isolate_group, bool ref = true) const {
+    stream_->PrintValue(isolate_group, ref);
+  }
   void AddValue(Breakpoint* bpt) const { stream_->PrintValue(bpt); }
   void AddValue(TokenPosition tp) const { stream_->PrintValue(tp); }
   void AddValue(const ServiceEvent* event) const { stream_->PrintValue(event); }

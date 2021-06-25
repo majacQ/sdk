@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'assist_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(FlutterMoveDownTest);
   });
@@ -19,16 +19,23 @@ class FlutterMoveDownTest extends AssistProcessorTest {
   @override
   AssistKind get kind => DartAssistKind.FLUTTER_MOVE_DOWN;
 
-  test_first() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  @override
+  void setUp() {
+    super.setUp();
+    writeTestPackageConfig(
+      flutter: true,
+    );
+  }
+
+  Future<void> test_first() async {
+    await resolveTestCode('''
 import 'package:flutter/material.dart';
 main() {
-  new Column(
+  Column(
     children: <Widget>[
-      new Text('aaa'),
-      /*caret*/new Text('bbbbbb'),
-      new Text('ccccccccc'),
+      Text('aaa'),
+      /*caret*/Text('bbbbbb'),
+      Text('ccccccccc'),
     ],
   );
 }
@@ -36,28 +43,27 @@ main() {
     await assertHasAssist('''
 import 'package:flutter/material.dart';
 main() {
-  new Column(
+  Column(
     children: <Widget>[
-      new Text('aaa'),
-      /*caret*/new Text('ccccccccc'),
-      new Text('bbbbbb'),
+      Text('aaa'),
+      Text('ccccccccc'),
+      Text('bbbbbb'),
     ],
   );
 }
 ''');
-    assertExitPosition(before: "new Text('bbbbbb')");
+    assertExitPosition(before: "Text('bbbbbb')");
   }
 
-  test_last() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  Future<void> test_last() async {
+    await resolveTestCode('''
 import 'package:flutter/material.dart';
 main() {
-  new Column(
+  Column(
     children: <Widget>[
-      new Text('aaa'),
-      new Text('bbb'),
-      /*caret*/new Text('ccc'),
+      Text('aaa'),
+      Text('bbb'),
+      /*caret*/Text('ccc'),
     ],
   );
 }
@@ -65,13 +71,12 @@ main() {
     await assertNoAssist();
   }
 
-  test_notInList() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  Future<void> test_notInList() async {
+    await resolveTestCode('''
 import 'package:flutter/material.dart';
 main() {
-  new Center(
-    child: /*caret*/new Text('aaa'),
+  Center(
+    child: /*caret*/Text('aaa'),
   );
 }
 ''');

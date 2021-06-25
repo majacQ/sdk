@@ -2,11 +2,13 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library MirrorsTest;
 
 import 'dart:mirrors';
 
-import '../../light_unittest.dart';
+import 'package:expect/minitest.dart';
 
 bool isDart2js = false; // TODO(ahe): Remove this field.
 
@@ -197,7 +199,7 @@ testNames(mirrors) {
 testLibraryUri(var value, bool check(Uri uri)) {
   var valueMirror = reflect(value);
   ClassMirror valueClass = valueMirror.type;
-  LibraryMirror valueLibrary = valueClass.owner;
+  LibraryMirror valueLibrary = valueClass.owner as LibraryMirror;
   Uri uri = valueLibrary.uri;
   if (uri.scheme != "https" ||
       uri.host != "dartlang.org" ||

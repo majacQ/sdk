@@ -6,8 +6,8 @@ import 'dart:collection' show Queue;
 
 import '../common.dart';
 import '../elements/entities.dart';
+import '../inferrer/abstract_value_domain.dart';
 import '../serialization/serialization.dart';
-import '../types/abstract_value_domain.dart';
 import '../universe/selector.dart';
 import '../universe/side_effects.dart';
 import '../world.dart';
@@ -103,8 +103,8 @@ class InferredDataImpl implements InferredData {
       DataSource source, JClosedWorld closedWorld) {
     source.begin(tag);
     Set<MemberEntity> functionsCalledInLoop = source.readMembers().toSet();
-    Map<FunctionEntity, SideEffects> sideEffects =
-        source.readMemberMap(() => new SideEffects.readFromDataSource(source));
+    Map<FunctionEntity, SideEffects> sideEffects = source.readMemberMap(
+        (MemberEntity member) => new SideEffects.readFromDataSource(source));
     Set<FunctionEntity> sideEffectsFreeElements =
         source.readMembers<FunctionEntity>().toSet();
     Set<FunctionEntity> elementsThatCannotThrow =
@@ -121,12 +121,15 @@ class InferredDataImpl implements InferredData {
         functionsThatMightBePassedToApply);
   }
 
+  @override
   void writeToDataSink(DataSink sink) {
     sink.writeBool(false); // Is _not_ trivial.
     sink.begin(tag);
     sink.writeMembers(_functionsCalledInLoop);
-    sink.writeMemberMap(_sideEffects,
-        (SideEffects sideEffects) => sideEffects.writeToDataSink(sink));
+    sink.writeMemberMap(
+        _sideEffects,
+        (MemberEntity member, SideEffects sideEffects) =>
+            sideEffects.writeToDataSink(sink));
     sink.writeMembers(_sideEffectsFreeElements);
     sink.writeMembers(_elementsThatCannotThrow);
     sink.writeMembers(_functionsThatMightBePassedToApply);
@@ -218,8 +221,8 @@ class InferredDataBuilderImpl implements InferredDataBuilder {
       new Set<FunctionEntity>();
 
   InferredDataBuilderImpl(AnnotationsData annotationsData) {
-    annotationsData.cannotThrowFunctions.forEach(registerCannotThrow);
-    annotationsData.sideEffectFreeFunctions.forEach(registerSideEffectsFree);
+    annotationsData.forEachNoThrows(registerCannotThrow);
+    annotationsData.forEachNoSideEffects(registerSideEffectsFree);
   }
 
   @override
@@ -235,6 +238,7 @@ class InferredDataBuilderImpl implements InferredDataBuilder {
   }
 
   /// Compute [SideEffects] for all registered [SideEffectBuilder]s.
+  @override
   InferredData close(JClosedWorld closedWorld) {
     assert(_sideEffectsBuilders != null,
         "Inferred data has already been computed.");

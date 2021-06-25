@@ -52,7 +52,11 @@ class MultiRootFileSystemEntity implements FileSystemEntity {
       _delegate ??= await _resolveEntity();
 
   Future<FileSystemEntity> _resolveEntity() async {
-    if (uri.scheme == multiRootFileSystem.markerScheme && uri.isAbsolute) {
+    if (uri.scheme == multiRootFileSystem.markerScheme) {
+      if (!uri.isAbsolute) {
+        throw new FileSystemException(
+            uri, "This MultiRootFileSystem only handles absolutes URIs: $uri");
+      }
       var original = multiRootFileSystem.original;
       assert(uri.path.startsWith('/'));
       var path = uri.path.substring(1);
@@ -60,6 +64,7 @@ class MultiRootFileSystemEntity implements FileSystemEntity {
         var candidate = original.entityForUri(root.resolve(path));
         if (await candidate.exists()) return candidate;
       }
+      return MissingFileSystemEntity(uri);
     }
     return multiRootFileSystem.original.entityForUri(uri);
   }
@@ -70,10 +75,42 @@ class MultiRootFileSystemEntity implements FileSystemEntity {
   Future<bool> exists() async => (await delegate).exists();
 
   @override
+  Future<bool> existsAsyncIfPossible() async =>
+      (await delegate).existsAsyncIfPossible();
+
+  @override
   Future<List<int>> readAsBytes() async => (await delegate).readAsBytes();
 
   @override
+  Future<List<int>> readAsBytesAsyncIfPossible() async =>
+      (await delegate).readAsBytes();
+
+  @override
   Future<String> readAsString() async => (await delegate).readAsString();
+}
+
+class MissingFileSystemEntity implements FileSystemEntity {
+  @override
+  final Uri uri;
+
+  MissingFileSystemEntity(this.uri);
+
+  @override
+  Future<bool> exists() => Future.value(false);
+
+  @override
+  Future<bool> existsAsyncIfPossible() => exists();
+
+  @override
+  Future<List<int>> readAsBytes() =>
+      Future.error(FileSystemException(uri, 'File not found'));
+
+  @override
+  Future<List<int>> readAsBytesAsyncIfPossible() => readAsBytes();
+
+  @override
+  Future<String> readAsString() =>
+      Future.error(FileSystemException(uri, 'File not found'));
 }
 
 Uri _normalize(root) {

@@ -1,8 +1,7 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'dart:collection';
 import 'dart:convert';
 
 import 'package:analysis_server/src/status/tree_writer.dart';
@@ -10,17 +9,14 @@ import 'package:analyzer/dart/element/element.dart';
 import 'package:analyzer/dart/element/visitor.dart';
 import 'package:analyzer/src/dart/element/element.dart';
 
-/**
- * A visitor that will produce an HTML representation of an element structure.
- */
+/// A visitor that will produce an HTML representation of an element structure.
 class ElementWriter extends GeneralizingElementVisitor with TreeWriter {
-  /**
-   * Initialize a newly created element writer to write the HTML representation
-   * of visited elements on the given [buffer].
-   */
-  ElementWriter(StringBuffer buffer) {
-    this.buffer = buffer;
-  }
+  @override
+  final StringBuffer buffer;
+
+  /// Initialize a newly created element writer to write the HTML representation
+  /// of visited elements on the given [buffer].
+  ElementWriter(this.buffer);
 
   @override
   void visitElement(Element element) {
@@ -34,24 +30,20 @@ class ElementWriter extends GeneralizingElementVisitor with TreeWriter {
     }
   }
 
-  /**
-   * Write a representation of the properties of the given [node] to the buffer.
-   */
-  Map<String, Object> _computeProperties(Element element) {
-    Map<String, Object> properties = new HashMap<String, Object>();
+  /// Write a representation of the properties of the given [node] to the
+  /// buffer.
+  Map<String, Object?> _computeProperties(Element element) {
+    var properties = <String, Object?>{};
 
     properties['metadata'] = element.metadata;
     properties['nameOffset'] = element.nameOffset;
     if (element is ClassElement) {
       properties['hasNonFinalField'] = element.hasNonFinalField;
-      properties['hasReferenceToSuper'] = element.hasReferenceToSuper;
       properties['hasStaticMember'] = element.hasStaticMember;
       properties['interfaces'] = element.interfaces;
       properties['isAbstract'] = element.isAbstract;
       properties['isEnum'] = element.isEnum;
       properties['isMixinApplication'] = element.isMixinApplication;
-      properties['isOrInheritsProxy'] = element.isOrInheritsProxy;
-      properties['isProxy'] = element.isProxy;
       properties['isValidMixin'] = element.isValidMixin;
       properties['mixins'] = element.mixins;
       properties['superclassConstraints'] = element.superclassConstraints;
@@ -61,7 +53,6 @@ class ElementWriter extends GeneralizingElementVisitor with TreeWriter {
       properties['isStatic'] = element.isStatic;
     }
     if (element is CompilationUnitElement) {
-      properties['hasLoadLibraryFunction'] = element.hasLoadLibraryFunction;
       properties['source'] = element.source;
     }
     if (element is ConstFieldElementImpl) {
@@ -117,24 +108,24 @@ class ElementWriter extends GeneralizingElementVisitor with TreeWriter {
       properties['definingCompilationUnit'] = element.definingCompilationUnit;
       properties['entryPoint'] = element.entryPoint;
       properties['hasExtUri'] = element.hasExtUri;
-      properties['hasLoadLibraryFunction'] = element.hasLoadLibraryFunction;
       properties['isBrowserApplication'] = element.isBrowserApplication;
       properties['isDartAsync'] = element.isDartAsync;
       properties['isDartCore'] = element.isDartCore;
       properties['isInSdk'] = element.isInSdk;
     }
-    if (element is LocalElement) {
-      properties['visibleRange'] = element.visibleRange;
-    }
     if (element is ParameterElement) {
       properties['defaultValueCode'] = element.defaultValueCode;
       properties['isInitializingFormal'] = element.isInitializingFormal;
-      if (element.isNotOptional) {
-        properties['parameterKind'] = 'required';
+      if (element.isRequiredPositional) {
+        properties['parameterKind'] = 'required-positional';
+      } else if (element.isRequiredNamed) {
+        properties['parameterKind'] = 'required-named';
       } else if (element.isOptionalPositional) {
-        properties['parameterKind'] = 'positional';
-      } else if (element.isNamed) {
-        properties['parameterKind'] = 'named';
+        properties['parameterKind'] = 'optional-positional';
+      } else if (element.isOptionalNamed) {
+        properties['parameterKind'] = 'optional-named';
+      } else {
+        properties['parameterKind'] = 'unknown kind';
       }
     }
     if (element is PropertyAccessorElement) {
@@ -144,9 +135,6 @@ class ElementWriter extends GeneralizingElementVisitor with TreeWriter {
     if (element is PropertyInducingElement) {
       properties['isStatic'] = element.isStatic;
     }
-    if (element is TypeDefiningElement) {
-      properties['type'] = element.type;
-    }
     if (element is TypeParameterElement) {
       properties['bound'] = element.bound;
     }
@@ -154,7 +142,6 @@ class ElementWriter extends GeneralizingElementVisitor with TreeWriter {
       properties['typeParameters'] = element.typeParameters;
     }
     if (element is VariableElement) {
-      properties['constantValue'] = element.constantValue;
       properties['hasImplicitType'] = element.hasImplicitType;
       properties['isConst'] = element.isConst;
       properties['isFinal'] = element.isFinal;
@@ -165,9 +152,7 @@ class ElementWriter extends GeneralizingElementVisitor with TreeWriter {
     return properties;
   }
 
-  /**
-   * Write a representation of the given [node] to the buffer.
-   */
+  /// Write a representation of the given [node] to the buffer.
   void _writeElement(Element element) {
     indent();
     if (element.isSynthetic) {

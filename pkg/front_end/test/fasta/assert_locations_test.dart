@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE.md file.
 
+// @dart = 2.9
+
 library fasta.test.assert_locations_test;
 
 import 'package:async_helper/async_helper.dart' show asyncTest;
@@ -100,7 +102,7 @@ void main() {}
 
 /// Visitor that verifies that all [AssertStatement]s in the Kernel AST
 /// have expected spans for their conditions.
-class VerifyingVisitor extends RecursiveVisitor<Null> {
+class VerifyingVisitor extends RecursiveVisitor {
   final Test test;
 
   /// Set of names of verified [Procedure]s.
@@ -114,10 +116,10 @@ class VerifyingVisitor extends RecursiveVisitor<Null> {
 
   @override
   visitProcedure(Procedure node) {
-    expectedSpan = test.spans[node.name.name];
+    expectedSpan = test.spans[node.name.text];
     if (expectedSpan != null) {
       super.visitProcedure(node);
-      verified.add(node.name.name);
+      verified.add(node.name.text);
       expectedSpan = null;
     }
   }
@@ -137,8 +139,9 @@ void main() {
         Expect.fail(
             "Unexpected message: ${message.plainTextFormatted.join('\n')}");
       };
-    Component p = await compileScript(test.source,
-        options: options, fileName: 'synthetic-test.dart');
+    Component p = (await compileScript(test.source,
+            options: options, fileName: 'synthetic-test.dart'))
+        ?.component;
     Expect.isNotNull(p);
     VerifyingVisitor visitor = new VerifyingVisitor(test);
     p.mainMethod.enclosingLibrary.accept(visitor);

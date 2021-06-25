@@ -2,7 +2,7 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-#include "vm/unicode.h"
+#include "platform/unicode.h"
 #include "vm/globals.h"
 #include "vm/unit_test.h"
 
@@ -24,6 +24,40 @@ ISOLATE_UNIT_TEST_CASE(Utf8Encode) {
   }
   for (; i < kBufferLength; i++) {
     EXPECT(buffer[i] == 42);
+  }
+}
+
+ISOLATE_UNIT_TEST_CASE(Utf8InvalidByte) {
+  {
+    uint8_t array[] = {0x41, 0xF0, 0x92};
+    intptr_t encode_len = 3;
+    intptr_t decode_len = 3;
+    intptr_t pos = Utf8::ReportInvalidByte(array, encode_len, decode_len);
+    EXPECT(pos == 1);
+  }
+
+  {
+    uint8_t array[] = {0x81, 0x40, 0x42};
+    intptr_t encode_len = 3;
+    intptr_t decode_len = 3;
+    intptr_t pos = Utf8::ReportInvalidByte(array, encode_len, decode_len);
+    EXPECT(pos == 0);
+  }
+
+  {
+    uint8_t array[] = {0x42, 0x40, 0x80};
+    intptr_t encode_len = 3;
+    intptr_t decode_len = 3;
+    intptr_t pos = Utf8::ReportInvalidByte(array, encode_len, decode_len);
+    EXPECT(pos == 2);
+  }
+
+  {
+    uint8_t array[] = {0x41, 0xF0, 0x92, 0x92, 0x91};
+    intptr_t encode_len = 5;
+    intptr_t decode_len = 2;
+    intptr_t pos = Utf8::ReportInvalidByte(array, encode_len, decode_len);
+    EXPECT(pos == encode_len);
   }
 }
 

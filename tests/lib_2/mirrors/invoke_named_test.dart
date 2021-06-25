@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library test.invoke_named_test;
 
 import 'dart:mirrors';
@@ -200,7 +202,7 @@ testSyncApply() {
   ClosureMirror cm;
   InstanceMirror result;
 
-  cm = reflect(a);
+  cm = reflect(a) as ClosureMirror;
   result = cm.apply(['X']);
   Expect.equals('X-B-null', result.reflectee);
   result = cm.apply(['X'], {const Symbol('b'): 'Y'});
@@ -215,7 +217,7 @@ testSyncApply() {
       () => cm.apply(['X'], {const Symbol('undef'): 'Y'}),
       'Unmatched named argument');
 
-  cm = reflect(b);
+  cm = reflect(b) as ClosureMirror;
   result = cm.apply([]);
   Expect.equals('A-null-null', result.reflectee);
   result = cm.apply([], {const Symbol('a'): 'X'});
@@ -229,7 +231,7 @@ testSyncApply() {
       () => cm.apply(['X'], {const Symbol('undef'): 'Y'}),
       'Unmatched named argument');
 
-  cm = reflect(c);
+  cm = reflect(c) as ClosureMirror;
   result = cm.apply(['X']);
   Expect.equals('X-null-C', result.reflectee);
   result = cm.apply(['X', 'Y']);
@@ -244,7 +246,7 @@ testSyncApply() {
       () => cm.apply(['X'], {const Symbol('undef'): 'Y'}),
       'Unmatched named argument');
 
-  cm = reflect(d);
+  cm = reflect(d) as ClosureMirror;
   result = cm.apply([]);
   Expect.equals('null-B-C', result.reflectee);
   result = cm.apply(['X']);
@@ -259,7 +261,7 @@ testSyncApply() {
       () => cm.apply(['X'], {const Symbol('undef'): 'Y'}),
       'Unmatched named argument');
 
-  cm = reflect(e);
+  cm = reflect(e) as ClosureMirror;
   result = cm.apply(['X', 'Y', 'Z']);
   Expect.equals('X-Y-Z', result.reflectee);
   Expect.throwsNoSuchMethodError(
@@ -279,7 +281,7 @@ main() {
   if (isDart2js) return;
 
   testSyncInvoke(reflectClass(D)); // ClassMirror
-  LibraryMirror lib = reflectClass(D).owner;
+  LibraryMirror lib = reflectClass(D).owner as LibraryMirror;
   testSyncInvoke(lib); // LibraryMirror
 
   testSyncNewInstance();

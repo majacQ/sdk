@@ -2,7 +2,6 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'package:analysis_server/src/protocol_server.dart';
 import 'package:analysis_server/src/services/correction/fix.dart';
 import 'package:analyzer_plugin/utilities/fixes/fixes.dart';
 import 'package:test/test.dart';
@@ -10,7 +9,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'fix_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(CreateLocalVariableTest);
   });
@@ -21,8 +20,15 @@ class CreateLocalVariableTest extends FixProcessorTest {
   @override
   FixKind get kind => DartFixKind.CREATE_LOCAL_VARIABLE;
 
-  test_functionType_named() async {
-    await resolveTestUnit('''
+  @override
+  void setUp() {
+    super.setUp();
+    // TODO(dantup): Get these tests passing with either line ending.
+    useLineEndingsForPlatform = false;
+  }
+
+  Future<void> test_functionType_named() async {
+    await resolveTestCode('''
 typedef MY_FUNCTION(int p);
 foo(MY_FUNCTION f) {}
 main() {
@@ -39,8 +45,8 @@ main() {
 ''');
   }
 
-  test_functionType_named_generic() async {
-    await resolveTestUnit('''
+  Future<void> test_functionType_named_generic() async {
+    await resolveTestCode('''
 typedef MY_FUNCTION<T>(T p);
 foo(MY_FUNCTION<int> f) {}
 main() {
@@ -57,8 +63,8 @@ main() {
 ''');
   }
 
-  test_functionType_synthetic() async {
-    await resolveTestUnit('''
+  Future<void> test_functionType_synthetic() async {
+    await resolveTestCode('''
 foo(f(int p)) {}
 main() {
   foo(bar);
@@ -73,8 +79,19 @@ main() {
 ''');
   }
 
-  test_read_typeAssignment() async {
-    await resolveTestUnit('''
+  @failingTest
+  Future<void> test_propertyAccess() async {
+    // We should not offer to define a local variable named 'g'.
+    await resolveTestCode('''
+void f(String s) {
+  s.g;
+}
+''');
+    await assertNoFix();
+  }
+
+  Future<void> test_read_typeAssignment() async {
+    await resolveTestCode('''
 main() {
   int a = test;
   print(a);
@@ -89,8 +106,8 @@ main() {
 ''');
   }
 
-  test_read_typeCondition() async {
-    await resolveTestUnit('''
+  Future<void> test_read_typeCondition() async {
+    await resolveTestCode('''
 main() {
   if (!test) {
     print(42);
@@ -107,8 +124,8 @@ main() {
 ''');
   }
 
-  test_read_typeInvocationArgument() async {
-    await resolveTestUnit('''
+  Future<void> test_read_typeInvocationArgument() async {
+    await resolveTestCode('''
 main() {
   f(test);
 }
@@ -125,8 +142,8 @@ f(String p) {}
     assertLinkedGroup(change.linkedEditGroups[1], ['test;', 'test);']);
   }
 
-  test_read_typeInvocationTarget() async {
-    await resolveTestUnit('''
+  Future<void> test_read_typeInvocationTarget() async {
+    await resolveTestCode('''
 main() {
   test.add('hello');
 }
@@ -140,28 +157,33 @@ main() {
     assertLinkedGroup(change.linkedEditGroups[0], ['test;', 'test.add(']);
   }
 
-  test_withImport() async {
-    addPackageFile('pkg', 'a/a.dart', '''
+  Future<void> test_withImport() async {
+    newFile('$workspaceRootPath/pkg/lib/a/a.dart', content: '''
 class A {}
 ''');
-    addPackageFile('pkg', 'b/b.dart', '''
+    newFile('$workspaceRootPath/pkg/lib/b/b.dart', content: '''
 class B {}
 ''');
-    addPackageFile('pkg', 'c/c.dart', '''
+    newFile('$workspaceRootPath/pkg/lib/c/c.dart', content: '''
 import 'package:pkg/a/a.dart';
 import 'package:pkg/b/b.dart';
 
 class C {
-  C(A a, B b);
+  C(A? a, B b);
 }
 ''');
 
-    await resolveTestUnit('''
+    writeTestPackageConfig(
+      config: PackageConfigFileBuilder()
+        ..add(name: 'pkg', rootPath: '$workspaceRootPath/pkg'),
+    );
+
+    await resolveTestCode('''
 import 'package:pkg/a/a.dart';
 import 'package:pkg/c/c.dart';
 
 main() {
-  A a;
+  A? a;
   new C(a, b);
 }
 ''');
@@ -171,26 +193,26 @@ import 'package:pkg/b/b.dart';
 import 'package:pkg/c/c.dart';
 
 main() {
-  A a;
+  A? a;
   B b;
   new C(a, b);
 }
 ''');
-    List<LinkedEditGroup> groups = change.linkedEditGroups;
+    var groups = change.linkedEditGroups;
     expect(groups, hasLength(2));
-    LinkedEditGroup typeGroup = groups[0];
-    List<Position> typePositions = typeGroup.positions;
+    var typeGroup = groups[0];
+    var typePositions = typeGroup.positions;
     expect(typePositions, hasLength(1));
-    expect(typePositions[0].offset, 112);
-    LinkedEditGroup nameGroup = groups[1];
-    List<Position> groupPositions = nameGroup.positions;
+    expect(typePositions[0].offset, 113);
+    var nameGroup = groups[1];
+    var groupPositions = nameGroup.positions;
     expect(groupPositions, hasLength(2));
-    expect(groupPositions[0].offset, 114);
-    expect(groupPositions[1].offset, 128);
+    expect(groupPositions[0].offset, 115);
+    expect(groupPositions[1].offset, 129);
   }
 
-  test_write_assignment() async {
-    await resolveTestUnit('''
+  Future<void> test_write_assignment() async {
+    await resolveTestCode('''
 main() {
   test = 42;
 }
@@ -202,8 +224,8 @@ main() {
 ''');
   }
 
-  test_write_assignment_compound() async {
-    await resolveTestUnit('''
+  Future<void> test_write_assignment_compound() async {
+    await resolveTestCode('''
 main() {
   test += 42;
 }

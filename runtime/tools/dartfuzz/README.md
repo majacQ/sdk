@@ -12,12 +12,18 @@ How to run DartFuzz
 ===================
 To generate a single random Dart program, run
 
-    dart dartfuzz.dart [--help] [--seed SEED] FILENAME
+    dart dartfuzz.dart [--help] [--seed SEED] [--[no-]fp] FILENAME
 
 where
 
-    --help : prints help and exits
-    --seed : defines random seed (system-set by default)
+    --help      : prints help and exits
+    --seed      : defines random seed (system-set by default)
+    --[no-]fp   : enables/disables floating-point operations (default: on)
+    --[no-]ffi  : enables/disables FFI method calls (default: off)
+    --[no-]flat : enables/disables flat types (default: off)
+    --[no-]mini : enables minimization mode (default: off)
+    --smask     : bitmask indicating which statements to omit (Bit=1 omits, defaults to "0")
+    --emask     : bitmask indicating which expressions to omit (Bit=1 omits, defaults to "0")
 
 The tool provides a runnable main isolate. A typical single
 test run looks as:
@@ -29,42 +35,39 @@ How to start DartFuzz testing
 =============================
 To start a fuzz testing session, run
 
-    dart dartfuzz_test.dart
-
-    run_dartfuzz_test.py  [--help]
-                          [--isolates ISOLATES ]
-                          [--repeat REPEAT]
-                          [--time TIME]
-                          [--true_divergence]
-                          [--mode1 MODE]
-                          [--mode2 MODE]
+    dart dartfuzz_test.dart [--help]
+                            [--isolates ISOLATES ]
+                            [--repeat REPEAT]
+                            [--time TIME]
+                            [--num-output-lines NUMOUTPUTLINES]
+                            [--true_divergence]
+                            [--show-stats]
+                            [--dart-top DARTTOP]
+                            [--mode1 MODE]
+                            [--mode2 MODE]
+                            [--[no-]rerun]
 
 where
 
-    --help            : prints help and exits
-    --isolates        : number of isolates in the session (1 by default)
-    --repeat          : number of tests to run (1000 by default)
-    --time            : time limit in seconds (none by default)
-    --show-stats      : show statistics during session (true by default)
-    --true-divergence : only report true divergences (true by default)
-    --dart-top        : sets DART_TOP explicitly through command line
-    --mode1           : m1
-    --mode2           : m2, and values one of
-        jit-[opt-][debug-]ia32  = Dart JIT (ia32)
-        jit-[opt-][debug-]x64   = Dart JIT (x64)
-        jit-[opt-][debug-]arm32 = Dart JIT (simarm)
-        jit-[opt-][debug-]arm64 = Dart JIT (simarm64)
-        jit-[opt-][debug-]dbc   = Dart JIT (simdbc)
-        jit-[opt-][debug-]dbc64 = Dart JIT (simdbc64)
-        aot-[debug-]x64         = Dart AOT (x64)
-        aot-[debug-]arm32       = Dart AOT (simarm)
-        aot-[debug-]arm64       = Dart AOT (simarm64)
-        kbc-int-[debug-]x64     = Dart KBC (interpreted bytecode)
-        kbc-mix-[debug-]x64     = Dart KBC (mixed-mode bytecode)
-        kbc-cmp-[debug-]x64     = Dart KBC (compiled bytecode)
-        js                      = dart2js + JS
+    --help             : prints help and exits
+    --isolates         : number of isolates in the session (1 by default)
+    --repeat           : number of tests to run (1000 by default)
+    --time             : time limit in seconds (none by default)
+    --num-output-lines : number of output lines to be printed in the case of a divergence (200 by default)
+    --true-divergence  : only report true divergences (true by default)
+    --show-stats       : show statistics during session (true by default)
+    --dart-top         : sets DART_TOP explicitly through command line
+    --mode1            : m1
+    --mode2            : m2, and values one of
+        jit-[debug-][ia32|x64|arm32|arm64]               = Dart JIT
+        aot-[debug-][x64|arm32|arm64]                    = Dart AOT
+        djs-x64                                          = dart2js + Node.JS
+    --[no-]rerun       : re-run a testcase if there is only a divergence in
+                         the return codes outside the range [-255,+255];
+                         if the second run produces no divergence the previous
+                         one will be ignored (true by default)
 
-If no modes are given, a random JIT and/or AOT combination is used.
+If no modes are given, a random combination is used.
 
 This fuzz testing tool must have access to the top of a Dart SDK
 development tree (DART_TOP) in which all proper binaries have been
@@ -89,14 +92,23 @@ and flaws still linger in the system.
 Over the years, fuzz testing has gained popularity as a testing technique for
 discovering such lingering bugs, including bugs that can bring down a system
 in an unexpected way. Fuzzing refers to feeding a large amount of random data
-as input to a system in an attempt to find bugs or make it crash. Generation-
-based fuzz testing constructs random, but properly formatted input data.
-Mutation-based fuzz testing applies small random changes to existing inputs
-in order to detect shortcomings in a system. Profile-guided or coverage-guided
-fuzz testing adds a direction to the way these random changes are applied.
-Multi-layered approaches generate random inputs that are subsequently mutated
-at various stages of execution.
+as input to a system in an attempt to find bugs or make it crash.
+Generation-based fuzz testing constructs random, but properly formatted input
+data. Mutation-based fuzz testing applies small random changes to existing
+inputs in order to detect shortcomings in a system. Profile-guided or
+coverage-guided fuzz testing adds a direction to the way these random changes
+are applied. Multi-layered approaches generate random inputs that are
+subsequently mutated at various stages of execution.
 
 The randomness of fuzz testing implies that the size and scope of testing is
 no longer bounded. Every new run can potentially discover bugs and crashes
 that were hereto undetected.
+
+Links
+=====
+
+* [Dart bugs found with fuzzing](https://github.com/dart-lang/sdk/issues?utf8=%E2%9C%93&q=label%3Adartfuzz+)
+* [DartFuzz](https://github.com/dart-lang/sdk/tree/master/runtime/tools/dartfuzz)
+* [DartLibFuzzer](https://github.com/dart-lang/sdk/tree/master/runtime/vm/libfuzzer)
+* [Dust](https://pub.dev/packages/dust)
+* [LibFuzzer](https://llvm.org/docs/LibFuzzer.html)

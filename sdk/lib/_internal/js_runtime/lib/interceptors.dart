@@ -24,7 +24,6 @@ import 'dart:_js_helper'
         defineProperty,
         diagnoseIndexError,
         getIsolateAffinityTag,
-        getRuntimeType,
         initNativeDispatch,
         initNativeDispatchFlag,
         regExpGetNative,
@@ -52,7 +51,10 @@ import 'dart:_foreign_helper'
         JS_EMBEDDED_GLOBAL,
         JS_INTERCEPTOR_CONSTANT,
         JS_STRING_CONCAT;
-import 'dart:math' show Random;
+
+import 'dart:_rti' show getRuntimeType;
+
+import 'dart:math' show Random, ln2;
 
 part 'js_array.dart';
 part 'js_number.dart';
@@ -60,17 +62,6 @@ part 'js_string.dart';
 
 final String DART_CLOSURE_PROPERTY_NAME =
     getIsolateAffinityTag(r'_$dart_dartClosure');
-
-String _symbolToString(Symbol symbol) => _symbol_dev.Symbol.getName(symbol);
-
-_symbolMapToStringMap(Map<Symbol, dynamic> map) {
-  if (map == null) return null;
-  var result = new Map<String, dynamic>();
-  map.forEach((Symbol key, value) {
-    result[_symbolToString(key)] = value;
-  });
-  return result;
-}
 
 getDispatchProperty(object) {
   return JS(
@@ -84,7 +75,7 @@ setDispatchProperty(object, value) {
 
 // Avoid inlining this method because inlining gives us multiple allocation
 // points for records which is bad because it leads to polymorphic access.
-@NoInline()
+@pragma('dart2js:noInline')
 makeDispatchRecord(interceptor, proto, extension, indexability) {
   // Dispatch records are stored in the prototype chain, and in some cases, on
   // instances.
@@ -121,12 +112,10 @@ makeDispatchRecord(interceptor, proto, extension, indexability) {
 dispatchRecordInterceptor(record) => JS('', '#.i', record);
 dispatchRecordProto(record) => JS('', '#.p', record);
 dispatchRecordExtension(record) => JS('', '#.e', record);
-dispatchRecordIndexability(record) => JS('bool|Null', '#.x', record);
+bool? dispatchRecordIndexability(record) => JS('bool|Null', '#.x', record);
 
-/**
- * Returns the interceptor for a native class instance. Used by
- * [getInterceptor].
- */
+/// Returns the interceptor for a native class instance. Used by
+/// [getInterceptor].
 getNativeInterceptor(object) {
   var record = getDispatchProperty(object);
 
@@ -197,7 +186,10 @@ getNativeInterceptor(object) {
 }
 
 // A JS String or Symbol.
-final JS_INTEROP_INTERCEPTOR_TAG = getIsolateAffinityTag(r'_$dart_js');
+dynamic _JS_INTEROP_INTERCEPTOR_TAG = null;
+get JS_INTEROP_INTERCEPTOR_TAG {
+  return _JS_INTEROP_INTERCEPTOR_TAG ??= getIsolateAffinityTag(r'_$dart_js');
+}
 
 lookupInterceptorByConstructor(constructor) {
   return constructor == null
@@ -220,25 +212,23 @@ void XcacheInterceptorOnConstructor(constructor, interceptor) {
   JS('', '#.set(#, #)', constructorToInterceptor, constructor, interceptor);
 }
 
-/**
- * Data structure used to map a [Type] to the [Interceptor] and constructors for
- * that type.  It is JavaScript array of 3N entries of adjacent slots containing
- * a [Type], followed by an [Interceptor] class for the type, followed by a
- * JavaScript object map for the constructors.
- *
- * The value of this variable is set by the compiler and contains only types
- * that are user extensions of native classes where the type occurs as a
- * constant in the program.
- *
- * The compiler, in CustomElementsAnalysis, assumes that [typeToInterceptorMap]
- * is accessed only by code that also calls [findIndexForWebComponentType].  If
- * this assumption is invalidated, the compiler will have to be updated.
- */
+/// Data structure used to map a [Type] to the [Interceptor] and constructors
+/// for that type.  It is JavaScript array of 3N entries of adjacent slots
+/// containing a [Type], followed by an [Interceptor] class for the type,
+/// followed by a JavaScript object map for the constructors.
+///
+/// The value of this variable is set by the compiler and contains only types
+/// that are user extensions of native classes where the type occurs as a
+/// constant in the program.
+///
+/// The compiler, in CustomElementsAnalysis, assumes that [typeToInterceptorMap]
+/// is accessed only by code that also calls [findIndexForWebComponentType].  If
+/// this assumption is invalidated, the compiler will have to be updated.
 get typeToInterceptorMap {
   return JS_EMBEDDED_GLOBAL('', TYPE_TO_INTERCEPTOR_MAP);
 }
 
-int findIndexForNativeSubclassType(Type type) {
+int? findIndexForNativeSubclassType(Type? type) {
   if (JS('bool', '# == null', typeToInterceptorMap)) return null;
   List map = JS('JSFixedArray', '#', typeToInterceptorMap);
   for (int i = 0; i + 1 < map.length; i += 3) {
@@ -249,20 +239,18 @@ int findIndexForNativeSubclassType(Type type) {
   return null;
 }
 
-findInterceptorConstructorForType(Type type) {
+findInterceptorConstructorForType(Type? type) {
   var index = findIndexForNativeSubclassType(type);
   if (index == null) return null;
   List map = JS('JSFixedArray', '#', typeToInterceptorMap);
   return map[index + 1];
 }
 
-/**
- * Returns a JavaScript function that runs the constructor on its argument, or
- * `null` if there is no such constructor.
- *
- * The returned function takes one argument, the web component object.
- */
-findConstructorForNativeSubclassType(Type type, String name) {
+/// Returns a JavaScript function that runs the constructor on its argument, or
+/// `null` if there is no such constructor.
+///
+/// The returned function takes one argument, the web component object.
+findConstructorForNativeSubclassType(Type? type, String name) {
   var index = findIndexForNativeSubclassType(type);
   if (index == null) return null;
   List map = JS('JSFixedArray', '#', typeToInterceptorMap);
@@ -271,60 +259,58 @@ findConstructorForNativeSubclassType(Type type, String name) {
   return constructorFn;
 }
 
-findInterceptorForType(Type type) {
+findInterceptorForType(Type? type) {
   var constructor = findInterceptorConstructorForType(type);
   if (constructor == null) return null;
   return JS('', '#.prototype', constructor);
 }
 
-/**
- * The base interceptor class.
- *
- * The code `r.foo(a)` is compiled to `getInterceptor(r).foo$1(r, a)`.  The
- * value returned by [getInterceptor] holds the methods separately from the
- * state of the instance.  The compiler converts the methods on an interceptor
- * to take the Dart `this` argument as an explicit `receiver` argument.  The
- * JavaScript `this` parameter is bound to the interceptor.
- *
- * In order to have uniform call sites, if a method is defined on an
- * interceptor, methods of that name on plain unintercepted classes also use the
- * interceptor calling convention.  The plain classes are _self-interceptors_,
- * and for them, `getInterceptor(r)` returns `r`.  Methods on plain
- * unintercepted classes have a redundant `receiver` argument and, to enable
- * some optimizations, must ignore `receiver` in favour of `this`.
- *
- * In the case of mixins, a method may be placed on both an intercepted class
- * and an unintercepted class.  In this case, the method must use the `receiver`
- * parameter.
- *
- *
- * There are various optimizations of the general call pattern.
- *
- * When the interceptor can be statically determined, it can be used directly:
- *
- *     CONSTANT_INTERCEPTOR.foo$1(r, a)
- *
- * If there are only a few classes, [getInterceptor] can be specialized with a
- * more efficient dispatch:
- *
- *     getInterceptor$specialized(r).foo$1(r, a)
- *
- * If it can be determined that the receiver is an unintercepted class, it can
- * be called directly:
- *
- *     r.foo$1(r, a)
- *
- * If, further, it is known that the call site cannot call a foo that is
- * mixed-in to a native class, then it is known that the explicit receiver is
- * ignored, and space-saving dummy value can be passed instead:
- *
- *     r.foo$1(0, a)
- *
- * This class defines implementations of *all* methods on [Object] so no
- * interceptor inherits an implementation from [Object].  This enables the
- * implementations on Object to ignore the explicit receiver argument, which
- * allows dummy receiver optimization.
- */
+/// The base interceptor class.
+///
+/// The code `r.foo(a)` is compiled to `getInterceptor(r).foo$1(r, a)`.  The
+/// value returned by [getInterceptor] holds the methods separately from the
+/// state of the instance.  The compiler converts the methods on an interceptor
+/// to take the Dart `this` argument as an explicit `receiver` argument.  The
+/// JavaScript `this` parameter is bound to the interceptor.
+///
+/// In order to have uniform call sites, if a method is defined on an
+/// interceptor, methods of that name on plain unintercepted classes also use
+/// the interceptor calling convention.  The plain classes are
+/// _self-interceptors_, and for them, `getInterceptor(r)` returns `r`.  Methods
+/// on plain unintercepted classes have a redundant `receiver` argument and, to
+/// enable some optimizations, must ignore `receiver` in favour of `this`.
+///
+/// In the case of mixins, a method may be placed on both an intercepted class
+/// and an unintercepted class.  In this case, the method must use the
+/// `receiver` parameter.
+///
+///
+/// There are various optimizations of the general call pattern.
+///
+/// When the interceptor can be statically determined, it can be used directly:
+///
+///     CONSTANT_INTERCEPTOR.foo$1(r, a)
+///
+/// If there are only a few classes, [getInterceptor] can be specialized with a
+/// more efficient dispatch:
+///
+///     getInterceptor$specialized(r).foo$1(r, a)
+///
+/// If it can be determined that the receiver is an unintercepted class, it can
+/// be called directly:
+///
+///     r.foo$1(r, a)
+///
+/// If, further, it is known that the call site cannot call a foo that is
+/// mixed-in to a native class, then it is known that the explicit receiver is
+/// ignored, and space-saving dummy value can be passed instead:
+///
+///     r.foo$1(0, a)
+///
+/// This class defines implementations of *all* methods on [Object] so no
+/// interceptor inherits an implementation from [Object].  This enables the
+/// implementations on Object to ignore the explicit receiver argument, which
+/// allows dummy receiver optimization.
 abstract class Interceptor {
   const Interceptor();
 
@@ -356,9 +342,7 @@ abstract class Interceptor {
   Type get runtimeType => getRuntimeType(this);
 }
 
-/**
- * The interceptor class for [bool].
- */
+/// The interceptor class for [bool].
 class JSBool extends Interceptor implements bool {
   const JSBool();
 
@@ -378,13 +362,11 @@ class JSBool extends Interceptor implements bool {
   Type get runtimeType => bool;
 }
 
-/**
- * The interceptor class for [Null].
- *
- * This class defines implementations for *all* methods on [Object] since
- * the methods on Object assume the receiver is non-null.  This means that
- * JSNull will always be in the interceptor set for methods defined on Object.
- */
+/// The interceptor class for [Null].
+///
+/// This class defines implementations for *all* methods on [Object] since
+/// the methods on Object assume the receiver is non-null.  This means that
+/// JSNull will always be in the interceptor set for methods defined on Object.
 class JSNull extends Interceptor implements Null {
   const JSNull();
 
@@ -403,37 +385,29 @@ class JSNull extends Interceptor implements Null {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
-/**
- * The supertype for JSString and JSArray. Used by the backend as to
- * have a type mask that contains the objects that we can use the
- * native JS [] operator and length on.
- */
+/// The supertype for JSString and JSArray. Used by the backend as to
+/// have a type mask that contains the objects that we can use the
+/// native JS [] operator and length on.
 abstract class JSIndexable<E> {
   int get length;
   E operator [](int index);
 }
 
-/**
- * The supertype for JSMutableArray and
- * JavaScriptIndexingBehavior. Used by the backend to have a type mask
- * that contains the objects we can use the JS []= operator on.
- */
+/// The supertype for JSMutableArray and
+/// JavaScriptIndexingBehavior. Used by the backend to have a type mask
+/// that contains the objects we can use the JS []= operator on.
 abstract class JSMutableIndexable<E> extends JSIndexable<E> {
   operator []=(int index, E value);
 }
 
-/**
- * The interface implemented by JavaScript objects.  These are methods in
- * addition to the regular Dart Object methods like [Object.hashCode].
- *
- * This is the type that should be exported by a JavaScript interop library.
- */
+/// The interface implemented by JavaScript objects.  These are methods in
+/// addition to the regular Dart Object methods like [Object.hashCode].
+///
+/// This is the type that should be exported by a JavaScript interop library.
 abstract class JSObject {}
 
-/**
- * Interceptor base class for JavaScript objects not recognized as some more
- * specific native type.
- */
+/// Interceptor base class for JavaScript objects not recognized as some more
+/// specific native type.
 class JavaScriptObject extends Interceptor implements JSObject {
   const JavaScriptObject();
 
@@ -442,36 +416,28 @@ class JavaScriptObject extends Interceptor implements JSObject {
 
   Type get runtimeType => JSObject;
 
-  /**
-   * Returns the result of the JavaScript objects `toString` method.
-   */
+  /// Returns the result of the JavaScript objects `toString` method.
   String toString() => JS('String', 'String(#)', this);
 }
 
-/**
- * Interceptor for plain JavaScript objects created as JavaScript object
- * literals or `new Object()`.
- */
+/// Interceptor for plain JavaScript objects created as JavaScript object
+/// literals or `new Object()`.
 class PlainJavaScriptObject extends JavaScriptObject {
   const PlainJavaScriptObject();
 }
 
-/**
- * Interceptor for unclassified JavaScript objects, typically objects with a
- * non-trivial prototype chain.
- *
- * This class also serves as a fallback for unknown JavaScript exceptions.
- */
+/// Interceptor for unclassified JavaScript objects, typically objects with a
+/// non-trivial prototype chain.
+///
+/// This class also serves as a fallback for unknown JavaScript exceptions.
 class UnknownJavaScriptObject extends JavaScriptObject {
   const UnknownJavaScriptObject();
 }
 
-/**
- * Interceptor for JavaScript function objects and Dart functions that have
- * been converted to JavaScript functions.
- * These interceptor methods are not always used as the JavaScript function
- * object has also been mangled to support Dart function calling conventions.
- */
+/// Interceptor for JavaScript function objects and Dart functions that have
+/// been converted to JavaScript functions.
+/// These interceptor methods are not always used as the JavaScript function
+/// object has also been mangled to support Dart function calling conventions.
 class JavaScriptFunction extends JavaScriptObject implements Function {
   const JavaScriptFunction();
 

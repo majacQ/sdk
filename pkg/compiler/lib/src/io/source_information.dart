@@ -8,13 +8,40 @@ import 'package:kernel/ast.dart' as ir;
 import '../common.dart';
 import '../elements/entities.dart';
 import '../js/js.dart' show JavaScriptNodeSourceInformation;
+import '../serialization/serialization.dart';
 import '../universe/call_structure.dart';
 import 'source_file.dart';
+import 'position_information.dart';
 
 /// Interface for passing source information, for instance for use in source
 /// maps, through the backend.
 abstract class SourceInformation extends JavaScriptNodeSourceInformation {
   const SourceInformation();
+
+  static SourceInformation readFromDataSource(DataSource source) {
+    int hasSourceInformation = source.readInt();
+    if (hasSourceInformation == 0) {
+      return null;
+    } else if (hasSourceInformation == 1) {
+      return const SourceMappedMarker();
+    } else {
+      assert(hasSourceInformation == 2);
+      return PositionSourceInformation.readFromDataSource(source);
+    }
+  }
+
+  static void writeToDataSink(
+      DataSink sink, SourceInformation sourceInformation) {
+    if (sourceInformation == null) {
+      sink.writeInt(0);
+    } else if (sourceInformation is SourceMappedMarker) {
+      sink.writeInt(1);
+    } else {
+      sink.writeInt(2);
+      PositionSourceInformation positionSourceInformation = sourceInformation;
+      positionSourceInformation.writeToDataSinkInternal(sink);
+    }
+  }
 
   SourceSpan get sourceSpan;
 
@@ -45,6 +72,8 @@ abstract class SourceInformation extends JavaScriptNodeSourceInformation {
 /// precise data about inlining that can then be used by defobuscation tools
 /// when reconstructing a source stack from a production stack trace.
 class FrameContext {
+  static const String tag = 'frame-context';
+
   /// Location of the call that was inlined.
   final SourceInformation callInformation;
 
@@ -53,6 +82,26 @@ class FrameContext {
 
   FrameContext(this.callInformation, this.inlinedMethodName);
 
+  factory FrameContext.readFromDataSource(DataSource source) {
+    source.begin(tag);
+    SourceInformation callInformation = source.readCached<SourceInformation>(
+        () => SourceInformation.readFromDataSource(source));
+    String inlinedMethodName = source.readString();
+    source.end(tag);
+    return new FrameContext(callInformation, inlinedMethodName);
+  }
+
+  void writeToDataSink(DataSink sink) {
+    sink.begin(tag);
+    sink.writeCached<SourceInformation>(
+        callInformation,
+        (SourceInformation sourceInformation) =>
+            SourceInformation.writeToDataSink(sink, sourceInformation));
+    sink.writeString(inlinedMethodName);
+    sink.end(tag);
+  }
+
+  @override
   String toString() => "(FrameContext: $callInformation, $inlinedMethodName)";
 }
 
@@ -205,6 +254,8 @@ class SourceInformationBuilder {
 
 /// A location in a source file.
 abstract class SourceLocation {
+  static const String tag = 'source-location';
+
   const SourceLocation();
 
   /// The absolute URI of the source file of this source location.
@@ -222,26 +273,83 @@ abstract class SourceLocation {
   /// The name associated with this source location, if any.
   String get sourceName;
 
-  /// `true` if the offset within the length of the source file.
-  bool get isValid;
+  static SourceLocation readFromDataSource(DataSource source) {
+    int hasSourceLocation = source.readInt();
+    if (hasSourceLocation == 0) {
+      return null;
+    } else if (hasSourceLocation == 1) {
+      return const NoSourceLocationMarker();
+    } else {
+      assert(hasSourceLocation == 2);
+      source.begin(tag);
+      Uri sourceUri = source.readUri();
+      int offset = source.readInt();
+      int line = source.readInt();
+      int column = source.readInt();
+      String sourceName = source.readString();
+      source.end(tag);
+      return new DirectSourceLocation(
+          sourceUri, offset, line, column, sourceName);
+    }
+  }
 
+  static void writeToDataSink(DataSink sink, SourceLocation sourceLocation) {
+    if (sourceLocation == null) {
+      sink.writeInt(0);
+    } else if (sourceLocation is NoSourceLocationMarker) {
+      sink.writeInt(1);
+    } else {
+      sink.writeInt(2);
+      sink.begin(tag);
+      sink.writeUri(sourceLocation.sourceUri);
+      sink.writeInt(sourceLocation.offset);
+      sink.writeInt(sourceLocation.line);
+      sink.writeInt(sourceLocation.column);
+      sink.writeString(sourceLocation.sourceName);
+      sink.end(tag);
+    }
+  }
+
+  @override
   int get hashCode {
     return sourceUri.hashCode * 17 +
         offset.hashCode * 19 +
         sourceName.hashCode * 23;
   }
 
+  @override
   bool operator ==(other) {
     if (identical(this, other)) return true;
-    if (other is! SourceLocation) return false;
-    return sourceUri == other.sourceUri &&
+    return other is SourceLocation &&
+        sourceUri == other.sourceUri &&
         offset == other.offset &&
         sourceName == other.sourceName;
   }
 
   String get shortText => '${sourceUri?.pathSegments?.last}:[$line,$column]';
 
+  @override
   String toString() => '${sourceUri}:[${line},${column}]';
+}
+
+class DirectSourceLocation extends SourceLocation {
+  @override
+  final Uri sourceUri;
+
+  @override
+  final int offset;
+
+  @override
+  final int line;
+
+  @override
+  final int column;
+
+  @override
+  final String sourceName;
+
+  DirectSourceLocation(
+      this.sourceUri, this.offset, this.line, this.column, this.sourceName);
 }
 
 /// A location in a source file.
@@ -251,7 +359,7 @@ abstract class AbstractSourceLocation extends SourceLocation {
 
   AbstractSourceLocation(this._sourceFile) {
     assert(
-        isValid,
+        offset < _sourceFile.length,
         failedAt(
             new SourceSpan(sourceUri, 0, 0),
             "Invalid source location in ${sourceUri}: "
@@ -263,38 +371,41 @@ abstract class AbstractSourceLocation extends SourceLocation {
   AbstractSourceLocation.fromOther(AbstractSourceLocation location)
       : this.fromLocation(location._location);
 
-  /// The absolute URI of the source file of this source location.
+  @override
   Uri get sourceUri => _sourceFile.uri;
 
-  /// The character offset of the this source location into the source file.
+  @override
   int get offset;
 
-  /// The 1-based line number of the [offset].
+  @override
   int get line => (_location ??= _sourceFile.getLocation(offset)).line;
 
-  /// The 1-based column number of the [offset] with its line.
+  @override
   int get column => (_location ??= _sourceFile.getLocation(offset)).column;
 
-  /// The name associated with this source location, if any.
+  @override
   String get sourceName;
 
-  /// `true` if the offset within the length of the source file.
-  bool get isValid => offset < _sourceFile.length;
-
+  @override
   String get shortText => '${sourceUri.pathSegments.last}:[$line,$column]';
 
+  @override
   String toString() => '${sourceUri}:[$line,$column]';
 }
 
 class OffsetSourceLocation extends AbstractSourceLocation {
+  @override
   final int offset;
+  @override
   final String sourceName;
 
   OffsetSourceLocation(SourceFile sourceFile, this.offset, this.sourceName)
       : super(sourceFile);
 
+  @override
   String get shortText => '${super.shortText}:$sourceName';
 
+  @override
   String toString() => '${super.toString()}:$sourceName';
 }
 
@@ -349,9 +460,6 @@ class NoSourceLocationMarker extends SourceLocation {
   Uri get sourceUri => null;
 
   @override
-  bool get isValid => true;
-
-  @override
   String get sourceName => null;
 
   @override
@@ -365,6 +473,7 @@ class NoSourceLocationMarker extends SourceLocation {
 
   String get shortName => '<no-location>';
 
+  @override
   String toString() => '<no-location>';
 }
 

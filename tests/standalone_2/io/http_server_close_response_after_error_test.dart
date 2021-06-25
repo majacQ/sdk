@@ -8,6 +8,8 @@
 // VMOptions=--short_socket_read --short_socket_write
 // OtherResources=http_server_close_response_after_error_client.dart
 
+// @dart = 2.9
+
 import 'dart:async';
 import 'dart:io';
 
@@ -20,10 +22,15 @@ void main() {
         request.response.close();
       });
     });
-    Process.run(Platform.executable, [
-      Platform.script.resolve(CLIENT_SCRIPT).toString(),
-      server.port.toString()
-    ]).then((result) {
+    Process.run(
+            Platform.executable,
+            []
+              ..addAll(Platform.executableArguments)
+              ..addAll([
+                Platform.script.resolve(CLIENT_SCRIPT).toString(),
+                server.port.toString()
+              ]))
+        .then((result) {
       if (result.exitCode != 0) throw "Bad exit code";
       server.close();
     });

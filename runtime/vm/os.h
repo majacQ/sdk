@@ -13,7 +13,6 @@ struct tm;
 namespace dart {
 
 // Forward declarations.
-class Isolate;
 class Zone;
 
 // Interface to the underlying OS platform.
@@ -64,17 +63,14 @@ class OS {
   // NOTE: This function will return -1 on OSs that are not supported.
   static int64_t GetCurrentThreadCPUMicros();
 
+  // If the tracing/timeline configuration on the current OS supports thread
+  // timestamps, returns the same value as |GetCurrentThreadCPUMicros|.
+  // Otherwise, returns -1.
+  static int64_t GetCurrentThreadCPUMicrosForTimeline();
+
   // Returns the activation frame alignment constraint or one if
   // the platform doesn't care. Guaranteed to be a power of two.
   static intptr_t ActivationFrameAlignment();
-
-  // This constant is guaranteed to be greater or equal to the
-  // preferred code alignment on all platforms.
-  static const int kMaxPreferredCodeAlignment = 32;
-
-  // Returns the preferred code alignment or zero if
-  // the platform doesn't care. Guaranteed to be a power of two.
-  static intptr_t PreferredCodeAlignment();
 
   // Returns number of available processor cores.
   static int NumberOfAvailableProcessors();
@@ -123,9 +119,12 @@ class OS {
   // Cleanup the OS class.
   static void Cleanup();
 
-  static DART_NORETURN void Abort();
+  // Only implemented on Windows, prevents cleanup code from running.
+  static void PrepareToAbort();
 
-  static DART_NORETURN void Exit(int code);
+  DART_NORETURN static void Abort();
+
+  DART_NORETURN static void Exit(int code);
 };
 
 }  // namespace dart

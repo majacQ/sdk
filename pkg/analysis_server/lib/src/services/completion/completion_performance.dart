@@ -1,110 +1,72 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-/**
- * Overall performance of a code completion operation.
- */
-class CompletionPerformance {
-  final DateTime start = new DateTime.now();
-  final Map<String, Duration> _startTimes = new Map<String, Duration>();
-  final Stopwatch _stopwatch = new Stopwatch();
-  final List<OperationPerformance> operations = <OperationPerformance>[];
+import 'package:analyzer/src/util/performance/operation_performance.dart';
 
-  String path;
-  String snippet = '';
-  int notificationCount = -1;
-  int suggestionCountFirst = -1;
-  int suggestionCountLast = -1;
-  Duration _firstNotification;
-
-  CompletionPerformance() {
-    _stopwatch.start();
+/// Compute a string representing a code completion operation at the
+/// given source and location.
+///
+/// This string is useful for displaying to users in a diagnostic context.
+String _computeCompletionSnippet(String contents, int offset) {
+  if (offset < 0 || contents.length < offset) {
+    return '???';
   }
-
-  int get elapsedInMilliseconds =>
-      operations.length > 0 ? operations.last.elapsed.inMilliseconds : 0;
-
-  String get suggestionCount {
-    if (notificationCount < 1) return '';
-    if (notificationCount == 1) return '$suggestionCountFirst';
-    return '$suggestionCountFirst,  $suggestionCountLast';
-  }
-
-  void complete([String tag = null]) {
-    _stopwatch.stop();
-    _logDuration(tag ?? 'total time', _stopwatch.elapsed);
-  }
-
-  void logElapseTime(String tag) {
-    Duration end = _stopwatch.elapsed;
-    Duration start = _startTimes[tag];
-    if (start == null) {
-      _logDuration(tag, null);
-      return null;
+  var start = offset;
+  while (start > 0) {
+    var ch = contents[start - 1];
+    if (ch == '\r' || ch == '\n') {
+      break;
     }
-    _logDuration(tag, end - start);
+    --start;
+  }
+  var end = offset;
+  while (end < contents.length) {
+    var ch = contents[end];
+    if (ch == '\r' || ch == '\n') {
+      break;
+    }
+    ++end;
+  }
+  var prefix = contents.substring(start, offset);
+  var suffix = contents.substring(offset, end);
+  return '$prefix^$suffix';
+}
+
+/// Overall performance of a code completion operation.
+class CompletionPerformance {
+  String? path;
+  String snippet = '';
+  int suggestionCount = -1;
+  OperationPerformance? _operation;
+
+  int get elapsedInMilliseconds {
+    var operation = _operation;
+    if (operation == null) {
+      throw StateError('Access of elapsed time before the operation is run');
+    }
+    return operation.elapsed.inMilliseconds;
   }
 
-  void logFirstNotificationComplete(String tag) {
-    _firstNotification = _stopwatch.elapsed;
-    _logDuration(tag, _firstNotification);
+  String get suggestionCountStr {
+    if (suggestionCount < 1) return '';
+    return '$suggestionCount';
   }
 
-  void logStartTime(String tag) {
-    _startTimes[tag] = _stopwatch.elapsed;
+  Future<T> runRequestOperation<T>(
+    Future<T> Function(OperationPerformanceImpl) operation,
+  ) async {
+    var rootOperation = OperationPerformanceImpl('<root>');
+    try {
+      return rootOperation.runAsync('<request>', (performance) async {
+        return await operation(performance);
+      });
+    } finally {
+      _operation = rootOperation.children.first;
+    }
   }
 
   void setContentsAndOffset(String contents, int offset) {
-    snippet = _computeSnippet(contents, offset);
+    snippet = _computeCompletionSnippet(contents, offset);
   }
-
-  void _logDuration(String tag, Duration elapsed) {
-    operations.add(new OperationPerformance(tag, elapsed));
-  }
-
-  static String _computeSnippet(String contents, int offset) {
-    if (contents == null ||
-        offset == null ||
-        offset < 0 ||
-        contents.length < offset) {
-      return '???';
-    }
-    int start = offset;
-    while (start > 0) {
-      String ch = contents[start - 1];
-      if (ch == '\r' || ch == '\n') {
-        break;
-      }
-      --start;
-    }
-    int end = offset;
-    while (end < contents.length) {
-      String ch = contents[end];
-      if (ch == '\r' || ch == '\n') {
-        break;
-      }
-      ++end;
-    }
-    String prefix = contents.substring(start, offset);
-    String suffix = contents.substring(offset, end);
-    return '$prefix^$suffix';
-  }
-}
-
-/**
- * The performance of an operation when computing code completion.
- */
-class OperationPerformance {
-  /**
-   * The name of the operation
-   */
-  final String name;
-
-  /**
-   * The elapse time or `null` if undefined.
-   */
-  final Duration elapsed;
-
-  OperationPerformance(this.name, this.elapsed);
 }

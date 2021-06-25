@@ -16,9 +16,7 @@ namespace bin {
 
 static const int kNamespaceNativeFieldIndex = 0;
 
-static void ReleaseNamespace(void* isolate_callback_data,
-                             Dart_WeakPersistentHandle handle,
-                             void* peer) {
+static void ReleaseNamespace(void* isolate_callback_data, void* peer) {
   Namespace* namespc = reinterpret_cast<Namespace*>(peer);
   ASSERT(namespc != NULL);
   namespc->Release();
@@ -84,8 +82,8 @@ void FUNCTION_NAME(Namespace_Create)(Dart_NativeArguments args) {
 
   // Set up a finalizer for the Dart object so that we can do any necessary
   // platform-specific cleanup for the namespc.
-  Dart_NewWeakPersistentHandle(namespc_obj, reinterpret_cast<void*>(namespc),
-                               sizeof(*namespc), ReleaseNamespace);
+  Dart_NewFinalizableHandle(namespc_obj, reinterpret_cast<void*>(namespc),
+                            sizeof(*namespc), ReleaseNamespace);
   Dart_SetReturnValue(args, namespc_obj);
 }
 
@@ -119,7 +117,7 @@ Dart_Handle Namespace::GetNativeNamespaceArgument(Dart_NativeArguments args,
                                                   Namespace** namespc) {
   Dart_Handle namespc_obj = Dart_GetNativeArgument(args, index);
   if (Dart_IsError(namespc_obj)) {
-    Dart_PropagateError(namespc_obj);
+    return namespc_obj;
   }
   DEBUG_ASSERT(IsNamespace(namespc_obj));
 
@@ -128,6 +126,10 @@ Dart_Handle Namespace::GetNativeNamespaceArgument(Dart_NativeArguments args,
                                   reinterpret_cast<intptr_t*>(namespc));
   if (Dart_IsError(result)) {
     return result;
+  }
+  if (*namespc == NULL) {
+    return Dart_NewUnhandledExceptionError(
+        DartUtils::NewInternalError("No native peer"));
   }
   return Dart_Null();
 }

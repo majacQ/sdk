@@ -1,3 +1,71 @@
+## 1.4.0
+
+* Introduce `TargetKind.topLevelVariable` that indicates that an annotation
+  is valid on any top-level variable declaration.
+* Introduce `@useResult` to annotate methods, fields, or getters that
+  return values that should be used - stored, passed as arguments, etc.
+* Updates for documentation.
+
+## 1.3.0
+
+* Stable release for null safety.
+
+## 1.3.0-nullsafety.6
+
+* Update SDK constraints to `>=2.12.0-0 <3.0.0` based on beta release
+    guidelines.
+
+## 1.3.0-nullsafety.5
+
+* Allow prerelease versions of the `2.12` sdk.
+
+## 1.3.0-nullsafety.4
+
+* Introduce `@internal` to annotate elements that should not be used outside of
+  the package in which the element is declared.
+
+## 1.3.0-nullsafety.3
+
+* Allow 2.10 stable and 2.11.0 dev SDK versions.
+
+## 1.3.0-nullsafety.2
+
+* Update for the 2.10 dev sdk.
+
+## 1.3.0-nullsafety.1
+
+* Allow the <=2.9.10 stable sdk.
+
+## 1.3.0-nullsafety
+
+* Opt into null safety.
+
+## 1.2.2
+
+* Removed `unawaited` because the attempt to move it from `package:pedantic`
+  caused too many issues. If you see errors about `unawaited` being declared in
+  two places, please update the version constraints for `meta` to `1.2.2` or
+  later.
+
+## 1.2.1
+
+* Fixed a bug by adding an import of dart:async so that the code really is
+  compatible with the lower bound of the SDK constraints.
+
+## 1.2.0
+
+* Introduce `unawaited` to mark invocations that return a `Future` where it's
+  intentional that the future is not being awaited. (Moved from
+  `package:pedantic`.)
+* Introduce `@doNotStore` to annotate methods, getters and functions to
+  indicate that values obtained by invoking them should not be stored in a
+  field or top-level variable.
+
+## 1.1.8
+
+* Introduce `@nonVirtual` to annotate instance members that should not be
+  overridden in subclasses or when mixed in.
+
 ## 1.1.7
 
 * Introduce `@sealed` to declare that a class or mixin is not allowed as a

@@ -62,10 +62,6 @@
  * and where both the keys and the values are strings.
  *
  * * [dart:web_sql]&mdash;a database that can be queried with SQL.
- * 
- * For a tutorial about using the indexed_db library with Dart,
- * check out
- * [Use IndexedDB](http://www.dartlang.org/docs/tutorials/indexeddb/).
  *
  * MDN provides [API
  * documentation](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API).
@@ -82,6 +78,7 @@ import 'dart:typed_data';
 import 'dart:_js_helper' show Creates, Returns, JSName, Native;
 import 'dart:_foreign_helper' show JS;
 import 'dart:_interceptors' show Interceptor, JSExtendableArray;
+import 'dart:_js_helper' show convertDartClosureToJS;
 // Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
@@ -230,7 +227,7 @@ class Cursor extends Interceptor {
   }
 
   @JSName('continue')
-  void next([Object key]) {
+  void next([Object? key]) {
     if (key == null) {
       JS('void', '#.continue()', this);
     } else {
@@ -243,19 +240,19 @@ class Cursor extends Interceptor {
     throw new UnsupportedError("Not supported");
   }
 
-  final String direction;
+  String? get direction native;
 
   @_annotation_Creates_IDBKey
   @_annotation_Returns_IDBKey
-  final Object key;
+  Object? get key native;
 
   @_annotation_Creates_IDBKey
   @_annotation_Returns_IDBKey
-  final Object primaryKey;
+  Object? get primaryKey native;
 
   @Creates('Null')
   @Returns('ObjectStore|Index|Null')
-  final Object source;
+  Object? get source native;
 
   void advance(int count) native;
 
@@ -288,7 +285,7 @@ class CursorWithValue extends Cursor {
   @JSName('value')
   @annotation_Creates_SerializedScriptValue
   @annotation_Returns_SerializedScriptValue
-  final dynamic _get_value;
+  dynamic get _get_value native;
 }
 // Copyright (c) 2013, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
@@ -304,7 +301,7 @@ class CursorWithValue extends Cursor {
 @Unstable()
 @Native("IDBDatabase")
 class Database extends EventTarget {
-  ObjectStore createObjectStore(String name, {keyPath, bool autoIncrement}) {
+  ObjectStore createObjectStore(String name, {keyPath, bool? autoIncrement}) {
     var options = {};
     if (keyPath != null) {
       options['keyPath'] = keyPath;
@@ -399,19 +396,19 @@ class Database extends EventTarget {
   static const EventStreamProvider<VersionChangeEvent> versionChangeEvent =
       const EventStreamProvider<VersionChangeEvent>('versionchange');
 
-  final String name;
+  String? get name native;
 
-  @Returns('DomStringList|Null')
+  @Returns('DomStringList')
   @Creates('DomStringList')
-  final List<String> objectStoreNames;
+  List<String>? get objectStoreNames native;
 
   @Creates('int|String|Null')
   @Returns('int|String|Null')
-  final int version;
+  int? get version native;
 
   void close() native;
 
-  ObjectStore _createObjectStore(String name, [Map options]) {
+  ObjectStore _createObjectStore(String name, [Map? options]) {
     if (options != null) {
       var options_1 = convertDartToNative_Dictionary(options);
       return _createObjectStore_1(name, options_1);
@@ -463,20 +460,20 @@ class IdbFactory extends Interceptor {
     return JS(
         'bool',
         '!!(window.indexedDB || '
-        'window.webkitIndexedDB || '
-        'window.mozIndexedDB)');
+            'window.webkitIndexedDB || '
+            'window.mozIndexedDB)');
   }
 
   Future<Database> open(String name,
-      {int version,
-      void onUpgradeNeeded(VersionChangeEvent event),
-      void onBlocked(Event event)}) {
+      {int? version,
+      void onUpgradeNeeded(VersionChangeEvent event)?,
+      void onBlocked(Event event)?}) {
     if ((version == null) != (onUpgradeNeeded == null)) {
       return new Future.error(new ArgumentError(
           'version and onUpgradeNeeded must be specified together'));
     }
     try {
-      var request;
+      OpenDBRequest request;
       if (version != null) {
         request = _open(name, version);
       } else {
@@ -495,7 +492,7 @@ class IdbFactory extends Interceptor {
     }
   }
 
-  Future<IdbFactory> deleteDatabase(String name, {void onBlocked(Event e)}) {
+  Future<IdbFactory> deleteDatabase(String name, {void onBlocked(Event e)?}) {
     try {
       var request = _deleteDatabase(name);
 
@@ -537,7 +534,7 @@ class IdbFactory extends Interceptor {
   @Returns('Request')
   @Creates('Request')
   @Creates('Database')
-  OpenDBRequest _open(String name, [int version]) native;
+  OpenDBRequest _open(String name, [int? version]) native;
 }
 
 /**
@@ -599,7 +596,7 @@ class Index extends Interceptor {
    * * [ObjectStore.openCursor]
    */
   Stream<CursorWithValue> openCursor(
-      {key, KeyRange range, String direction, bool autoAdvance}) {
+      {key, KeyRange? range, String? direction, bool? autoAdvance}) {
     var key_OR_range = null;
     if (key != null) {
       if (range != null) {
@@ -627,7 +624,7 @@ class Index extends Interceptor {
    * * [ObjectStore.openCursor]
    */
   Stream<Cursor> openKeyCursor(
-      {key, KeyRange range, String direction, bool autoAdvance}) {
+      {key, KeyRange? range, String? direction, bool? autoAdvance}) {
     var key_OR_range = null;
     if (key != null) {
       if (range != null) {
@@ -653,18 +650,20 @@ class Index extends Interceptor {
   }
 
   @annotation_Creates_SerializedScriptValue
-  final Object keyPath;
+  Object? get keyPath native;
 
-  final bool multiEntry;
+  bool? get multiEntry native;
 
-  String name;
+  String? get name native;
 
-  final ObjectStore objectStore;
+  set name(String? value) native;
 
-  final bool unique;
+  ObjectStore? get objectStore native;
+
+  bool? get unique native;
 
   @JSName('count')
-  Request _count(Object key) native;
+  Request _count(Object? key) native;
 
   @JSName('get')
   @Returns('Request')
@@ -672,9 +671,9 @@ class Index extends Interceptor {
   @annotation_Creates_SerializedScriptValue
   Request _get(Object key) native;
 
-  Request getAll(Object query, [int count]) native;
+  Request getAll(Object? query, [int? count]) native;
 
-  Request getAllKeys(Object query, [int count]) native;
+  Request getAllKeys(Object? query, [int? count]) native;
 
   @JSName('getKey')
   @Returns('Request')
@@ -687,13 +686,13 @@ class Index extends Interceptor {
   @Returns('Request')
   @Creates('Request')
   @Creates('Cursor')
-  Request _openCursor(Object range, [String direction]) native;
+  Request _openCursor(Object? range, [String? direction]) native;
 
   @JSName('openKeyCursor')
   @Returns('Request')
   @Creates('Request')
   @Creates('Cursor')
-  Request _openKeyCursor(Object range, [String direction]) native;
+  Request _openKeyCursor(Object? range, [String? direction]) native;
 }
 // Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
@@ -722,29 +721,29 @@ class KeyRange extends Interceptor {
   }
 
   @annotation_Creates_SerializedScriptValue
-  final Object lower;
+  Object? get lower native;
 
-  final bool lowerOpen;
+  bool? get lowerOpen native;
 
   @annotation_Creates_SerializedScriptValue
-  final Object upper;
+  Object? get upper native;
 
-  final bool upperOpen;
+  bool? get upperOpen native;
 
   @JSName('bound')
   static KeyRange bound_(Object lower, Object upper,
-      [bool lowerOpen, bool upperOpen]) native;
+      [bool? lowerOpen, bool? upperOpen]) native;
 
   bool includes(Object key) native;
 
   @JSName('lowerBound')
-  static KeyRange lowerBound_(Object bound, [bool open]) native;
+  static KeyRange lowerBound_(Object bound, [bool? open]) native;
 
   @JSName('only')
   static KeyRange only_(Object value) native;
 
   @JSName('upperBound')
-  static KeyRange upperBound_(Object bound, [bool open]) native;
+  static KeyRange upperBound_(Object bound, [bool? open]) native;
 }
 // Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
@@ -838,7 +837,7 @@ class ObjectStore extends Interceptor {
    * the current transaction.
    */
   Stream<CursorWithValue> openCursor(
-      {key, KeyRange range, String direction, bool autoAdvance}) {
+      {key, KeyRange? range, String? direction, bool? autoAdvance}) {
     var key_OR_range = null;
     if (key != null) {
       if (range != null) {
@@ -859,7 +858,7 @@ class ObjectStore extends Interceptor {
     return _cursorStreamFromResult(request, autoAdvance);
   }
 
-  Index createIndex(String name, keyPath, {bool unique, bool multiEntry}) {
+  Index createIndex(String name, keyPath, {bool? unique, bool? multiEntry}) {
     var options = {};
     if (unique != null) {
       options['unique'] = unique;
@@ -876,18 +875,20 @@ class ObjectStore extends Interceptor {
     throw new UnsupportedError("Not supported");
   }
 
-  final bool autoIncrement;
+  bool? get autoIncrement native;
 
-  @Returns('DomStringList|Null')
+  @Returns('DomStringList')
   @Creates('DomStringList')
-  final List<String> indexNames;
+  List<String>? get indexNames native;
 
   @annotation_Creates_SerializedScriptValue
-  final Object keyPath;
+  Object? get keyPath native;
 
-  String name;
+  String? get name native;
 
-  final Transaction transaction;
+  set name(String? value) native;
+
+  Transaction? get transaction native;
 
   @Returns('Request')
   @Creates('Request')
@@ -917,9 +918,9 @@ class ObjectStore extends Interceptor {
   Request _clear() native;
 
   @JSName('count')
-  Request _count(Object key) native;
+  Request _count(Object? key) native;
 
-  Index _createIndex(String name, Object keyPath, [Map options]) {
+  Index _createIndex(String name, Object keyPath, [Map? options]) {
     if (options != null) {
       var options_1 = convertDartToNative_Dictionary(options);
       return _createIndex_1(name, keyPath, options_1);
@@ -943,9 +944,9 @@ class ObjectStore extends Interceptor {
   @annotation_Creates_SerializedScriptValue
   Request _get(Object key) native;
 
-  Request getAll(Object query, [int count]) native;
+  Request getAll(Object? query, [int? count]) native;
 
-  Request getAllKeys(Object query, [int count]) native;
+  Request getAllKeys(Object? query, [int? count]) native;
 
   Request getKey(Object key) native;
 
@@ -955,9 +956,9 @@ class ObjectStore extends Interceptor {
   @Returns('Request')
   @Creates('Request')
   @Creates('Cursor')
-  Request _openCursor(Object range, [String direction]) native;
+  Request _openCursor(Object? range, [String? direction]) native;
 
-  Request openKeyCursor(Object range, [String direction]) native;
+  Request openKeyCursor(Object? range, [String? direction]) native;
 
   @Returns('Request')
   @Creates('Request')
@@ -987,7 +988,7 @@ class ObjectStore extends Interceptor {
    * Helper for iterating over cursors in a request.
    */
   static Stream<T> _cursorStreamFromResult<T extends Cursor>(
-      Request request, bool autoAdvance) {
+      Request request, bool? autoAdvance) {
     // TODO: need to guarantee that the controller provides the values
     // immediately as waiting until the next tick will cause the transaction to
     // close.
@@ -997,7 +998,7 @@ class ObjectStore extends Interceptor {
     request.onError.listen(controller.addError);
 
     request.onSuccess.listen((e) {
-      T cursor = request.result as dynamic;
+      T? cursor = request.result as dynamic;
       if (cursor == null) {
         controller.close();
       } else {
@@ -1021,11 +1022,11 @@ class Observation extends Interceptor {
     throw new UnsupportedError("Not supported");
   }
 
-  final Object key;
+  Object? get key native;
 
-  final String type;
+  String? get type native;
 
-  final Object value;
+  Object? get value native;
 }
 // Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
@@ -1039,7 +1040,8 @@ class Observer extends Interceptor {
   }
 
   factory Observer(ObserverCallback callback) {
-    return Observer._create_1(callback);
+    var callback_1 = convertDartClosureToJS(callback, 1);
+    return Observer._create_1(callback_1);
   }
   static Observer _create_1(callback) =>
       JS('Observer', 'new IDBObserver(#)', callback);
@@ -1066,11 +1068,11 @@ class ObserverChanges extends Interceptor {
     throw new UnsupportedError("Not supported");
   }
 
-  final Database database;
+  Database? get database native;
 
-  final Object records;
+  Object? get records native;
 
-  final Transaction transaction;
+  Transaction? get transaction native;
 }
 // Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
@@ -1139,19 +1141,19 @@ class Request extends EventTarget {
   static const EventStreamProvider<Event> successEvent =
       const EventStreamProvider<Event>('success');
 
-  final DomException error;
+  DomException? get error native;
 
-  final String readyState;
+  String? get readyState native;
 
   dynamic get result => _convertNativeToDart_IDBAny(this._get_result);
   @JSName('result')
   @Creates('Null')
-  final dynamic _get_result;
+  dynamic get _get_result native;
 
   @Creates('Null')
-  final Object source;
+  Object? get source native;
 
-  final Transaction transaction;
+  Transaction? get transaction native;
 
   /// Stream of `error` events handled by this [Request].
   Stream<Event> get onError => errorEvent.forTarget(this);
@@ -1226,15 +1228,15 @@ class Transaction extends EventTarget {
   static const EventStreamProvider<Event> errorEvent =
       const EventStreamProvider<Event>('error');
 
-  final Database db;
+  Database? get db native;
 
-  final DomException error;
+  DomException? get error native;
 
-  final String mode;
+  String? get mode native;
 
-  @Returns('DomStringList|Null')
+  @Returns('DomStringList')
   @Creates('DomStringList')
-  final List<String> objectStoreNames;
+  List<String>? get objectStoreNames native;
 
   void abort() native;
 
@@ -1261,7 +1263,7 @@ class VersionChangeEvent extends Event {
     throw new UnsupportedError("Not supported");
   }
 
-  factory VersionChangeEvent(String type, [Map eventInitDict]) {
+  factory VersionChangeEvent(String type, [Map? eventInitDict]) {
     if (eventInitDict != null) {
       var eventInitDict_1 = convertDartToNative_Dictionary(eventInitDict);
       return VersionChangeEvent._create_1(type, eventInitDict_1);
@@ -1276,18 +1278,18 @@ class VersionChangeEvent extends Event {
   static VersionChangeEvent _create_2(type) =>
       JS('VersionChangeEvent', 'new IDBVersionChangeEvent(#)', type);
 
-  final String dataLoss;
+  String? get dataLoss native;
 
-  final String dataLossMessage;
-
-  @Creates('int|String|Null')
-  @Returns('int|String|Null')
-  final int newVersion;
+  String? get dataLossMessage native;
 
   @Creates('int|String|Null')
   @Returns('int|String|Null')
-  final int oldVersion;
+  int? get newVersion native;
+
+  @Creates('int|String|Null')
+  @Returns('int|String|Null')
+  int? get oldVersion native;
 
   @JSName('target')
-  final OpenDBRequest target;
+  OpenDBRequest get target native;
 }

@@ -29,6 +29,8 @@ io_impl_sources = [
   "file_system_watcher_win.cc",
   "filter.cc",
   "filter.h",
+  "ifaddrs-android.cc",
+  "ifaddrs-android.h",
   "io_service.cc",
   "io_service.h",
   "io_service_no_ssl.cc",
@@ -37,6 +39,7 @@ io_impl_sources = [
   "namespace.h",
   "namespace_android.cc",
   "namespace_fuchsia.cc",
+  "namespace_fuchsia.h",
   "namespace_linux.cc",
   "namespace_macos.cc",
   "namespace_win.cc",
@@ -46,6 +49,7 @@ io_impl_sources = [
   "platform_fuchsia.cc",
   "platform_linux.cc",
   "platform_macos.cc",
+  "platform_macos.h",
   "platform_win.cc",
   "process.cc",
   "process.h",
@@ -101,6 +105,8 @@ io_impl_sources = [
   "sync_socket_linux.cc",
   "sync_socket_macos.cc",
   "sync_socket_win.cc",
-  "typed_data_utils.h",
   "typed_data_utils.cc",
+  "typed_data_utils.h",
 ]
+
+io_impl_tests = [ "platform_macos_test.cc" ]

@@ -15,9 +15,9 @@
 
 #include "bin/directory.h"
 #include "bin/file.h"
-#include "bin/log.h"
 #include "bin/secure_socket_filter.h"
 #include "bin/secure_socket_utils.h"
+#include "platform/syslog.h"
 
 namespace dart {
 namespace bin {
@@ -55,6 +55,10 @@ void SSLCertContext::TrustBuiltinRoots() {
 void SSLCertContext::RegisterCallbacks(SSL* ssl) {
   // No callbacks to register for implementations using BoringSSL's built-in
   // verification mechanism.
+}
+
+TrustEvaluateHandlerFunc SSLCertContext::GetTrustEvaluateHandler() const {
+  return nullptr;
 }
 
 }  // namespace bin

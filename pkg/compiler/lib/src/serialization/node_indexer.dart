@@ -6,7 +6,8 @@ part of 'serialization.dart';
 
 /// Visitor that ascribes an index to all [ir.TreeNode]s that potentially
 /// needed for serialization and deserialization.
-class _TreeNodeIndexerVisitor extends ir.Visitor<void> {
+class _TreeNodeIndexerVisitor extends ir.Visitor<void>
+    with ir.VisitorVoidMixin {
   int _currentIndex = 0;
   final Map<int, ir.TreeNode> _indexToNodeMap;
   final Map<ir.TreeNode, int> _nodeToIndexMap;
@@ -93,6 +94,12 @@ class _TreeNodeIndexerVisitor extends ir.Visitor<void> {
   }
 
   @override
+  void visitSetLiteral(ir.SetLiteral node) {
+    registerNode(node);
+    super.visitSetLiteral(node);
+  }
+
+  @override
   void visitMapLiteral(ir.MapLiteral node) {
     registerNode(node);
     super.visitMapLiteral(node);
@@ -105,9 +112,45 @@ class _TreeNodeIndexerVisitor extends ir.Visitor<void> {
   }
 
   @override
+  void visitInstanceGet(ir.InstanceGet node) {
+    registerNode(node);
+    super.visitInstanceGet(node);
+  }
+
+  @override
+  void visitInstanceTearOff(ir.InstanceTearOff node) {
+    registerNode(node);
+    super.visitInstanceTearOff(node);
+  }
+
+  @override
+  void visitDynamicGet(ir.DynamicGet node) {
+    registerNode(node);
+    super.visitDynamicGet(node);
+  }
+
+  @override
+  void visitFunctionTearOff(ir.FunctionTearOff node) {
+    registerNode(node);
+    super.visitFunctionTearOff(node);
+  }
+
+  @override
   void visitPropertySet(ir.PropertySet node) {
     registerNode(node);
     super.visitPropertySet(node);
+  }
+
+  @override
+  void visitInstanceSet(ir.InstanceSet node) {
+    registerNode(node);
+    super.visitInstanceSet(node);
+  }
+
+  @override
+  void visitDynamicSet(ir.DynamicSet node) {
+    registerNode(node);
+    super.visitDynamicSet(node);
   }
 
   @override
@@ -117,21 +160,45 @@ class _TreeNodeIndexerVisitor extends ir.Visitor<void> {
   }
 
   @override
-  void visitDirectPropertyGet(ir.DirectPropertyGet node) {
+  void visitInstanceInvocation(ir.InstanceInvocation node) {
     registerNode(node);
-    super.visitDirectPropertyGet(node);
+    super.visitInstanceInvocation(node);
   }
 
   @override
-  void visitDirectPropertySet(ir.DirectPropertySet node) {
+  void visitInstanceGetterInvocation(ir.InstanceGetterInvocation node) {
     registerNode(node);
-    super.visitDirectPropertySet(node);
+    super.visitInstanceGetterInvocation(node);
   }
 
   @override
-  void visitDirectMethodInvocation(ir.DirectMethodInvocation node) {
+  void visitDynamicInvocation(ir.DynamicInvocation node) {
     registerNode(node);
-    super.visitDirectMethodInvocation(node);
+    super.visitDynamicInvocation(node);
+  }
+
+  @override
+  void visitFunctionInvocation(ir.FunctionInvocation node) {
+    registerNode(node);
+    super.visitFunctionInvocation(node);
+  }
+
+  @override
+  void visitLocalFunctionInvocation(ir.LocalFunctionInvocation node) {
+    registerNode(node);
+    super.visitLocalFunctionInvocation(node);
+  }
+
+  @override
+  void visitEqualsNull(ir.EqualsNull node) {
+    registerNode(node);
+    super.visitEqualsNull(node);
+  }
+
+  @override
+  void visitEqualsCall(ir.EqualsCall node) {
+    registerNode(node);
+    super.visitEqualsCall(node);
   }
 
   @override
@@ -156,5 +223,155 @@ class _TreeNodeIndexerVisitor extends ir.Visitor<void> {
   void visitContinueSwitchStatement(ir.ContinueSwitchStatement node) {
     registerNode(node);
     super.visitContinueSwitchStatement(node);
+  }
+
+  @override
+  void visitConstructorInvocation(ir.ConstructorInvocation node) {
+    registerNode(node);
+    super.visitConstructorInvocation(node);
+  }
+
+  @override
+  void visitVariableGet(ir.VariableGet node) {
+    registerNode(node);
+    super.visitVariableGet(node);
+  }
+
+  @override
+  void visitInstantiation(ir.Instantiation node) {
+    registerNode(node);
+    super.visitInstantiation(node);
+  }
+
+  @override
+  void visitSuperMethodInvocation(ir.SuperMethodInvocation node) {
+    registerNode(node);
+    super.visitSuperMethodInvocation(node);
+  }
+
+  @override
+  void visitSuperPropertyGet(ir.SuperPropertyGet node) {
+    registerNode(node);
+    super.visitSuperPropertyGet(node);
+  }
+
+  @override
+  void visitConstantExpression(ir.ConstantExpression node) {
+    registerNode(node);
+    super.visitConstantExpression(node);
+  }
+
+  @override
+  void visitNullCheck(ir.NullCheck node) {
+    registerNode(node);
+    super.visitNullCheck(node);
+  }
+}
+
+/// Visitor that ascribes an index to all [ir.Constant]s that we potentially
+/// need to reference for serialization and deserialization.
+///
+/// Currently this is only list, map, and set constants, which are used as
+/// allocation identities in the global inference.
+class _ConstantNodeIndexerVisitor implements ir.ConstantVisitor<void> {
+  int _currentIndex = 0;
+  final Map<int, ir.Constant> _indexToNodeMap = {};
+  final Map<ir.Constant, int> _nodeToIndexMap = {};
+  final Set<ir.Constant> _visitedNonindexedNodes = {};
+
+  /// Returns `true` if node not already registered.
+  bool _register(ir.Constant node) {
+    int index = _nodeToIndexMap[node];
+    if (index != null) return false;
+    _indexToNodeMap[_currentIndex] = node;
+    _nodeToIndexMap[node] = _currentIndex;
+    _currentIndex++;
+    return true;
+  }
+
+  int getIndex(ir.Constant node) {
+    assert(_nodeToIndexMap.containsKey(node), "Constant without index: $node");
+    return _nodeToIndexMap[node];
+  }
+
+  ir.Constant getConstant(int index) {
+    assert(
+        _indexToNodeMap.containsKey(index), "Index without constant: $index");
+    return _indexToNodeMap[index];
+  }
+
+  @override
+  void visitUnevaluatedConstant(ir.UnevaluatedConstant node) {}
+
+  @override
+  void visitTypeLiteralConstant(ir.TypeLiteralConstant node) {}
+
+  @override
+  void visitTearOffConstant(ir.TearOffConstant node) {}
+
+  @override
+  void visitPartialInstantiationConstant(ir.PartialInstantiationConstant node) {
+    node.tearOffConstant.accept(this);
+  }
+
+  @override
+  void visitInstanceConstant(ir.InstanceConstant node) {
+    if (_visitedNonindexedNodes.add(node)) {
+      node.fieldValues.forEach((_, ir.Constant value) {
+        value.accept(this);
+      });
+    }
+  }
+
+  @override
+  void visitSetConstant(ir.SetConstant node) {
+    if (_register(node)) {
+      for (ir.Constant element in node.entries) {
+        element.accept(this);
+      }
+    }
+  }
+
+  @override
+  void visitListConstant(ir.ListConstant node) {
+    if (_register(node)) {
+      for (ir.Constant element in node.entries) {
+        element.accept(this);
+      }
+    }
+  }
+
+  @override
+  void visitMapConstant(ir.MapConstant node) {
+    if (_register(node)) {
+      for (ir.ConstantMapEntry entry in node.entries) {
+        entry.key.accept(this);
+        entry.value.accept(this);
+      }
+    }
+  }
+
+  @override
+  void visitSymbolConstant(ir.SymbolConstant node) {}
+
+  @override
+  void visitStringConstant(ir.StringConstant node) {}
+
+  @override
+  void visitDoubleConstant(ir.DoubleConstant node) {}
+
+  @override
+  void visitIntConstant(ir.IntConstant node) {}
+
+  @override
+  void visitBoolConstant(ir.BoolConstant node) {}
+
+  @override
+  void visitNullConstant(ir.NullConstant node) {}
+
+  @override
+  void defaultConstant(ir.Constant node) {
+    throw new UnimplementedError(
+        "Unexpected constant: $node (${node.runtimeType})");
   }
 }

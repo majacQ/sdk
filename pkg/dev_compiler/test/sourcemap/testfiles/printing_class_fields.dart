@@ -2,10 +2,12 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 /*Debugger:stepOver*/
-main() {
+void main() {
   /*bl*/
-  /*sl:1*/ Foo foo = Foo(1, 2);
+  /*sl:1*/ var foo = Foo(1, 2);
   /*sl:2*/ print(foo.x);
   /*sl:3*/ print(foo.y);
   /*sl:4*/ print(foo.z);
@@ -17,17 +19,17 @@ main() {
 }
 
 class Foo {
-  var x, y, z;
+  int x, y, z;
 
-  Foo(a, b)
-      : this.x = a,
-        this.y = b {
+  Foo(int a, int b)
+      : x = a,
+        y = b {
     z = a + b;
   }
 
   Foo.named()
-      : this.x = 42,
-        this.y = 88 {
+      : x = 42,
+        y = 88 {
     z = 28;
   }
 }

@@ -2,22 +2,24 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-main() async {
+// @dart = 2.9
+
+void main() async {
   await for (var i in foobar()) {
     print(i);
   }
-  print("Done!");
+  print('Done!');
 }
 
-foobar() async* {
+dynamic foobar() async* {
   /*bc:4*/ yield /*bc:1*/ foo() /*bc:3*/ + /*bc:2*/ bar();
   /*bc:8*/ yield /*bc:5*/ bar() /*bc:7*/ * /*bc:6*/ foo();
 }
 
-foo() {
+dynamic foo() {
   return 42;
 }
 
-bar() {
+dynamic bar() {
   return 3;
 }

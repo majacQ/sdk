@@ -5,6 +5,9 @@
 #ifndef RUNTIME_VM_SOURCE_REPORT_H_
 #define RUNTIME_VM_SOURCE_REPORT_H_
 
+#include "vm/globals.h"
+#if !defined(PRODUCT) && !defined(DART_PRECOMPILED_RUNTIME)
+
 #include "vm/allocation.h"
 #include "vm/flags.h"
 #include "vm/hash_map.h"
@@ -44,8 +47,8 @@ class SourceReport {
   // in the isolate.
   void PrintJSON(JSONStream* js,
                  const Script& script,
-                 TokenPosition start_pos = TokenPosition::kNoSource,
-                 TokenPosition end_pos = TokenPosition::kNoSource);
+                 TokenPosition start_pos = TokenPosition::kMinSource,
+                 TokenPosition end_pos = TokenPosition::kMaxSource);
 
  private:
   void ClearScriptTable();
@@ -60,6 +63,7 @@ class SourceReport {
 
   bool IsReportRequested(ReportKind report_kind);
   bool ShouldSkipFunction(const Function& func);
+  bool ShouldSkipField(const Field& field);
   intptr_t GetScriptIndex(const Script& script);
   bool ScriptIsLoadedByLibrary(const Script& script, const Library& lib);
 
@@ -79,9 +83,9 @@ class SourceReport {
   void PrintScriptTable(JSONArray* jsarr);
 
   void VisitFunction(JSONArray* jsarr, const Function& func);
+  void VisitField(JSONArray* jsarr, const Field& field);
   void VisitLibrary(JSONArray* jsarr, const Library& lib);
   void VisitClosures(JSONArray* jsarr);
-
   // An entry in the script table.
   struct ScriptTableEntry {
     ScriptTableEntry() : key(NULL), index(-1), script(NULL) {}
@@ -101,12 +105,24 @@ class SourceReport {
 
     static Value ValueOf(Pair kv) { return kv; }
 
-    static inline intptr_t Hashcode(Key key) { return key->key->Hash(); }
+    static inline uword Hash(Key key) { return key->key->Hash(); }
 
     static inline bool IsKeyEqual(Pair kv, Key key) {
-      return kv->script->raw() == key->script->raw();
+      return kv->script->ptr() == key->script->ptr();
     }
   };
+
+  void CollectAllScripts(
+      DirectChainedHashMap<ScriptTableTrait>* local_script_table,
+      GrowableArray<ScriptTableEntry*>* local_script_table_entries);
+
+  void CleanupCollectedScripts(
+      DirectChainedHashMap<ScriptTableTrait>* local_script_table,
+      GrowableArray<ScriptTableEntry*>* local_script_table_entries);
+
+  void CollectConstConstructorCoverageFromScripts(
+      GrowableArray<ScriptTableEntry*>* local_script_table_entries,
+      JSONArray* ranges);
 
   intptr_t report_set_;
   CompileMode compile_mode_;
@@ -122,4 +138,5 @@ class SourceReport {
 
 }  // namespace dart
 
+#endif  // !defined(PRODUCT) && !defined(DART_PRECOMPILED_RUNTIME)
 #endif  // RUNTIME_VM_SOURCE_REPORT_H_

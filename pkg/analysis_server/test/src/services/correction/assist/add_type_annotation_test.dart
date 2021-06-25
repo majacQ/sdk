@@ -3,12 +3,13 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:analysis_server/src/services/correction/assist.dart';
+import 'package:analysis_server/src/services/linter/lint_names.dart';
 import 'package:analyzer_plugin/utilities/assist/assist.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'assist_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(AddTypeAnnotationTest);
   });
@@ -19,8 +20,11 @@ class AddTypeAnnotationTest extends AssistProcessorTest {
   @override
   AssistKind get kind => DartAssistKind.ADD_TYPE_ANNOTATION;
 
-  test_classField_final() async {
-    await resolveTestUnit('''
+  @override
+  String? get testPackageLanguageVersion => '2.12';
+
+  Future<void> test_classField_final() async {
+    await resolveTestCode('''
 class A {
   final f = 0;
 }
@@ -32,50 +36,61 @@ class A {
 ''');
   }
 
-  test_classField_int() async {
-    await resolveTestUnit('''
+  Future<void> test_classField_final_noAssistWithLint() async {
+    createAnalysisOptionsFile(lints: [LintNames.always_specify_types]);
+    verifyNoTestUnitErrors = false;
+    await resolveTestCode('''
+class A {
+  /*caret*/final f = 0;
+}
+''');
+    await assertNoAssist();
+  }
+
+  Future<void> test_classField_int() async {
+    await resolveTestCode('''
 class A {
   var f = 0;
 }
 ''');
-    await await assertHasAssistAt('var ', '''
+    await assertHasAssistAt('var ', '''
 class A {
   int f = 0;
 }
 ''');
   }
 
-  test_declaredIdentifier() async {
-    await resolveTestUnit('''
-main(List<String> items) {
+  Future<void> test_declaredIdentifier() async {
+    await resolveTestCode('''
+void f(List<String> items) {
   for (var item in items) {
   }
 }
 ''');
     // on identifier
     await assertHasAssistAt('item in', '''
-main(List<String> items) {
+void f(List<String> items) {
   for (String item in items) {
   }
 }
 ''');
     // on "for"
     await assertHasAssistAt('for (', '''
-main(List<String> items) {
+void f(List<String> items) {
   for (String item in items) {
   }
 }
 ''');
   }
 
-  test_declaredIdentifier_addImport_dartUri() async {
+  Future<void> test_declaredIdentifier_addImport_dartUri() async {
     addSource('/home/test/lib/my_lib.dart', r'''
 import 'dart:collection';
 List<HashMap<String, int>> getMap() => null;
 ''');
-    await resolveTestUnit('''
+    await resolveTestCode('''
 import 'my_lib.dart';
-main() {
+void f() {
   for (var map in getMap()) {
   }
 }
@@ -84,32 +99,32 @@ main() {
 import 'dart:collection';
 
 import 'my_lib.dart';
-main() {
+void f() {
   for (HashMap<String, int> map in getMap()) {
   }
 }
 ''');
   }
 
-  test_declaredIdentifier_final() async {
-    await resolveTestUnit('''
-main(List<String> items) {
+  Future<void> test_declaredIdentifier_final() async {
+    await resolveTestCode('''
+void f(List<String> items) {
   for (final item in items) {
   }
 }
 ''');
     await assertHasAssistAt('item in', '''
-main(List<String> items) {
+void f(List<String> items) {
   for (final String item in items) {
   }
 }
 ''');
   }
 
-  test_declaredIdentifier_generic() async {
-    await resolveTestUnit('''
+  Future<void> test_declaredIdentifier_generic() async {
+    await resolveTestCode('''
 class A<T> {
-  main(List<List<T>> items) {
+  void f(List<List<T>> items) {
     for (var item in items) {
     }
   }
@@ -117,7 +132,7 @@ class A<T> {
 ''');
     await assertHasAssistAt('item in', '''
 class A<T> {
-  main(List<List<T>> items) {
+  void f(List<List<T>> items) {
     for (List<T> item in items) {
     }
   }
@@ -125,9 +140,9 @@ class A<T> {
 ''');
   }
 
-  test_declaredIdentifier_hasTypeAnnotation() async {
-    await resolveTestUnit('''
-main(List<String> items) {
+  Future<void> test_declaredIdentifier_hasTypeAnnotation() async {
+    await resolveTestCode('''
+void f(List<String> items) {
   for (String item in items) {
   }
 }
@@ -135,9 +150,9 @@ main(List<String> items) {
     await assertNoAssistAt('item in');
   }
 
-  test_declaredIdentifier_inForEachBody() async {
-    await resolveTestUnit('''
-main(List<String> items) {
+  Future<void> test_declaredIdentifier_inForEachBody() async {
+    await resolveTestCode('''
+void f(List<String> items) {
   for (var item in items) {
     42;
   }
@@ -146,10 +161,10 @@ main(List<String> items) {
     await assertNoAssistAt('42;');
   }
 
-  test_declaredIdentifier_unknownType() async {
+  Future<void> test_declaredIdentifier_unknownType() async {
     verifyNoTestUnitErrors = false;
-    await resolveTestUnit('''
-main() {
+    await resolveTestCode('''
+void f() {
   for (var item in unknownList) {
   }
 }
@@ -157,14 +172,14 @@ main() {
     await assertNoAssistAt('item in');
   }
 
-  test_local_addImport_dartUri() async {
+  Future<void> test_local_addImport_dartUri() async {
     addSource('/home/test/lib/my_lib.dart', r'''
 import 'dart:collection';
 HashMap<String, int> getMap() => null;
 ''');
-    await resolveTestUnit('''
+    await resolveTestCode('''
 import 'my_lib.dart';
-main() {
+void f() {
   var v = getMap();
 }
 ''');
@@ -172,13 +187,13 @@ main() {
 import 'dart:collection';
 
 import 'my_lib.dart';
-main() {
+void f() {
   HashMap<String, int> v = getMap();
 }
 ''');
   }
 
-  test_local_addImport_notLibraryUnit() async {
+  Future<void> test_local_addImport_notLibraryUnit() async {
     addSource('/home/test/lib/my_lib.dart', r'''
 import 'dart:collection';
 HashMap<String, int> getMap() => null;
@@ -189,22 +204,22 @@ library my_app;
 import 'my_lib.dart';
 part 'test.dart';
 ''';
-    var partCode = r'''
+    addTestSource(r'''
 part of my_app;
-main() {
+void f() {
   var /*caret*/v = getMap();
 }
-''';
+''');
 
     var appPath = convertPath('/home/test/lib/app.dart');
     addSource(appPath, appCode);
-    addSource(testFile, partCode);
-    await resolveTestUnit(partCode);
+    await analyzeTestPackageFiles();
+    await resolveTestFile();
 
     await assertHasAssist('''
 part of my_app;
-main() {
-  HashMap<String, int> /*caret*/v = getMap();
+void f() {
+  HashMap<String, int> v = getMap();
 }
 ''', additionallyChangedFiles: {
       appPath: [
@@ -220,7 +235,7 @@ part 'test.dart';
     });
   }
 
-  test_local_addImport_relUri() async {
+  Future<void> test_local_addImport_relUri() async {
     testFile = convertPath('/home/test/bin/test.dart');
     addSource('/home/test/bin/aa/bbb/lib_a.dart', r'''
 class MyClass {}
@@ -229,264 +244,421 @@ class MyClass {}
 import '../aa/bbb/lib_a.dart';
 MyClass newMyClass() => null;
 ''');
-    await resolveTestUnit('''
+    await resolveTestCode('''
 import 'ccc/lib_b.dart';
-main() {
+void f() {
   var v = newMyClass();
 }
 ''');
     await assertHasAssistAt('v =', '''
 import 'aa/bbb/lib_a.dart';
 import 'ccc/lib_b.dart';
-main() {
+void f() {
   MyClass v = newMyClass();
 }
 ''');
   }
 
-  test_local_bottom() async {
-    await resolveTestUnit('''
-main() {
+  Future<void> test_local_bottom() async {
+    await resolveTestCode('''
+void f() {
   var v = throw 42;
 }
 ''');
     await assertNoAssistAt('var ');
   }
 
-  test_local_Function() async {
-    await resolveTestUnit('''
-main() {
+  Future<void> test_local_Function() async {
+    await resolveTestCode('''
+void f() {
   var v = () => 1;
 }
 ''');
     await assertHasAssistAt('v =', '''
-main() {
+void f() {
   int Function() v = () => 1;
 }
 ''');
   }
 
-  test_local_generic_literal() async {
-    await resolveTestUnit('''
+  Future<void> test_local_generic_literal() async {
+    await resolveTestCode('''
 class A {
-  main(List<int> items) {
+  void m(List<int> items) {
     var v = items;
   }
 }
 ''');
     await assertHasAssistAt('v =', '''
 class A {
-  main(List<int> items) {
+  void m(List<int> items) {
     List<int> v = items;
   }
 }
 ''');
   }
 
-  test_local_generic_local() async {
-    await resolveTestUnit('''
+  Future<void> test_local_generic_local() async {
+    await resolveTestCode('''
 class A<T> {
-  main(List<T> items) {
+  void m(List<T> items) {
     var v = items;
   }
 }
 ''');
     await assertHasAssistAt('v =', '''
 class A<T> {
-  main(List<T> items) {
+  void m(List<T> items) {
     List<T> v = items;
   }
 }
 ''');
   }
 
-  test_local_hasTypeAnnotation() async {
-    await resolveTestUnit('''
-main() {
+  Future<void> test_local_hasTypeAnnotation() async {
+    await resolveTestCode('''
+void f() {
   int v = 42;
 }
 ''');
     await assertNoAssistAt(' = 42');
   }
 
-  test_local_int() async {
-    await resolveTestUnit('''
-main() {
+  Future<void> test_local_int() async {
+    await resolveTestCode('''
+void f() {
   var v = 0;
 }
 ''');
     await assertHasAssistAt('v =', '''
-main() {
+void f() {
   int v = 0;
 }
 ''');
   }
 
-  test_local_List() async {
-    await resolveTestUnit('''
-main() {
+  Future<void> test_local_List() async {
+    await resolveTestCode('''
+void f() {
   var v = <String>[];
 }
 ''');
     await assertHasAssistAt('v =', '''
-main() {
+void f() {
   List<String> v = <String>[];
 }
 ''');
   }
 
-  test_local_localType() async {
-    await resolveTestUnit('''
+  Future<void> test_local_localType() async {
+    await resolveTestCode('''
 class C {}
-C f() => null;
-main() {
+C f() => C();
+void g() {
   var x = f();
 }
 ''');
     await assertHasAssistAt('x =', '''
 class C {}
-C f() => null;
-main() {
+C f() => C();
+void g() {
   C x = f();
 }
 ''');
   }
 
-  test_local_multiple() async {
-    await resolveTestUnit('''
-main() {
+  Future<void> test_local_multiple() async {
+    await resolveTestCode('''
+void f() {
   var a = 1, b = '';
 }
 ''');
     await assertNoAssistAt('var ');
   }
 
-  test_local_noValue() async {
+  Future<void> test_local_noInitializer_noAssignments() async {
     verifyNoTestUnitErrors = false;
-    await resolveTestUnit('''
-main() {
+    await resolveTestCode('''
+void f() {
   var v;
 }
 ''');
     await assertNoAssistAt('var ');
   }
 
-  test_local_null() async {
-    await resolveTestUnit('''
-main() {
+  Future<void> test_local_noInitializer_oneAssignment_dynamic() async {
+    verifyNoTestUnitErrors = false;
+    await resolveTestCode('''
+void f(p) {
+  var v;
+  v = p;
+}
+''');
+    await assertNoAssistAt('var ');
+  }
+
+  Future<void> test_local_noInitializer_oneAssignment_functionType() async {
+    verifyNoTestUnitErrors = false;
+    await resolveTestCode('''
+void f(int Function(int) p) {
+  var v;
+  v = p;
+}
+''');
+    // TODO(brianwilkerson) Improve `DartChangeBuilder.writeType` so that
+    //  unnecessary parameter names (`p1`) are not written.
+    await assertHasAssistAt('var ', '''
+void f(int Function(int) p) {
+  int Function(int p1) v;
+  v = p;
+}
+''');
+  }
+
+  Future<void> test_local_noInitializer_oneAssignment_insideClosure() async {
+    verifyNoTestUnitErrors = false;
+    await resolveTestCode('''
+void f() {
+  var v;
+  () {
+    v = '';
+  }();
+}
+''');
+    await assertHasAssistAt('var ', '''
+void f() {
+  String v;
+  () {
+    v = '';
+  }();
+}
+''');
+  }
+
+  Future<void> test_local_noInitializer_oneAssignment_interfaceType() async {
+    verifyNoTestUnitErrors = false;
+    await resolveTestCode('''
+void f() {
+  var v;
+  v = '';
+}
+''');
+    await assertHasAssistAt('var ', '''
+void f() {
+  String v;
+  v = '';
+}
+''');
+  }
+
+  Future<void> test_local_noInitializer_threeAssignments() async {
+    verifyNoTestUnitErrors = false;
+    await resolveTestCode('''
+void f(int a, String b) {
+  var v;
+  v = a;
+  v = null;
+  v = b;
+}
+''');
+    await assertHasAssistAt('var ', '''
+void f(int a, String b) {
+  Object? v;
+  v = a;
+  v = null;
+  v = b;
+}
+''');
+  }
+
+  Future<void> test_local_noInitializer_twoAssignments_differentTypes() async {
+    verifyNoTestUnitErrors = false;
+    await resolveTestCode('''
+void f() {
+  var v;
+  v = 0;
+  v = 3.1;
+}
+''');
+    await assertHasAssistAt('var ', '''
+void f() {
+  num v;
+  v = 0;
+  v = 3.1;
+}
+''');
+  }
+
+  Future<void> test_local_noInitializer_twoAssignments_oneNull() async {
+    verifyNoTestUnitErrors = false;
+    await resolveTestCode('''
+void f() {
+  var v;
+  v = null;
+  v = 0;
+}
+''');
+    await assertHasAssistAt('var ', '''
+void f() {
+  int? v;
+  v = null;
+  v = 0;
+}
+''');
+  }
+
+  Future<void> test_local_noInitializer_twoAssignments_oneNullable() async {
+    verifyNoTestUnitErrors = false;
+    await resolveTestCode('''
+void f(int a, int? b) {
+  var v;
+  v = a;
+  v = b;
+}
+''');
+    await assertHasAssistAt('var ', '''
+void f(int a, int? b) {
+  int? v;
+  v = a;
+  v = b;
+}
+''');
+  }
+
+  Future<void> test_local_noInitializer_twoAssignments_sameTypes() async {
+    verifyNoTestUnitErrors = false;
+    await resolveTestCode('''
+void f() {
+  var v;
+  v = 'a';
+  v = 'b';
+}
+''');
+    await assertHasAssistAt('var ', '''
+void f() {
+  String v;
+  v = 'a';
+  v = 'b';
+}
+''');
+  }
+
+  Future<void> test_local_null() async {
+    await resolveTestCode('''
+void f() {
   var v = null;
 }
 ''');
     await assertNoAssistAt('var ');
   }
 
-  test_local_onInitializer() async {
-    await resolveTestUnit('''
-main() {
+  Future<void> test_local_onInitializer() async {
+    await resolveTestCode('''
+void f() {
   var abc = 0;
 }
 ''');
     await assertNoAssistAt('0;');
   }
 
-  test_local_onName() async {
-    await resolveTestUnit('''
-main() {
+  Future<void> test_local_onName() async {
+    await resolveTestCode('''
+void f() {
   var abc = 0;
 }
 ''');
     await assertHasAssistAt('bc', '''
-main() {
+void f() {
   int abc = 0;
 }
 ''');
   }
 
-  test_local_onVar() async {
-    await resolveTestUnit('''
-main() {
+  Future<void> test_local_onVar() async {
+    await resolveTestCode('''
+void f() {
   var v = 0;
 }
 ''');
     await assertHasAssistAt('var ', '''
-main() {
+void f() {
   int v = 0;
 }
 ''');
   }
 
-  test_local_unknown() async {
+  Future<void> test_local_unknown() async {
     verifyNoTestUnitErrors = false;
-    await resolveTestUnit('''
-main() {
+    await resolveTestCode('''
+void f() {
   var v = unknownVar;
 }
 ''');
     await assertNoAssistAt('var ');
   }
 
-  test_parameter() async {
-    await resolveTestUnit('''
+  Future<void> test_parameter() async {
+    await resolveTestCode('''
 foo(f(int p)) {}
-main() {
+void f() {
   foo((test) {});
 }
 ''');
     await assertHasAssistAt('test', '''
 foo(f(int p)) {}
-main() {
+void f() {
   foo((int test) {});
 }
 ''');
   }
 
-  test_parameter_hasExplicitType() async {
-    await resolveTestUnit('''
+  Future<void> test_parameter_hasExplicitType() async {
+    await resolveTestCode('''
 foo(f(int p)) {}
-main() {
+void f() {
   foo((num test) {});
 }
 ''');
     await assertNoAssistAt('test');
   }
 
-  test_parameter_noPropagatedType() async {
-    await resolveTestUnit('''
+  Future<void> test_parameter_noPropagatedType() async {
+    await resolveTestCode('''
 foo(f(p)) {}
-main() {
+void f() {
   foo((test) {});
 }
 ''');
     await assertNoAssistAt('test');
   }
 
-  test_privateType_closureParameter() async {
+  Future<void> test_privateType_closureParameter() async {
     addSource('/home/test/lib/my_lib.dart', '''
 library my_lib;
 class A {}
 class _B extends A {}
 foo(f(_B p)) {}
 ''');
-    await resolveTestUnit('''
+    await resolveTestCode('''
 import 'my_lib.dart';
-main() {
+void f() {
   foo((test) {});
 }
  ''');
     await assertNoAssistAt('test)');
   }
 
-  test_privateType_declaredIdentifier() async {
+  Future<void> test_privateType_declaredIdentifier() async {
     addSource('/home/test/lib/my_lib.dart', '''
 library my_lib;
 class A {}
 class _B extends A {}
 List<_B> getValues() => [];
 ''');
-    await resolveTestUnit('''
+    await resolveTestCode('''
 import 'my_lib.dart';
 class A<T> {
-  main() {
+  void m() {
     for (var item in getValues()) {
     }
   }
@@ -495,7 +667,7 @@ class A<T> {
     await assertNoAssistAt('var item');
   }
 
-  test_privateType_list() async {
+  Future<void> test_privateType_list() async {
     // This is now failing because we're suggesting "List" rather than nothing.
     // Is it really better to produce nothing?
     addSource('/home/test/lib/my_lib.dart', '''
@@ -504,55 +676,55 @@ class A {}
 class _B extends A {}
 List<_B> getValues() => [];
 ''');
-    await resolveTestUnit('''
+    await resolveTestCode('''
 import 'my_lib.dart';
-main() {
+void f() {
   var v = getValues();
 }
 ''');
     await assertHasAssistAt('var ', '''
 import 'my_lib.dart';
-main() {
+void f() {
   List v = getValues();
 }
 ''');
   }
 
-  test_privateType_sameLibrary() async {
-    await resolveTestUnit('''
+  Future<void> test_privateType_sameLibrary() async {
+    await resolveTestCode('''
 class _A {}
-_A getValue() => new _A();
-main() {
+_A getValue() => _A();
+void f() {
   var v = getValue();
 }
 ''');
     await assertHasAssistAt('var ', '''
 class _A {}
-_A getValue() => new _A();
-main() {
+_A getValue() => _A();
+void f() {
   _A v = getValue();
 }
 ''');
   }
 
-  test_privateType_variable() async {
+  Future<void> test_privateType_variable() async {
     addSource('/home/test/lib/my_lib.dart', '''
 library my_lib;
 class A {}
 class _B extends A {}
-_B getValue() => new _B();
+_B getValue() => _B();
 ''');
-    await resolveTestUnit('''
+    await resolveTestCode('''
 import 'my_lib.dart';
-main() {
+void f() {
   var v = getValue();
 }
 ''');
     await assertNoAssistAt('var ');
   }
 
-  test_topLevelField_int() async {
-    await resolveTestUnit('''
+  Future<void> test_topLevelField_int() async {
+    await resolveTestCode('''
 var V = 0;
 ''');
     await assertHasAssistAt('var ', '''
@@ -560,15 +732,15 @@ int V = 0;
 ''');
   }
 
-  test_topLevelField_multiple() async {
-    await resolveTestUnit('''
+  Future<void> test_topLevelField_multiple() async {
+    await resolveTestCode('''
 var A = 1, V = '';
 ''');
     await assertNoAssistAt('var ');
   }
 
-  test_topLevelField_noValue() async {
-    await resolveTestUnit('''
+  Future<void> test_topLevelField_noValue() async {
+    await resolveTestCode('''
 var V;
 ''');
     await assertNoAssistAt('var ');

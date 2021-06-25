@@ -1,8 +1,9 @@
+
+// @dart = 2.9
 library main;
 
 // Test that the library-mirrors are updated after loading a deferred library.
 
-@MirrorsUsed(targets: "D")
 import "dart:mirrors";
 
 import "deferred_mirrors_update_lib.dart" deferred as l;

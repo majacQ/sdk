@@ -5,6 +5,8 @@
 #ifndef RUNTIME_VM_PROFILER_H_
 #define RUNTIME_VM_PROFILER_H_
 
+#include "platform/atomic.h"
+
 #include "vm/allocation.h"
 #include "vm/bitfield.h"
 #include "vm/code_observers.h"
@@ -47,7 +49,7 @@ class ProfileTrieNode;
   V(failure_native_allocation_sample)
 
 struct ProfilerCounters {
-#define DECLARE_PROFILER_COUNTER(name) ALIGN8 int64_t name;
+#define DECLARE_PROFILER_COUNTER(name) RelaxedAtomic<int64_t> name;
   PROFILER_COUNTERS(DECLARE_PROFILER_COUNTER)
 #undef DECLARE_PROFILER_COUNTER
 };
@@ -60,6 +62,12 @@ class Profiler : public AllStatic {
 
   static void SetSampleDepth(intptr_t depth);
   static void SetSamplePeriod(intptr_t period);
+  // Restarts sampling with a given profile period. This is called after the
+  // profile period is changed via the service protocol.
+  static void UpdateSamplePeriod();
+  // Starts or shuts down the profiler after --profiler is changed via the
+  // service protocol.
+  static void UpdateRunningState();
 
   static SampleBuffer* sample_buffer() { return sample_buffer_; }
   static AllocationSampleBuffer* allocation_sample_buffer() {
@@ -69,7 +77,9 @@ class Profiler : public AllStatic {
   static void DumpStackTrace(void* context);
   static void DumpStackTrace(bool for_crash = true);
 
-  static void SampleAllocation(Thread* thread, intptr_t cid);
+  static void SampleAllocation(Thread* thread,
+                               intptr_t cid,
+                               uint32_t identity_hash);
   static Sample* SampleNativeAllocation(intptr_t skip_count,
                                         uword address,
                                         uintptr_t allocation_size);
@@ -77,8 +87,8 @@ class Profiler : public AllStatic {
   // SampleThread is called from inside the signal handler and hence it is very
   // critical that the implementation of SampleThread does not do any of the
   // following:
-  //   * Accessing TLS -- Because on Windows the callback will be running in a
-  //                      different thread.
+  //   * Accessing TLS -- Because on Windows and Fuchsia the callback will be
+  //                      running in a different thread.
   //   * Allocating memory -- Because this takes locks which may already be
   //                          held, resulting in a dead lock.
   //   * Taking a lock -- See above.
@@ -88,13 +98,21 @@ class Profiler : public AllStatic {
     // Copies the counter values.
     return counters_;
   }
+  inline static intptr_t Size();
 
  private:
   static void DumpStackTrace(uword sp, uword fp, uword pc, bool for_crash);
 
+  // Calculates the sample buffer capacity. Returns
+  // SampleBuffer::kDefaultBufferCapacity if --sample-buffer-duration is not
+  // provided. Otherwise, the capacity is based on the sample rate, maximum
+  // sample stack depth, and the number of seconds of samples the sample buffer
+  // should be able to accomodate.
+  static intptr_t CalculateSampleBufferCapacity();
+
   // Does not walk the thread's stack.
   static void SampleThreadSingleFrame(Thread* thread, uintptr_t pc);
-  static bool initialized_;
+  static RelaxedAtomic<bool> initialized_;
 
   static SampleBuffer* sample_buffer_;
   static AllocationSampleBuffer* allocation_sample_buffer_;
@@ -184,24 +202,25 @@ class Sample {
   ThreadId tid() const { return tid_; }
 
   void Clear() {
+    timestamp_ = 0;
     port_ = ILLEGAL_PORT;
-    pc_marker_ = 0;
+    tid_ = OSThread::kInvalidThreadId;
     for (intptr_t i = 0; i < kStackBufferSizeInWords; i++) {
       stack_buffer_[i] = 0;
     }
+    for (intptr_t i = 0; i < kPCArraySizeInWords; i++) {
+      pc_array_[i] = 0;
+    }
     vm_tag_ = VMTag::kInvalidTagId;
     user_tag_ = UserTags::kDefaultUserTag;
-    lr_ = 0;
-    metadata_ = 0;
     state_ = 0;
+    continuation_index_ = -1;
+    allocation_identity_hash_ = 0;
+#if defined(DART_USE_TCMALLOC) && defined(DEBUG)
     native_allocation_address_ = 0;
     native_allocation_size_bytes_ = 0;
-    continuation_index_ = -1;
     next_free_ = NULL;
-    uword* pcs = GetPCArray();
-    for (intptr_t i = 0; i < pcs_length_; i++) {
-      pcs[i] = 0;
-    }
+#endif
     set_head_sample(true);
   }
 
@@ -214,21 +233,19 @@ class Sample {
   // Get stack trace entry.
   uword At(intptr_t i) const {
     ASSERT(i >= 0);
-    ASSERT(i < pcs_length_);
-    uword* pcs = GetPCArray();
-    return pcs[i];
+    ASSERT(i < kPCArraySizeInWords);
+    return pc_array_[i];
   }
 
   // Set stack trace entry.
   void SetAt(intptr_t i, uword pc) {
     ASSERT(i >= 0);
-    ASSERT(i < pcs_length_);
-    uword* pcs = GetPCArray();
-    pcs[i] = pc;
+    ASSERT(i < kPCArraySizeInWords);
+    pc_array_[i] = pc;
   }
 
   void DumpStackTrace() {
-    for (intptr_t i = 0; i < pcs_length_; ++i) {
+    for (intptr_t i = 0; i < kPCArraySizeInWords; ++i) {
       uintptr_t start = 0;
       uword pc = At(i);
       char* native_symbol_name =
@@ -250,14 +267,6 @@ class Sample {
 
   uword user_tag() const { return user_tag_; }
   void set_user_tag(uword tag) { user_tag_ = tag; }
-
-  uword pc_marker() const { return pc_marker_; }
-
-  void set_pc_marker(uword pc_marker) { pc_marker_ = pc_marker; }
-
-  uword lr() const { return lr_; }
-
-  void set_lr(uword link_register) { lr_ = link_register; }
 
   bool leaf_frame_is_dart() const { return LeafFrameIsDart::decode(state_); }
 
@@ -299,8 +308,16 @@ class Sample {
     state_ = ClassAllocationSampleBit::update(allocation_sample, state_);
   }
 
-  uword native_allocation_address() const { return native_allocation_address_; }
+  uint32_t allocation_identity_hash() const {
+    return allocation_identity_hash_;
+  }
 
+  void set_allocation_identity_hash(uint32_t hash) {
+    allocation_identity_hash_ = hash;
+  }
+
+#if defined(DART_USE_TCMALLOC) && defined(DEBUG)
+  uword native_allocation_address() const { return native_allocation_address_; }
   void set_native_allocation_address(uword address) {
     native_allocation_address_ = address;
   }
@@ -308,13 +325,22 @@ class Sample {
   uintptr_t native_allocation_size_bytes() const {
     return native_allocation_size_bytes_;
   }
-
   void set_native_allocation_size_bytes(uintptr_t size) {
     native_allocation_size_bytes_ = size;
   }
 
   Sample* next_free() const { return next_free_; }
   void set_next_free(Sample* next_free) { next_free_ = next_free; }
+#else
+  uword native_allocation_address() const { return 0; }
+  void set_native_allocation_address(uword address) { UNREACHABLE(); }
+
+  uintptr_t native_allocation_size_bytes() const { return 0; }
+  void set_native_allocation_size_bytes(uintptr_t size) { UNREACHABLE(); }
+
+  Sample* next_free() const { return nullptr; }
+  void set_next_free(Sample* next_free) { UNREACHABLE(); }
+#endif  // defined(DART_USE_TCMALLOC) && defined(DEBUG)
 
   Thread::TaskKind thread_task() const { return ThreadTaskBit::decode(state_); }
 
@@ -341,7 +367,7 @@ class Sample {
 
   intptr_t allocation_cid() const {
     ASSERT(is_allocation_sample());
-    return metadata_;
+    return metadata();
   }
 
   void set_head_sample(bool head_sample) {
@@ -350,25 +376,23 @@ class Sample {
 
   bool head_sample() const { return HeadSampleBit::decode(state_); }
 
-  void set_metadata(intptr_t metadata) { metadata_ = metadata; }
+  intptr_t metadata() const { return MetadataBits::decode(state_); }
+  void set_metadata(intptr_t metadata) {
+    state_ = MetadataBits::update(metadata, state_);
+  }
 
   void SetAllocationCid(intptr_t cid) {
     set_is_allocation_sample(true);
     set_metadata(cid);
   }
 
-  static void Init();
+  static constexpr int kPCArraySizeInWords = 32;
+  uword* GetPCArray() { return &pc_array_[0]; }
 
-  static intptr_t instance_size() { return instance_size_; }
-
-  uword* GetPCArray() const;
-
-  static const int kStackBufferSizeInWords = 2;
+  static constexpr int kStackBufferSizeInWords = 2;
   uword* GetStackBuffer() { return &stack_buffer_[0]; }
 
  private:
-  static intptr_t instance_size_;
-  static intptr_t pcs_length_;
   enum StateBits {
     kHeadSampleBit = 0,
     kLeafFrameIsDartBit = 1,
@@ -378,42 +402,44 @@ class Sample {
     kTruncatedTraceBit = 5,
     kClassAllocationSampleBit = 6,
     kContinuationSampleBit = 7,
-    kThreadTaskBit = 8,  // 5 bits.
-    kNextFreeBit = 13,
+    kThreadTaskBit = 8,  // 6 bits.
+    kMetadataBit = 14,   // 16 bits.
+    kNextFreeBit = 30,
   };
-  class HeadSampleBit : public BitField<uword, bool, kHeadSampleBit, 1> {};
-  class LeafFrameIsDart : public BitField<uword, bool, kLeafFrameIsDartBit, 1> {
-  };
-  class IgnoreBit : public BitField<uword, bool, kIgnoreBit, 1> {};
-  class ExitFrameBit : public BitField<uword, bool, kExitFrameBit, 1> {};
+  class HeadSampleBit : public BitField<uint32_t, bool, kHeadSampleBit, 1> {};
+  class LeafFrameIsDart
+      : public BitField<uint32_t, bool, kLeafFrameIsDartBit, 1> {};
+  class IgnoreBit : public BitField<uint32_t, bool, kIgnoreBit, 1> {};
+  class ExitFrameBit : public BitField<uint32_t, bool, kExitFrameBit, 1> {};
   class MissingFrameInsertedBit
-      : public BitField<uword, bool, kMissingFrameInsertedBit, 1> {};
+      : public BitField<uint32_t, bool, kMissingFrameInsertedBit, 1> {};
   class TruncatedTraceBit
-      : public BitField<uword, bool, kTruncatedTraceBit, 1> {};
+      : public BitField<uint32_t, bool, kTruncatedTraceBit, 1> {};
   class ClassAllocationSampleBit
-      : public BitField<uword, bool, kClassAllocationSampleBit, 1> {};
+      : public BitField<uint32_t, bool, kClassAllocationSampleBit, 1> {};
   class ContinuationSampleBit
-      : public BitField<uword, bool, kContinuationSampleBit, 1> {};
+      : public BitField<uint32_t, bool, kContinuationSampleBit, 1> {};
   class ThreadTaskBit
-      : public BitField<uword, Thread::TaskKind, kThreadTaskBit, 5> {};
+      : public BitField<uint32_t, Thread::TaskKind, kThreadTaskBit, 6> {};
+  class MetadataBits : public BitField<uint32_t, intptr_t, kMetadataBit, 16> {};
 
   int64_t timestamp_;
-  ThreadId tid_;
   Dart_Port port_;
-  uword pc_marker_;
+  ThreadId tid_;
   uword stack_buffer_[kStackBufferSizeInWords];
+  uword pc_array_[kPCArraySizeInWords];
   uword vm_tag_;
   uword user_tag_;
-  uword metadata_;
-  uword lr_;
-  uword state_;
+  uint32_t state_;
+  int32_t continuation_index_;
+  uint32_t allocation_identity_hash_;
+
+#if defined(DART_USE_TCMALLOC) && defined(DEBUG)
   uword native_allocation_address_;
   uintptr_t native_allocation_size_bytes_;
-  intptr_t continuation_index_;
   Sample* next_free_;
+#endif
 
-  /* There are a variable number of words that follow, the words hold the
-   * sampled pc values. Access via GetPCArray() */
   DISALLOW_COPY_AND_ASSIGN(Sample);
 };
 
@@ -440,27 +466,21 @@ class NativeAllocationSampleFilter : public SampleFilter {
 
 class AbstractCode {
  public:
-  explicit AbstractCode(RawObject* code) : code_(Object::Handle(code)) {
-    ASSERT(code_.IsNull() || code_.IsCode() || code_.IsBytecode());
+  explicit AbstractCode(ObjectPtr code) : code_(Object::Handle(code)) {
+    ASSERT(code_.IsNull() || code_.IsCode());
   }
 
-  RawObject* raw() const { return code_.raw(); }
+  ObjectPtr ptr() const { return code_.ptr(); }
   const Object* handle() const { return &code_; }
 
   uword PayloadStart() const {
-    if (code_.IsCode()) {
-      return Code::Cast(code_).PayloadStart();
-    } else {
-      return Bytecode::Cast(code_).PayloadStart();
-    }
+    ASSERT(code_.IsCode());
+    return Code::Cast(code_).PayloadStart();
   }
 
   uword Size() const {
-    if (code_.IsCode()) {
-      return Code::Cast(code_).Size();
-    } else {
-      return Bytecode::Cast(code_).Size();
-    }
+    ASSERT(code_.IsCode());
+    return Code::Cast(code_).Size();
   }
 
   int64_t compile_timestamp() const {
@@ -475,29 +495,53 @@ class AbstractCode {
     if (code_.IsCode()) {
       return Code::Cast(code_).Name();
     } else {
-      return Bytecode::Cast(code_).Name();
+      return "";
     }
   }
 
   const char* QualifiedName() const {
     if (code_.IsCode()) {
-      return Code::Cast(code_).QualifiedName();
+      return Code::Cast(code_).QualifiedName(
+          NameFormattingParams(Object::kUserVisibleName));
     } else {
-      return Bytecode::Cast(code_).QualifiedName();
+      return "";
     }
   }
 
-  RawObject* owner() const {
+  bool IsStubCode() const {
+    if (code_.IsCode()) {
+      return Code::Cast(code_).IsStubCode();
+    } else {
+      return false;
+    }
+  }
+
+  bool IsAllocationStubCode() const {
+    if (code_.IsCode()) {
+      return Code::Cast(code_).IsAllocationStubCode();
+    } else {
+      return false;
+    }
+  }
+
+  bool IsTypeTestStubCode() const {
+    if (code_.IsCode()) {
+      return Code::Cast(code_).IsTypeTestStubCode();
+    } else {
+      return false;
+    }
+  }
+
+  ObjectPtr owner() const {
     if (code_.IsCode()) {
       return Code::Cast(code_).owner();
     } else {
-      return Bytecode::Cast(code_).function();
+      return Object::null();
     }
   }
 
   bool IsNull() const { return code_.IsNull(); }
   bool IsCode() const { return code_.IsCode(); }
-  bool IsBytecode() const { return code_.IsBytecode(); }
 
   bool is_optimized() const {
     if (code_.IsCode()) {
@@ -627,6 +671,8 @@ class SampleBuffer {
 
   ProcessedSampleBuffer* BuildProcessedSampleBuffer(SampleFilter* filter);
 
+  intptr_t Size() { return memory_->size(); }
+
  protected:
   ProcessedSample* BuildProcessedSample(Sample* sample,
                                         const CodeLookupTable& clt);
@@ -635,7 +681,7 @@ class SampleBuffer {
   VirtualMemory* memory_;
   Sample* samples_;
   intptr_t capacity_;
-  uintptr_t cursor_;
+  RelaxedAtomic<uintptr_t> cursor_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(SampleBuffer);
@@ -652,11 +698,22 @@ class AllocationSampleBuffer : public SampleBuffer {
   void FreeAllocationSample(Sample* sample);
 
  private:
-  Mutex* mutex_;
+  Mutex mutex_;
   Sample* free_sample_list_;
 
   DISALLOW_COPY_AND_ASSIGN(AllocationSampleBuffer);
 };
+
+intptr_t Profiler::Size() {
+  intptr_t size = 0;
+  if (sample_buffer_ != nullptr) {
+    size += sample_buffer_->Size();
+  }
+  if (allocation_sample_buffer_ != nullptr) {
+    size += allocation_sample_buffer_->Size();
+  }
+  return size;
+}
 
 // A |ProcessedSample| is a combination of 1 (or more) |Sample|(s) that have
 // been merged into a logical sample. The raw data may have been processed to
@@ -700,6 +757,15 @@ class ProcessedSample : public ZoneAllocated {
   intptr_t allocation_cid() const { return allocation_cid_; }
   void set_allocation_cid(intptr_t cid) { allocation_cid_ = cid; }
 
+  // The identity hash code of the allocated object if this is an allocation
+  // profile sample. -1 otherwise.
+  uint32_t allocation_identity_hash() const {
+    return allocation_identity_hash_;
+  }
+  void set_allocation_identity_hash(uint32_t hash) {
+    allocation_identity_hash_ = hash;
+  }
+
   bool IsAllocationSample() const { return allocation_cid_ > 0; }
 
   bool is_native_allocation_sample() const {
@@ -723,10 +789,18 @@ class ProcessedSample : public ZoneAllocated {
     first_frame_executing_ = first_frame_executing;
   }
 
-  ProfileTrieNode* timeline_trie() const { return timeline_trie_; }
-  void set_timeline_trie(ProfileTrieNode* trie) {
-    ASSERT(timeline_trie_ == NULL);
-    timeline_trie_ = trie;
+  ProfileTrieNode* timeline_code_trie() const { return timeline_code_trie_; }
+  void set_timeline_code_trie(ProfileTrieNode* trie) {
+    ASSERT(timeline_code_trie_ == NULL);
+    timeline_code_trie_ = trie;
+  }
+
+  ProfileTrieNode* timeline_function_trie() const {
+    return timeline_function_trie_;
+  }
+  void set_timeline_function_trie(ProfileTrieNode* trie) {
+    ASSERT(timeline_function_trie_ == NULL);
+    timeline_function_trie_ = trie;
   }
 
  private:
@@ -745,11 +819,13 @@ class ProcessedSample : public ZoneAllocated {
   uword vm_tag_;
   uword user_tag_;
   intptr_t allocation_cid_;
+  uint32_t allocation_identity_hash_;
   bool truncated_;
   bool first_frame_executing_;
   uword native_allocation_address_;
   uintptr_t native_allocation_size_bytes_;
-  ProfileTrieNode* timeline_trie_;
+  ProfileTrieNode* timeline_code_trie_;
+  ProfileTrieNode* timeline_function_trie_;
 
   friend class SampleBuffer;
   DISALLOW_COPY_AND_ASSIGN(ProcessedSample);

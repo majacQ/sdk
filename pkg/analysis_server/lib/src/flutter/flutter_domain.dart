@@ -1,64 +1,85 @@
-// Copyright (c) 2018, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2018, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-
-import 'dart:async';
 
 import 'package:analysis_server/protocol/protocol_constants.dart';
 import 'package:analysis_server/src/analysis_server.dart';
 import 'package:analysis_server/src/domain_abstract.dart';
-import 'package:analysis_server/src/flutter/flutter_correction.dart';
 import 'package:analysis_server/src/protocol/protocol_internal.dart';
 import 'package:analysis_server/src/protocol_server.dart';
-import 'package:analyzer/dart/analysis/results.dart';
+import 'package:analyzer/dart/analysis/session.dart';
 
-/**
- * A [RequestHandler] that handles requests in the `flutter` domain.
- */
+/// A [RequestHandler] that handles requests in the `flutter` domain.
 class FlutterDomainHandler extends AbstractRequestHandler {
-  /**
-   * Initialize a newly created handler to handle requests for the given [server].
-   */
+  /// Initialize a newly created handler to handle requests for the given
+  /// [server].
   FlutterDomainHandler(AnalysisServer server) : super(server);
 
-  /**
-   * Implement the 'flutter.getChangeAddForDesignTimeConstructor' request.
-   */
-  Future getChangeAddForDesignTimeConstructor(Request request) async {
-    // TODO(brianwilkerson) Determine whether this await is necessary.
-    await null;
-    var params =
-        new FlutterGetChangeAddForDesignTimeConstructorParams.fromRequest(
-            request);
-    String file = params.file;
-    int offset = params.offset;
+  /// Implement the 'flutter.getWidgetDescription' request.
+  void getWidgetDescription(Request request) async {
+    var params = FlutterGetWidgetDescriptionParams.fromRequest(request);
+    var file = params.file;
+    var offset = params.offset;
 
-    ResolvedUnitResult result = await server.getResolvedUnit(file);
-    if (result != null) {
-      var corrections = new FlutterCorrections(
-        resolveResult: result,
-        selectionOffset: offset,
-        selectionLength: 0,
-      );
-      SourceChange change = await corrections.addForDesignTimeConstructor();
-      if (change != null) {
-        server.sendResponse(
-            new FlutterGetChangeAddForDesignTimeConstructorResult(change)
-                .toResponse(request.id));
-        return;
-      }
+    if (server.sendResponseErrorIfInvalidFilePath(request, file)) {
+      return;
     }
+
+    var resolvedUnit = await server.getResolvedUnit(file);
+    if (resolvedUnit == null) {
+      server.sendResponse(Response.fileNotAnalyzed(request, file));
+      return;
+    }
+
+    var computer = server.flutterWidgetDescriptions;
+
+    FlutterGetWidgetDescriptionResult? result;
+    try {
+      result = await computer.getDescription(
+        resolvedUnit,
+        offset,
+      );
+    } on InconsistentAnalysisException {
+      server.sendResponse(
+        Response(
+          request.id,
+          error: RequestError(
+            RequestErrorCode.FLUTTER_GET_WIDGET_DESCRIPTION_CONTENT_MODIFIED,
+            'Concurrent modification detected.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    if (result == null) {
+      server.sendResponse(
+        Response(
+          request.id,
+          error: RequestError(
+            RequestErrorCode.FLUTTER_GET_WIDGET_DESCRIPTION_NO_WIDGET,
+            'No Flutter widget at the given location.',
+          ),
+        ),
+      );
+      return;
+    }
+
     server.sendResponse(
-        new Response.invalidParameter(request, 'file', 'No change'));
+      result.toResponse(request.id),
+    );
   }
 
   @override
-  Response handleRequest(Request request) {
+  Response? handleRequest(Request request) {
     try {
-      String requestName = request.method;
-      if (requestName ==
-          FLUTTER_REQUEST_GET_CHANGE_ADD_FOR_DESIGN_TIME_CONSTRUCTOR) {
-        getChangeAddForDesignTimeConstructor(request);
+      var requestName = request.method;
+      if (requestName == FLUTTER_REQUEST_GET_WIDGET_DESCRIPTION) {
+        getWidgetDescription(request);
+        return Response.DELAYED_RESPONSE;
+      }
+      if (requestName == FLUTTER_REQUEST_SET_WIDGET_PROPERTY_VALUE) {
+        setPropertyValue(request);
         return Response.DELAYED_RESPONSE;
       }
       if (requestName == FLUTTER_REQUEST_SET_SUBSCRIPTIONS) {
@@ -70,14 +91,41 @@ class FlutterDomainHandler extends AbstractRequestHandler {
     return null;
   }
 
-  /**
-   * Implement the 'flutter.setSubscriptions' request.
-   */
+  /// Implement the 'flutter.setPropertyValue' request.
+  void setPropertyValue(Request request) async {
+    var params = FlutterSetWidgetPropertyValueParams.fromRequest(request);
+
+    var result = await server.flutterWidgetDescriptions.setPropertyValue(
+      params.id,
+      params.value,
+    );
+
+    var errorCode = result.errorCode;
+    if (errorCode != null) {
+      server.sendResponse(
+        Response(
+          request.id,
+          error: RequestError(errorCode, ''),
+        ),
+      );
+    }
+
+    server.sendResponse(
+      FlutterSetWidgetPropertyValueResult(
+        result.change!,
+      ).toResponse(request.id),
+    );
+  }
+
+  /// Implement the 'flutter.setSubscriptions' request.
   Response setSubscriptions(Request request) {
-    var params = new FlutterSetSubscriptionsParams.fromRequest(request);
-    Map<FlutterService, Set<String>> subMap = mapMap(params.subscriptions,
-        valueCallback: (List<String> subscriptions) => subscriptions.toSet());
+    var params = FlutterSetSubscriptionsParams.fromRequest(request);
+    var subMap =
+        mapMap<FlutterService, List<String>, FlutterService, Set<String>>(
+            params.subscriptions,
+            valueCallback: (List<String> subscriptions) =>
+                subscriptions.toSet());
     server.setFlutterSubscriptions(subMap);
-    return new FlutterSetSubscriptionsResult().toResponse(request.id);
+    return FlutterSetSubscriptionsResult().toResponse(request.id);
   }
 }

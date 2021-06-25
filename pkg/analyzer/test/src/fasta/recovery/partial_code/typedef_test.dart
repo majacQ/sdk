@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -7,7 +7,7 @@ import 'package:analyzer/src/dart/error/syntactic_errors.dart';
 import 'partial_code_support.dart';
 
 main() {
-  new TypedefTest().buildAll();
+  TypedefTest().buildAll();
 }
 
 class TypedefTest extends PartialCodeTest {
@@ -15,7 +15,7 @@ class TypedefTest extends PartialCodeTest {
     buildTests(
         'typedef',
         [
-          new TestDescriptor(
+          TestDescriptor(
               'keyword',
               'typedef',
               [
@@ -25,7 +25,7 @@ class TypedefTest extends PartialCodeTest {
               ],
               "typedef _s_();",
               failing: ['functionVoid', 'functionNonVoid', 'getter']),
-          new TestDescriptor(
+          TestDescriptor(
               'name',
               'typedef T',
               [
@@ -34,7 +34,7 @@ class TypedefTest extends PartialCodeTest {
               ],
               "typedef T();",
               failing: ['functionNonVoid', 'getter', 'mixin', 'setter']),
-          new TestDescriptor(
+          TestDescriptor(
               'keywordEquals',
               'typedef =',
               [
@@ -44,17 +44,17 @@ class TypedefTest extends PartialCodeTest {
               ],
               "typedef _s_ = _s_;",
               allFailing: true),
-          new TestDescriptor(
+          TestDescriptor(
               'equals',
               'typedef T =',
               [
                 ParserErrorCode.EXPECTED_TYPE_NAME,
                 ParserErrorCode.EXPECTED_TOKEN,
-                ParserErrorCode.INVALID_GENERIC_FUNCTION_TYPE
+                ParserErrorCode.EXPERIMENT_NOT_ENABLED
               ],
               "typedef T = _s_;",
               expectedErrorsInValidCode: [
-                ParserErrorCode.INVALID_GENERIC_FUNCTION_TYPE
+                ParserErrorCode.EXPERIMENT_NOT_ENABLED
               ],
               failing: ['functionVoid', 'functionNonVoid', 'getter', 'mixin']),
         ],

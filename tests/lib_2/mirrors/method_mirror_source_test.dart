@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 // Note: This test relies on LF line endings in the source file.
 
 import "dart:mirrors";
@@ -59,7 +61,7 @@ class C extends S {
 
 main() {
   // Top-level members
-  LibraryMirror lib = reflectClass(C).owner;
+  LibraryMirror lib = reflectClass(C).owner as LibraryMirror;
   expectSource(lib.declarations[#foo1],
       "foo1() {}");
   expectSource(lib.declarations[#x],
@@ -102,7 +104,7 @@ main() {
   expectSource(reflect(a), "() {}");
 
   // Function at first line.
-  LibraryMirror otherLib = reflectClass(SomethingInOther).owner;
+  LibraryMirror otherLib = reflectClass(SomethingInOther).owner as LibraryMirror;
   expectSource(otherLib.declarations[#main],
 """main() {
   print("Blah");

@@ -2,26 +2,43 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-export '../api_prototype/compiler_options.dart' show CompilerOptions;
+// @dart = 2.9
 
-export '../api_prototype/diagnostic_message.dart'
+export 'package:_fe_analyzer_shared/src/messages/diagnostic_message.dart'
     show DiagnosticMessage, DiagnosticMessageHandler, getMessageUri;
+
+export 'package:_fe_analyzer_shared/src/messages/severity.dart' show Severity;
+
+export '../api_prototype/compiler_options.dart'
+    show
+        CompilerOptions,
+        InvocationMode,
+        Verbosity,
+        parseExperimentalArguments,
+        parseExperimentalFlags;
+
+export '../api_prototype/experimental_flags.dart'
+    show defaultExperimentalFlags, ExperimentalFlag;
 
 export '../api_prototype/file_system.dart'
     show FileSystem, FileSystemEntity, FileSystemException;
 
+export '../api_prototype/front_end.dart' show CompilerResult;
+
 export '../api_prototype/incremental_kernel_generator.dart'
-    show IncrementalKernelGenerator, isLegalIdentifier;
+    show IncrementalKernelGenerator, IncrementalSerializer, isLegalIdentifier;
 
 export '../api_prototype/kernel_generator.dart'
-    show kernelForComponent, kernelForProgram;
+    show kernelForModule, kernelForProgram;
 
 export '../api_prototype/memory_file_system.dart' show MemoryFileSystem;
 
 export '../api_prototype/standard_file_system.dart' show StandardFileSystem;
 
 export '../api_prototype/terminal_color_support.dart'
-    show printDiagnosticMessage;
+    show printDiagnosticMessage, enableColors;
+
+export '../base/nnbd_mode.dart' show NnbdMode;
 
 export '../base/processed_options.dart' show ProcessedOptions;
 
@@ -33,27 +50,42 @@ export '../fasta/compiler_context.dart' show CompilerContext;
 export '../fasta/fasta_codes.dart'
     show
         LocatedMessage,
-        Message,
-        messageConstEvalContext,
-        messageConstEvalFailedAssertion,
+        messageFfiExceptionalReturnNull,
+        messageFfiExpectedConstant,
+        messageFfiLeafCallMustNotReturnHandle,
+        messageFfiLeafCallMustNotTakeHandle,
+        messageFfiPackedAnnotationAlignment,
+        messageNonPositiveArrayDimensions,
         noLength,
-        templateConstEvalFreeTypeParameter,
-        templateConstEvalDeferredLibrary,
-        templateConstEvalDuplicateKey,
-        templateConstEvalFailedAssertionWithMessage,
-        templateConstEvalInvalidBinaryOperandType,
-        templateConstEvalInvalidMethodInvocation,
-        templateConstEvalInvalidStaticInvocation,
-        templateConstEvalInvalidStringInterpolationOperand,
-        templateConstEvalInvalidSymbolName,
-        templateConstEvalInvalidType,
-        templateConstEvalNegativeShift,
-        templateConstEvalNonConstantLiteral,
-        templateConstEvalNonConstantVariableGet,
-        templateConstEvalZeroDivisor;
+        templateFfiDartTypeMismatch,
+        templateFfiEmptyStruct,
+        templateFfiExpectedConstantArg,
+        templateFfiExpectedExceptionalReturn,
+        templateFfiExpectedNoExceptionalReturn,
+        templateFfiExtendsOrImplementsSealedClass,
+        templateFfiFieldAnnotation,
+        templateFfiFieldCyclic,
+        templateFfiFieldInitializer,
+        templateFfiFieldNoAnnotation,
+        templateFfiFieldNull,
+        templateFfiNotStatic,
+        templateFfiPackedAnnotation,
+        templateFfiPackedNestingNonPacked,
+        templateFfiSizeAnnotation,
+        templateFfiSizeAnnotationDimensions,
+        templateFfiStructGeneric,
+        templateFfiTypeInvalid,
+        templateFfiTypeMismatch;
 
 export '../fasta/hybrid_file_system.dart' show HybridFileSystem;
 
-export '../fasta/kernel/utils.dart' show serializeComponent, serializeProcedure;
+export '../fasta/kernel/redirecting_factory_body.dart'
+    show getRedirectingFactoryBody, isRedirectingFactoryField;
 
-export '../fasta/severity.dart' show Severity;
+export '../fasta/kernel/utils.dart'
+    show
+        createExpressionEvaluationComponent,
+        serializeComponent,
+        serializeProcedure;
+
+export '../fasta/resolve_input_uri.dart' show resolveInputUri;

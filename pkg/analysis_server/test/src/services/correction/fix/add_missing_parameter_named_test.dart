@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'fix_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(AddMissingParameterNamedTest);
   });
@@ -19,19 +19,21 @@ class AddMissingParameterNamedTest extends FixProcessorTest {
   @override
   FixKind get kind => DartFixKind.ADD_MISSING_PARAMETER_NAMED;
 
-  test_constructor_hasNamed() async {
-    await resolveTestUnit('''
+  Future<void> test_constructor_hasNamed() async {
+    await resolveTestCode('''
 class A {
-  A(int a, {int b}) {}
+  A(int a, {int b = 0}) {}
 }
 
 main() {
   new A(1, b: 2, named: 3.0);
 }
 ''');
+    // TODO(brianwilkerson) The fix should make added named parameters be
+    //  `required`. I'm leaving it as is to match the current behavior.
     await assertHasFix('''
 class A {
-  A(int a, {int b, double named}) {}
+  A(int a, {int b = 0, double named}) {}
 }
 
 main() {
@@ -40,8 +42,8 @@ main() {
 ''');
   }
 
-  test_constructor_hasRequired() async {
-    await resolveTestUnit('''
+  Future<void> test_constructor_hasRequired() async {
+    await resolveTestCode('''
 class A {
   A(int a) {}
 }
@@ -61,8 +63,8 @@ main() {
 ''');
   }
 
-  test_constructor_noParameters() async {
-    await resolveTestUnit('''
+  Future<void> test_constructor_noParameters() async {
+    await resolveTestCode('''
 class A {
   A() {}
 }
@@ -82,8 +84,8 @@ main() {
 ''');
   }
 
-  test_constructor_noParameters_named() async {
-    await resolveTestUnit('''
+  Future<void> test_constructor_noParameters_named() async {
+    await resolveTestCode('''
 class A {
   A.aaa() {}
 }
@@ -103,8 +105,8 @@ main() {
 ''');
   }
 
-  test_function_hasNamed() async {
-    await resolveTestUnit('''
+  Future<void> test_function_hasNamed() async {
+    await resolveTestCode('''
 test(int a, {int b: 0}) {}
 
 main() {
@@ -120,8 +122,8 @@ main() {
 ''');
   }
 
-  test_function_hasRequired() async {
-    await resolveTestUnit('''
+  Future<void> test_function_hasRequired() async {
+    await resolveTestCode('''
 test(int a) {}
 
 main() {
@@ -137,8 +139,8 @@ main() {
 ''');
   }
 
-  test_function_noParameters() async {
-    await resolveTestUnit('''
+  Future<void> test_function_noParameters() async {
+    await resolveTestCode('''
 test() {}
 
 main() {
@@ -154,8 +156,8 @@ main() {
 ''');
   }
 
-  test_method_hasNamed() async {
-    await resolveTestUnit('''
+  Future<void> test_method_hasNamed() async {
+    await resolveTestCode('''
 class A {
   test(int a, {int b: 0}) {}
 
@@ -175,10 +177,10 @@ class A {
 ''');
   }
 
-  test_method_hasOptionalPositional() async {
-    await resolveTestUnit('''
+  Future<void> test_method_hasOptionalPositional() async {
+    await resolveTestCode('''
 class A {
-  test(int a, [int b]) {}
+  test(int a, [int b = 0]) {}
 
   main() {
     test(1, 2, named: 3.0);
@@ -188,8 +190,8 @@ class A {
     await assertNoFix();
   }
 
-  test_method_hasRequired() async {
-    await resolveTestUnit('''
+  Future<void> test_method_hasRequired() async {
+    await resolveTestCode('''
 class A {
   test(int a) {}
 
@@ -209,8 +211,8 @@ class A {
 ''');
   }
 
-  test_method_noParameters() async {
-    await resolveTestUnit('''
+  Future<void> test_method_noParameters() async {
+    await resolveTestCode('''
 class A {
   test() {}
 

@@ -1,7 +1,7 @@
 // Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-
+// @dart=2.9
 /*@testedFeatures=inference*/
 library test;
 
@@ -12,17 +12,13 @@ class C {
 }
 
 C c = new C();
-var /*@topType=int*/ field_ref = c. /*@target=C::field*/ field;
-var /*@topType=int*/ getter_ref = c. /*@target=C::getter*/ getter;
-var /*@topType=() -> int*/ function_ref = c. /*@target=C::function*/ function;
-var /*@topType=List<int>*/ field_ref_list = /*@typeArgs=int*/ [
-  c. /*@target=C::field*/ field
-];
-var /*@topType=List<int>*/ getter_ref_list = /*@typeArgs=int*/ [
-  c. /*@target=C::getter*/ getter
-];
-var /*@topType=List<() -> int>*/ function_ref_list = /*@typeArgs=() -> int*/ [
-  c. /*@target=C::function*/ function
+var field_ref = c. /*@target=C.field*/ field;
+var getter_ref = c. /*@target=C.getter*/ getter;
+var function_ref = c. /*@target=C.function*/ function;
+var field_ref_list = /*@ typeArgs=int* */ [c. /*@target=C.field*/ field];
+var getter_ref_list = /*@ typeArgs=int* */ [c. /*@target=C.getter*/ getter];
+var function_ref_list = /*@ typeArgs=() ->* int* */ [
+  c. /*@target=C.function*/ function
 ];
 
 main() {}

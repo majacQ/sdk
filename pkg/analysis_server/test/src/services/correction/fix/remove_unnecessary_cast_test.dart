@@ -9,38 +9,20 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'fix_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
+    defineReflectiveTests(RemoveUnnecessaryCastMultiTest);
     defineReflectiveTests(RemoveUnnecessaryCastTest);
   });
 }
 
 @reflectiveTest
-class RemoveUnnecessaryCastTest extends FixProcessorTest {
+class RemoveUnnecessaryCastMultiTest extends FixProcessorTest {
   @override
-  FixKind get kind => DartFixKind.REMOVE_UNNECESSARY_CAST;
+  FixKind get kind => DartFixKind.REMOVE_UNNECESSARY_CAST_MULTI;
 
-  test_assignment() async {
-    await resolveTestUnit('''
-main(Object p) {
-  if (p is String) {
-    String v = ((p as String));
-    print(v);
-  }
-}
-''');
-    await assertHasFix('''
-main(Object p) {
-  if (p is String) {
-    String v = p;
-    print(v);
-  }
-}
-''');
-  }
-
-  test_assignment_all() async {
-    await resolveTestUnit('''
+  Future<void> test_assignment_all() async {
+    await resolveTestCode('''
 main(Object p, Object q) {
   if (p is String) {
     String v = ((p as String));
@@ -60,6 +42,31 @@ main(Object p, Object q) {
   }
   if (q is int) {
     int v = q;
+    print(v);
+  }
+}
+''');
+  }
+}
+
+@reflectiveTest
+class RemoveUnnecessaryCastTest extends FixProcessorTest {
+  @override
+  FixKind get kind => DartFixKind.REMOVE_UNNECESSARY_CAST;
+
+  Future<void> test_assignment() async {
+    await resolveTestCode('''
+main(Object p) {
+  if (p is String) {
+    String v = ((p as String));
+    print(v);
+  }
+}
+''');
+    await assertHasFix('''
+main(Object p) {
+  if (p is String) {
+    String v = p;
     print(v);
   }
 }

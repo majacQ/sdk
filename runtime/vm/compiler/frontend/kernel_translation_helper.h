@@ -5,16 +5,19 @@
 #ifndef RUNTIME_VM_COMPILER_FRONTEND_KERNEL_TRANSLATION_HELPER_H_
 #define RUNTIME_VM_COMPILER_FRONTEND_KERNEL_TRANSLATION_HELPER_H_
 
+#if defined(DART_PRECOMPILED_RUNTIME)
+#error "AOT runtime should not use compiler sources (including header files)"
+#endif  // defined(DART_PRECOMPILED_RUNTIME)
+
 #include "vm/compiler/backend/il.h"  // For CompileType.
 #include "vm/kernel.h"
 #include "vm/kernel_binary.h"
 #include "vm/object.h"
 
-#if !defined(DART_PRECOMPILED_RUNTIME)
-
 namespace dart {
 namespace kernel {
 
+class ConstantReader;
 class KernelReaderHelper;
 class TypeTranslator;
 
@@ -41,25 +44,42 @@ class TranslationHelper {
   Heap::Space allocation_space() { return allocation_space_; }
 
   // Access to strings.
-  const TypedData& string_offsets() { return string_offsets_; }
+  const TypedData& string_offsets() const { return string_offsets_; }
   void SetStringOffsets(const TypedData& string_offsets);
 
-  const ExternalTypedData& string_data() { return string_data_; }
+  const ExternalTypedData& string_data() const { return string_data_; }
   void SetStringData(const ExternalTypedData& string_data);
 
-  const TypedData& canonical_names() { return canonical_names_; }
+  const TypedData& canonical_names() const { return canonical_names_; }
   void SetCanonicalNames(const TypedData& canonical_names);
 
-  const ExternalTypedData& metadata_payloads() { return metadata_payloads_; }
+  const ExternalTypedData& metadata_payloads() const {
+    return metadata_payloads_;
+  }
   void SetMetadataPayloads(const ExternalTypedData& metadata_payloads);
 
-  const ExternalTypedData& metadata_mappings() { return metadata_mappings_; }
+  const ExternalTypedData& metadata_mappings() const {
+    return metadata_mappings_;
+  }
   void SetMetadataMappings(const ExternalTypedData& metadata_mappings);
 
+  // Access to previously evaluated constants from the constants table.
   const Array& constants() { return constants_; }
   void SetConstants(const Array& constants);
 
+  // Access to the raw bytes of the constants table.
+  const ExternalTypedData& constants_table() const { return constants_table_; }
+  void SetConstantsTable(const ExternalTypedData& constants_table);
+
+  KernelProgramInfo& info() { return info_; }
+
+  GrowableObjectArrayPtr EnsurePotentialPragmaFunctions();
+
+  void AddPotentialExtensionLibrary(const Library& library);
+  GrowableObjectArrayPtr GetPotentialExtensionLibraries();
+
   void SetKernelProgramInfo(const KernelProgramInfo& info);
+  const KernelProgramInfo& GetKernelProgramInfo() const { return info_; }
 
   intptr_t StringOffset(StringIndex index) const;
   intptr_t StringSize(StringIndex index) const;
@@ -81,7 +101,6 @@ class TranslationHelper {
   bool IsLibrary(NameIndex name);
   bool IsClass(NameIndex name);
   bool IsMember(NameIndex name);
-  bool IsField(NameIndex name);
   bool IsConstructor(NameIndex name);
   bool IsProcedure(NameIndex name);
   bool IsMethod(NameIndex name);
@@ -93,7 +112,7 @@ class TranslationHelper {
   // of the enclosing class or library.
   NameIndex EnclosingName(NameIndex name);
 
-  RawInstance* Canonicalize(const Instance& instance);
+  InstancePtr Canonicalize(const Instance& instance);
 
   const String& DartString(const char* content) {
     return DartString(content, allocation_space_);
@@ -108,6 +127,8 @@ class TranslationHelper {
   String& DartString(const uint8_t* utf8_array,
                      intptr_t len,
                      Heap::Space space);
+
+  const String& DartString(const GrowableHandlePtrArray<const String>& pieces);
 
   const String& DartSymbolPlain(const char* content) const;
   String& DartSymbolPlain(StringIndex string_index) const;
@@ -139,22 +160,27 @@ class TranslationHelper {
   // A subclass overrides these when reading in the Kernel program in order to
   // support recursive type expressions (e.g. for "implements X" ...
   // annotations).
-  virtual RawLibrary* LookupLibraryByKernelLibrary(NameIndex library);
-  virtual RawClass* LookupClassByKernelClass(NameIndex klass);
+  virtual LibraryPtr LookupLibraryByKernelLibrary(NameIndex library);
+  virtual ClassPtr LookupClassByKernelClass(NameIndex klass);
 
-  RawField* LookupFieldByKernelField(NameIndex field);
-  RawFunction* LookupStaticMethodByKernelProcedure(NameIndex procedure);
-  RawFunction* LookupConstructorByKernelConstructor(NameIndex constructor);
-  RawFunction* LookupConstructorByKernelConstructor(const Class& owner,
-                                                    NameIndex constructor);
-  RawFunction* LookupConstructorByKernelConstructor(
+  FieldPtr LookupFieldByKernelGetterOrSetter(NameIndex field,
+                                             bool required = true);
+  FunctionPtr LookupStaticMethodByKernelProcedure(NameIndex procedure,
+                                                  bool required = true);
+  FunctionPtr LookupConstructorByKernelConstructor(NameIndex constructor);
+  FunctionPtr LookupConstructorByKernelConstructor(const Class& owner,
+                                                   NameIndex constructor);
+  FunctionPtr LookupConstructorByKernelConstructor(
       const Class& owner,
       StringIndex constructor_name);
-  RawFunction* LookupMethodByMember(NameIndex target,
-                                    const String& method_name);
-  RawFunction* LookupDynamicFunction(const Class& klass, const String& name);
+  FunctionPtr LookupMethodByMember(NameIndex target, const String& method_name);
+  FunctionPtr LookupDynamicFunction(const Class& klass, const String& name);
 
-  Type& GetCanonicalType(const Class& klass);
+  Type& GetDeclarationType(const Class& klass);
+
+  void SetupFieldAccessorFunction(const Class& klass,
+                                  const Function& function,
+                                  const AbstractType& field_type);
 
   void ReportError(const char* format, ...) PRINTF_ATTRIBUTE(2, 3);
   void ReportError(const Script& script,
@@ -169,9 +195,24 @@ class TranslationHelper {
                    const char* format,
                    ...) PRINTF_ATTRIBUTE(5, 6);
 
-  RawArray* GetBytecodeComponent() const { return info_.bytecode_component(); }
-  void SetBytecodeComponent(const Array& bytecode_component) {
-    info_.set_bytecode_component(bytecode_component);
+  void SetExpressionEvaluationFunction(const Function& function) {
+    ASSERT(expression_evaluation_function_ == nullptr);
+    expression_evaluation_function_ = &Function::Handle(zone_, function.ptr());
+  }
+  const Function& GetExpressionEvaluationFunction() {
+    if (expression_evaluation_function_ == nullptr) {
+      return Function::null_function();
+    }
+    return *expression_evaluation_function_;
+  }
+  void SetExpressionEvaluationRealClass(const Class& real_class) {
+    ASSERT(expression_evaluation_real_class_ == nullptr);
+    ASSERT(!real_class.IsNull());
+    expression_evaluation_real_class_ = &Class::Handle(zone_, real_class.ptr());
+  }
+  ClassPtr GetExpressionEvaluationRealClass() {
+    ASSERT(expression_evaluation_real_class_ != nullptr);
+    return expression_evaluation_real_class_->ptr();
   }
 
  private:
@@ -199,8 +240,12 @@ class TranslationHelper {
   ExternalTypedData& metadata_payloads_;
   ExternalTypedData& metadata_mappings_;
   Array& constants_;
+  ExternalTypedData& constants_table_;
   KernelProgramInfo& info_;
   Smi& name_index_handle_;
+  GrowableObjectArray* potential_extension_libraries_ = nullptr;
+  Function* expression_evaluation_function_ = nullptr;
+  Class* expression_evaluation_real_class_ = nullptr;
 
   DISALLOW_COPY_AND_ASSIGN(TranslationHelper);
 };
@@ -226,11 +271,12 @@ class FunctionNodeHelper {
     kPositionalParameters,
     kNamedParameters,
     kReturnType,
+    kFutureValueType,
     kBody,
     kEnd,
   };
 
-  enum AsyncMarker {
+  enum AsyncMarker : intptr_t {
     kSync = 0,
     kSyncStar = 1,
     kAsync = 2,
@@ -252,12 +298,12 @@ class FunctionNodeHelper {
   void SetNext(Field field) { next_read_ = field; }
   void SetJustRead(Field field) { next_read_ = field + 1; }
 
-  TokenPosition position_;
-  TokenPosition end_position_;
+  TokenPosition position_ = TokenPosition::kNoSource;
+  TokenPosition end_position_ = TokenPosition::kNoSource;
   AsyncMarker async_marker_;
   AsyncMarker dart_async_marker_;
-  intptr_t total_parameter_count_;
-  intptr_t required_parameter_count_;
+  intptr_t total_parameter_count_ = 0;
+  intptr_t required_parameter_count_ = 0;
 
  private:
   KernelReaderHelper* helper_;
@@ -272,6 +318,7 @@ class TypeParameterHelper {
     kStart,  // tag.
     kFlags,
     kAnnotations,
+    kVariance,
     kName,
     kBound,
     kDefaultType,
@@ -307,8 +354,8 @@ class TypeParameterHelper {
     return (flags_ & kIsGenericCovariantImpl) != 0;
   }
 
-  TokenPosition position_;
-  uint8_t flags_;
+  TokenPosition position_ = TokenPosition::kNoSource;
+  uint8_t flags_ = 0;
   StringIndex name_index_;
 
  private:
@@ -342,7 +389,10 @@ class VariableDeclarationHelper {
     kFinal = 1 << 0,
     kConst = 1 << 1,
     kCovariant = 1 << 3,
-    kIsGenericCovariantImpl = 1 << 5,
+    kIsGenericCovariantImpl = 1 << 4,
+    kLate = 1 << 5,
+    kRequired = 1 << 6,
+    kLowered = 1 << 7,
   };
 
   explicit VariableDeclarationHelper(KernelReaderHelper* helper)
@@ -357,19 +407,21 @@ class VariableDeclarationHelper {
   void SetNext(Field field) { next_read_ = field; }
   void SetJustRead(Field field) { next_read_ = field + 1; }
 
-  bool IsConst() { return (flags_ & kConst) != 0; }
-  bool IsFinal() { return (flags_ & kFinal) != 0; }
-  bool IsCovariant() { return (flags_ & kCovariant) != 0; }
+  bool IsConst() const { return (flags_ & kConst) != 0; }
+  bool IsFinal() const { return (flags_ & kFinal) != 0; }
+  bool IsCovariant() const { return (flags_ & kCovariant) != 0; }
+  bool IsLate() const { return (flags_ & kLate) != 0; }
+  bool IsRequired() const { return (flags_ & kRequired) != 0; }
 
-  bool IsGenericCovariantImpl() {
+  bool IsGenericCovariantImpl() const {
     return (flags_ & kIsGenericCovariantImpl) != 0;
   }
 
-  TokenPosition position_;
-  TokenPosition equals_position_;
-  uint8_t flags_;
+  TokenPosition position_ = TokenPosition::kNoSource;
+  TokenPosition equals_position_ = TokenPosition::kNoSource;
+  uint8_t flags_ = 0;
   StringIndex name_index_;
-  intptr_t annotation_count_;
+  intptr_t annotation_count_ = 0;
 
  private:
   KernelReaderHelper* helper_;
@@ -389,7 +441,8 @@ class FieldHelper {
  public:
   enum Field {
     kStart,  // tag.
-    kCanonicalName,
+    kCanonicalNameGetter,
+    kCanonicalNameSetter,
     kSourceUriIndex,
     kPosition,
     kEndPosition,
@@ -405,14 +458,14 @@ class FieldHelper {
     kFinal = 1 << 0,
     kConst = 1 << 1,
     kStatic = 1 << 2,
-    kIsCovariant = 1 << 5,
-    kIsGenericCovariantImpl = 1 << 6,
+    kIsCovariant = 1 << 3,
+    kIsGenericCovariantImpl = 1 << 4,
+    kIsLate = 1 << 5,
+    kExtensionMember = 1 << 6,
   };
 
   explicit FieldHelper(KernelReaderHelper* helper)
-      : helper_(helper),
-        next_read_(kStart),
-        has_function_literal_initializer_(false) {}
+      : helper_(helper), next_read_(kStart) {}
 
   FieldHelper(KernelReaderHelper* helper, intptr_t offset);
 
@@ -420,8 +473,7 @@ class FieldHelper {
     ReadUntilExcluding(static_cast<Field>(static_cast<int>(field) + 1));
   }
 
-  void ReadUntilExcluding(Field field,
-                          bool detect_function_literal_initializer = false);
+  void ReadUntilExcluding(Field field);
 
   void SetNext(Field field) { next_read_ = field; }
   void SetJustRead(Field field) { next_read_ = field + 1; }
@@ -433,30 +485,20 @@ class FieldHelper {
   bool IsGenericCovariantImpl() {
     return (flags_ & kIsGenericCovariantImpl) != 0;
   }
+  bool IsLate() const { return (flags_ & kIsLate) != 0; }
+  bool IsExtensionMember() const { return (flags_ & kExtensionMember) != 0; }
 
-  bool FieldHasFunctionLiteralInitializer(TokenPosition* start,
-                                          TokenPosition* end) {
-    if (has_function_literal_initializer_) {
-      *start = function_literal_start_;
-      *end = function_literal_end_;
-    }
-    return has_function_literal_initializer_;
-  }
-
-  NameIndex canonical_name_;
-  TokenPosition position_;
-  TokenPosition end_position_;
-  uint8_t flags_;
-  intptr_t source_uri_index_;
-  intptr_t annotation_count_;
+  NameIndex canonical_name_getter_;
+  NameIndex canonical_name_setter_;
+  TokenPosition position_ = TokenPosition::kNoSource;
+  TokenPosition end_position_ = TokenPosition::kNoSource;
+  uint32_t flags_ = 0;
+  intptr_t source_uri_index_ = 0;
+  intptr_t annotation_count_ = 0;
 
  private:
   KernelReaderHelper* helper_;
   intptr_t next_read_;
-
-  bool has_function_literal_initializer_;
-  TokenPosition function_literal_start_;
-  TokenPosition function_literal_end_;
 
   DISALLOW_COPY_AND_ASSIGN(FieldHelper);
 };
@@ -478,11 +520,11 @@ class ProcedureHelper {
     kPosition,
     kEndPosition,
     kKind,
+    kStubKind,
     kFlags,
     kName,
     kAnnotations,
-    kForwardingStubSuperTarget,
-    kForwardingStubInterfaceTarget,
+    kStubTarget,
     kFunction,
     kEnd,
   };
@@ -495,16 +537,26 @@ class ProcedureHelper {
     kFactory,
   };
 
+  enum StubKind {
+    kRegularStubKind,
+    kAbstractForwardingStubKind,
+    kConcreteForwardingStubKind,
+    kNoSuchMethodForwarderStubKind,
+    kMemberSignatureStubKind,
+    kAbstractMixinStubKind,
+    kConcreteMixinStubKind,
+  };
+
   enum Flag {
     kStatic = 1 << 0,
     kAbstract = 1 << 1,
     kExternal = 1 << 2,
     kConst = 1 << 3,  // Only for external const factories.
-    kForwardingStub = 1 << 4,
 
     // TODO(29841): Remove this line after the issue is resolved.
-    kRedirectingFactoryConstructor = 1 << 6,
-    kNoSuchMethodForwarder = 1 << 7,
+    kRedirectingFactoryConstructor = 1 << 4,
+    kExtensionMember = 1 << 5,
+    kSyntheticProcedure = 1 << 7,
   };
 
   explicit ProcedureHelper(KernelReaderHelper* helper)
@@ -519,26 +571,37 @@ class ProcedureHelper {
   void SetNext(Field field) { next_read_ = field; }
   void SetJustRead(Field field) { next_read_ = field + 1; }
 
-  bool IsStatic() { return (flags_ & kStatic) != 0; }
-  bool IsAbstract() { return (flags_ & kAbstract) != 0; }
-  bool IsExternal() { return (flags_ & kExternal) != 0; }
-  bool IsConst() { return (flags_ & kConst) != 0; }
-  bool IsForwardingStub() { return (flags_ & kForwardingStub) != 0; }
-  bool IsRedirectingFactoryConstructor() {
+  bool IsStatic() const { return (flags_ & kStatic) != 0; }
+  bool IsAbstract() const { return (flags_ & kAbstract) != 0; }
+  bool IsExternal() const { return (flags_ & kExternal) != 0; }
+  bool IsConst() const { return (flags_ & kConst) != 0; }
+  bool IsForwardingStub() const {
+    return stub_kind_ == kAbstractForwardingStubKind ||
+           stub_kind_ == kConcreteForwardingStubKind;
+  }
+  bool IsRedirectingFactoryConstructor() const {
     return (flags_ & kRedirectingFactoryConstructor) != 0;
+  }
+  bool IsNoSuchMethodForwarder() const {
+    return stub_kind_ == kNoSuchMethodForwarderStubKind;
+  }
+  bool IsExtensionMember() const { return (flags_ & kExtensionMember) != 0; }
+  bool IsMemberSignature() const {
+    return stub_kind_ == kMemberSignatureStubKind;
   }
 
   NameIndex canonical_name_;
-  TokenPosition start_position_;
-  TokenPosition position_;
-  TokenPosition end_position_;
+  TokenPosition start_position_ = TokenPosition::kNoSource;
+  TokenPosition position_ = TokenPosition::kNoSource;
+  TokenPosition end_position_ = TokenPosition::kNoSource;
   Kind kind_;
-  uint8_t flags_;
-  intptr_t source_uri_index_;
-  intptr_t annotation_count_;
+  uint32_t flags_ = 0;
+  intptr_t source_uri_index_ = 0;
+  intptr_t annotation_count_ = 0;
+  StubKind stub_kind_;
 
   // Only valid if the 'isForwardingStub' flag is set.
-  NameIndex forwarding_stub_super_target_;
+  NameIndex concrete_forwarding_stub_target_;
 
  private:
   KernelReaderHelper* helper_;
@@ -594,12 +657,12 @@ class ConstructorHelper {
   bool IsSynthetic() { return (flags_ & kSynthetic) != 0; }
 
   NameIndex canonical_name_;
-  TokenPosition start_position_;
-  TokenPosition position_;
-  TokenPosition end_position_;
-  uint8_t flags_;
-  intptr_t source_uri_index_;
-  intptr_t annotation_count_;
+  TokenPosition start_position_ = TokenPosition::kNoSource;
+  TokenPosition position_ = TokenPosition::kNoSource;
+  TokenPosition end_position_ = TokenPosition::kNoSource;
+  uint8_t flags_ = 0;
+  intptr_t source_uri_index_ = 0;
+  intptr_t annotation_count_ = 0;
 
  private:
   KernelReaderHelper* helper_;
@@ -639,10 +702,12 @@ class ClassHelper {
   };
 
   enum Flag {
-    kIsAbstract = 1 << 2,
-    kIsEnumClass = 1 << 3,
-    kIsAnonymousMixin = 1 << 4,
-    kIsEliminatedMixin = 1 << 5,
+    kIsAbstract = 1 << 0,
+    kIsEnumClass = 1 << 1,
+    kIsAnonymousMixin = 1 << 2,
+    kIsEliminatedMixin = 1 << 3,
+    kFlagMixinDeclaration = 1 << 4,
+    kHasConstConstructor = 1 << 5,
   };
 
   explicit ClassHelper(KernelReaderHelper* helper)
@@ -657,23 +722,27 @@ class ClassHelper {
   void SetNext(Field field) { next_read_ = field; }
   void SetJustRead(Field field) { next_read_ = field + 1; }
 
-  bool is_abstract() const { return flags_ & Flag::kIsAbstract; }
+  bool is_abstract() const { return (flags_ & Flag::kIsAbstract) != 0; }
 
-  bool is_enum_class() const { return flags_ & Flag::kIsEnumClass; }
+  bool is_enum_class() const { return (flags_ & Flag::kIsEnumClass) != 0; }
 
   bool is_transformed_mixin_application() const {
-    return flags_ & Flag::kIsEliminatedMixin;
+    return (flags_ & Flag::kIsEliminatedMixin) != 0;
+  }
+
+  bool has_const_constructor() const {
+    return (flags_ & Flag::kHasConstConstructor) != 0;
   }
 
   NameIndex canonical_name_;
-  TokenPosition start_position_;
-  TokenPosition position_;
-  TokenPosition end_position_;
+  TokenPosition start_position_ = TokenPosition::kNoSource;
+  TokenPosition position_ = TokenPosition::kNoSource;
+  TokenPosition end_position_ = TokenPosition::kNoSource;
   StringIndex name_index_;
-  intptr_t source_uri_index_;
-  intptr_t annotation_count_;
-  intptr_t procedure_count_;
-  uint8_t flags_;
+  intptr_t source_uri_index_ = 0;
+  intptr_t annotation_count_ = 0;
+  intptr_t procedure_count_ = 0;
+  uint8_t flags_ = 0;
 
  private:
   KernelReaderHelper* helper_;
@@ -693,27 +762,35 @@ class LibraryHelper {
  public:
   enum Field {
     kFlags,
+    kLanguageVersion /* from binary version 27 */,
     kCanonicalName,
     kName,
     kSourceUriIndex,
+    kProblemsAsJson,
     kAnnotations,
     kDependencies,
-    kAdditionalExports,
-    kParts,
-    kTypedefs,
-    kClasses,
-    kToplevelField,
-    kToplevelProcedures,
-    kLibraryIndex,
-    kEnd,
+    // There are other fields in a library:
+    // * kAdditionalExports
+    // * kParts
+    // * kTypedefs
+    // * kClasses
+    // * kToplevelField
+    // * kToplevelProcedures
+    // * kSourceReferences
+    // * kLibraryIndex
+    // but we never read them via this helper and it makes extending the format
+    // harder to keep the code around.
   };
 
   enum Flag {
-    kExternal = 1,
+    kSynthetic = 1 << 0,
+    kIsNonNullableByDefault = 1 << 1,
+    kNonNullableByDefaultCompiledModeBit1 = 1 << 2,
+    kNonNullableByDefaultCompiledModeBit2 = 1 << 3,
   };
 
-  explicit LibraryHelper(KernelReaderHelper* helper)
-      : helper_(helper), next_read_(kFlags) {}
+  explicit LibraryHelper(KernelReaderHelper* helper, uint32_t binary_version)
+      : helper_(helper), binary_version_(binary_version), next_read_(kFlags) {}
 
   void ReadUntilIncluding(Field field) {
     ReadUntilExcluding(static_cast<Field>(static_cast<int>(field) + 1));
@@ -724,17 +801,28 @@ class LibraryHelper {
   void SetNext(Field field) { next_read_ = field; }
   void SetJustRead(Field field) { next_read_ = field + 1; }
 
-  bool IsExternal() const { return (flags_ & kExternal) != 0; }
+  bool IsSynthetic() const { return (flags_ & kSynthetic) != 0; }
+  bool IsNonNullableByDefault() const {
+    return (flags_ & kIsNonNullableByDefault) != 0;
+  }
+  NNBDCompiledMode GetNonNullableByDefaultCompiledMode() const {
+    bool bit1 = (flags_ & kNonNullableByDefaultCompiledModeBit1) != 0;
+    bool bit2 = (flags_ & kNonNullableByDefaultCompiledModeBit2) != 0;
+    if (!bit1 && !bit2) return NNBDCompiledMode::kWeak;
+    if (bit1 && !bit2) return NNBDCompiledMode::kStrong;
+    if (bit1 && bit2) return NNBDCompiledMode::kAgnostic;
+    if (!bit1 && bit2) return NNBDCompiledMode::kInvalid;
+    UNREACHABLE();
+  }
 
-  uint8_t flags_;
+  uint8_t flags_ = 0;
   NameIndex canonical_name_;
   StringIndex name_index_;
-  intptr_t source_uri_index_;
-  intptr_t class_count_;
-  intptr_t procedure_count_;
+  intptr_t source_uri_index_ = 0;
 
  private:
   KernelReaderHelper* helper_;
+  uint32_t binary_version_;
   intptr_t next_read_;
 
   DISALLOW_COPY_AND_ASSIGN(LibraryHelper);
@@ -762,7 +850,7 @@ class LibraryDependencyHelper {
   };
 
   explicit LibraryDependencyHelper(KernelReaderHelper* helper)
-      : annotation_count_(0), helper_(helper), next_read_(kFileOffset) {}
+      : helper_(helper), next_read_(kFileOffset) {}
 
   void ReadUntilIncluding(Field field) {
     ReadUntilExcluding(static_cast<Field>(static_cast<int>(field) + 1));
@@ -770,10 +858,10 @@ class LibraryDependencyHelper {
 
   void ReadUntilExcluding(Field field);
 
-  uint8_t flags_;
+  uint8_t flags_ = 0;
   StringIndex name_index_;
   NameIndex target_library_canonical_name_;
-  intptr_t annotation_count_;
+  intptr_t annotation_count_ = 0;
 
  private:
   KernelReaderHelper* helper_;
@@ -789,6 +877,11 @@ class MetadataHelper {
   MetadataHelper(KernelReaderHelper* helper,
                  const char* tag,
                  bool precompiler_only);
+
+#if defined(DEBUG)
+  static void VerifyMetadataMappings(
+      const ExternalTypedData& metadata_mappings);
+#endif
 
  protected:
   // Look for metadata mapping with node offset greater or equal than the given.
@@ -806,6 +899,8 @@ class MetadataHelper {
   TranslationHelper& translation_helper_;
 
  private:
+  MetadataHelper();
+
   void SetMetadataMappings(intptr_t mappings_offset, intptr_t mappings_num);
   void ScanMetadataMappings();
 
@@ -851,26 +946,40 @@ struct InferredTypeMetadata {
   enum Flag {
     kFlagNullable = 1 << 0,
     kFlagInt = 1 << 1,
+    kFlagSkipCheck = 1 << 2,
+    kFlagConstant = 1 << 3,
+    kFlagReceiverNotInt = 1 << 4,
   };
 
-  InferredTypeMetadata(intptr_t cid_, uint8_t flags_)
-      : cid(cid_), flags(flags_) {}
+  InferredTypeMetadata(intptr_t cid_,
+                       uint8_t flags_,
+                       const Object& constant_value_ = Object::null_object())
+      : cid(cid_), flags(flags_), constant_value(constant_value_) {}
 
   const intptr_t cid;
   const uint8_t flags;
+  const Object& constant_value;
 
   bool IsTrivial() const {
     return (cid == kDynamicCid) && (flags == kFlagNullable);
   }
   bool IsNullable() const { return (flags & kFlagNullable) != 0; }
-  bool IsInt() const { return (flags & kFlagInt) != 0; }
+  bool IsInt() const {
+    return (flags & kFlagInt) != 0 || cid == kMintCid || cid == kSmiCid;
+  }
+  bool IsSkipCheck() const { return (flags & kFlagSkipCheck) != 0; }
+  bool IsConstant() const { return (flags & kFlagConstant) != 0; }
+  bool ReceiverNotInt() const { return (flags & kFlagReceiverNotInt) != 0; }
 
   CompileType ToCompileType(Zone* zone) const {
-    if (IsInt()) {
+    if (IsInt() && cid == kDynamicCid) {
       return CompileType::FromAbstractType(
-          Type::ZoneHandle(zone, Type::IntType()), IsNullable());
+          Type::ZoneHandle(
+              zone, (IsNullable() ? Type::NullableIntType() : Type::IntType())),
+          IsNullable(), CompileType::kCannotBeSentinel);
     } else {
-      return CompileType::CreateNullable(IsNullable(), cid);
+      return CompileType(IsNullable(), CompileType::kCannotBeSentinel, cid,
+                         nullptr);
     }
   }
 };
@@ -880,19 +989,30 @@ class InferredTypeMetadataHelper : public MetadataHelper {
  public:
   static const char* tag() { return "vm.inferred-type.metadata"; }
 
-  explicit InferredTypeMetadataHelper(KernelReaderHelper* helper);
+  explicit InferredTypeMetadataHelper(KernelReaderHelper* helper,
+                                      ConstantReader* constant_reader);
 
-  InferredTypeMetadata GetInferredType(intptr_t node_offset);
+  InferredTypeMetadata GetInferredType(intptr_t node_offset,
+                                       bool read_constant = true);
 
  private:
+  ConstantReader* constant_reader_;
+
   DISALLOW_COPY_AND_ASSIGN(InferredTypeMetadataHelper);
 };
 
 struct ProcedureAttributesMetadata {
-  bool has_dynamic_invocations = true;
+  static const int32_t kInvalidSelectorId = 0;
+
+  bool method_or_setter_called_dynamically = true;
+  bool getter_called_dynamically = true;
   bool has_this_uses = true;
   bool has_non_this_uses = true;
   bool has_tearoff_uses = true;
+  int32_t method_or_setter_selector_id = kInvalidSelectorId;
+  int32_t getter_selector_id = kInvalidSelectorId;
+
+  void InitializeFromFlags(uint8_t flags);
 };
 
 // Helper class which provides access to direct call metadata.
@@ -925,6 +1045,20 @@ class ObfuscationProhibitionsMetadataHelper : public MetadataHelper {
   DISALLOW_COPY_AND_ASSIGN(ObfuscationProhibitionsMetadataHelper);
 };
 
+class LoadingUnitsMetadataHelper : public MetadataHelper {
+ public:
+  static const char* tag() { return "vm.loading-units.metadata"; }
+
+  explicit LoadingUnitsMetadataHelper(KernelReaderHelper* helper);
+
+  void ReadLoadingUnits() { ReadMetadata(0); }
+
+ private:
+  void ReadMetadata(intptr_t node_offset);
+
+  DISALLOW_COPY_AND_ASSIGN(LoadingUnitsMetadataHelper);
+};
+
 struct CallSiteAttributesMetadata {
   const AbstractType* receiver_type = nullptr;
 };
@@ -947,6 +1081,80 @@ class CallSiteAttributesMetadataHelper : public MetadataHelper {
   DISALLOW_COPY_AND_ASSIGN(CallSiteAttributesMetadataHelper);
 };
 
+// Information about a table selector computed by the TFA.
+struct TableSelectorInfo {
+  int call_count = 0;
+  bool called_on_null = true;
+  bool torn_off = true;
+};
+
+// Collection of table selector information for all selectors in the program.
+class TableSelectorMetadata : public ZoneAllocated {
+ public:
+  explicit TableSelectorMetadata(intptr_t num_selectors)
+      : selectors(num_selectors) {
+    selectors.FillWith(TableSelectorInfo(), 0, num_selectors);
+  }
+
+  GrowableArray<TableSelectorInfo> selectors;
+
+  DISALLOW_COPY_AND_ASSIGN(TableSelectorMetadata);
+};
+
+// Helper class which provides access to table selector metadata.
+class TableSelectorMetadataHelper : public MetadataHelper {
+ public:
+  static const char* tag() { return "vm.table-selector.metadata"; }
+
+  explicit TableSelectorMetadataHelper(KernelReaderHelper* helper);
+
+  TableSelectorMetadata* GetTableSelectorMetadata(Zone* zone);
+
+ private:
+  static const uint8_t kCalledOnNullBit = 1 << 0;
+  static const uint8_t kTornOffBit = 1 << 1;
+
+  void ReadTableSelectorInfo(TableSelectorInfo* info);
+
+  DISALLOW_COPY_AND_ASSIGN(TableSelectorMetadataHelper);
+};
+
+// Information about a function regarding unboxed parameters and return value.
+class UnboxingInfoMetadata : public ZoneAllocated {
+ public:
+  enum UnboxingInfoTag {
+    kBoxed = 0,
+    kUnboxedIntCandidate = 1 << 0,
+    kUnboxedDoubleCandidate = 1 << 1,
+    kUnboxingCandidate = kUnboxedIntCandidate | kUnboxedDoubleCandidate,
+  };
+
+  UnboxingInfoMetadata() : unboxed_args_info(0) { return_info = kBoxed; }
+
+  void SetArgsCount(intptr_t num_args) {
+    ASSERT(unboxed_args_info.is_empty());
+    unboxed_args_info.SetLength(num_args);
+    unboxed_args_info.FillWith(kBoxed, 0, num_args);
+  }
+
+  GrowableArray<UnboxingInfoTag> unboxed_args_info;
+  UnboxingInfoTag return_info;
+
+  DISALLOW_COPY_AND_ASSIGN(UnboxingInfoMetadata);
+};
+
+// Helper class which provides access to unboxing information metadata.
+class UnboxingInfoMetadataHelper : public MetadataHelper {
+ public:
+  static const char* tag() { return "vm.unboxing-info.metadata"; }
+
+  explicit UnboxingInfoMetadataHelper(KernelReaderHelper* helper);
+
+  UnboxingInfoMetadata* GetUnboxingInfoMetadata(intptr_t node_offset);
+
+  DISALLOW_COPY_AND_ASSIGN(UnboxingInfoMetadataHelper);
+};
+
 class KernelReaderHelper {
  public:
   KernelReaderHelper(Zone* zone,
@@ -962,12 +1170,11 @@ class KernelReaderHelper {
 
   KernelReaderHelper(Zone* zone,
                      TranslationHelper* translation_helper,
-                     const uint8_t* data_buffer,
-                     intptr_t buffer_length,
+                     const ProgramBinary& binary,
                      intptr_t data_program_offset)
       : zone_(zone),
         translation_helper_(*translation_helper),
-        reader_(data_buffer, buffer_length),
+        reader_(binary),
         script_(Script::Handle(zone_)),
         data_program_offset_(data_program_offset) {}
 
@@ -991,12 +1198,6 @@ class KernelReaderHelper {
     USE(id);
   }
 
-  virtual void RecordYieldPosition(TokenPosition position) {
-    // Do nothing by default.
-    // This is overridden in KernelTokenPositionCollector.
-    USE(position);
-  }
-
   virtual void RecordTokenPosition(TokenPosition position) {
     // Do nothing by default.
     // This is overridden in KernelTokenPositionCollector.
@@ -1004,6 +1205,7 @@ class KernelReaderHelper {
   }
 
   intptr_t ReaderOffset() const;
+  intptr_t ReaderSize() const;
   void SkipBytes(intptr_t skip);
   bool ReadBool();
   uint8_t ReadByte();
@@ -1014,6 +1216,7 @@ class KernelReaderHelper {
   uint32_t PeekListLength();
   StringIndex ReadStringReference();
   NameIndex ReadCanonicalNameReference();
+  NameIndex ReadInterfaceMemberNameReference();
   StringIndex ReadNameAsStringIndex();
   const String& ReadNameAsMethodName();
   const String& ReadNameAsGetterName();
@@ -1023,6 +1226,7 @@ class KernelReaderHelper {
   void SkipStringReference();
   void SkipConstantReference();
   void SkipCanonicalNameReference();
+  void SkipInterfaceMemberNameReference();
   void SkipDartType();
   void SkipOptionalDartType();
   void SkipInterfaceType(bool simple);
@@ -1044,15 +1248,19 @@ class KernelReaderHelper {
   void SkipLibraryDependency();
   void SkipLibraryPart();
   void SkipLibraryTypedef();
-  TokenPosition ReadPosition(bool record = true);
+  TokenPosition ReadPosition();
   Tag ReadTag(uint8_t* payload = NULL);
   uint8_t ReadFlags() { return reader_.ReadFlags(); }
+  Nullability ReadNullability();
+  Variance ReadVariance();
 
   intptr_t SourceTableSize();
   intptr_t GetOffsetForSourceInfo(intptr_t index);
   String& SourceTableUriFor(intptr_t index);
   const String& GetSourceFor(intptr_t index);
-  RawTypedData* GetLineStartsFor(intptr_t index);
+  TypedDataPtr GetLineStartsFor(intptr_t index);
+  String& SourceTableImportUriFor(intptr_t index, uint32_t binaryVersion);
+  ExternalTypedDataPtr GetConstantCoverageFor(intptr_t index);
 
   Zone* zone_;
   TranslationHelper& translation_helper_;
@@ -1066,10 +1274,9 @@ class KernelReaderHelper {
   // kernel program.
   intptr_t data_program_offset_;
 
-  friend class BytecodeMetadataHelper;
   friend class ClassHelper;
   friend class CallSiteAttributesMetadataHelper;
-  friend class ConstantEvaluator;
+  friend class ConstantReader;
   friend class ConstantHelper;
   friend class ConstructorHelper;
   friend class DirectCallMetadataHelper;
@@ -1084,11 +1291,16 @@ class KernelReaderHelper {
   friend class ProcedureHelper;
   friend class SimpleExpressionConverter;
   friend class ScopeBuilder;
+  friend class TableSelectorMetadataHelper;
   friend class TypeParameterHelper;
   friend class TypeTranslator;
+  friend class UnboxingInfoMetadataHelper;
   friend class VariableDeclarationHelper;
   friend class ObfuscationProhibitionsMetadataHelper;
+  friend class LoadingUnitsMetadataHelper;
   friend bool NeedsDynamicInvocationForwarder(const Function& function);
+  friend ArrayPtr CollectConstConstructorCoverageFrom(
+      const Script& interesting_script);
 
  private:
   DISALLOW_COPY_AND_ASSIGN(KernelReaderHelper);
@@ -1106,12 +1318,12 @@ class ActiveClass {
 
   bool MemberIsProcedure() {
     ASSERT(member != NULL);
-    RawFunction::Kind function_kind = member->kind();
-    return function_kind == RawFunction::kRegularFunction ||
-           function_kind == RawFunction::kGetterFunction ||
-           function_kind == RawFunction::kSetterFunction ||
-           function_kind == RawFunction::kMethodExtractor ||
-           function_kind == RawFunction::kDynamicInvocationForwarder ||
+    UntaggedFunction::Kind function_kind = member->kind();
+    return function_kind == UntaggedFunction::kRegularFunction ||
+           function_kind == UntaggedFunction::kGetterFunction ||
+           function_kind == UntaggedFunction::kSetterFunction ||
+           function_kind == UntaggedFunction::kMethodExtractor ||
+           function_kind == UntaggedFunction::kDynamicInvocationForwarder ||
            member->IsFactory();
   }
 
@@ -1120,11 +1332,27 @@ class ActiveClass {
     return member->IsFactory();
   }
 
+  bool RequireConstCanonicalTypeErasure(bool null_safety) const {
+    return klass != nullptr && !null_safety &&
+           Library::Handle(klass->library()).nnbd_compiled_mode() ==
+               NNBDCompiledMode::kAgnostic;
+  }
+
   intptr_t MemberTypeParameterCount(Zone* zone);
 
   intptr_t ClassNumTypeArguments() {
     ASSERT(klass != NULL);
     return klass->NumTypeArguments();
+  }
+
+  void RecordDerivedTypeParameter(Zone* zone, const TypeParameter& derived) {
+    if (derived.bound() == AbstractType::null()) {
+      if (derived_type_parameters == nullptr) {
+        derived_type_parameters = &GrowableObjectArray::Handle(
+            zone, GrowableObjectArray::New(Heap::kOld));
+      }
+      derived_type_parameters->Add(derived);
+    }
   }
 
   const char* ToCString() {
@@ -1136,11 +1364,13 @@ class ActiveClass {
 
   const Function* member;
 
-  // The innermost enclosing function. This is used for building types, as a
+  // The innermost enclosing signature. This is used for building types, as a
   // parent for function types.
-  const Function* enclosing;
+  const FunctionType* enclosing;
 
   const TypeArguments* local_type_parameters;
+
+  GrowableObjectArray* derived_type_parameters = nullptr;
 };
 
 class ActiveClassScope {
@@ -1176,30 +1406,48 @@ class ActiveMemberScope {
   DISALLOW_COPY_AND_ASSIGN(ActiveMemberScope);
 };
 
+class ActiveEnclosingFunctionScope {
+ public:
+  ActiveEnclosingFunctionScope(ActiveClass* active_class,
+                               const FunctionType* enclosing_signature)
+      : active_class_(active_class), saved_(*active_class) {
+    active_class_->enclosing = enclosing_signature;
+  }
+
+  ~ActiveEnclosingFunctionScope() { *active_class_ = saved_; }
+
+ private:
+  ActiveClass* active_class_;
+  ActiveClass saved_;
+
+  DISALLOW_COPY_AND_ASSIGN(ActiveEnclosingFunctionScope);
+};
+
 class ActiveTypeParametersScope {
  public:
   // Set the local type parameters of the ActiveClass to be exactly all type
   // parameters defined by 'innermost' and any enclosing *closures* (but not
   // enclosing methods/top-level functions/classes).
   //
-  // Also, the enclosing function is set to 'innermost'.
+  // Also, the enclosing signature is set to innermost's signature.
   ActiveTypeParametersScope(ActiveClass* active_class,
                             const Function& innermost,
+                            const FunctionType* innermost_signature,
                             Zone* Z);
 
   // Append the list of the local type parameters to the list in ActiveClass.
   //
-  // Also, the enclosing function is set to 'function'.
+  // Also, the enclosing signature is set to 'signature'.
   ActiveTypeParametersScope(ActiveClass* active_class,
-                            const Function* function,
-                            const TypeArguments& new_params,
+                            const FunctionType* innermost_signature,
                             Zone* Z);
 
-  ~ActiveTypeParametersScope() { *active_class_ = saved_; }
+  ~ActiveTypeParametersScope();
 
  private:
   ActiveClass* active_class_;
   ActiveClass saved_;
+  Zone* zone_;
 
   DISALLOW_COPY_AND_ASSIGN(ActiveTypeParametersScope);
 };
@@ -1207,30 +1455,32 @@ class ActiveTypeParametersScope {
 class TypeTranslator {
  public:
   TypeTranslator(KernelReaderHelper* helper,
+                 ConstantReader* constant_reader,
                  ActiveClass* active_class,
-                 bool finalize = false);
+                 bool finalize = false,
+                 bool apply_canonical_type_erasure = false,
+                 bool in_constant_context = false);
 
-  // Can return a malformed type.
   AbstractType& BuildType();
-  // Can return a malformed type.
   AbstractType& BuildTypeWithoutFinalization();
-  // Is guaranteed to be not malformed.
-  AbstractType& BuildVariableType();
 
-  // Will return `TypeArguments::null()` in case any of the arguments are
-  // malformed.
   const TypeArguments& BuildTypeArguments(intptr_t length);
 
-  // Will return `TypeArguments::null()` in case any of the arguments are
-  // malformed.
   const TypeArguments& BuildInstantiatedTypeArguments(
       const Class& receiver_class,
       intptr_t length);
 
   void LoadAndSetupTypeParameters(ActiveClass* active_class,
-                                  const Object& set_on,
-                                  intptr_t type_parameter_count,
-                                  const Function& parameterized_function);
+                                  const Function& function,
+                                  const Class& parameterized_class,
+                                  const FunctionType& parameterized_signature,
+                                  intptr_t type_parameter_count);
+
+  void LoadAndSetupBounds(ActiveClass* active_class,
+                          const Function& function,
+                          const Class& parameterized_class,
+                          const FunctionType& parameterized_signature,
+                          intptr_t type_parameter_count);
 
   const Type& ReceiverType(const Class& klass);
 
@@ -1241,8 +1491,13 @@ class TypeTranslator {
                                FunctionNodeHelper* function_node_helper);
 
  private:
-  // Can build a malformed type.
-  void BuildTypeInternal(bool invalid_as_dynamic = false);
+  void SetupUnboxingInfoMetadata(const Function& function,
+                                 intptr_t library_kernel_offset);
+  void SetupUnboxingInfoMetadataForFieldAccessors(
+      const Function& field_accessor,
+      intptr_t library_kernel_offset);
+
+  void BuildTypeInternal();
   void BuildInterfaceType(bool simple);
   void BuildFunctionType(bool simple);
   void BuildTypeParameterType();
@@ -1274,12 +1529,18 @@ class TypeTranslator {
   };
 
   KernelReaderHelper* helper_;
+  ConstantReader* constant_reader_;
   TranslationHelper& translation_helper_;
   ActiveClass* const active_class_;
   TypeParameterScope* type_parameter_scope_;
+  InferredTypeMetadataHelper inferred_type_metadata_helper_;
+  UnboxingInfoMetadataHelper unboxing_info_metadata_helper_;
   Zone* zone_;
   AbstractType& result_;
   bool finalize_;
+  bool refers_to_derived_type_param_;
+  const bool apply_canonical_type_erasure_;
+  const bool in_constant_context_;
 
   friend class ScopeBuilder;
   friend class KernelLoader;
@@ -1290,5 +1551,4 @@ class TypeTranslator {
 }  // namespace kernel
 }  // namespace dart
 
-#endif  // !defined(DART_PRECOMPILED_RUNTIME)
 #endif  // RUNTIME_VM_COMPILER_FRONTEND_KERNEL_TRANSLATION_HELPER_H_

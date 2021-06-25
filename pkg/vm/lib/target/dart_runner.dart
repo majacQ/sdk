@@ -23,6 +23,7 @@ class DartRunnerTarget extends VmTarget {
         'dart:collection',
         'dart:convert',
         'dart:developer',
+        'dart:ffi',
         'dart:_internal',
         'dart:isolate',
         'dart:math',
@@ -31,7 +32,6 @@ class DartRunnerTarget extends VmTarget {
         // PRODUCT mode.
         'dart:mirrors',
 
-        'dart:profiler',
         'dart:typed_data',
         'dart:nativewrappers',
         'dart:io',
@@ -42,4 +42,7 @@ class DartRunnerTarget extends VmTarget {
         'dart:fuchsia',
         'dart:vmservice_io',
       ];
+
+  @override
+  List<String> get extraRequiredLibrariesPlatform => const <String>[];
 }

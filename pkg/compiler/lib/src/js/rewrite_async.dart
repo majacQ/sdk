@@ -509,7 +509,7 @@ abstract class AsyncRewriterBase extends js.NodeVisitor {
   /// [fn] in that place.
   withExpressions(List<js.Expression> nodes, fn(List<js.Expression> results)) {
     int oldTempVarIndex = currentTempVarIndex;
-    // Find last occurence of a 'transform' expression in [nodes].
+    // Find last occurrence of a 'transform' expression in [nodes].
     // All expressions before that must be stored in temp-vars.
     int lastTransformIndex = 0;
     for (int i = nodes.length - 1; i >= 0; --i) {
@@ -762,8 +762,7 @@ abstract class AsyncRewriterBase extends js.NodeVisitor {
         variableDeclarations, node.sourceInformation, bodySourceInformation);
   }
 
-  @override
-  js.Expression visitFun(js.Fun node) {
+  js.Expression visitFunctionExpression(js.FunctionExpression node) {
     if (node.asyncModifier.isAsync || node.asyncModifier.isYielding) {
       // The translation does not handle nested functions that are generators
       // or asynchronous.  These functions should only be ones that are
@@ -772,6 +771,16 @@ abstract class AsyncRewriterBase extends js.NodeVisitor {
           spannable, 'Nested function is a generator or asynchronous.');
     }
     return node;
+  }
+
+  @override
+  js.Expression visitFun(js.Fun node) {
+    return visitFunctionExpression(node);
+  }
+
+  @override
+  js.Expression visitArrowFunction(js.ArrowFunction node) {
+    return visitFunctionExpression(node);
   }
 
   @override
@@ -1265,6 +1274,9 @@ abstract class AsyncRewriterBase extends js.NodeVisitor {
   js.Expression visitDeferredExpression(js.DeferredExpression node) => node;
 
   @override
+  visitDeferredStatement(js.DeferredStatement node) => unsupported(node);
+
+  @override
   js.Expression visitDeferredNumber(js.DeferredNumber node) => node;
 
   @override
@@ -1282,10 +1294,14 @@ abstract class AsyncRewriterBase extends js.NodeVisitor {
 
   @override
   js.Expression visitObjectInitializer(js.ObjectInitializer node) {
+    // throw Exception("NOOOOOOOOOOOOOOOO");
     return withExpressions(
         node.properties.map((js.Property property) => property.value).toList(),
         (List<js.Node> values) {
       List<js.Property> properties = new List.generate(values.length, (int i) {
+        if (node.properties[i] is js.MethodDefinition) {
+          return new js.MethodDefinition(node.properties[i].name, values[i]);
+        }
         return new js.Property(node.properties[i].name, values[i]);
       });
       return new js.ObjectInitializer(properties);
@@ -1344,8 +1360,16 @@ abstract class AsyncRewriterBase extends js.NodeVisitor {
 
   @override
   js.Property visitProperty(js.Property node) {
+    assert(node.runtimeType == js.Property);
     return withExpression(
         node.value, (js.Expression value) => new js.Property(node.name, value),
+        store: false);
+  }
+
+  @override
+  js.MethodDefinition visitMethodDefinition(js.MethodDefinition node) {
+    return withExpression(node.function,
+        (js.Expression value) => new js.MethodDefinition(node.name, value),
         store: false);
   }
 
@@ -1385,8 +1409,9 @@ abstract class AsyncRewriterBase extends js.NodeVisitor {
           if (clause is js.Case) {
             return new js.Case(
                 clause.expression, translateToBlock(clause.body));
-          } else if (clause is js.Default) {
-            return new js.Default(translateToBlock(clause.body));
+          } else {
+            return new js.Default(
+                translateToBlock((clause as js.Default).body));
           }
         }).toList();
         addStatement(new js.Switch(key, cases));
@@ -1399,7 +1424,7 @@ abstract class AsyncRewriterBase extends js.NodeVisitor {
     breakLabels[node] = after;
 
     beginLabel(before);
-    List<int> labels = new List<int>(node.cases.length);
+    List<int> labels = new List<int>.filled(node.cases.length, null);
 
     bool anyCaseExpressionTransformed = node.cases.any(
         (js.SwitchClause x) => x is js.Case && shouldTransform(x.expression));
@@ -1510,6 +1535,7 @@ abstract class AsyncRewriterBase extends js.NodeVisitor {
   }
 
   /// See the comments of [rewriteFunction] for more explanation.
+  @override
   void visitTry(js.Try node) {
     if (!shouldTransform(node)) {
       js.Block body = translateToBlock(node.body);
@@ -1721,6 +1747,7 @@ js.VariableInitialization _makeVariableInitializer(dynamic variable,
 }
 
 class AsyncRewriter extends AsyncRewriterBase {
+  @override
   bool get isAsync => true;
 
   /// The Completer that will finish an async function.
@@ -1787,6 +1814,7 @@ class AsyncRewriter extends AsyncRewriterBase {
     reporter.internalError(spannable, "Yield in non-generating async function");
   }
 
+  @override
   void addErrorExit(SourceInformation sourceInformation) {
     if (!hasHandlerLabels) return; // rethrow handled in method boilerplate.
     beginLabel(rethrowLabel);
@@ -1803,6 +1831,7 @@ class AsyncRewriter extends AsyncRewriterBase {
   /// Returning from an async method calls [asyncStarHelper] with the result.
   /// (the result might have been stored in [returnValue] by some finally
   /// block).
+  @override
   void addSuccessExit(SourceInformation sourceInformation) {
     if (analysis.hasExplicitReturns) {
       beginLabel(exitLabel);
@@ -1929,6 +1958,7 @@ class AsyncRewriter extends AsyncRewriterBase {
 }
 
 class SyncStarRewriter extends AsyncRewriterBase {
+  @override
   bool get isSyncStar => true;
 
   /// Constructor creating the Iterable for a sync* method. Called with
@@ -2068,6 +2098,7 @@ class SyncStarRewriter extends AsyncRewriterBase {
     }).withSourceInformation(functionSourceInformation);
   }
 
+  @override
   void addErrorExit(SourceInformation sourceInformation) {
     hasHandlerLabels = true; // TODO(sra): Add short form error handler.
     beginLabel(rethrowLabel);
@@ -2080,6 +2111,7 @@ class SyncStarRewriter extends AsyncRewriterBase {
   }
 
   /// Returning from a sync* function returns an [endOfIteration] marker.
+  @override
   void addSuccessExit(SourceInformation sourceInformation) {
     if (analysis.hasExplicitReturns) {
       beginLabel(exitLabel);
@@ -2114,6 +2146,7 @@ class SyncStarRewriter extends AsyncRewriterBase {
 }
 
 class AsyncStarRewriter extends AsyncRewriterBase {
+  @override
   bool get isAsyncStar => true;
 
   /// The stack of labels of finally blocks to assign to [next] if the
@@ -2405,7 +2438,7 @@ class AsyncStarRewriter extends AsyncRewriterBase {
 /// - targets of jumps
 /// - a set of used names.
 /// - if any [This]-expressions are used.
-class PreTranslationAnalysis extends js.NodeVisitor<bool> {
+class PreTranslationAnalysis extends js.BaseVisitor<bool> {
   Set<js.Node> hasAwaitOrYield = new Set<js.Node>();
 
   Map<js.Node, js.Node> targets = new Map<js.Node, js.Node>();
@@ -2606,7 +2639,17 @@ class PreTranslationAnalysis extends js.NodeVisitor<bool> {
   }
 
   @override
+  bool visitFunctionExpression(js.FunctionExpression node) {
+    return false;
+  }
+
+  @override
   bool visitFun(js.Fun node) {
+    return false;
+  }
+
+  @override
+  bool visitArrowFunction(js.ArrowFunction node) {
     return false;
   }
 
@@ -2665,6 +2708,11 @@ class PreTranslationAnalysis extends js.NodeVisitor<bool> {
   @override
   bool visitDeferredExpression(js.DeferredExpression node) {
     return false;
+  }
+
+  @override
+  bool visitDeferredStatement(js.DeferredStatement node) {
+    return unsupported(node);
   }
 
   @override
@@ -2765,6 +2813,11 @@ class PreTranslationAnalysis extends js.NodeVisitor<bool> {
   @override
   bool visitProperty(js.Property node) {
     return visit(node.value);
+  }
+
+  @override
+  bool visitMethodDefinition(js.MethodDefinition node) {
+    return false;
   }
 
   @override

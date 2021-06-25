@@ -6,9 +6,9 @@
 #define RUNTIME_BIN_OPTIONS_H_
 
 #include "bin/dartutils.h"
-#include "bin/log.h"
 #include "platform/globals.h"
 #include "platform/hashmap.h"
+#include "platform/syslog.h"
 
 namespace dart {
 namespace bin {
@@ -22,9 +22,11 @@ class OptionProcessor {
 
   virtual ~OptionProcessor() {}
 
-  static bool IsValidFlag(const char* name,
-                          const char* prefix,
-                          intptr_t prefix_length);
+  // Returns true if name starts with "--".
+  static bool IsValidFlag(const char* name);
+
+  // Returns true if name starts with "-".
+  static bool IsValidShortFlag(const char* name);
 
   virtual bool Process(const char* option, CommandLineOptions* options) = 0;
 
@@ -68,7 +70,7 @@ class CallbackOptionProcessor : public OptionProcessor {
         return false;                                                          \
       }                                                                        \
       if (*value == '\0') {                                                    \
-        Log::PrintErr("Empty value for option " #name "\n");                   \
+        Syslog::PrintErr("Empty value for option " #name "\n");                \
         return false;                                                          \
       }                                                                        \
       callback;                                                                \
@@ -82,19 +84,19 @@ class CallbackOptionProcessor : public OptionProcessor {
 
 #define DEFINE_ENUM_OPTION(name, enum_name, variable)                          \
   DEFINE_STRING_OPTION_CB(name, {                                              \
-    const char** kNames = k##enum_name##Names;                                 \
+    const char* const* kNames = k##enum_name##Names;                           \
     for (intptr_t i = 0; kNames[i] != NULL; i++) {                             \
       if (strcmp(value, kNames[i]) == 0) {                                     \
         variable = static_cast<enum_name>(i);                                  \
         return true;                                                           \
       }                                                                        \
     }                                                                          \
-    Log::PrintErr(                                                             \
+    Syslog::PrintErr(                                                          \
         "Unrecognized value for " #name ": '%s'\nValid values are: ", value);  \
     for (intptr_t i = 0; kNames[i] != NULL; i++) {                             \
-      Log::PrintErr("%s%s", i > 0 ? ", " : "", kNames[i]);                     \
+      Syslog::PrintErr("%s%s", i > 0 ? ", " : "", kNames[i]);                  \
     }                                                                          \
-    Log::PrintErr("\n");                                                       \
+    Syslog::PrintErr("\n");                                                    \
   })
 
 #define DEFINE_BOOL_OPTION_CB(name, callback)                                  \
@@ -106,7 +108,7 @@ class CallbackOptionProcessor : public OptionProcessor {
         return false;                                                          \
       }                                                                        \
       if (*value == '=') {                                                     \
-        Log::PrintErr("Non-empty value for option " #name "\n");               \
+        Syslog::PrintErr("Non-empty value for option " #name "\n");            \
         return false;                                                          \
       }                                                                        \
       if (*value != '\0') {                                                    \
@@ -127,7 +129,7 @@ class CallbackOptionProcessor : public OptionProcessor {
         return false;                                                          \
       }                                                                        \
       if (*value == '=') {                                                     \
-        Log::PrintErr("Non-empty value for option " #name "\n");               \
+        Syslog::PrintErr("Non-empty value for option " #name "\n");            \
         return false;                                                          \
       }                                                                        \
       if (*value != '\0') {                                                    \
@@ -152,7 +154,7 @@ class CallbackOptionProcessor : public OptionProcessor {
         return false;                                                          \
       }                                                                        \
       if (*value == '=') {                                                     \
-        Log::PrintErr("Non-empty value for option " #long_name "\n");          \
+        Syslog::PrintErr("Non-empty value for option " #long_name "\n");       \
         return false;                                                          \
       }                                                                        \
       if (*value != '\0') {                                                    \

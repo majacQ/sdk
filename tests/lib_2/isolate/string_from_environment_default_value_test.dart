@@ -2,12 +2,17 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
+// VMOptions=--enable-isolate-groups --experimental-enable-isolate-groups-jit
+// VMOptions=--no-enable-isolate-groups
+
 import "dart:isolate";
 
 import "package:expect/expect.dart";
 
 void test(port) {
-  Expect.isNull(const String.fromEnvironment('NOT_FOUND'));
+  Expect.equals('', const String.fromEnvironment('NOT_FOUND'));
   Expect.equals(
       'x', const String.fromEnvironment('NOT_FOUND', defaultValue: 'x'));
   if (port != null) port.send(null);

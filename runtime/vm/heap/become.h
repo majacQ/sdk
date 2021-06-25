@@ -5,6 +5,7 @@
 #ifndef RUNTIME_VM_HEAP_BECOME_H_
 #define RUNTIME_VM_HEAP_BECOME_H_
 
+#include "platform/atomic.h"
 #include "vm/allocation.h"
 #include "vm/raw_object.h"
 
@@ -22,11 +23,11 @@ class Array;
 // representation as a FreeListElement.
 class ForwardingCorpse {
  public:
-  RawObject* target() const { return target_; }
-  void set_target(RawObject* target) { target_ = target; }
+  ObjectPtr target() const { return target_; }
+  void set_target(ObjectPtr target) { target_ = target; }
 
-  intptr_t Size() {
-    intptr_t size = RawObject::SizeTag::decode(tags_);
+  intptr_t HeapSize() {
+    intptr_t size = UntaggedObject::SizeTag::decode(tags_);
     if (size != 0) return size;
     return *SizeAddress();
   }
@@ -52,11 +53,8 @@ class ForwardingCorpse {
 
  private:
   // This layout mirrors the layout of RawObject.
-  uint32_t tags_;
-#if defined(HASH_IN_OBJECT_HEADER)
-  uint32_t hash_;
-#endif
-  RawObject* target_;
+  RelaxedAtomic<uword> tags_;
+  RelaxedAtomic<ObjectPtr> target_;
 
   // Returns the address of the embedded size.
   intptr_t* SizeAddress() const {
@@ -85,12 +83,12 @@ class Become : public AllStatic {
   // (used for morphic instances during reload).
   static void MakeDummyObject(const Instance& instance);
 
- private:
   // Update any references pointing to forwarding objects to point the
   // forwarding objects' targets.
   static void FollowForwardingPointers(Thread* thread);
 
-  static void CrashDump(RawObject* before_obj, RawObject* after_obj);
+ private:
+  static void CrashDump(ObjectPtr before_obj, ObjectPtr after_obj);
 };
 
 }  // namespace dart

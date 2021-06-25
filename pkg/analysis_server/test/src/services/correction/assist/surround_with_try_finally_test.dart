@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'assist_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(SurroundWithTryFinallyTest);
   });
@@ -19,8 +19,8 @@ class SurroundWithTryFinallyTest extends AssistProcessorTest {
   @override
   AssistKind get kind => DartAssistKind.SURROUND_WITH_TRY_FINALLY;
 
-  test_twoStatements() async {
-    await resolveTestUnit('''
+  Future<void> test_twoStatements() async {
+    await resolveTestCode('''
 main() {
 // start
   print(0);
@@ -30,14 +30,12 @@ main() {
 ''');
     await assertHasAssist('''
 main() {
-// start
   try {
     print(0);
     print(1);
   } finally {
     // TODO
   }
-// end
 }
 ''');
     assertLinkedGroup(0, ['// TODO']);

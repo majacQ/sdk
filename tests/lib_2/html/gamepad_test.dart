@@ -1,5 +1,6 @@
-import 'package:unittest/unittest.dart';
-import 'package:unittest/html_config.dart';
+
+// @dart = 2.9
+import 'package:expect/minitest.dart';
 import 'dart:html';
 
 main() {
@@ -16,8 +17,6 @@ main() {
     document.body.append(element);
     return element;
   }
-
-  useHtmlConfiguration();
 
   test("getGamepads", () {
     insertTestDiv();

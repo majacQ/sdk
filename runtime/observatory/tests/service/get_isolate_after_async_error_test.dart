@@ -3,7 +3,7 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:observatory/service_io.dart';
-import 'package:unittest/unittest.dart';
+import 'package:test/test.dart';
 import 'test_helper.dart';
 import 'service_test_common.dart';
 
@@ -16,7 +16,7 @@ var tests = <IsolateTest>[
   (Isolate isolate) async {
     await isolate.reload();
     expect(isolate.error, isNotNull);
-    expect(isolate.error.message.contains('oh no'), isTrue);
+    expect(isolate.error!.message!.contains('oh no'), isTrue);
   }
 ];
 

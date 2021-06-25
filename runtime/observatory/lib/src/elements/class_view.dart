@@ -18,7 +18,7 @@ import 'package:observatory/src/elements/function_ref.dart';
 import 'package:observatory/src/elements/helpers/any_ref.dart';
 import 'package:observatory/src/elements/helpers/nav_bar.dart';
 import 'package:observatory/src/elements/helpers/rendering_scheduler.dart';
-import 'package:observatory/src/elements/helpers/tag.dart';
+import 'package:observatory/src/elements/helpers/custom_element.dart';
 import 'package:observatory/src/elements/instance_ref.dart';
 import 'package:observatory/src/elements/library_ref.dart';
 import 'package:observatory/src/elements/nav/class_menu.dart';
@@ -32,52 +32,28 @@ import 'package:observatory/src/elements/source_inset.dart';
 import 'package:observatory/src/elements/source_link.dart';
 import 'package:observatory/src/elements/view_footer.dart';
 
-class ClassViewElement extends HtmlElement implements Renderable {
-  static const tag =
-      const Tag<ClassViewElement>('class-view', dependencies: const [
-    ClassInstancesElement.tag,
-    ClassRefElement.tag,
-    CurlyBlockElement.tag,
-    ErrorRefElement.tag,
-    EvalBoxElement.tag,
-    FieldRefElement.tag,
-    FunctionRefElement.tag,
-    InstanceRefElement.tag,
-    LibraryRefElement.tag,
-    NavClassMenuElement.tag,
-    NavTopMenuElement.tag,
-    NavVMMenuElement.tag,
-    NavIsolateMenuElement.tag,
-    NavRefreshElement.tag,
-    NavNotifyElement.tag,
-    ObjectCommonElement.tag,
-    SourceInsetElement.tag,
-    SourceLinkElement.tag,
-    ViewFooterElement.tag
-  ]);
-
-  RenderingScheduler<ClassViewElement> _r;
+class ClassViewElement extends CustomElement implements Renderable {
+  late RenderingScheduler<ClassViewElement> _r;
 
   Stream<RenderedEvent<ClassViewElement>> get onRendered => _r.onRendered;
 
-  M.VM _vm;
-  M.IsolateRef _isolate;
-  M.EventRepository _events;
-  M.NotificationRepository _notifications;
-  M.Class _cls;
-  M.ClassRepository _classes;
-  M.RetainedSizeRepository _retainedSizes;
-  M.ReachableSizeRepository _reachableSizes;
-  M.InboundReferencesRepository _references;
-  M.RetainingPathRepository _retainingPaths;
-  M.StronglyReachableInstancesRepository _stronglyReachableInstances;
-  M.TopRetainingInstancesRepository _topRetainedInstances;
-  M.FieldRepository _fields;
-  M.ScriptRepository _scripts;
-  M.ObjectRepository _objects;
-  M.EvalRepository _eval;
-  M.ClassSampleProfileRepository _profiles;
-  Iterable<M.Field> _classFields;
+  late M.VM _vm;
+  late M.IsolateRef _isolate;
+  late M.EventRepository _events;
+  late M.NotificationRepository _notifications;
+  late M.Class _cls;
+  late M.ClassRepository _classes;
+  late M.RetainedSizeRepository _retainedSizes;
+  late M.ReachableSizeRepository _reachableSizes;
+  late M.InboundReferencesRepository _references;
+  late M.RetainingPathRepository _retainingPaths;
+  late M.StronglyReachableInstancesRepository _stronglyReachableInstances;
+  late M.FieldRepository _fields;
+  late M.ScriptRepository _scripts;
+  late M.ObjectRepository _objects;
+  late M.EvalRepository _eval;
+  late M.ClassSampleProfileRepository _profiles;
+  Iterable<M.Field>? _classFields;
 
   M.VMRef get vm => _vm;
   M.IsolateRef get isolate => _isolate;
@@ -100,9 +76,8 @@ class ClassViewElement extends HtmlElement implements Renderable {
       M.ObjectRepository objects,
       M.EvalRepository eval,
       M.StronglyReachableInstancesRepository stronglyReachable,
-      M.TopRetainingInstancesRepository topRetained,
       M.ClassSampleProfileRepository profiles,
-      {RenderingQueue queue}) {
+      {RenderingQueue? queue}) {
     assert(vm != null);
     assert(isolate != null);
     assert(events != null);
@@ -118,9 +93,8 @@ class ClassViewElement extends HtmlElement implements Renderable {
     assert(objects != null);
     assert(eval != null);
     assert(stronglyReachable != null);
-    assert(topRetained != null);
     assert(profiles != null);
-    ClassViewElement e = document.createElement(tag.name);
+    ClassViewElement e = new ClassViewElement.created();
     e._r = new RenderingScheduler<ClassViewElement>(e, queue: queue);
     e._vm = vm;
     e._isolate = isolate;
@@ -137,12 +111,11 @@ class ClassViewElement extends HtmlElement implements Renderable {
     e._objects = objects;
     e._eval = eval;
     e._stronglyReachableInstances = stronglyReachable;
-    e._topRetainedInstances = topRetained;
     e._profiles = profiles;
     return e;
   }
 
-  ClassViewElement.created() : super.created();
+  ClassViewElement.created() : super.created('class-view');
 
   @override
   attached() {
@@ -158,8 +131,8 @@ class ClassViewElement extends HtmlElement implements Renderable {
     children = <Element>[];
   }
 
-  ObjectCommonElement _common;
-  ClassInstancesElement _classInstances;
+  ObjectCommonElement? _common;
+  ClassInstancesElement? _classInstances;
   bool _loadProfile = false;
 
   void render() {
@@ -168,52 +141,48 @@ class ClassViewElement extends HtmlElement implements Renderable {
             _references, _retainingPaths, _objects,
             queue: _r.queue);
     _classInstances = _classInstances ??
-        new ClassInstancesElement(
-            _isolate,
-            _cls,
-            _retainedSizes,
-            _reachableSizes,
-            _stronglyReachableInstances,
-            _topRetainedInstances,
-            _objects,
+        new ClassInstancesElement(_isolate, _cls, _retainedSizes,
+            _reachableSizes, _stronglyReachableInstances, _objects,
             queue: _r.queue);
     var header = '';
-    if (_cls.isAbstract) {
+    if (_cls.isAbstract!) {
       header += 'abstract ';
     }
-    if (_cls.isPatch) {
+    if (_cls.isPatch!) {
       header += 'patch ';
     }
     children = <Element>[
       navBar(<Element>[
-        new NavTopMenuElement(queue: _r.queue),
-        new NavVMMenuElement(_vm, _events, queue: _r.queue),
-        new NavIsolateMenuElement(_isolate, _events, queue: _r.queue),
-        new NavClassMenuElement(_isolate, _cls, queue: _r.queue),
-        new NavRefreshElement(
-            label: 'Refresh Allocation Profile', queue: _r.queue)
-          ..onRefresh.listen((e) {
-            e.element.disabled = true;
-            _loadProfile = true;
-            _r.dirty();
-          }),
-        new NavRefreshElement(queue: _r.queue)
-          ..onRefresh.listen((e) {
-            e.element.disabled = true;
-            _common = null;
-            _classInstances = null;
-            _fieldsExpanded = null;
-            _functionsExpanded = null;
-            _refresh();
-          }),
-        new NavNotifyElement(_notifications, queue: _r.queue)
+        new NavTopMenuElement(queue: _r.queue).element,
+        new NavVMMenuElement(_vm, _events, queue: _r.queue).element,
+        new NavIsolateMenuElement(_isolate, _events, queue: _r.queue).element,
+        new NavClassMenuElement(_isolate, _cls, queue: _r.queue).element,
+        (new NavRefreshElement(
+                label: 'Refresh Allocation Profile', queue: _r.queue)
+              ..onRefresh.listen((e) {
+                e.element.disabled = true;
+                _loadProfile = true;
+                _r.dirty();
+              }))
+            .element,
+        (new NavRefreshElement(queue: _r.queue)
+              ..onRefresh.listen((e) {
+                e.element.disabled = true;
+                _common = null;
+                _classInstances = null;
+                _fieldsExpanded = null;
+                _functionsExpanded = null;
+                _refresh();
+              }))
+            .element,
+        new NavNotifyElement(_notifications, queue: _r.queue).element
       ]),
       new DivElement()
         ..classes = ['content-centered-big']
         ..children = <Element>[
           new HeadingElement.h2()..text = '$header class ${_cls.name}',
           new HRElement(),
-          _common,
+          _common!.element,
           new BRElement(),
           new DivElement()
             ..classes = ['memberList']
@@ -223,10 +192,11 @@ class ClassViewElement extends HtmlElement implements Renderable {
                 ? const []
                 : [
                     new HRElement(),
-                    new ErrorRefElement(_cls.error, queue: _r.queue)
+                    new ErrorRefElement(_cls.error!, queue: _r.queue).element
                   ],
           new HRElement(),
-          new EvalBoxElement(_isolate, _cls, _objects, _eval, queue: _r.queue),
+          new EvalBoxElement(_isolate, _cls, _objects, _eval, queue: _r.queue)
+              .element,
           new HRElement(),
           new HeadingElement.h2()..text = 'Fields & Functions',
           new DivElement()
@@ -234,8 +204,7 @@ class ClassViewElement extends HtmlElement implements Renderable {
             ..children = _createElements(),
           new HRElement(),
           new HeadingElement.h2()..text = 'Instances',
-          new DivElement()
-            ..children = _cls.hasAllocations ? [_classInstances] : const [],
+          new DivElement()..children = [_classInstances!.element],
           new HRElement(),
           new HeadingElement.h2()..text = 'Allocations',
           new DivElement()
@@ -246,7 +215,7 @@ class ClassViewElement extends HtmlElement implements Renderable {
                 ..text = 'Tracing allocations?	',
               new DivElement()
                 ..classes = ['memberValue']
-                ..children = _cls.traceAllocations
+                ..children = _cls.traceAllocations!
                     ? [
                         new SpanElement()..text = 'Yes ',
                         new ButtonElement()
@@ -273,27 +242,29 @@ class ClassViewElement extends HtmlElement implements Renderable {
             ..children = _loadProfile
                 ? [
                     new ClassAllocationProfileElement(
-                        _vm, _isolate, _cls, _profiles,
-                        queue: _r.queue)
+                            _vm, _isolate, _cls, _profiles,
+                            queue: _r.queue)
+                        .element
                   ]
                 : const [],
           new DivElement()
             ..children = _cls.location != null
                 ? [
                     new HRElement(),
-                    new SourceInsetElement(
-                        _isolate, _cls.location, _scripts, _objects, _events,
-                        queue: _r.queue)
+                    new SourceInsetElement(_isolate, _cls.location!, _scripts,
+                            _objects, _events,
+                            queue: _r.queue)
+                        .element
                   ]
                 : const [],
           new HRElement(),
-          new ViewFooterElement(queue: _r.queue)
+          new ViewFooterElement(queue: _r.queue).element
         ]
     ];
   }
 
-  bool _fieldsExpanded;
-  bool _functionsExpanded;
+  bool? _fieldsExpanded;
+  bool? _functionsExpanded;
 
   List<Element> _createMembers() {
     final members = <Element>[];
@@ -307,7 +278,8 @@ class ClassViewElement extends HtmlElement implements Renderable {
           new DivElement()
             ..classes = ['memberValue']
             ..children = <Element>[
-              new LibraryRefElement(_isolate, _cls.library, queue: _r.queue)
+              new LibraryRefElement(_isolate, _cls.library!, queue: _r.queue)
+                  .element
             ]
         ]);
     }
@@ -321,8 +293,9 @@ class ClassViewElement extends HtmlElement implements Renderable {
           new DivElement()
             ..classes = ['memberValue']
             ..children = <Element>[
-              new SourceLinkElement(_isolate, _cls.location, _scripts,
-                  queue: _r.queue)
+              new SourceLinkElement(_isolate, _cls.location!, _scripts,
+                      queue: _r.queue)
+                  .element
             ]
         ]);
     }
@@ -336,7 +309,8 @@ class ClassViewElement extends HtmlElement implements Renderable {
           new DivElement()
             ..classes = ['memberValue']
             ..children = <Element>[
-              new ClassRefElement(_isolate, _cls.superclass, queue: _r.queue)
+              new ClassRefElement(_isolate, _cls.superclass!, queue: _r.queue)
+                  .element
             ]
         ]);
     }
@@ -350,8 +324,9 @@ class ClassViewElement extends HtmlElement implements Renderable {
           new DivElement()
             ..classes = ['memberValue']
             ..children = <Element>[
-              new InstanceRefElement(_isolate, _cls.superType, _objects,
-                  queue: _r.queue)
+              new InstanceRefElement(_isolate, _cls.superType!, _objects,
+                      queue: _r.queue)
+                  .element
             ]
         ]);
     }
@@ -365,12 +340,13 @@ class ClassViewElement extends HtmlElement implements Renderable {
           new DivElement()
             ..classes = ['memberValue']
             ..children = <Element>[
-              new InstanceRefElement(_isolate, _cls.mixin, _objects,
-                  queue: _r.queue)
+              new InstanceRefElement(_isolate, _cls.mixin!, _objects,
+                      queue: _r.queue)
+                  .element
             ]
         ]);
     }
-    if (_cls.subclasses.length > 0) {
+    if (_cls.subclasses!.length > 0) {
       members.add(new DivElement()
         ..classes = ['memberItem']
         ..children = <Element>[
@@ -379,9 +355,10 @@ class ClassViewElement extends HtmlElement implements Renderable {
             ..text = 'extended by',
           new DivElement()
             ..classes = ['memberValue']
-            ..children = (_cls.subclasses
+            ..children = (_cls.subclasses!
                 .expand((subcls) => <Element>[
-                      new ClassRefElement(_isolate, subcls, queue: _r.queue),
+                      new ClassRefElement(_isolate, subcls, queue: _r.queue)
+                          .element,
                       new SpanElement()..text = ', '
                     ])
                 .toList()
@@ -391,7 +368,7 @@ class ClassViewElement extends HtmlElement implements Renderable {
 
     members.add(new BRElement());
 
-    if (_cls.interfaces.length > 0) {
+    if (_cls.interfaces!.length > 0) {
       members.add(new DivElement()
         ..classes = ['memberItem']
         ..children = <Element>[
@@ -400,10 +377,11 @@ class ClassViewElement extends HtmlElement implements Renderable {
             ..text = 'implements',
           new DivElement()
             ..classes = ['memberValue']
-            ..children = (_cls.interfaces
+            ..children = (_cls.interfaces!
                 .expand((interf) => <Element>[
                       new InstanceRefElement(_isolate, interf, _objects,
-                          queue: _r.queue),
+                              queue: _r.queue)
+                          .element,
                       new SpanElement()..text = ', '
                     ])
                 .toList()
@@ -427,8 +405,8 @@ class ClassViewElement extends HtmlElement implements Renderable {
 
   List<Element> _createElements() {
     final members = <Element>[];
-    if (_classFields != null && _classFields.isNotEmpty) {
-      final fields = _classFields.toList();
+    if (_classFields != null && _classFields!.isNotEmpty) {
+      final fields = _classFields!.toList();
       _fieldsExpanded = _fieldsExpanded ?? (fields.length <= 8);
       members.add(new DivElement()
         ..classes = ['memberItem']
@@ -439,38 +417,42 @@ class ClassViewElement extends HtmlElement implements Renderable {
           new DivElement()
             ..classes = ['memberValue']
             ..children = <Element>[
-              new CurlyBlockElement(expanded: _fieldsExpanded)
-                ..onToggle.listen((e) => _fieldsExpanded = e.control.expanded)
-                ..content = <Element>[
-                  new DivElement()
-                    ..classes = ['memberList']
-                    ..children = (fields
-                        .map<Element>((f) => new DivElement()
-                          ..classes = ['memberItem']
-                          ..children = <Element>[
-                            new DivElement()
-                              ..classes = ['memberName']
+              (new CurlyBlockElement(expanded: _fieldsExpanded!)
+                    ..onToggle
+                        .listen((e) => _fieldsExpanded = e.control.expanded)
+                    ..content = <Element>[
+                      new DivElement()
+                        ..classes = ['memberList']
+                        ..children = (fields
+                            .map<Element>((f) => new DivElement()
+                              ..classes = ['memberItem']
                               ..children = <Element>[
-                                new FieldRefElement(_isolate, f, _objects,
-                                    queue: _r.queue)
-                              ],
-                            new DivElement()
-                              ..classes = ['memberValue']
-                              ..children = f.staticValue == null
-                                  ? const []
-                                  : [
-                                      anyRef(_isolate, f.staticValue, _objects,
-                                          queue: _r.queue)
-                                    ]
-                          ])
-                        .toList())
-                ]
+                                new DivElement()
+                                  ..classes = ['memberName']
+                                  ..children = <Element>[
+                                    new FieldRefElement(_isolate, f, _objects,
+                                            queue: _r.queue)
+                                        .element
+                                  ],
+                                new DivElement()
+                                  ..classes = ['memberValue']
+                                  ..children = f.staticValue == null
+                                      ? const []
+                                      : [
+                                          anyRef(
+                                              _isolate, f.staticValue, _objects,
+                                              queue: _r.queue)
+                                        ]
+                              ])
+                            .toList())
+                    ])
+                  .element
             ]
         ]);
     }
 
-    if (_cls.functions.isNotEmpty) {
-      final functions = _cls.functions.toList();
+    if (_cls.functions!.isNotEmpty) {
+      final functions = _cls.functions!.toList();
       _functionsExpanded = _functionsExpanded ?? (functions.length <= 8);
       members.add(new DivElement()
         ..classes = ['memberItem']
@@ -481,16 +463,18 @@ class ClassViewElement extends HtmlElement implements Renderable {
           new DivElement()
             ..classes = ['memberValue']
             ..children = <Element>[
-              new CurlyBlockElement(expanded: _functionsExpanded)
-                ..onToggle
-                    .listen((e) => _functionsExpanded = e.control.expanded)
-                ..content = (functions
-                    .map<Element>((f) => new DivElement()
-                      ..classes = ['indent']
-                      ..children = <Element>[
-                        new FunctionRefElement(_isolate, f, queue: _r.queue)
-                      ])
-                    .toList())
+              (new CurlyBlockElement(expanded: _functionsExpanded!)
+                    ..onToggle
+                        .listen((e) => _functionsExpanded = e.control.expanded)
+                    ..content = (functions
+                        .map<Element>((f) => new DivElement()
+                          ..classes = ['indent']
+                          ..children = <Element>[
+                            new FunctionRefElement(_isolate, f, queue: _r.queue)
+                                .element
+                          ])
+                        .toList()))
+                  .element
             ]
         ]);
     }
@@ -498,14 +482,14 @@ class ClassViewElement extends HtmlElement implements Renderable {
   }
 
   Future _refresh() async {
-    _cls = await _classes.get(_isolate, _cls.id);
+    _cls = await _classes.get(_isolate, _cls.id!);
     await _loadAdditionalData();
     _r.dirty();
   }
 
   Future _loadAdditionalData() async {
-    _classFields =
-        await Future.wait(_cls.fields.map((f) => _fields.get(_isolate, f.id)));
+    _classFields = await Future.wait(
+        _cls.fields!.map((f) => _fields.get(_isolate, f.id!)));
     _r.dirty();
   }
 }

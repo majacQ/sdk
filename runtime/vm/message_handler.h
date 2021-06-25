@@ -5,10 +5,13 @@
 #ifndef RUNTIME_VM_MESSAGE_HANDLER_H_
 #define RUNTIME_VM_MESSAGE_HANDLER_H_
 
+#include <memory>
+
 #include "vm/isolate.h"
 #include "vm/lockers.h"
 #include "vm/message.h"
 #include "vm/os_thread.h"
+#include "vm/port_set.h"
 #include "vm/thread_pool.h"
 
 namespace dart {
@@ -168,7 +171,8 @@ class MessageHandler {
   // Posts a message on this handler's message queue.
   // If before_events is true, then the message is enqueued before any pending
   // events, but after any pending isolate library events.
-  void PostMessage(Message* message, bool before_events = false);
+  void PostMessage(std::unique_ptr<Message> message,
+                   bool before_events = false);
 
   // Notifies this handler that a port is being closed.
   void ClosePort(Dart_Port port);
@@ -195,7 +199,7 @@ class MessageHandler {
   // Handles a single message.  Provided by subclass.
   //
   // Returns true on success.
-  virtual MessageStatus HandleMessage(Message* message) = 0;
+  virtual MessageStatus HandleMessage(std::unique_ptr<Message> message) = 0;
 
   virtual void NotifyPauseOnStart() {}
   virtual void NotifyPauseOnExit() {}
@@ -207,6 +211,8 @@ class MessageHandler {
   friend class PortMap;
   friend class MessageHandlerTestPeer;
   friend class MessageHandlerTask;
+
+  struct PortSetEntry : public PortSet<PortSetEntry>::Entry {};
 
   // Called by MessageHandlerTask to process our task queue.
   void TaskCallback();
@@ -229,7 +235,7 @@ class MessageHandler {
 
   // Dequeue the next message.  Prefer messages from the oob_queue_ to
   // messages from the queue_.
-  Message* DequeueMessage(Message::Priority min_priority);
+  std::unique_ptr<Message> DequeueMessage(Message::Priority min_priority);
 
   void ClearOOBQueue();
 
@@ -245,6 +251,8 @@ class MessageHandler {
   // thread.
   bool oob_message_handling_allowed_;
   bool paused_for_messages_;
+  PortSet<PortSetEntry>
+      ports_;  // Only accessed by [PortMap], protected by [PortMap]s lock.
   intptr_t live_ports_;  // The number of open ports, including control ports.
   intptr_t paused_;      // The number of pause messages received.
 #if !defined(PRODUCT)
@@ -254,10 +262,9 @@ class MessageHandler {
   bool is_paused_on_exit_;
   int64_t paused_timestamp_;
 #endif
+  bool task_running_;
   bool delete_me_;
   ThreadPool* pool_;
-  ThreadPool::Task* task_;
-  int64_t idle_start_time_;
   StartCallback start_callback_;
   EndCallback end_callback_;
   CallbackData callback_data_;

@@ -5,8 +5,6 @@
 #include "vm/compiler/frontend/kernel_fingerprints.h"
 #include "vm/compiler/frontend/kernel_translation_helper.h"
 
-#if !defined(DART_PRECOMPILED_RUNTIME)
-
 #define H (translation_helper_)
 #define I Isolate::Current()
 
@@ -49,6 +47,7 @@ class KernelFingerprintHelper : public KernelReaderHelper {
   void CalculateTypeParameterFingerprint();
   void CalculateTypeParametersListFingerprint();
   void CalculateCanonicalNameFingerprint();
+  void CalculateInterfaceMemberNameFingerprint();
   void CalculateInitializerFingerprint();
   void CalculateDartTypeFingerprint();
   void CalculateOptionalDartTypeFingerprint();
@@ -82,7 +81,6 @@ void KernelFingerprintHelper::CalculateConstructorFingerprint() {
   }
   helper.SetJustRead(ConstructorHelper::kInitializers);
   BuildHash(helper.flags_);
-  BuildHash(helper.annotation_count_);
 }
 
 void KernelFingerprintHelper::CalculateArgumentsFingerprint() {
@@ -164,12 +162,15 @@ void KernelFingerprintHelper::CalculateTypeParameterFingerprint() {
   CalculateListOfExpressionsFingerprint();
   helper.SetJustRead(TypeParameterHelper::kAnnotations);
 
+  helper.ReadUntilExcluding(TypeParameterHelper::kVariance);
+  Variance variance = ReadVariance();
+  BuildHash(variance);
+  helper.SetJustRead(TypeParameterHelper::kVariance);
+
   helper.ReadUntilExcluding(TypeParameterHelper::kBound);
   // The helper isn't needed after this point.
-  CalculateDartTypeFingerprint();
-  if (ReadTag() == kSomething) {
-    CalculateDartTypeFingerprint();
-  }
+  CalculateDartTypeFingerprint();  // read bound
+  CalculateDartTypeFingerprint();  // read default type
   BuildHash(helper.flags_);
 }
 
@@ -183,6 +184,11 @@ void KernelFingerprintHelper::CalculateTypeParametersListFingerprint() {
 void KernelFingerprintHelper::CalculateCanonicalNameFingerprint() {
   const StringIndex i = H.CanonicalNameString(ReadCanonicalNameReference());
   BuildHash(H.DartString(i).Hash());
+}
+
+void KernelFingerprintHelper::CalculateInterfaceMemberNameFingerprint() {
+  CalculateCanonicalNameFingerprint();
+  ReadCanonicalNameReference();  // read target_origin_reference
 }
 
 void KernelFingerprintHelper::CalculateInitializerFingerprint() {
@@ -224,10 +230,11 @@ void KernelFingerprintHelper::CalculateDartTypeFingerprint() {
     case kInvalidType:
     case kDynamicType:
     case kVoidType:
-    case kBottomType:
       // those contain nothing.
       break;
-      UNIMPLEMENTED();
+    case kNeverType:
+      BuildHash(static_cast<uint32_t>(ReadNullability()));
+      break;
     case kInterfaceType:
       CalculateInterfaceTypeFingerprint(false);
       break;
@@ -240,10 +247,13 @@ void KernelFingerprintHelper::CalculateDartTypeFingerprint() {
     case kSimpleFunctionType:
       CalculateFunctionTypeFingerprint(true);
       break;
-    case kTypeParameterType:
+    case kTypeParameterType: {
+      Nullability nullability = ReadNullability();
+      BuildHash(static_cast<uint32_t>(nullability));
       ReadUInt();                              // read index for parameter.
       CalculateOptionalDartTypeFingerprint();  // read bound bound.
       break;
+    }
     default:
       ReportUnexpectedTag("type", tag);
       UNREACHABLE();
@@ -261,13 +271,25 @@ void KernelFingerprintHelper::CalculateOptionalDartTypeFingerprint() {
 }
 
 void KernelFingerprintHelper::CalculateInterfaceTypeFingerprint(bool simple) {
-  BuildHash(ReadUInt());  // read klass_name.
+  Nullability nullability = ReadNullability();
+  BuildHash(static_cast<uint32_t>(nullability));
+  NameIndex kernel_class = ReadCanonicalNameReference();
+  ASSERT(H.IsClass(kernel_class));
+  const String& class_name = H.DartClassName(kernel_class);
+  NameIndex kernel_library = H.CanonicalNameParent(kernel_class);
+  const String& library_name =
+      H.DartSymbolPlain(H.CanonicalNameString(kernel_library));
+  BuildHash(class_name.Hash());
+  BuildHash(library_name.Hash());
   if (!simple) {
     CalculateListOfDartTypesFingerprint();  // read list of types.
   }
 }
 
 void KernelFingerprintHelper::CalculateFunctionTypeFingerprint(bool simple) {
+  Nullability nullability = ReadNullability();
+  BuildHash(static_cast<uint32_t>(nullability));
+
   if (!simple) {
     CalculateTypeParametersListFingerprint();  // read type_parameters.
     BuildHash(ReadUInt());                     // read required parameter count.
@@ -284,6 +306,7 @@ void KernelFingerprintHelper::CalculateFunctionTypeFingerprint(bool simple) {
       // read string reference (i.e. named_parameters[i].name).
       CalculateStringReferenceFingerprint();
       CalculateDartTypeFingerprint();  // read named_parameters[i].type.
+      BuildHash(ReadFlags());          // read flags.
     }
   }
 
@@ -297,9 +320,10 @@ void KernelFingerprintHelper::CalculateFunctionTypeFingerprint(bool simple) {
 
 void KernelFingerprintHelper::CalculateGetterNameFingerprint() {
   const NameIndex name = ReadCanonicalNameReference();
-  if (!H.IsRoot(name) && (H.IsGetter(name) || H.IsField(name))) {
+  if (!H.IsRoot(name) && H.IsGetter(name)) {
     BuildHash(H.DartGetterName(name).Hash());
   }
+  ReadCanonicalNameReference();  // read interface_target_origin_reference
 }
 
 void KernelFingerprintHelper::CalculateSetterNameFingerprint() {
@@ -307,14 +331,16 @@ void KernelFingerprintHelper::CalculateSetterNameFingerprint() {
   if (!H.IsRoot(name)) {
     BuildHash(H.DartSetterName(name).Hash());
   }
+  ReadCanonicalNameReference();  // read interface_target_origin_reference
 }
 
 void KernelFingerprintHelper::CalculateMethodNameFingerprint() {
   const NameIndex name =
       ReadCanonicalNameReference();  // read interface_target_reference.
-  if (!H.IsRoot(name) && !H.IsField(name)) {
+  if (!H.IsRoot(name)) {
     BuildHash(H.DartProcedureName(name).Hash());
   }
+  ReadCanonicalNameReference();  // read interface_target_origin_reference
 }
 
 void KernelFingerprintHelper::CalculateExpressionFingerprint() {
@@ -347,18 +373,46 @@ void KernelFingerprintHelper::CalculateExpressionFingerprint() {
       ReadUInt();                        // read kernel position.
       CalculateExpressionFingerprint();  // read expression.
       return;
-    case kPropertyGet:
+    case kInstanceGet:
+      ReadByte();                                // read kind.
       ReadPosition();                            // read position.
       CalculateExpressionFingerprint();          // read receiver.
       BuildHash(ReadNameAsGetterName().Hash());  // read name.
+      SkipDartType();                            // read result_type.
       CalculateGetterNameFingerprint();  // read interface_target_reference.
       return;
-    case kPropertySet:
+    case kDynamicGet:
+      ReadByte();                                // read kind.
+      ReadPosition();                            // read position.
+      CalculateExpressionFingerprint();          // read receiver.
+      BuildHash(ReadNameAsGetterName().Hash());  // read name.
+      return;
+    case kInstanceTearOff:
+      ReadByte();                                // read kind.
+      ReadPosition();                            // read position.
+      CalculateExpressionFingerprint();          // read receiver.
+      BuildHash(ReadNameAsGetterName().Hash());  // read name.
+      SkipDartType();                            // read result_type.
+      CalculateGetterNameFingerprint();  // read interface_target_reference.
+      return;
+    case kFunctionTearOff:
+      ReadPosition();                    // read position.
+      CalculateExpressionFingerprint();  // read receiver.
+      return;
+    case kInstanceSet:
+      ReadByte();                                // read kind.
       ReadPosition();                            // read position.
       CalculateExpressionFingerprint();          // read receiver.
       BuildHash(ReadNameAsSetterName().Hash());  // read name.
       CalculateExpressionFingerprint();          // read value.
       CalculateSetterNameFingerprint();  // read interface_target_reference.
+      return;
+    case kDynamicSet:
+      ReadByte();                                // read kind.
+      ReadPosition();                            // read position.
+      CalculateExpressionFingerprint();          // read receiver.
+      BuildHash(ReadNameAsSetterName().Hash());  // read name.
+      CalculateExpressionFingerprint();          // read value.
       return;
     case kSuperPropertyGet:
       ReadPosition();                            // read position.
@@ -371,17 +425,6 @@ void KernelFingerprintHelper::CalculateExpressionFingerprint() {
       CalculateExpressionFingerprint();          // read value.
       CalculateSetterNameFingerprint();  // read interface_target_reference.
       return;
-    case kDirectPropertyGet:
-      ReadPosition();                       // read position.
-      CalculateExpressionFingerprint();     // read receiver.
-      CalculateCanonicalNameFingerprint();  // read target_reference.
-      return;
-    case kDirectPropertySet:
-      ReadPosition();                       // read position.
-      CalculateExpressionFingerprint();     // read receiver.
-      CalculateCanonicalNameFingerprint();  // read target_reference.
-      CalculateExpressionFingerprint();     // read value·
-      return;
     case kStaticGet:
       ReadPosition();                       // read position.
       CalculateCanonicalNameFingerprint();  // read target_reference.
@@ -391,38 +434,69 @@ void KernelFingerprintHelper::CalculateExpressionFingerprint() {
       CalculateCanonicalNameFingerprint();  // read target_reference.
       CalculateExpressionFingerprint();     // read expression.
       return;
-    case kMethodInvocation:
+    case kInstanceInvocation:
+      ReadByte();                                // read kind.
+      ReadFlags();                               // read flags.
       ReadPosition();                            // read position.
       CalculateExpressionFingerprint();          // read receiver.
       BuildHash(ReadNameAsMethodName().Hash());  // read name.
       CalculateArgumentsFingerprint();           // read arguments.
+      SkipDartType();                            // read function_type.
       CalculateMethodNameFingerprint();  // read interface_target_reference.
+      return;
+    case kDynamicInvocation:
+      ReadByte();                                // read kind.
+      ReadPosition();                            // read position.
+      CalculateExpressionFingerprint();          // read receiver.
+      BuildHash(ReadNameAsMethodName().Hash());  // read name.
+      CalculateArgumentsFingerprint();           // read arguments.
+      return;
+    case kLocalFunctionInvocation:
+      ReadPosition();                   // read position.
+      ReadUInt();                       // read variable kernel position.
+      ReadUInt();                       // read relative variable index.
+      CalculateArgumentsFingerprint();  // read arguments.
+      SkipDartType();                   // read function_type.
+      return;
+    case kFunctionInvocation:
+      BuildHash(ReadByte());             // read kind.
+      ReadPosition();                    // read position.
+      CalculateExpressionFingerprint();  // read receiver.
+      CalculateArgumentsFingerprint();   // read arguments.
+      SkipDartType();                    // read function_type.
+      return;
+    case kEqualsCall:
+      ReadPosition();                    // read position.
+      CalculateExpressionFingerprint();  // read left.
+      CalculateExpressionFingerprint();  // read right.
+      SkipDartType();                    // read function_type.
+      CalculateMethodNameFingerprint();  // read interface_target_reference.
+      return;
+    case kEqualsNull:
+      ReadPosition();                    // read position.
+      CalculateExpressionFingerprint();  // read expression.
       return;
     case kSuperMethodInvocation:
       ReadPosition();                            // read position.
       BuildHash(ReadNameAsMethodName().Hash());  // read name.
       CalculateArgumentsFingerprint();           // read arguments.
-      CalculateCanonicalNameFingerprint();       // read target_reference.
-      return;
-    case kDirectMethodInvocation:
-      ReadPosition();                       // read position.
-      CalculateExpressionFingerprint();     // read receiver.
-      CalculateCanonicalNameFingerprint();  // read target_reference.
-      CalculateArgumentsFingerprint();      // read arguments.
+      CalculateInterfaceMemberNameFingerprint();  // read target_reference.
       return;
     case kStaticInvocation:
-    case kConstStaticInvocation:
       ReadPosition();                       // read position.
       CalculateCanonicalNameFingerprint();  // read target_reference.
       CalculateArgumentsFingerprint();      // read arguments.
       return;
     case kConstructorInvocation:
-    case kConstConstructorInvocation:
       ReadPosition();                       // read position.
       CalculateCanonicalNameFingerprint();  // read target_reference.
       CalculateArgumentsFingerprint();      // read arguments.
       return;
     case kNot:
+      CalculateExpressionFingerprint();  // read expression.
+      return;
+    case kNullCheck:
+      ReadPosition();                    // read position.
       CalculateExpressionFingerprint();  // read expression.
       return;
     case kLogicalExpression:
@@ -442,6 +516,9 @@ void KernelFingerprintHelper::CalculateExpressionFingerprint() {
       return;
     case kIsExpression:
       ReadPosition();                    // read position.
+      if (translation_helper_.info().kernel_binary_version() >= 38) {
+        BuildHash(ReadFlags());  // read flags.
+      }
       CalculateExpressionFingerprint();  // read operand.
       CalculateDartTypeFingerprint();    // read type.
       return;
@@ -450,9 +527,6 @@ void KernelFingerprintHelper::CalculateExpressionFingerprint() {
       BuildHash(ReadFlags());            // read flags.
       CalculateExpressionFingerprint();  // read operand.
       CalculateDartTypeFingerprint();    // read type.
-      return;
-    case kSymbolLiteral:
-      CalculateStringReferenceFingerprint();  // read index into string table.
       return;
     case kTypeLiteral:
       CalculateDartTypeFingerprint();  // read type.
@@ -467,13 +541,16 @@ void KernelFingerprintHelper::CalculateExpressionFingerprint() {
       CalculateExpressionFingerprint();  // read expression.
       return;
     case kListLiteral:
-    case kConstListLiteral:
       ReadPosition();                           // read position.
       CalculateDartTypeFingerprint();           // read type.
       CalculateListOfExpressionsFingerprint();  // read list of expressions.
       return;
-    case kMapLiteral:
-    case kConstMapLiteral: {
+    case kSetLiteral:
+      // Set literals are currently desugared in the frontend and will not
+      // reach the VM. See http://dartbug.com/35124 for discussion.
+      UNREACHABLE();
+      return;
+    case kMapLiteral: {
       ReadPosition();                           // read position.
       CalculateDartTypeFingerprint();           // read type.
       CalculateDartTypeFingerprint();           // read value type.
@@ -489,8 +566,13 @@ void KernelFingerprintHelper::CalculateExpressionFingerprint() {
       CalculateFunctionNodeFingerprint();  // read function node.
       return;
     case kLet:
+      ReadPosition();                             // read position.
       CalculateVariableDeclarationFingerprint();  // read variable declaration.
       CalculateExpressionFingerprint();           // read expression.
+      return;
+    case kBlockExpression:
+      CalculateStatementListFingerprint();
+      CalculateExpressionFingerprint();  // read expression.
       return;
     case kInstantiation:
       CalculateExpressionFingerprint();       // read expression.
@@ -524,12 +606,28 @@ void KernelFingerprintHelper::CalculateExpressionFingerprint() {
     case kNullLiteral:
       return;
     case kConstantExpression:
+      ReadPosition();
+      SkipDartType();
       SkipConstantReference();
       return;
     case kLoadLibrary:
     case kCheckLibraryIsLoaded:
       ReadUInt();  // skip library index
       return;
+    case kConstStaticInvocation:
+    case kConstConstructorInvocation:
+    case kConstListLiteral:
+    case kConstSetLiteral:
+    case kConstMapLiteral:
+    case kSymbolLiteral:
+    case kListConcatenation:
+    case kSetConcatenation:
+    case kMapConcatenation:
+    case kInstanceCreation:
+    case kFileUriExpression:
+    case kStaticTearOff:
+      // These nodes are internal to the front end and
+      // removed by the constant evaluator.
     default:
       ReportUnexpectedTag("expression", tag);
       UNREACHABLE();
@@ -544,6 +642,8 @@ void KernelFingerprintHelper::CalculateStatementFingerprint() {
       CalculateExpressionFingerprint();  // read expression.
       return;
     case kBlock:
+      ReadPosition();  // read file offset.
+      ReadPosition();  // read file end offset.
       CalculateStatementListFingerprint();
       return;
     case kEmptyStatement:
@@ -605,7 +705,7 @@ void KernelFingerprintHelper::CalculateStatementFingerprint() {
           ReadPosition();                    // read jth position.
           CalculateExpressionFingerprint();  // read jth expression.
         }
-        BuildHash(ReadBool());            // read is_default.
+        BuildHash(static_cast<uint32_t>(ReadBool()));  // read is_default.
         CalculateStatementFingerprint();  // read body.
       }
       return;
@@ -712,6 +812,7 @@ void KernelFingerprintHelper::CalculateFunctionNodeFingerprint() {
   CalculateListOfVariableDeclarationsFingerprint();  // read positionals
   CalculateListOfVariableDeclarationsFingerprint();  // read named
   CalculateDartTypeFingerprint();                    // read return type.
+  CalculateOptionalDartTypeFingerprint();            // read future value type.
 
   if (ReadTag() == kSomething) {
     CalculateStatementFingerprint();  // Read body.
@@ -735,13 +836,12 @@ uint32_t KernelFingerprintHelper::CalculateFunctionFingerprint() {
   procedure_helper.SetJustRead(ProcedureHelper::kName);
 
   procedure_helper.ReadUntilExcluding(ProcedureHelper::kFunction);
-  if (ReadTag() == kSomething) {
-    CalculateFunctionNodeFingerprint();
-  }
+  CalculateFunctionNodeFingerprint();
 
   BuildHash(procedure_helper.kind_);
   BuildHash(procedure_helper.flags_);
   BuildHash(procedure_helper.annotation_count_);
+  BuildHash(procedure_helper.stub_kind_);
   BuildHash(name.Hash());
   return hash_;
 }
@@ -749,31 +849,18 @@ uint32_t KernelFingerprintHelper::CalculateFunctionFingerprint() {
 uint32_t KernelSourceFingerprintHelper::CalculateClassFingerprint(
     const Class& klass) {
   Zone* zone = Thread::Current()->zone();
-
-  // Handle typedefs.
-  if (klass.IsTypedefClass()) {
-    const Function& func = Function::Handle(zone, klass.signature_function());
-    return CalculateFunctionFingerprint(func);
-  }
-
   String& name = String::Handle(zone, klass.Name());
   const Array& fields = Array::Handle(zone, klass.fields());
-  const Array& functions = Array::Handle(zone, klass.functions());
+  const Array& functions = Array::Handle(zone, klass.current_functions());
   const Array& interfaces = Array::Handle(zone, klass.interfaces());
   AbstractType& type = AbstractType::Handle(zone);
 
   uint32_t hash = 0;
   hash = KernelFingerprintHelper::CalculateHash(hash, name.Hash());
 
-  type ^= klass.super_type();
+  type = klass.super_type();
   if (!type.IsNull()) {
-    name ^= type.Name();
-    hash = KernelFingerprintHelper::CalculateHash(hash, name.Hash());
-  }
-
-  type ^= klass.mixin();
-  if (!type.IsNull()) {
-    name ^= type.Name();
+    name = type.Name();
     hash = KernelFingerprintHelper::CalculateHash(hash, name.Hash());
   }
 
@@ -796,7 +883,7 @@ uint32_t KernelSourceFingerprintHelper::CalculateClassFingerprint(
   // Calculate fingerprint for the interfaces.
   for (intptr_t i = 0; i < interfaces.Length(); ++i) {
     type ^= interfaces.At(i);
-    name ^= type.Name();
+    name = type.Name();
     hash = KernelFingerprintHelper::CalculateHash(hash, name.Hash());
   }
 
@@ -839,5 +926,3 @@ uint32_t KernelSourceFingerprintHelper::CalculateFunctionFingerprint(
 
 }  // namespace kernel
 }  // namespace dart
-
-#endif  // !defined(DART_PRECOMPILED_RUNTIME)

@@ -1,3 +1,4 @@
+// @dart = 2.9
 // Copyright (c) 2018, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
@@ -13,7 +14,7 @@ main(List<String> args) async {
   }
   String filePath = args[0];
 
-  List<String> output = new File(filePath).readAsLinesSync();
+  List<String> output = File(filePath).readAsLinesSync();
   int failureCount = 0;
   int index = 0;
   final int expectedPrefixLength = 'Expected: '.length;
@@ -31,7 +32,7 @@ main(List<String> args) async {
       String expected = output[index + 1].substring(expectedPrefixLength);
       String actual = output[index + 2].substring(actualPrefixLength);
       String key = '$expected-$actual';
-      currentResult = new TestResult(testName, expected, actual);
+      currentResult = TestResult(testName, expected, actual);
       testsByExpectedAndActual
           .putIfAbsent(key, () => <TestResult>[])
           .add(currentResult);
@@ -115,7 +116,7 @@ main(List<String> args) async {
 
 /// A representation of the result of a single test.
 class TestResult {
-  static final RegExp framePattern = new RegExp('#[0-9]+ ');
+  static final RegExp framePattern = RegExp('#[0-9]+ ');
 
   String testName;
   String expected;
@@ -139,10 +140,6 @@ class TestResult {
             traceLine.contains('DeclarationResolver.applyParameters') ||
             traceLine.contains('ResolutionStorer._store')) {
           return stackTrace[i + 1];
-        } else if (traceLine.contains('_FunctionTypeImplLazy.substitute2') ||
-            traceLine.contains('ElementImpl.encloseElement') ||
-            traceLine.contains('ResolutionStorer._validateLocation')) {
-          return stackTrace[i + 2];
         }
         return traceLine;
       }

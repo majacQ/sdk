@@ -50,51 +50,78 @@ abstract class WebSocketStatus {
   static const int RESERVED_1015 = reserved1015;
 }
 
-/**
- * The [CompressionOptions] class allows you to control
- * the options of WebSocket compression.
- */
+/// Options controlling compression in a [WebSocket].
+///
+/// A [CompressionOptions] instance can be passed to [WebSocket.connect], or
+/// used in other similar places where [WebSocket] compression is configured.
+///
+/// In most cases the default [compressionDefault] is sufficient, but in some
+/// situations, it might be desirable to use different compression parameters,
+/// for example to preserve memory on small devices.
 class CompressionOptions {
-  /// Default WebSocket Compression options.
+  /// Default [WebSocket] compression configuration.
   ///
-  /// Compression will be enabled with the following options:
+  /// Enables compression with default window sizes and no reuse. This is the
+  /// default options used by [WebSocket.connect] if no [CompressionOptions] is
+  /// supplied.
   ///
   /// * `clientNoContextTakeover`: false
   /// * `serverNoContextTakeover`: false
-  /// * `clientMaxWindowBits`: 15
-  /// * `serverMaxWindowBits`: 15
+  /// * `clientMaxWindowBits`: null (default maximal window size of 15 bits)
+  /// * `serverMaxWindowBits`: null (default maximal window size of 15 bits)
   static const CompressionOptions compressionDefault =
       const CompressionOptions();
   @Deprecated("Use compressionDefault instead")
   static const CompressionOptions DEFAULT = compressionDefault;
 
-  /// Disables WebSocket Compression.
+  /// No-compression configuration.
+  ///
+  /// Disables compression when used as compression configuration for a
+  /// [WebSocket].
   static const CompressionOptions compressionOff =
       const CompressionOptions(enabled: false);
   @Deprecated("Use compressionOff instead")
   static const CompressionOptions OFF = compressionOff;
 
-  /// Controls whether the client will reuse its compression instances.
+  /// Whether the client will reuse its compression instances.
   final bool clientNoContextTakeover;
 
-  /// Controls whether the server will reuse its compression instances.
+  /// Whether the server will reuse its compression instances.
   final bool serverNoContextTakeover;
 
-  /// Determines the max window bits for the client.
-  final int clientMaxWindowBits;
+  /// The maximal window size bit count requested by the client.
+  ///
+  /// The windows size for the compression is always a power of two, so the
+  /// number of bits precisely determines the window size.
+  ///
+  /// If set to `null`, the client has no preference, and the compression can
+  /// use up to its default maximum window size of 15 bits depending on the
+  /// server's preference.
+  final int? clientMaxWindowBits;
 
-  /// Determines the max window bits for the server.
-  final int serverMaxWindowBits;
+  /// The maximal window size bit count requested by the server.
+  ///
+  /// The windows size for the compression is always a power of two, so the
+  /// number of bits precisely determines the window size.
+  ///
+  /// If set to `null`, the server has no preference, and the compression can
+  /// use up to its default maximum window size of 15 bits depending on the
+  /// client's preference.
+  final int? serverMaxWindowBits;
 
-  /// Enables or disables WebSocket compression.
+  /// Whether WebSocket compression is enabled.
+  ///
+  /// If not enabled, the remaining fields have no effect, and the
+  /// [compressionOff] instance can, and should, be reused instead of creating a
+  /// new instance with compression disabled.
   final bool enabled;
 
   const CompressionOptions(
-      {this.clientNoContextTakeover: false,
-      this.serverNoContextTakeover: false,
+      {this.clientNoContextTakeover = false,
+      this.serverNoContextTakeover = false,
       this.clientMaxWindowBits,
       this.serverMaxWindowBits,
-      this.enabled: true});
+      this.enabled = true});
 
   /// Parses list of requested server headers to return server compression
   /// response headers.
@@ -103,22 +130,18 @@ class CompressionOptions {
   /// value from headers. Defaults to [WebSocket.DEFAULT_WINDOW_BITS]. Returns a
   /// [_CompressionMaxWindowBits] object which contains the response headers and
   /// negotiated max window bits.
-  _CompressionMaxWindowBits _createServerResponseHeader(HeaderValue requested) {
-    var info = new _CompressionMaxWindowBits();
+  _CompressionMaxWindowBits _createServerResponseHeader(
+      HeaderValue? requested) {
+    var info = new _CompressionMaxWindowBits("", 0);
 
-    int mwb;
-    String part;
-    if (requested?.parameters != null) {
-      part = requested.parameters[_serverMaxWindowBits];
-    }
+    String? part = requested?.parameters[_serverMaxWindowBits];
     if (part != null) {
       if (part.length >= 2 && part.startsWith('0')) {
         throw new ArgumentError("Illegal 0 padding on value.");
       } else {
-        mwb = serverMaxWindowBits == null
-            ? int.parse(part,
-                onError: (source) => _WebSocketImpl.DEFAULT_WINDOW_BITS)
-            : serverMaxWindowBits;
+        int mwb = serverMaxWindowBits ??
+            int.tryParse(part) ??
+            _WebSocketImpl.DEFAULT_WINDOW_BITS;
         info.headerValue = "; server_max_window_bits=${mwb}";
         info.maxWindowBits = mwb;
       }
@@ -130,7 +153,7 @@ class CompressionOptions {
   }
 
   /// Returns default values for client compression request headers.
-  String _createClientRequestHeader(HeaderValue requested, int size) {
+  String _createClientRequestHeader(HeaderValue? requested, int size) {
     var info = "";
 
     // If responding to a valid request, specify size
@@ -161,7 +184,7 @@ class CompressionOptions {
   /// `server_max_window_bits` value.  This method returns a
   /// [_CompressionMaxWindowBits] object with the response headers and
   /// negotiated `maxWindowBits` value.
-  _CompressionMaxWindowBits _createHeader([HeaderValue requested]) {
+  _CompressionMaxWindowBits _createHeader([HeaderValue? requested]) {
     var info = new _CompressionMaxWindowBits("", 0);
     if (!enabled) {
       return info;
@@ -238,8 +261,8 @@ abstract class WebSocketTransformer
    * then the [WebSocket] will be created with the default [CompressionOptions].
    */
   factory WebSocketTransformer(
-      {/*String|Future<String>*/ protocolSelector(List<String> protocols),
-      CompressionOptions compression: CompressionOptions.compressionDefault}) {
+      {/*String|Future<String>*/ protocolSelector(List<String> protocols)?,
+      CompressionOptions compression = CompressionOptions.compressionDefault}) {
     return new _WebSocketTransformerImpl(protocolSelector, compression);
   }
 
@@ -261,8 +284,8 @@ abstract class WebSocketTransformer
    * then the [WebSocket] will be created with the default [CompressionOptions].
    */
   static Future<WebSocket> upgrade(HttpRequest request,
-      {protocolSelector(List<String> protocols),
-      CompressionOptions compression: CompressionOptions.compressionDefault}) {
+      {protocolSelector(List<String> protocols)?,
+      CompressionOptions compression = CompressionOptions.compressionDefault}) {
     return _WebSocketTransformerImpl._upgrade(
         request, protocolSelector, compression);
   }
@@ -303,11 +326,14 @@ abstract class WebSocket
   static const int CLOSED = closed;
 
   /**
-   * Set and get the interval for sending ping signals. If a ping message is not
-   * answered by a pong message from the peer, the `WebSocket` is assumed
-   * disconnected and the connection is closed with a
-   * [WebSocketStatus.GOING_AWAY] close code. When a ping signal is sent, the
-   * pong message must be received within [pingInterval].
+   * The interval between ping signals.
+   *
+   * A ping message is sent every [pingInterval], starting at the first
+   * [pingInterval] after a new value has been assigned or a pong message has
+   * been received. If a ping message is not answered by a pong message from the
+   * peer, the `WebSocket` is assumed disconnected and the connection is closed
+   * with a [WebSocketStatus.goingAway] close code. When a ping signal is sent,
+   * the pong message must be received within [pingInterval].
    *
    * There are never two outstanding pings at any given time, and the next ping
    * timer starts when the pong is received.
@@ -316,7 +342,7 @@ abstract class WebSocket
    *
    * The default value is `null`.
    */
-  Duration pingInterval;
+  Duration? pingInterval;
 
   /**
    * Create a new WebSocket connection. The URL supplied in [url]
@@ -346,9 +372,9 @@ abstract class WebSocket
    * authentication when setting up the connection.
    */
   static Future<WebSocket> connect(String url,
-          {Iterable<String> protocols,
-          Map<String, dynamic> headers,
-          CompressionOptions compression:
+          {Iterable<String>? protocols,
+          Map<String, dynamic>? headers,
+          CompressionOptions compression =
               CompressionOptions.compressionDefault}) =>
       _WebSocketImpl.connect(url, protocols, headers, compression: compression);
 
@@ -376,9 +402,9 @@ abstract class WebSocket
    * then the [WebSocket] will be created with the default [CompressionOptions].
    */
   factory WebSocket.fromUpgradedSocket(Socket socket,
-      {String protocol,
-      bool serverSide,
-      CompressionOptions compression: CompressionOptions.compressionDefault}) {
+      {String? protocol,
+      bool? serverSide,
+      CompressionOptions compression = CompressionOptions.compressionDefault}) {
     if (serverSide == null) {
       throw new ArgumentError("The serverSide argument must be passed "
           "explicitly to WebSocket.fromUpgradedSocket.");
@@ -405,27 +431,27 @@ abstract class WebSocket
    * selected by the server. If no subprotocol is negotiated the
    * value will remain [:null:].
    */
-  String get protocol;
+  String? get protocol;
 
   /**
    * The close code set when the WebSocket connection is closed. If
    * there is no close code available this property will be [:null:]
    */
-  int get closeCode;
+  int? get closeCode;
 
   /**
    * The close reason set when the WebSocket connection is closed. If
    * there is no close reason available this property will be [:null:]
    */
-  String get closeReason;
+  String? get closeReason;
 
   /**
    * Closes the WebSocket connection. Set the optional [code] and [reason]
    * arguments to send close information to the remote peer. If they are
-   * omitted, the peer will see [WebSocketStatus.NO_STATUS_RECEIVED] code
+   * omitted, the peer will see [WebSocketStatus.noStatusReceived] code
    * with no reason.
    */
-  Future close([int code, String reason]);
+  Future close([int? code, String? reason]);
 
   /**
    * Sends data on the WebSocket connection. The data in [data] must
@@ -451,12 +477,12 @@ abstract class WebSocket
   /**
    * Gets the user agent used for WebSocket connections.
    */
-  static String get userAgent => _WebSocketImpl.userAgent;
+  static String? get userAgent => _WebSocketImpl.userAgent;
 
   /**
    * Sets the user agent to use for WebSocket connections.
    */
-  static set userAgent(String userAgent) {
+  static set userAgent(String? userAgent) {
     _WebSocketImpl.userAgent = userAgent;
   }
 }

@@ -1,19 +1,19 @@
 // Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-
+// @dart=2.9
 /*@testedFeatures=checks*/
 library test;
 
 class C<T> {
   // List<T> is covariant in T so it needs checking
-  void f1(List<T> /*@covariance=genericImpl*/ x) {}
+  void f1(List<T> x) {}
 
   // () -> T is covariant in T so it needs checking
-  void f2(T /*@covariance=genericImpl*/ callback()) {}
+  void f2(T callback()) {}
 
   // (T) -> T is partially covariant in T so it needs checking
-  void f3(T /*@covariance=genericImpl*/ callback(T x)) {}
+  void f3(T callback(T x)) {}
 
   // (T) -> void is contravariant in T so it doesn't need checking
   void f4(void callback(T x)) {}

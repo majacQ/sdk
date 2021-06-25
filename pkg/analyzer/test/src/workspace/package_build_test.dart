@@ -3,11 +3,9 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:analyzer/file_system/file_system.dart';
-import 'package:analyzer/src/context/builder.dart';
 import 'package:analyzer/src/generated/source.dart';
 import 'package:analyzer/src/test_utilities/resource_provider_mixin.dart';
 import 'package:analyzer/src/workspace/package_build.dart';
-import 'package:package_config/packages.dart';
 import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
@@ -16,106 +14,103 @@ main() {
     defineReflectiveTests(PackageBuildFileUriResolverTest);
     defineReflectiveTests(PackageBuildPackageUriResolverTest);
     defineReflectiveTests(PackageBuildWorkspaceTest);
+    defineReflectiveTests(PackageBuildWorkspacePackageTest);
   });
 }
 
-class MockContextBuilder implements ContextBuilder {
-  Map<String, Packages> packagesMapMap = <String, Packages>{};
-  Map<Packages, Map<String, List<Folder>>> packagesToMapMap =
-      <Packages, Map<String, List<Folder>>>{};
-
-  Map<String, List<Folder>> convertPackagesToMap(Packages packages) =>
-      packagesToMapMap[packages];
-
-  Packages createPackageMap(String rootDirectoryPath) =>
-      packagesMapMap[rootDirectoryPath];
-
-  noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
-}
-
-class MockPackages implements Packages {
-  noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
-}
-
 class MockUriResolver implements UriResolver {
-  Map<Uri, Source> resolveAbsoluteMap = {};
+  Map<Uri, File> uriToFile = {};
+  Map<String, Uri> pathToUri = {};
 
+  void add(Uri uri, File file) {
+    uriToFile[uri] = file;
+    pathToUri[file.path] = uri;
+  }
+
+  @override
   noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 
-  Source resolveAbsolute(Uri uri, [Uri actualUri]) => resolveAbsoluteMap[uri];
+  @override
+  Source? resolveAbsolute(Uri uri) {
+    return uriToFile[uri]?.createSource(uri);
+  }
+
+  @override
+  Uri? restoreAbsolute(Source source) => pathToUri[source.fullName];
 }
 
 @reflectiveTest
 class PackageBuildFileUriResolverTest with ResourceProviderMixin {
-  PackageBuildWorkspace workspace;
-  PackageBuildFileUriResolver resolver;
+  late final PackageBuildWorkspace workspace;
+  late final PackageBuildFileUriResolver resolver;
 
   void setUp() {
     newFolder('/workspace/.dart_tool/build/generated/project/lib');
-    newFileWithBytes('/workspace/pubspec.yaml', 'name: project'.codeUnits);
-    final MockContextBuilder contextBuilder = new MockContextBuilder();
-    final Packages packages = new MockPackages();
-    contextBuilder.packagesMapMap[convertPath('/workspace')] = packages;
-    contextBuilder.packagesToMapMap[packages] = {'project': []};
+    newPubspecYamlFile('/workspace', 'name: project');
+
     workspace = PackageBuildWorkspace.find(
-        resourceProvider, convertPath('/workspace'), contextBuilder);
-    resolver = new PackageBuildFileUriResolver(workspace);
+      resourceProvider,
+      {
+        'project': [getFolder('/workspace')]
+      },
+      convertPath('/workspace'),
+    )!;
+    resolver = PackageBuildFileUriResolver(workspace);
     newFile('/workspace/test.dart');
     newFile('/workspace/.dart_tool/build/generated/project/gen.dart');
+    expect(workspace.isBazel, isFalse);
   }
 
   void test_resolveAbsolute_doesNotExist() {
-    Source source = _resolvePath('/workspace/foo.dart');
+    var source = _resolvePath('/workspace/foo.dart')!;
     expect(source, isNotNull);
     expect(source.exists(), isFalse);
     expect(source.fullName, convertPath('/workspace/foo.dart'));
   }
 
   void test_resolveAbsolute_file() {
-    Source source = _resolvePath('/workspace/test.dart');
-    expect(source, isNotNull);
+    var source = _resolvePath('/workspace/test.dart')!;
     expect(source.exists(), isTrue);
     expect(source.fullName, convertPath('/workspace/test.dart'));
   }
 
   void test_resolveAbsolute_folder() {
-    Source source = _resolvePath('/workspace');
+    var source = _resolvePath('/workspace');
     expect(source, isNull);
   }
 
   void test_resolveAbsolute_generated_file_exists_one() {
-    Source source = _resolvePath('/workspace/gen.dart');
-    expect(source, isNotNull);
+    var source = _resolvePath('/workspace/gen.dart')!;
     expect(source.exists(), isTrue);
     expect(source.fullName,
         convertPath('/workspace/.dart_tool/build/generated/project/gen.dart'));
   }
 
   void test_resolveAbsolute_notFile_dartUri() {
-    Uri uri = new Uri(scheme: 'dart', path: 'core');
-    Source source = resolver.resolveAbsolute(uri);
+    Uri uri = Uri(scheme: 'dart', path: 'core');
+    var source = resolver.resolveAbsolute(uri);
     expect(source, isNull);
   }
 
   void test_resolveAbsolute_notFile_httpsUri() {
-    Uri uri = new Uri(scheme: 'https', path: '127.0.0.1/test.dart');
-    Source source = resolver.resolveAbsolute(uri);
+    Uri uri = Uri(scheme: 'https', path: '127.0.0.1/test.dart');
+    var source = resolver.resolveAbsolute(uri);
     expect(source, isNull);
   }
 
   void test_restoreAbsolute() {
     Uri uri =
         resourceProvider.pathContext.toUri(convertPath('/workspace/test.dart'));
-    Source source = resolver.resolveAbsolute(uri);
+    var source = resolver.resolveAbsolute(uri)!;
     expect(source, isNotNull);
     expect(resolver.restoreAbsolute(source), uri);
     expect(
-        resolver.restoreAbsolute(
-            new NonExistingSource(source.fullName, null, null)),
+        resolver.restoreAbsolute(NonExistingSource(source.fullName,
+            Uri.parse('package:test/test.dart'), UriKind.PACKAGE_URI)),
         uri);
   }
 
-  Source _resolvePath(String path) {
+  Source? _resolvePath(String path) {
     Uri uri = toUri(path);
     return resolver.resolveAbsolute(uri);
   }
@@ -123,22 +118,21 @@ class PackageBuildFileUriResolverTest with ResourceProviderMixin {
 
 @reflectiveTest
 class PackageBuildPackageUriResolverTest with ResourceProviderMixin {
-  PackageBuildWorkspace workspace;
-  PackageBuildPackageUriResolver resolver;
-  MockUriResolver packageUriResolver;
+  late final PackageBuildWorkspace workspace;
+  late final PackageBuildPackageUriResolver resolver;
+  late final MockUriResolver packageUriResolver;
 
-  Uri addPackageSource(String path, String uriStr, {bool create: true}) {
+  Uri addPackageSource(String path, String uriStr, {bool create = true}) {
     Uri uri = Uri.parse(uriStr);
-    final File file = create
+    final file = create
         ? newFile(path)
-        : resourceProvider.getResource(convertPath(path));
-    final Source source = file.createSource(uri);
-    packageUriResolver.resolveAbsoluteMap[uri] = source;
+        : resourceProvider.getResource(convertPath(path)) as File;
+    packageUriResolver.add(uri, file);
     return uri;
   }
 
   void setUp() {
-    newFileWithBytes('/workspace/pubspec.yaml', 'name: project'.codeUnits);
+    newPubspecYamlFile('/workspace', 'name: project');
   }
 
   void test_resolveAbsolute_generated() {
@@ -157,7 +151,7 @@ class PackageBuildPackageUriResolverTest with ResourceProviderMixin {
     _addResources([
       '/workspace/.dart_tool/build/generated',
     ]);
-    Source source = resolver.resolveAbsolute(Uri.parse('dart:async'));
+    var source = resolver.resolveAbsolute(Uri.parse('dart:async'));
     expect(source, isNull);
   }
 
@@ -165,8 +159,7 @@ class PackageBuildPackageUriResolverTest with ResourceProviderMixin {
     _addResources([
       '/workspace/.dart_tool/build/generated',
     ]);
-    Source source =
-        resolver.resolveAbsolute(Uri.parse('package:/foo/bar.dart'));
+    var source = resolver.resolveAbsolute(Uri.parse('package:/foo/bar.dart'));
     expect(source, isNull);
   }
 
@@ -191,7 +184,8 @@ class PackageBuildPackageUriResolverTest with ResourceProviderMixin {
         exists: false);
   }
 
-  void _addResources(List<String> paths, {String workspacePath: '/workspace'}) {
+  void _addResources(List<String> paths,
+      {String workspacePath = '/workspace'}) {
     for (String path in paths) {
       if (path.endsWith('/')) {
         newFolder(path.substring(0, path.length - 1));
@@ -199,27 +193,26 @@ class PackageBuildPackageUriResolverTest with ResourceProviderMixin {
         newFile(path);
       }
     }
-    final contextBuilder = new MockContextBuilder();
-    final packages = new MockPackages();
-    contextBuilder.packagesMapMap[convertPath(workspacePath)] = packages;
-    contextBuilder.packagesToMapMap[packages] = {'project': []};
     workspace = PackageBuildWorkspace.find(
-        resourceProvider, convertPath(workspacePath), contextBuilder);
-    packageUriResolver = new MockUriResolver();
-    resolver =
-        new PackageBuildPackageUriResolver(workspace, packageUriResolver);
+      resourceProvider,
+      {
+        'project': [getFolder('/workspace')]
+      },
+      convertPath(workspacePath),
+    )!;
+    packageUriResolver = MockUriResolver();
+    resolver = PackageBuildPackageUriResolver(workspace, packageUriResolver);
   }
 
   Source _assertResolveUri(Uri uri, String posixPath,
-      {bool exists: true, bool restore: true}) {
-    Source source = resolver.resolveAbsolute(uri);
-    expect(source, isNotNull);
+      {bool exists = true, bool restore = true}) {
+    var source = resolver.resolveAbsolute(uri)!;
     expect(source.fullName, convertPath(posixPath));
     expect(source.uri, uri);
     expect(source.exists(), exists);
     // If enabled, test also "restoreAbsolute".
     if (restore) {
-      Uri restoredUri = resolver.restoreAbsolute(source);
+      var restoredUri = resolver.restoreAbsolute(source);
       expect(restoredUri.toString(), uri.toString());
     }
     return source;
@@ -227,10 +220,173 @@ class PackageBuildPackageUriResolverTest with ResourceProviderMixin {
 }
 
 @reflectiveTest
+class PackageBuildWorkspacePackageTest with ResourceProviderMixin {
+  late final PackageBuildWorkspace myWorkspace;
+  late final PackageBuildWorkspacePackage myPackage;
+
+  String get fooPackageLibPath => '$fooPackageRootPath/lib';
+
+  String get fooPackageRootPath => '$myWorkspacePath/foo';
+
+  String get myPackageGeneratedPath {
+    return '$myPackageRootPath/.dart_tool/build/generated';
+  }
+
+  String get myPackageLibPath => '$myPackageRootPath/lib';
+
+  String get myPackageRootPath => '$myWorkspacePath/my';
+
+  String get myWorkspacePath => '/workspace';
+
+  void setUp() {
+    newPubspecYamlFile(myPackageRootPath, 'name: my');
+    newFolder(myPackageGeneratedPath);
+
+    myWorkspace = PackageBuildWorkspace.find(
+      resourceProvider,
+      {
+        'my': [getFolder(myPackageLibPath)],
+        'foo': [getFolder(fooPackageLibPath)],
+      },
+      convertPath(myPackageRootPath),
+    )!;
+
+    myPackage = myWorkspace.findPackageFor('$myPackageLibPath/fake.dart')!;
+  }
+
+  test_contains_fileUri() {
+    expect(
+      myPackage.contains(
+        _sourceWithFileUri('$myPackageRootPath/test/a.dart'),
+      ),
+      isTrue,
+    );
+
+    expect(
+      myPackage.contains(
+        _sourceWithFileUri('$fooPackageRootPath/test/a.dart'),
+      ),
+      isFalse,
+    );
+  }
+
+  test_contains_fileUri_generated() {
+    var myGeneratedPath = '$myPackageGeneratedPath/my/test/a.dart';
+    newFile(myGeneratedPath, content: '');
+
+    var fooGeneratedPath = '$myPackageGeneratedPath/foo/test/a.dart';
+    newFile(fooGeneratedPath, content: '');
+
+    expect(
+      myPackage.contains(
+        _sourceWithFileUri(myGeneratedPath),
+      ),
+      isTrue,
+    );
+
+    expect(
+      myPackage.contains(
+        _sourceWithFileUri(fooGeneratedPath),
+      ),
+      isFalse,
+    );
+  }
+
+  test_contains_packageUri() {
+    expect(
+      myPackage.contains(
+        _sourceWithPackageUriWithoutPath('package:my/a.dart'),
+      ),
+      isTrue,
+    );
+
+    expect(
+      myPackage.contains(
+        _sourceWithPackageUriWithoutPath('package:foo/a.dart'),
+      ),
+      isFalse,
+    );
+  }
+
+  test_findPackageFor_my_generated_libFile() {
+    var package = myWorkspace.findPackageFor(
+      convertPath('$myPackageGeneratedPath/my/lib/a.dart'),
+    )!;
+    expect(package.root, convertPath(myPackageRootPath));
+    expect(package.workspace, myWorkspace);
+  }
+
+  test_findPackageFor_my_generated_other() {
+    expect(
+      myWorkspace.findPackageFor(
+        convertPath('$myPackageGeneratedPath/foo/lib/a.dart'),
+      ),
+      isNull,
+    );
+
+    expect(
+      myWorkspace.findPackageFor(
+        convertPath('$myPackageGeneratedPath/foo/test/a.dart'),
+      ),
+      isNull,
+    );
+  }
+
+  test_findPackageFor_my_generated_testFile() {
+    var package = myWorkspace.findPackageFor(
+      convertPath('$myPackageGeneratedPath/my/test/a.dart'),
+    )!;
+    expect(package.root, convertPath(myPackageRootPath));
+    expect(package.workspace, myWorkspace);
+  }
+
+  test_findPackageFor_my_libFile() {
+    var package = myWorkspace.findPackageFor(
+      convertPath('$myPackageLibPath/a.dart'),
+    )!;
+    expect(package.root, convertPath(myPackageRootPath));
+    expect(package.workspace, myWorkspace);
+  }
+
+  test_findPackageFor_my_testFile() {
+    var package = myWorkspace.findPackageFor(
+      convertPath('$myPackageRootPath/test/a.dart'),
+    )!;
+    expect(package.root, convertPath(myPackageRootPath));
+    expect(package.workspace, myWorkspace);
+  }
+
+  test_findPackageFor_other() {
+    expect(
+      myWorkspace.findPackageFor(
+        convertPath('$fooPackageRootPath/lib/a.dart'),
+      ),
+      isNull,
+    );
+
+    expect(
+      myWorkspace.findPackageFor(
+        convertPath('$fooPackageRootPath/test/a.dart'),
+      ),
+      isNull,
+    );
+  }
+
+  Source _sourceWithFileUri(String path) {
+    return _MockSource(path: convertPath(path), uri: toUri(path));
+  }
+
+  Source _sourceWithPackageUriWithoutPath(String uriStr) {
+    var uri = Uri.parse(uriStr);
+    return _MockSource(path: convertPath('/test/lib/test.dart'), uri: uri);
+  }
+}
+
+@reflectiveTest
 class PackageBuildWorkspaceTest with ResourceProviderMixin {
   void test_builtFile_currentProject() {
     newFolder('/workspace/.dart_tool/build');
-    newFileWithBytes('/workspace/pubspec.yaml', 'name: project'.codeUnits);
+    newPubspecYamlFile('/workspace', 'name: project');
     PackageBuildWorkspace workspace =
         _createWorkspace('/workspace', ['project']);
 
@@ -242,7 +398,7 @@ class PackageBuildWorkspaceTest with ResourceProviderMixin {
 
   void test_builtFile_importedPackage() {
     newFolder('/workspace/.dart_tool/build');
-    newFileWithBytes('/workspace/pubspec.yaml', 'name: project'.codeUnits);
+    newPubspecYamlFile('/workspace', 'name: project');
     PackageBuildWorkspace workspace =
         _createWorkspace('/workspace', ['project', 'foo']);
 
@@ -253,7 +409,7 @@ class PackageBuildWorkspaceTest with ResourceProviderMixin {
 
   void test_builtFile_notInPackagesGetsHidden() {
     newFolder('/workspace/.dart_tool/build');
-    newFileWithBytes('/workspace/pubspec.yaml', 'name: project'.codeUnits);
+    newPubspecYamlFile('/workspace', 'name: project');
 
     // Ensure package:bar is not configured.
     PackageBuildWorkspace workspace =
@@ -268,16 +424,40 @@ class PackageBuildWorkspaceTest with ResourceProviderMixin {
 
   void test_find_fail_notAbsolute() {
     expect(
-        () => PackageBuildWorkspace.find(resourceProvider,
-            convertPath('not_absolute'), new MockContextBuilder()),
-        throwsA(const TypeMatcher<AssertionError>()));
+      () {
+        return PackageBuildWorkspace.find(
+          resourceProvider,
+          {},
+          convertPath('not_absolute'),
+        );
+      },
+      throwsArgumentError,
+    );
+  }
+
+  void test_find_hasBuild_hasPubspec_malformed_dontGoToUp() {
+    newFolder('/workspace/.dart_tool/build/generated');
+    newPubspecYamlFile('/workspace', 'name: project');
+
+    newFolder('/workspace/aaa/.dart_tool/build/generated');
+    newPubspecYamlFile('/workspace/aaa', '*');
+
+    var workspace = PackageBuildWorkspace.find(
+      resourceProvider,
+      {},
+      convertPath('/workspace/aaa/lib'),
+    );
+    expect(workspace, isNull);
   }
 
   void test_find_hasDartToolAndPubspec() {
     newFolder('/workspace/.dart_tool/build/generated/project/lib');
-    newFileWithBytes('/workspace/pubspec.yaml', 'name: project'.codeUnits);
-    PackageBuildWorkspace workspace = PackageBuildWorkspace.find(
-        resourceProvider, convertPath('/workspace'), new MockContextBuilder());
+    newPubspecYamlFile('/workspace', 'name: project');
+    var workspace = PackageBuildWorkspace.find(
+      resourceProvider,
+      {},
+      convertPath('/workspace'),
+    )!;
     expect(workspace.root, convertPath('/workspace'));
     expect(workspace.projectPackageName, 'project');
   }
@@ -285,55 +465,27 @@ class PackageBuildWorkspaceTest with ResourceProviderMixin {
   void test_find_hasDartToolAndPubspec_inParentDirectory() {
     newFolder('/workspace/.dart_tool/build/generated/project/lib');
     newFolder('/workspace/opened/up/a/child/dir/.dart_tool/build');
-    newFileWithBytes('/workspace/opened/up/a/child/dir/pubspec.yaml',
-        'name: subproject'.codeUnits);
-    newFileWithBytes('/workspace/pubspec.yaml', 'name: project'.codeUnits);
-    PackageBuildWorkspace workspace = PackageBuildWorkspace.find(
-        resourceProvider,
-        convertPath('/workspace/opened/up/a/child/dir'),
-        new MockContextBuilder());
+    newPubspecYamlFile('/workspace/opened/up/a/child/dir', 'name: subproject');
+    newPubspecYamlFile('/workspace', 'name: project');
+    var workspace = PackageBuildWorkspace.find(
+      resourceProvider,
+      {},
+      convertPath('/workspace/opened/up/a/child/dir'),
+    )!;
     expect(workspace.root, convertPath('/workspace/opened/up/a/child/dir'));
     expect(workspace.projectPackageName, 'subproject');
-  }
-
-  void
-      test_find_hasDartToolAndPubspec_inParentDirectory_ignoresMalformedPubspec() {
-    newFolder('/workspace/.dart_tool/build/generated/project/lib');
-    newFolder('/workspace/opened/up/a/child/dir/.dart_tool/build');
-    newFileWithBytes('/workspace/opened/up/a/child/dir/pubspec.yaml',
-        'not: yaml: here!!! 111'.codeUnits);
-    newFileWithBytes('/workspace/pubspec.yaml', 'name: project'.codeUnits);
-    PackageBuildWorkspace workspace = PackageBuildWorkspace.find(
-        resourceProvider,
-        convertPath('/workspace/opened/up/a/child/dir'),
-        new MockContextBuilder());
-    expect(workspace.root, convertPath('/workspace'));
-    expect(workspace.projectPackageName, 'project');
   }
 
   void test_find_hasDartToolAndPubspec_inParentDirectory_ignoresSoloDartTool() {
     newFolder('/workspace/.dart_tool/build/generated/project/lib');
     newFolder('/workspace/opened/up/a/child/dir');
     newFolder('/workspace/opened/up/a/child/dir/.dart_tool/build');
-    newFileWithBytes('/workspace/pubspec.yaml', 'name: project'.codeUnits);
-    PackageBuildWorkspace workspace = PackageBuildWorkspace.find(
-        resourceProvider,
-        convertPath('/workspace/opened/up/a/child/dir'),
-        new MockContextBuilder());
-    expect(workspace.root, convertPath('/workspace'));
-    expect(workspace.projectPackageName, 'project');
-  }
-
-  void test_find_hasDartToolAndPubspec_inParentDirectory_ignoresSoloPubspec() {
-    newFolder('/workspace/.dart_tool/build/generated/project/lib');
-    newFolder('/workspace/opened/up/a/child/dir');
-    newFileWithBytes('/workspace/opened/up/a/child/dir/pubspec.yaml',
-        'name: subproject'.codeUnits);
-    newFileWithBytes('/workspace/pubspec.yaml', 'name: project'.codeUnits);
-    PackageBuildWorkspace workspace = PackageBuildWorkspace.find(
-        resourceProvider,
-        convertPath('/workspace/opened/up/a/child/dir'),
-        new MockContextBuilder());
+    newPubspecYamlFile('/workspace', 'name: project');
+    var workspace = PackageBuildWorkspace.find(
+      resourceProvider,
+      {},
+      convertPath('/workspace/opened/up/a/child/dir'),
+    )!;
     expect(workspace.root, convertPath('/workspace'));
     expect(workspace.projectPackageName, 'project');
   }
@@ -341,47 +493,75 @@ class PackageBuildWorkspaceTest with ResourceProviderMixin {
   void test_find_hasDartToolNoBuild() {
     // Edge case: an empty .dart_tool directory. Don't assume package:build.
     newFolder('/workspace/.dart_tool');
-    newFileWithBytes('/workspace/pubspec.yaml', 'name: project'.codeUnits);
-    PackageBuildWorkspace workspace = PackageBuildWorkspace.find(
-        resourceProvider, convertPath('/workspace'), new MockContextBuilder());
+    newPubspecYamlFile('/workspace', 'name: project');
+    var workspace = PackageBuildWorkspace.find(
+      resourceProvider,
+      {},
+      convertPath('/workspace'),
+    );
     expect(workspace, isNull);
   }
 
   void test_find_hasDartToolNoPubspec() {
     newFolder('/workspace/.dart_tool/build/generated/project/lib');
-    PackageBuildWorkspace workspace = PackageBuildWorkspace.find(
-        resourceProvider, convertPath('/workspace'), new MockContextBuilder());
+    var workspace = PackageBuildWorkspace.find(
+      resourceProvider,
+      {},
+      convertPath('/workspace'),
+    );
     expect(workspace, isNull);
   }
 
   void test_find_hasDartToolPubButNotBuild() {
     // Dart projects will have this directory, that don't use package:build.
     newFolder('/workspace/.dart_tool/pub');
-    newFileWithBytes('/workspace/pubspec.yaml', 'name: project'.codeUnits);
-    PackageBuildWorkspace workspace = PackageBuildWorkspace.find(
-        resourceProvider, convertPath('/workspace'), new MockContextBuilder());
+    newPubspecYamlFile('/workspace', 'name: project');
+    var workspace = PackageBuildWorkspace.find(
+      resourceProvider,
+      {},
+      convertPath('/workspace'),
+    );
     expect(workspace, isNull);
   }
 
   void test_find_hasMalformedPubspec() {
     newFolder('/workspace/.dart_tool/build/generated/project/lib');
-    newFileWithBytes(
-        '/workspace/pubspec.yaml', 'not: yaml: here! 1111'.codeUnits);
-    PackageBuildWorkspace workspace = PackageBuildWorkspace.find(
-        resourceProvider, convertPath('/workspace'), new MockContextBuilder());
+    newPubspecYamlFile('/workspace', 'not: yaml: here! 1111');
+    var workspace = PackageBuildWorkspace.find(
+      resourceProvider,
+      {},
+      convertPath('/workspace'),
+    );
+    expect(workspace, isNull);
+  }
+
+  void test_find_hasPubspec_noDartTool_dontGoUp() {
+    newFolder('/workspace/.dart_tool/build/generated');
+    newPubspecYamlFile('/workspace', 'name: project');
+
+    newPubspecYamlFile('/workspace/aaa', '*');
+
+    var workspace = PackageBuildWorkspace.find(
+      resourceProvider,
+      {},
+      convertPath('/workspace/aaa/lib'),
+    );
     expect(workspace, isNull);
   }
 
   void test_find_hasPubspecNoDartTool() {
-    newFileWithBytes('/workspace/pubspec.yaml', 'name: project'.codeUnits);
-    PackageBuildWorkspace workspace = PackageBuildWorkspace.find(
-        resourceProvider, convertPath('/workspace'), new MockContextBuilder());
+    newPubspecYamlFile('/workspace', 'name: project');
+    var workspace = PackageBuildWorkspace.find(
+      resourceProvider,
+      {},
+      convertPath('/workspace'),
+    );
     expect(workspace, isNull);
   }
 
   void test_findFile_bin() {
     newFolder('/workspace/.dart_tool/build/generated/project/bin');
-    newFileWithBytes('/workspace/pubspec.yaml', 'name: project'.codeUnits);
+    newPubspecYamlFile('/workspace', 'name: project');
     PackageBuildWorkspace workspace =
         _createWorkspace('/workspace', ['project']);
 
@@ -392,7 +572,7 @@ class PackageBuildWorkspaceTest with ResourceProviderMixin {
 
   void test_findFile_binGenerated() {
     newFolder('/workspace/.dart_tool/build/generated/project/bin');
-    newFileWithBytes('/workspace/pubspec.yaml', 'name: project'.codeUnits);
+    newPubspecYamlFile('/workspace', 'name: project');
     PackageBuildWorkspace workspace =
         _createWorkspace('/workspace', ['project']);
 
@@ -404,7 +584,7 @@ class PackageBuildWorkspaceTest with ResourceProviderMixin {
 
   void test_findFile_libGenerated() {
     newFolder('/workspace/.dart_tool/build/generated/project/lib');
-    newFileWithBytes('/workspace/pubspec.yaml', 'name: project'.codeUnits);
+    newPubspecYamlFile('/workspace', 'name: project');
     PackageBuildWorkspace workspace =
         _createWorkspace('/workspace', ['project']);
 
@@ -416,7 +596,7 @@ class PackageBuildWorkspaceTest with ResourceProviderMixin {
 
   void test_findFile_test() {
     newFolder('/workspace/.dart_tool/build/generated/project/test');
-    newFileWithBytes('/workspace/pubspec.yaml', 'name: project'.codeUnits);
+    newPubspecYamlFile('/workspace', 'name: project');
     PackageBuildWorkspace workspace =
         _createWorkspace('/workspace', ['project']);
 
@@ -427,7 +607,7 @@ class PackageBuildWorkspaceTest with ResourceProviderMixin {
 
   void test_findFile_testGenerated() {
     newFolder('/workspace/.dart_tool/build/generated/project/test');
-    newFileWithBytes('/workspace/pubspec.yaml', 'name: project'.codeUnits);
+    newPubspecYamlFile('/workspace', 'name: project');
     PackageBuildWorkspace workspace =
         _createWorkspace('/workspace', ['project']);
 
@@ -439,7 +619,7 @@ class PackageBuildWorkspaceTest with ResourceProviderMixin {
 
   void test_findFile_web() {
     newFolder('/workspace/.dart_tool/build/generated/project/web');
-    newFileWithBytes('/workspace/pubspec.yaml', 'name: project'.codeUnits);
+    newPubspecYamlFile('/workspace', 'name: project');
     PackageBuildWorkspace workspace =
         _createWorkspace('/workspace', ['project']);
 
@@ -450,7 +630,7 @@ class PackageBuildWorkspaceTest with ResourceProviderMixin {
 
   void test_findFile_webGenerated() {
     newFolder('/workspace/.dart_tool/build/generated/project/web');
-    newFileWithBytes('/workspace/pubspec.yaml', 'name: project'.codeUnits);
+    newPubspecYamlFile('/workspace', 'name: project');
     PackageBuildWorkspace workspace =
         _createWorkspace('/workspace', ['project']);
 
@@ -460,24 +640,45 @@ class PackageBuildWorkspaceTest with ResourceProviderMixin {
         workspace.findFile(convertPath('/workspace/web/file.dart')), webFile);
   }
 
-  void test_supports_flutter() {
-    newFolder('/workspace/.dart_tool/build');
-    newFileWithBytes('/workspace/pubspec.yaml', 'name: project'.codeUnits);
+  void test_isConsistentWithFileSystem() {
+    newFolder('/workspace/.dart_tool/build/generated/project/bin');
+    newPubspecYamlFile('/workspace', 'name: project');
     PackageBuildWorkspace workspace =
-        _createWorkspace('/workspace', ['project', 'flutter']);
+        _createWorkspace('/workspace', ['project']);
+    expect(workspace.isConsistentWithFileSystem, isTrue);
 
-    expect(workspace.hasFlutterDependency, true);
+    newPubspecYamlFile('/workspace', 'name: my2');
+    expect(workspace.isConsistentWithFileSystem, isFalse);
   }
 
   PackageBuildWorkspace _createWorkspace(
       String root, List<String> packageNames) {
-    final contextBuilder = new MockContextBuilder();
-    final packages = new MockPackages();
-    final packageMap = new Map<String, List<Folder>>.fromIterable(packageNames,
-        value: ((_) => []));
-    contextBuilder.packagesMapMap[convertPath(root)] = packages;
-    contextBuilder.packagesToMapMap[packages] = packageMap;
     return PackageBuildWorkspace.find(
-        resourceProvider, convertPath(root), contextBuilder);
+      resourceProvider,
+      Map.fromIterables(
+        packageNames,
+        packageNames.map(
+          (name) => [getFolder('/packages/$name/lib')],
+        ),
+      ),
+      convertPath(root),
+    )!;
   }
+}
+
+class _MockSource implements Source {
+  final String path;
+
+  @override
+  final Uri uri;
+
+  _MockSource({required this.path, required this.uri});
+
+  @override
+  String get fullName {
+    return path;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

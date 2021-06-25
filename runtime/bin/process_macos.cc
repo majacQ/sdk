@@ -23,9 +23,9 @@
 #include "bin/dartutils.h"
 #include "bin/fdutils.h"
 #include "bin/lockers.h"
-#include "bin/log.h"
 #include "bin/namespace.h"
 #include "bin/thread.h"
+#include "platform/syslog.h"
 
 #include "platform/signal_blocker.h"
 #include "platform/utils.h"
@@ -34,7 +34,7 @@ namespace dart {
 namespace bin {
 
 int Process::global_exit_code_ = 0;
-Mutex* Process::global_exit_code_mutex_ = new Mutex();
+Mutex* Process::global_exit_code_mutex_ = nullptr;
 Process::ExitHook Process::exit_hook_ = NULL;
 
 // ProcessInfo is used to map a process id to the file descriptor for
@@ -45,7 +45,7 @@ class ProcessInfo {
  public:
   ProcessInfo(pid_t pid, intptr_t fd) : pid_(pid), fd_(fd) {}
   ~ProcessInfo() {
-    int closed = TEMP_FAILURE_RETRY(close(fd_));
+    int closed = close(fd_);
     if (closed != 0) {
       FATAL("Failed to close process exit code pipe");
     }
@@ -67,6 +67,9 @@ class ProcessInfo {
 // started from Dart.
 class ProcessInfoList {
  public:
+  static void Init();
+  static void Cleanup();
+
   static void AddProcess(pid_t pid, intptr_t fd) {
     MutexLocker locker(mutex_);
     ProcessInfo* info = new ProcessInfo(pid, fd);
@@ -118,7 +121,7 @@ class ProcessInfoList {
 };
 
 ProcessInfo* ProcessInfoList::active_processes_ = NULL;
-Mutex* ProcessInfoList::mutex_ = new Mutex();
+Mutex* ProcessInfoList::mutex_ = nullptr;
 
 // The exit code handler sets up a separate thread which waits for child
 // processes to terminate. That separate thread can then get the exit code from
@@ -126,6 +129,9 @@ Mutex* ProcessInfoList::mutex_ = new Mutex();
 // event loop.
 class ExitCodeHandler {
  public:
+  static void Init();
+  static void Cleanup();
+
   // Notify the ExitCodeHandler that another process exists.
   static void ProcessStarted() {
     // Multiple isolates could be starting processes at the same
@@ -140,7 +146,8 @@ class ExitCodeHandler {
     }
 
     // Start thread that handles process exits when wait returns.
-    int result = Thread::Start(ExitCodeHandlerEntry, 0);
+    int result =
+        Thread::Start("dart:io Process.start", ExitCodeHandlerEntry, 0);
     if (result != 0) {
       FATAL1("Failed to start exit code handler worker thread %d", result);
     }
@@ -220,6 +227,8 @@ class ExitCodeHandler {
             process_count_--;
           }
         }
+      } else if (pid < 0) {
+        FATAL1("Wait for process exit failed: %d", errno);
       }
     }
   }
@@ -236,7 +245,7 @@ class ExitCodeHandler {
 bool ExitCodeHandler::running_ = false;
 int ExitCodeHandler::process_count_ = 0;
 bool ExitCodeHandler::terminate_done_ = false;
-Monitor* ExitCodeHandler::monitor_ = new Monitor();
+Monitor* ExitCodeHandler::monitor_ = nullptr;
 
 class ProcessStarter {
  public:
@@ -331,14 +340,14 @@ class ProcessStarter {
     }
 
     // Read the result of executing the child process.
-    VOID_TEMP_FAILURE_RETRY(close(exec_control_[1]));
+    close(exec_control_[1]);
     exec_control_[1] = -1;
     if (Process::ModeIsAttached(mode_)) {
       err = ReadExecResult();
     } else {
       err = ReadDetachedExecResult(&pid);
     }
-    VOID_TEMP_FAILURE_RETRY(close(exec_control_[0]));
+    close(exec_control_[0]);
     exec_control_[0] = -1;
 
     // Return error code if any failures.
@@ -349,7 +358,7 @@ class ProcessStarter {
         // GetProcessExitCodes will get a broken pipe error when it
         // tries to write to the writing side of the pipe and it will
         // ignore the error.
-        VOID_TEMP_FAILURE_RETRY(close(*exit_event_));
+        close(*exit_event_);
         *exit_event_ = -1;
       }
       CloseAllPipes();
@@ -360,17 +369,17 @@ class ProcessStarter {
       // Connect stdio, stdout and stderr.
       FDUtils::SetNonBlocking(read_in_[0]);
       *in_ = read_in_[0];
-      VOID_TEMP_FAILURE_RETRY(close(read_in_[1]));
+      close(read_in_[1]);
       FDUtils::SetNonBlocking(write_out_[1]);
       *out_ = write_out_[1];
-      VOID_TEMP_FAILURE_RETRY(close(write_out_[0]));
+      close(write_out_[0]);
       FDUtils::SetNonBlocking(read_err_[0]);
       *err_ = read_err_[0];
-      VOID_TEMP_FAILURE_RETRY(close(read_err_[1]));
+      close(read_err_[1]);
     } else {
       // Close all fds.
-      VOID_TEMP_FAILURE_RETRY(close(read_in_[0]));
-      VOID_TEMP_FAILURE_RETRY(close(read_in_[1]));
+      close(read_in_[0]);
+      close(read_in_[1]);
       ASSERT(write_out_[0] == -1);
       ASSERT(write_out_[1] == -1);
       ASSERT(read_err_[0] == -1);
@@ -468,9 +477,7 @@ class ProcessStarter {
     }
 #endif
 
-    VOID_TEMP_FAILURE_RETRY(
-        execvp(path_, const_cast<char* const*>(program_arguments_)));
-
+    execvp(path_, const_cast<char* const*>(program_arguments_));
     ReportChildError();
   }
 
@@ -482,9 +489,9 @@ class ProcessStarter {
       ASSERT(read_err_[1] == -1);
       // For a detached process the pipe to connect stdout is only used for
       // signaling when to do the first fork.
-      VOID_TEMP_FAILURE_RETRY(close(read_in_[0]));
+      close(read_in_[0]);
       read_in_[0] = -1;
-      VOID_TEMP_FAILURE_RETRY(close(read_in_[1]));
+      close(read_in_[1]);
       read_in_[1] = -1;
     } else {
       // Don't close any fds if keeping stdio open to the detached process.
@@ -514,11 +521,18 @@ class ProcessStarter {
               (TEMP_FAILURE_RETRY(chdir(working_directory_)) == -1)) {
             ReportChildError();
           }
+#if !HOST_OS_IOS
+          if (program_environment_ != NULL) {
+            // On MacOS you have to do a bit of magic to get to the
+            // environment strings.
+            char*** environ = _NSGetEnviron();
+            *environ = program_environment_;
+          }
+#endif
 
           // Report the final PID and do the exec.
           ReportPid(getpid());  // getpid cannot fail.
-          VOID_TEMP_FAILURE_RETRY(
-              execvp(path_, const_cast<char* const*>(program_arguments_)));
+          execvp(path_, const_cast<char* const*>(program_arguments_));
           ReportChildError();
         } else {
           // Exit the intermeiate process.
@@ -596,7 +610,7 @@ class ProcessStarter {
     }
     for (int fd = 0; fd < max_fds; fd++) {
       if (fd != exec_control_[1]) {
-        VOID_TEMP_FAILURE_RETRY(close(fd));
+        close(fd);
       }
     }
 
@@ -628,24 +642,24 @@ class ProcessStarter {
     for (int fd = 0; fd < max_fds; fd++) {
       if ((fd != exec_control_[1]) && (fd != write_out_[0]) &&
           (fd != read_in_[1]) && (fd != read_err_[1])) {
-        VOID_TEMP_FAILURE_RETRY(close(fd));
+        close(fd);
       }
     }
 
     if (TEMP_FAILURE_RETRY(dup2(write_out_[0], STDIN_FILENO)) == -1) {
       ReportChildError();
     }
-    VOID_TEMP_FAILURE_RETRY(close(write_out_[0]));
+    close(write_out_[0]);
 
     if (TEMP_FAILURE_RETRY(dup2(read_in_[1], STDOUT_FILENO)) == -1) {
       ReportChildError();
     }
-    VOID_TEMP_FAILURE_RETRY(close(read_in_[1]));
+    close(read_in_[1]);
 
     if (TEMP_FAILURE_RETRY(dup2(read_err_[1], STDERR_FILENO)) == -1) {
       ReportChildError();
     }
-    VOID_TEMP_FAILURE_RETRY(close(read_err_[1]));
+    close(read_err_[1]);
   }
 
   int CleanupAndReturnError() {
@@ -680,7 +694,7 @@ class ProcessStarter {
       FDUtils::WriteToBlocking(exec_control_[1], os_error_message,
                                strlen(os_error_message) + 1);
     }
-    VOID_TEMP_FAILURE_RETRY(close(exec_control_[1]));
+    close(exec_control_[1]);
     exit(1);
   }
 
@@ -709,7 +723,7 @@ class ProcessStarter {
   void ClosePipe(int* fds) {
     for (int i = 0; i < 2; i++) {
       if (fds[i] != -1) {
-        VOID_TEMP_FAILURE_RETRY(close(fds[i]));
+        close(fds[i]);
         fds[i] = -1;
       }
     }
@@ -764,11 +778,11 @@ int Process::Start(Namespace* namespc,
   return starter.Start();
 }
 
-static bool CloseProcessBuffers(struct pollfd fds[3]) {
+static bool CloseProcessBuffers(struct pollfd* fds, int alive) {
   int e = errno;
-  VOID_TEMP_FAILURE_RETRY(close(fds[0].fd));
-  VOID_TEMP_FAILURE_RETRY(close(fds[1].fd));
-  VOID_TEMP_FAILURE_RETRY(close(fds[2].fd));
+  for (int i = 0; i < alive; i++) {
+    close(fds[i].fd);
+  }
   errno = e;
   return false;
 }
@@ -780,7 +794,7 @@ bool Process::Wait(intptr_t pid,
                    intptr_t exit_event,
                    ProcessResult* result) {
   // Close input to the process right away.
-  VOID_TEMP_FAILURE_RETRY(close(in));
+  close(in);
 
   // There is no return from this function using Dart_PropagateError
   // as memory used by the buffer lists is freed through their
@@ -805,13 +819,15 @@ bool Process::Wait(intptr_t pid,
   while (alive > 0) {
     // Blocking call waiting for events from the child process.
     if (TEMP_FAILURE_RETRY(poll(fds, alive, -1)) <= 0) {
-      return CloseProcessBuffers(fds);
+      return CloseProcessBuffers(fds, alive);
     }
 
     // Process incoming data.
-    int current_alive = alive;
-    for (int i = 0; i < current_alive; i++) {
+    for (int i = 0; i < alive; i++) {
       intptr_t avail;
+      if ((fds[i].revents & (POLLNVAL | POLLERR)) != 0) {
+        return CloseProcessBuffers(fds, alive);
+      }
       if ((fds[i].revents & POLLIN) != 0) {
         avail = FDUtils::AvailableBytes(fds[i].fd);
         // On Mac OS POLLIN can be set with zero available
@@ -819,18 +835,18 @@ bool Process::Wait(intptr_t pid,
         if (avail > 0) {
           if (fds[i].fd == out) {
             if (!out_data.Read(out, avail)) {
-              return CloseProcessBuffers(fds);
+              return CloseProcessBuffers(fds, alive);
             }
           } else if (fds[i].fd == err) {
             if (!err_data.Read(err, avail)) {
-              return CloseProcessBuffers(fds);
+              return CloseProcessBuffers(fds, alive);
             }
           } else if (fds[i].fd == exit_event) {
             if (avail == 8) {
               intptr_t b =
-                  TEMP_FAILURE_RETRY(read(fds[i].fd, exit_code_data.bytes, 8));
+                  TEMP_FAILURE_RETRY(read(exit_event, exit_code_data.bytes, 8));
               if (b != 8) {
-                return CloseProcessBuffers(fds);
+                return CloseProcessBuffers(fds, alive);
               }
             }
           } else {
@@ -840,11 +856,15 @@ bool Process::Wait(intptr_t pid,
       }
       if (((fds[i].revents & POLLHUP) != 0) ||
           (((fds[i].revents & POLLIN) != 0) && (avail == 0))) {
-        VOID_TEMP_FAILURE_RETRY(close(fds[i].fd));
+        // Remove the pollfd from the list of pollfds.
+        close(fds[i].fd);
         alive--;
         if (i < alive) {
           fds[i] = fds[alive];
         }
+        // Process the same index again.
+        i--;
+        continue;
       }
     }
   }
@@ -964,7 +984,7 @@ int64_t Process::MaxRSS() {
   return usage.ru_maxrss;
 }
 
-static Mutex* signal_mutex = new Mutex();
+static Mutex* signal_mutex = nullptr;
 static SignalInfo* signal_handlers = NULL;
 static const int kSignalsCount = 7;
 static const int kSignals[kSignalsCount] = {
@@ -973,7 +993,7 @@ static const int kSignals[kSignalsCount] = {
 };
 
 SignalInfo::~SignalInfo() {
-  VOID_TEMP_FAILURE_RETRY(close(fd_));
+  close(fd_);
 }
 
 static void SignalHandler(int signal) {
@@ -1009,44 +1029,45 @@ intptr_t Process::SetSignalHandler(intptr_t signal) {
   }
   if (!FDUtils::SetCloseOnExec(fds[0]) || !FDUtils::SetCloseOnExec(fds[1]) ||
       !FDUtils::SetNonBlocking(fds[0])) {
-    VOID_TEMP_FAILURE_RETRY(close(fds[0]));
-    VOID_TEMP_FAILURE_RETRY(close(fds[1]));
+    close(fds[0]);
+    close(fds[1]);
     return -1;
   }
   ThreadSignalBlocker blocker(kSignalsCount, kSignals);
   MutexLocker lock(signal_mutex);
   SignalInfo* handler = signal_handlers;
   bool listen = true;
+  sa_handler_t oldact_handler = nullptr;
   while (handler != NULL) {
     if (handler->signal() == signal) {
+      oldact_handler = handler->oldact();
       listen = false;
       break;
     }
     handler = handler->next();
   }
   if (listen) {
-    struct sigaction act;
-    bzero(&act, sizeof(act));
+    struct sigaction act = {};
     act.sa_handler = SignalHandler;
     sigemptyset(&act.sa_mask);
     for (int i = 0; i < kSignalsCount; i++) {
       sigaddset(&act.sa_mask, kSignals[i]);
     }
-    intptr_t status = NO_RETRY_EXPECTED(sigaction(signal, &act, NULL));
+    struct sigaction oldact = {};
+    intptr_t status = NO_RETRY_EXPECTED(sigaction(signal, &act, &oldact));
     if (status < 0) {
-      VOID_TEMP_FAILURE_RETRY(close(fds[0]));
-      VOID_TEMP_FAILURE_RETRY(close(fds[1]));
+      close(fds[0]);
+      close(fds[1]);
       return -1;
     }
+    oldact_handler = oldact.sa_handler;
   }
-  signal_handlers = new SignalInfo(fds[1], signal, signal_handlers);
+  signal_handlers =
+      new SignalInfo(fds[1], signal, oldact_handler, signal_handlers);
   return fds[0];
 }
 
 void Process::ClearSignalHandler(intptr_t signal, Dart_Port port) {
-  // Either the port is illegal or there is no current isolate, but not both.
-  ASSERT((port != ILLEGAL_PORT) || (Dart_CurrentIsolate() == NULL));
-  ASSERT((port == ILLEGAL_PORT) || (Dart_CurrentIsolate() != NULL));
   signal = SignalMap(signal);
   if (signal == -1) {
     return;
@@ -1054,7 +1075,9 @@ void Process::ClearSignalHandler(intptr_t signal, Dart_Port port) {
   ThreadSignalBlocker blocker(kSignalsCount, kSignals);
   MutexLocker lock(signal_mutex);
   SignalInfo* handler = signal_handlers;
-  bool unlisten = true;
+  sa_handler_t oldact_handler = SIG_DFL;
+  bool any_removed = false;
+  bool any_remaining = false;
   while (handler != NULL) {
     bool remove = false;
     if (handler->signal() == signal) {
@@ -1064,8 +1087,10 @@ void Process::ClearSignalHandler(intptr_t signal, Dart_Port port) {
         }
         handler->Unlink();
         remove = true;
+        oldact_handler = handler->oldact();
+        any_removed = true;
       } else {
-        unlisten = false;
+        any_remaining = true;
       }
     }
     SignalInfo* next = handler->next();
@@ -1074,12 +1099,93 @@ void Process::ClearSignalHandler(intptr_t signal, Dart_Port port) {
     }
     handler = next;
   }
-  if (unlisten) {
-    struct sigaction act;
-    bzero(&act, sizeof(act));
-    act.sa_handler = SIG_DFL;
+  if (any_removed && !any_remaining) {
+    struct sigaction act = {};
+    act.sa_handler = oldact_handler;
     VOID_NO_RETRY_EXPECTED(sigaction(signal, &act, NULL));
   }
+}
+
+void Process::ClearSignalHandlerByFd(intptr_t fd, Dart_Port port) {
+  ThreadSignalBlocker blocker(kSignalsCount, kSignals);
+  MutexLocker lock(signal_mutex);
+  SignalInfo* handler = signal_handlers;
+  sa_handler_t oldact_handler = SIG_DFL;
+  bool any_remaining = false;
+  intptr_t signal = -1;
+  while (handler != NULL) {
+    bool remove = false;
+    if (handler->fd() == fd) {
+      if ((port == ILLEGAL_PORT) || (handler->port() == port)) {
+        if (signal_handlers == handler) {
+          signal_handlers = handler->next();
+        }
+        handler->Unlink();
+        remove = true;
+        signal = handler->signal();
+      } else {
+        any_remaining = true;
+      }
+    }
+    SignalInfo* next = handler->next();
+    if (remove) {
+      delete handler;
+    }
+    handler = next;
+  }
+  if ((signal != -1) && !any_remaining) {
+    struct sigaction act = {};
+    act.sa_handler = oldact_handler;
+    VOID_NO_RETRY_EXPECTED(sigaction(signal, &act, NULL));
+  }
+}
+
+void ProcessInfoList::Init() {
+  ASSERT(ProcessInfoList::mutex_ == nullptr);
+  ProcessInfoList::mutex_ = new Mutex();
+}
+
+void ProcessInfoList::Cleanup() {
+  ASSERT(ProcessInfoList::mutex_ != nullptr);
+  delete ProcessInfoList::mutex_;
+  ProcessInfoList::mutex_ = nullptr;
+}
+
+void ExitCodeHandler::Init() {
+  ASSERT(ExitCodeHandler::monitor_ == nullptr);
+  ExitCodeHandler::monitor_ = new Monitor();
+}
+
+void ExitCodeHandler::Cleanup() {
+  ASSERT(ExitCodeHandler::monitor_ != nullptr);
+  delete ExitCodeHandler::monitor_;
+  ExitCodeHandler::monitor_ = nullptr;
+}
+
+void Process::Init() {
+  ExitCodeHandler::Init();
+  ProcessInfoList::Init();
+
+  ASSERT(signal_mutex == nullptr);
+  signal_mutex = new Mutex();
+
+  ASSERT(Process::global_exit_code_mutex_ == nullptr);
+  Process::global_exit_code_mutex_ = new Mutex();
+}
+
+void Process::Cleanup() {
+  ClearAllSignalHandlers();
+
+  ASSERT(signal_mutex != nullptr);
+  delete signal_mutex;
+  signal_mutex = nullptr;
+
+  ASSERT(Process::global_exit_code_mutex_ != nullptr);
+  delete Process::global_exit_code_mutex_;
+  Process::global_exit_code_mutex_ = nullptr;
+
+  ProcessInfoList::Cleanup();
+  ExitCodeHandler::Cleanup();
 }
 
 }  // namespace bin

@@ -22,6 +22,7 @@
 
 #include "platform/memory_sanitizer.h"
 #include "platform/utils.h"
+#include "vm/code_comments.h"
 #include "vm/code_observers.h"
 #include "vm/dart.h"
 #include "vm/flags.h"
@@ -37,12 +38,14 @@ namespace dart {
 DEFINE_FLAG(bool,
             generate_perf_events_symbols,
             false,
-            "Generate events symbols for profiling with perf");
+            "Generate events symbols for profiling with perf (disables dual "
+            "code mapping)");
 
 DEFINE_FLAG(bool,
             generate_perf_jitdump,
             false,
-            "Generate jitdump file to use with perf-inject");
+            "Generate jitdump file to use with perf-inject (disables dual code "
+            "mapping)");
 
 DECLARE_FLAG(bool, write_protect_code);
 DECLARE_FLAG(bool, write_protect_vm_isolate);
@@ -490,11 +493,15 @@ int64_t OS::GetCurrentThreadCPUMicros() {
   return result;
 }
 
+int64_t OS::GetCurrentThreadCPUMicrosForTimeline() {
+  return OS::GetCurrentThreadCPUMicros();
+}
+
 // TODO(5411554):  May need to hoist these architecture dependent code
 // into a architecture specific file e.g: os_ia32_linux.cc
 intptr_t OS::ActivationFrameAlignment() {
 #if defined(TARGET_ARCH_IA32) || defined(TARGET_ARCH_X64) ||                   \
-    defined(TARGET_ARCH_ARM64) || defined(TARGET_ARCH_DBC)
+    defined(TARGET_ARCH_ARM64)
   const int kMinimumAlignment = 16;
 #elif defined(TARGET_ARCH_ARM)
   const int kMinimumAlignment = 8;
@@ -507,25 +514,6 @@ intptr_t OS::ActivationFrameAlignment() {
   // Flags::DebugIsInt("stackalign", &alignment);
   ASSERT(Utils::IsPowerOfTwo(alignment));
   ASSERT(alignment >= kMinimumAlignment);
-  return alignment;
-}
-
-intptr_t OS::PreferredCodeAlignment() {
-#if defined(TARGET_ARCH_IA32) || defined(TARGET_ARCH_X64) ||                   \
-    defined(TARGET_ARCH_ARM64) || defined(TARGET_ARCH_DBC)
-  const int kMinimumAlignment = 32;
-#elif defined(TARGET_ARCH_ARM)
-  const int kMinimumAlignment = 16;
-#else
-#error Unsupported architecture.
-#endif
-  intptr_t alignment = kMinimumAlignment;
-  // TODO(5411554): Allow overriding default code alignment for
-  // testing purposes.
-  // Flags::DebugIsInt("codealign", &alignment);
-  ASSERT(Utils::IsPowerOfTwo(alignment));
-  ASSERT(alignment >= kMinimumAlignment);
-  ASSERT(alignment <= OS::kMaxPreferredCodeAlignment);
   return alignment;
 }
 
@@ -558,9 +546,7 @@ void OS::SleepMicros(int64_t micros) {
   }
 }
 
-// TODO(regis, iposva): When this function is no longer called from the
-// CodeImmutability test in object_test.cc, it will be called only from the
-// simulator, which means that only the Intel implementation is needed.
+// TODO(regis): Function called only from the simulator.
 void OS::DebugBreak() {
   __builtin_trap();
 }
@@ -598,7 +584,7 @@ char* OS::VSCreate(Zone* zone, const char* format, va_list args) {
   va_end(measure_args);
 
   char* buffer;
-  if (zone) {
+  if (zone != nullptr) {
     buffer = zone->Alloc<char>(len + 1);
   } else {
     buffer = reinterpret_cast<char*>(malloc(len + 1));
@@ -661,7 +647,10 @@ void OS::Init() {}
 
 void OS::Cleanup() {}
 
+void OS::PrepareToAbort() {}
+
 void OS::Abort() {
+  PrepareToAbort();
   abort();
 }
 

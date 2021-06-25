@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'fix_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(ImportLibraryPrefixTest);
   });
@@ -19,38 +19,59 @@ class ImportLibraryPrefixTest extends FixProcessorTest {
   @override
   FixKind get kind => DartFixKind.IMPORT_LIBRARY_PREFIX;
 
-  test_withClass() async {
-    await resolveTestUnit('''
+  Future<void> test_withClass() async {
+    await resolveTestCode('''
 import 'dart:collection' as pref;
 main() {
-  pref.HashMap s = null;
-  LinkedHashMap f = null;
+  pref.HashMap? s = null;
+  LinkedHashMap? f = null;
   print('\$s \$f');
 }
 ''');
     await assertHasFix('''
 import 'dart:collection' as pref;
 main() {
-  pref.HashMap s = null;
-  pref.LinkedHashMap f = null;
+  pref.HashMap? s = null;
+  pref.LinkedHashMap? f = null;
   print('\$s \$f');
 }
 ''');
   }
 
-  test_withTopLevelVariable() async {
-    await resolveTestUnit('''
+  Future<void> test_withExtension() async {
+    addSource('/home/test/lib/lib.dart', '''
+class C {}
+extension E on int {
+  static String m() => '';
+}
+''');
+    await resolveTestCode('''
+import 'lib.dart' as p;
+void f(p.C c) {
+  print(E.m());
+}
+''');
+    await assertHasFix('''
+import 'lib.dart' as p;
+void f(p.C c) {
+  print(p.E.m());
+}
+''');
+  }
+
+  Future<void> test_withTopLevelVariable() async {
+    await resolveTestCode('''
 import 'dart:math' as pref;
 main() {
-  print(pref.E);
-  print(PI);
+  print(pref.e);
+  print(pi);
 }
 ''');
     await assertHasFix('''
 import 'dart:math' as pref;
 main() {
-  print(pref.E);
-  print(pref.PI);
+  print(pref.e);
+  print(pref.pi);
 }
 ''');
   }

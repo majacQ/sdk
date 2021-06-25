@@ -3,14 +3,6 @@
 // BSD-style license that can be found in the LICENSE file.
 import 'dart:io';
 
-// TODO(rnystrom): Differences from test.dart's version:
-// - Remove special handling for "ff" as firefox.
-// - "windows" -> "win".
-// - "macos" -> "mac".
-// - toString() on enum classes is just name.
-// - builderTag defaults to empty string, not null.
-// Need to migrate test.dart to not expect the above before it can use this.
-
 // READ ME! If you add a new field to this, make sure to add it to
 // [parse()], [optionsEqual()], [hashCode], and [toString()]. A good check is to
 // comment out an existing field and see what breaks. Every error is a place
@@ -123,7 +115,7 @@ class Configuration {
 
     // Infer option values from the words in the configuration name.
     var words = name.split("-").toSet();
-    var optionsCopy = new Map.of(optionsJson);
+    var optionsCopy = Map.of(optionsJson);
 
     T enumOption<T extends NamedEnum>(
         String option, List<String> allowed, T Function(String) parse) {
@@ -210,7 +202,7 @@ class Configuration {
         throw FormatException('Option "$option" had value "$value", which is '
             'not a List.');
       }
-      return new List<String>.from(value as List);
+      return List<String>.from(value as List);
     }
 
     // Extract options from the name and map.
@@ -220,10 +212,14 @@ class Configuration {
     var mode = enumOption("mode", Mode.names, Mode.find);
     var runtime = enumOption("runtime", Runtime.names, Runtime.find);
     var system = enumOption("system", System.names, System.find);
+    var nnbdMode = enumOption("nnbd", NnbdMode.names, NnbdMode.find);
+    var sanitizer = enumOption("sanitizer", Sanitizer.names, Sanitizer.find);
 
     // Fill in any missing values using defaults when possible.
     architecture ??= Architecture.x64;
     system ??= System.host;
+    nnbdMode ??= NnbdMode.legacy;
+    sanitizer ??= Sanitizer.none;
 
     // Infer from compiler from runtime or vice versa.
     if (compiler == null) {
@@ -247,28 +243,31 @@ class Configuration {
 
     var configuration = Configuration(
         name, architecture, compiler, mode, runtime, system,
+        nnbdMode: nnbdMode,
+        sanitizer: sanitizer,
+        babel: stringOption("babel"),
         builderTag: stringOption("builder-tag"),
+        genKernelOptions: stringListOption("gen-kernel-options"),
         vmOptions: stringListOption("vm-options"),
+        dart2jsOptions: stringListOption("dart2js-options"),
+        experiments: stringListOption("enable-experiment"),
         timeout: intOption("timeout"),
         enableAsserts: boolOption("enable-asserts"),
         isChecked: boolOption("checked"),
         isCsp: boolOption("csp"),
         isHostChecked: boolOption("host-checked"),
         isMinified: boolOption("minified"),
-        previewDart2: boolOption("preview-dart-2"),
         useAnalyzerCfe: boolOption("use-cfe"),
         useAnalyzerFastaParser: boolOption("analyzer-use-fasta-parser"),
-        useBlobs: boolOption("use-blobs"),
-        useDart2JSWithKernel: boolOption("dart2js-with-kernel"),
-        useDart2JSOldFrontEnd: boolOption("dart2js-old-frontend"),
-        useFastStartup: boolOption("fast-startup"),
+        useElf: boolOption("use-elf"),
         useHotReload: boolOption("hot-reload"),
         useHotReloadRollback: boolOption("hot-reload-rollback"),
-        useSdk: boolOption("use-sdk"));
+        useSdk: boolOption("use-sdk"),
+        useQemu: boolOption("use-qemu"));
 
     // Should have consumed the whole map.
     if (optionsCopy.isNotEmpty) {
-      throw new FormatException('Unknown option "${optionsCopy.keys.first}".');
+      throw FormatException('Unknown option "${optionsCopy.keys.first}".');
     }
 
     return configuration;
@@ -286,11 +285,33 @@ class Configuration {
 
   final System system;
 
+  /// Which NNBD mode to run the test files under.
+  final NnbdMode nnbdMode;
+
+  final Sanitizer sanitizer;
+
+  final String babel;
+
   final String builderTag;
+
+  final List<String> genKernelOptions;
 
   final List<String> vmOptions;
 
-  int timeout;
+  final List<String> dart2jsOptions;
+
+  /// The names of the experiments to enable while running tests.
+  ///
+  /// A test may *require* an experiment to always be enabled by containing a
+  /// comment like:
+  ///
+  ///     // SharedOptions=--enable-experiment=extension-methods
+  ///
+  /// Enabling an experiment here in the configuration allows running the same
+  /// test both with an experiment on and off.
+  final List<String> experiments;
+
+  final int timeout;
 
   final bool enableAsserts;
 
@@ -299,70 +320,73 @@ class Configuration {
 
   final bool isCsp;
 
-  // TODO(rnystrom): Remove this when Dart 1.0 is no longer supported.
+  /// Enables asserts in the dart2js compiler.
   final bool isHostChecked;
 
   final bool isMinified;
-
-  // TODO(rnystrom): Remove this when Dart 1.0 is no longer supported.
-  final bool previewDart2;
 
   // TODO(whesse): Remove these when only fasta front end is in analyzer.
   final bool useAnalyzerCfe;
   final bool useAnalyzerFastaParser;
 
-  // TODO(rnystrom): What is this?
-  final bool useBlobs;
-
-  // TODO(rnystrom): Remove these when Dart 1.0 is no longer supported.
-  final bool useDart2JSWithKernel;
-  final bool useDart2JSOldFrontEnd;
-
-  final bool useFastStartup;
+  final bool useElf;
 
   final bool useHotReload;
   final bool useHotReloadRollback;
 
   final bool useSdk;
 
+  final bool useQemu;
+
   Configuration(this.name, this.architecture, this.compiler, this.mode,
       this.runtime, this.system,
-      {String builderTag,
+      {NnbdMode nnbdMode,
+      Sanitizer sanitizer,
+      String babel,
+      String builderTag,
+      List<String> genKernelOptions,
       List<String> vmOptions,
+      List<String> dart2jsOptions,
+      List<String> experiments,
       int timeout,
       bool enableAsserts,
       bool isChecked,
       bool isCsp,
       bool isHostChecked,
       bool isMinified,
-      bool previewDart2,
       bool useAnalyzerCfe,
       bool useAnalyzerFastaParser,
-      bool useBlobs,
-      bool useDart2JSWithKernel,
-      bool useDart2JSOldFrontEnd,
-      bool useFastStartup,
+      bool useElf,
       bool useHotReload,
       bool useHotReloadRollback,
-      bool useSdk})
-      : builderTag = builderTag ?? "",
+      bool useSdk,
+      bool useQemu})
+      : nnbdMode = nnbdMode ?? NnbdMode.legacy,
+        sanitizer = sanitizer ?? Sanitizer.none,
+        babel = babel ?? "",
+        builderTag = builderTag ?? "",
+        genKernelOptions = genKernelOptions ?? <String>[],
         vmOptions = vmOptions ?? <String>[],
-        timeout = timeout,
+        dart2jsOptions = dart2jsOptions ?? <String>[],
+        experiments = experiments ?? <String>[],
+        timeout = timeout ?? -1,
         enableAsserts = enableAsserts ?? false,
         isChecked = isChecked ?? false,
         isCsp = isCsp ?? false,
         isHostChecked = isHostChecked ?? false,
         isMinified = isMinified ?? false,
-        previewDart2 = previewDart2 ?? true,
         useAnalyzerCfe = useAnalyzerCfe ?? false,
         useAnalyzerFastaParser = useAnalyzerFastaParser ?? false,
-        useBlobs = useBlobs ?? false,
-        useDart2JSWithKernel = useDart2JSWithKernel ?? false,
-        useDart2JSOldFrontEnd = useDart2JSOldFrontEnd ?? false,
-        useFastStartup = useFastStartup ?? false,
+        useElf = useElf ?? false,
         useHotReload = useHotReload ?? false,
         useHotReloadRollback = useHotReloadRollback ?? false,
-        useSdk = useSdk ?? false;
+        useSdk = useSdk ?? false,
+        useQemu = useQemu ?? false {
+    if (name.contains(" ")) {
+      throw ArgumentError(
+          "Name of test configuration cannot contain spaces: $name");
+    }
+  }
 
   /// Returns `true` if this configuration's options all have the same values
   /// as [other].
@@ -372,27 +396,47 @@ class Configuration {
       mode == other.mode &&
       runtime == other.runtime &&
       system == other.system &&
+      nnbdMode == other.nnbdMode &&
+      sanitizer == other.sanitizer &&
+      babel == other.babel &&
       builderTag == other.builderTag &&
-      vmOptions.join(" & ") == other.vmOptions.join(" & ") &&
+      _listsEqual(genKernelOptions, other.genKernelOptions) &&
+      _listsEqual(vmOptions, other.vmOptions) &&
+      _listsEqual(dart2jsOptions, other.dart2jsOptions) &&
+      _listsEqual(experiments, other.experiments) &&
       timeout == other.timeout &&
       enableAsserts == other.enableAsserts &&
       isChecked == other.isChecked &&
       isCsp == other.isCsp &&
       isHostChecked == other.isHostChecked &&
       isMinified == other.isMinified &&
-      previewDart2 == other.previewDart2 &&
       useAnalyzerCfe == other.useAnalyzerCfe &&
       useAnalyzerFastaParser == other.useAnalyzerFastaParser &&
-      useBlobs == other.useBlobs &&
-      useDart2JSWithKernel == other.useDart2JSWithKernel &&
-      useDart2JSOldFrontEnd == other.useDart2JSOldFrontEnd &&
-      useFastStartup == other.useFastStartup &&
+      useElf == other.useElf &&
       useHotReload == other.useHotReload &&
       useHotReloadRollback == other.useHotReloadRollback &&
-      useSdk == other.useSdk;
+      useSdk == other.useSdk &&
+      useQemu == other.useQemu;
+
+  /// Whether [a] and [b] contain the same strings, regardless of order.
+  bool _listsEqual(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+
+    // Using sorted lists instead of sets in case there are duplicate strings
+    // in the lists. ["a"] should not be considered equal to ["a", "a"].
+    var aSorted = a.toList()..sort();
+    var bSorted = b.toList()..sort();
+    for (var i = 0; i < aSorted.length; i++) {
+      if (aSorted[i] != bSorted[i]) return false;
+    }
+    return true;
+  }
 
   bool operator ==(Object other) =>
       other is Configuration && name == other.name && optionsEqual(other);
+
+  int _toBinary(List<bool> bits) =>
+      bits.fold(0, (sum, bit) => (sum << 1) ^ (bit ? 1 : 0));
 
   int get hashCode =>
       name.hashCode ^
@@ -401,27 +445,31 @@ class Configuration {
       mode.hashCode ^
       runtime.hashCode ^
       system.hashCode ^
+      nnbdMode.hashCode ^
+      babel.hashCode ^
       builderTag.hashCode ^
+      genKernelOptions.join(" & ").hashCode ^
       vmOptions.join(" & ").hashCode ^
+      dart2jsOptions.join(" & ").hashCode ^
+      experiments.join(" & ").hashCode ^
       timeout.hashCode ^
-      (enableAsserts ? 1 : 0) ^
-      (isChecked ? 2 : 0) ^
-      (isCsp ? 4 : 0) ^
-      (isHostChecked ? 8 : 0) ^
-      (isMinified ? 16 : 0) ^
-      (previewDart2 ? 32 : 0) ^
-      (useAnalyzerCfe ? 64 : 0) ^
-      (useAnalyzerFastaParser ? 128 : 0) ^
-      (useBlobs ? 256 : 0) ^
-      (useDart2JSWithKernel ? 512 : 0) ^
-      (useDart2JSOldFrontEnd ? 1024 : 0) ^
-      (useFastStartup ? 2048 : 0) ^
-      (useHotReload ? 4096 : 0) ^
-      (useHotReloadRollback ? 8192 : 0) ^
-      (useSdk ? 16384 : 0);
+      _toBinary([
+        enableAsserts,
+        isChecked,
+        isCsp,
+        isHostChecked,
+        isMinified,
+        useAnalyzerCfe,
+        useAnalyzerFastaParser,
+        useElf,
+        useHotReload,
+        useHotReloadRollback,
+        useSdk,
+        useQemu
+      ]);
 
   String toString() {
-    var buffer = new StringBuffer();
+    var buffer = StringBuffer();
     buffer.write(name);
     buffer.write("(");
 
@@ -432,24 +480,31 @@ class Configuration {
     fields.add("runtime: $runtime");
     fields.add("system: $system");
 
-    if (builderTag != "") fields.add("builder-tag: $builderTag");
-    if (vmOptions != "") fields.add("vm-options: [${vmOptions.join(", ")}]");
-    if (timeout != 0) fields.add("timeout: $timeout");
+    if (nnbdMode != NnbdMode.legacy) fields.add("nnbd: $nnbdMode");
+
+    stringListField(String name, List<String> field) {
+      if (field.isEmpty) return;
+      fields.add("$name: [${field.join(", ")}]");
+    }
+
+    if (babel.isNotEmpty) fields.add("babel: $babel");
+    if (builderTag.isNotEmpty) fields.add("builder-tag: $builderTag");
+    stringListField("gen-kernel-options", genKernelOptions);
+    stringListField("vm-options", vmOptions);
+    stringListField("dart2js-options", dart2jsOptions);
+    stringListField("enable-experiment", experiments);
+    if (timeout > 0) fields.add("timeout: $timeout");
     if (enableAsserts) fields.add("enable-asserts");
     if (isChecked) fields.add("checked");
     if (isCsp) fields.add("csp");
     if (isHostChecked) fields.add("host-checked");
     if (isMinified) fields.add("minified");
-    if (previewDart2) fields.add("preview-dart-2");
     if (useAnalyzerCfe) fields.add("use-cfe");
     if (useAnalyzerFastaParser) fields.add("analyzer-use-fasta-parser");
-    if (useBlobs) fields.add("use-blobs");
-    if (useDart2JSWithKernel) fields.add("dart2js-with-kernel");
-    if (useDart2JSOldFrontEnd) fields.add("dart2js-old-frontend");
-    if (useFastStartup) fields.add("fast-startup");
     if (useHotReload) fields.add("hot-reload");
     if (useHotReloadRollback) fields.add("hot-reload-rollback");
     if (useSdk) fields.add("use-sdk");
+    if (useQemu) fields.add("use-qemu");
 
     buffer.write(fields.join(", "));
     buffer.write(")");
@@ -457,7 +512,7 @@ class Configuration {
   }
 
   String visualCompare(Configuration other) {
-    var buffer = new StringBuffer();
+    var buffer = StringBuffer();
     buffer.writeln(name);
     buffer.writeln(other.name);
 
@@ -468,69 +523,47 @@ class Configuration {
     fields.add("runtime: $runtime ${other.runtime}");
     fields.add("system: $system ${other.system}");
 
-    if (builderTag != "" || other.builderTag != "") {
-      var tag = builderTag == "" ? "(none)" : builderTag;
-      var otherTag = other.builderTag == "" ? "(none)" : other.builderTag;
-      fields.add("builder-tag: $tag $otherTag");
+    stringField(String name, String value, String otherValue) {
+      if (value.isEmpty && otherValue.isEmpty) return;
+      var ours = value.isEmpty ? "(none)" : value;
+      var theirs = otherValue.isEmpty ? "(none)" : otherValue;
+      fields.add("$name: $ours $theirs");
     }
-    if (vmOptions != "" || other.vmOptions != "") {
-      var tag = "[${vmOptions.join(", ")}]";
-      var otherTag = "[${other.vmOptions.join(", ")}]";
-      fields.add("vm-options: $tag $otherTag");
+
+    stringListField(String name, List<String> value, List<String> otherValue) {
+      if (value.isEmpty && otherValue.isEmpty) return;
+      fields.add("$name: [${value.join(', ')}] [${otherValue.join(', ')}]");
     }
+
+    boolField(String name, bool value, bool otherValue) {
+      if (!value && !otherValue) return;
+      fields.add("$name: $value $otherValue");
+    }
+
+    fields.add("nnbd: $nnbdMode ${other.nnbdMode}");
+    fields.add("sanitizer: $sanitizer ${other.sanitizer}");
+    stringField("babel", babel, other.babel);
+    stringField("builder-tag", builderTag, other.builderTag);
+    stringListField(
+        "gen-kernel-options", genKernelOptions, other.genKernelOptions);
+    stringListField("vm-options", vmOptions, other.vmOptions);
+    stringListField("dart2js-options", dart2jsOptions, other.dart2jsOptions);
+    stringListField("experiments", experiments, other.experiments);
     fields.add("timeout: $timeout ${other.timeout}");
-    if (enableAsserts || other.enableAsserts) {
-      fields.add("enable-asserts $enableAsserts ${other.enableAsserts}");
-    }
-    if (isChecked || other.isChecked) {
-      fields.add("checked $isChecked ${other.isChecked}");
-    }
-    if (isCsp || other.isCsp) {
-      fields.add("csp $isCsp ${other.isCsp}");
-    }
-    if (isHostChecked || other.isHostChecked) {
-      fields.add("isHostChecked $isHostChecked ${other.isHostChecked}");
-    }
-    if (isMinified || other.isMinified) {
-      fields.add("isMinified $isMinified ${other.isMinified}");
-    }
-    if (previewDart2 || other.previewDart2) {
-      fields.add("previewDart2 $previewDart2 ${other.previewDart2}");
-    }
-    if (useAnalyzerCfe || other.useAnalyzerCfe) {
-      fields.add("useAnalyzerCfe $useAnalyzerCfe ${other.useAnalyzerCfe}");
-    }
-    if (useAnalyzerFastaParser || other.useAnalyzerFastaParser) {
-      fields.add("useAnalyzerFastaParser "
-          "$useAnalyzerFastaParser ${other.useAnalyzerFastaParser}");
-    }
-    if (useBlobs || other.useBlobs) {
-      fields.add("useBlobs $useBlobs ${other.useBlobs}");
-    }
-    if (useDart2JSWithKernel || other.useDart2JSWithKernel) {
-      fields.add("useDart2JSWithKernel "
-          "$useDart2JSWithKernel ${other.useDart2JSWithKernel}");
-    }
-    if (useDart2JSOldFrontEnd || other.useDart2JSOldFrontEnd) {
-      fields.add("useDart2JSOldFrontEnd "
-          "$useDart2JSOldFrontEnd ${other.useDart2JSOldFrontEnd}");
-    }
-    if (useFastStartup || other.useFastStartup) {
-      fields.add("useFastStartup $useFastStartup ${other.useFastStartup}");
-    }
-    if (useHotReload || other.useHotReload) {
-      fields.add("useHotReload $useHotReload ${other.useHotReload}");
-    }
-    if (isHostChecked) {
-      fields.add("host-checked $isHostChecked ${other.isHostChecked}");
-    }
-    if (useHotReloadRollback || other.useHotReloadRollback) {
-      fields.add("useHotReloadRollback"
-          " $useHotReloadRollback ${other.useHotReloadRollback}");
-    }
-    if (useSdk || other.useSdk) {
-      fields.add("useSdk $useSdk ${other.useSdk}");
-    }
+    boolField("enable-asserts", enableAsserts, other.enableAsserts);
+    boolField("checked", isChecked, other.isChecked);
+    boolField("csp", isCsp, other.isCsp);
+    boolField("host-checked", isHostChecked, other.isHostChecked);
+    boolField("minified", isMinified, other.isMinified);
+    boolField("use-cfe", useAnalyzerCfe, other.useAnalyzerCfe);
+    boolField("analyzer-use-fasta-parser", useAnalyzerFastaParser,
+        other.useAnalyzerFastaParser);
+    boolField("host-checked", isHostChecked, other.isHostChecked);
+    boolField("hot-reload", useHotReload, other.useHotReload);
+    boolField("hot-reload-rollback", useHotReloadRollback,
+        other.useHotReloadRollback);
+    boolField("use-sdk", useSdk, other.useSdk);
+    boolField("use-qemu", useQemu, other.useQemu);
 
     buffer.write(fields.join("\n   "));
     buffer.write("\n");
@@ -539,77 +572,71 @@ class Configuration {
 }
 
 class Architecture extends NamedEnum {
-  static const ia32 = const Architecture._('ia32');
-  static const x64 = const Architecture._('x64');
-  static const arm = const Architecture._('arm');
-  static const armv6 = const Architecture._('armv6');
-  static const armv5te = const Architecture._('armv5te');
-  static const arm64 = const Architecture._('arm64');
-  static const simarm = const Architecture._('simarm');
-  static const simarmv6 = const Architecture._('simarmv6');
-  static const simarmv5te = const Architecture._('simarmv5te');
-  static const simarm64 = const Architecture._('simarm64');
-  static const simdbc = const Architecture._('simdbc');
-  static const simdbc64 = const Architecture._('simdbc64');
+  static const ia32 = Architecture._('ia32');
+  static const x64 = Architecture._('x64');
+  static const x64c = Architecture._('x64c');
+  static const arm = Architecture._('arm');
+  static const arm_x64 = Architecture._('arm_x64');
+  static const armv6 = Architecture._('armv6');
+  static const arm64 = Architecture._('arm64');
+  static const arm64c = Architecture._('arm64c');
+  static const simarm = Architecture._('simarm');
+  static const simarmv6 = Architecture._('simarmv6');
+  static const simarm64 = Architecture._('simarm64');
+  static const simarm64c = Architecture._('simarm64c');
 
   static final List<String> names = _all.keys.toList();
 
-  static final _all = new Map<String, Architecture>.fromIterable([
+  static final _all = Map<String, Architecture>.fromIterable([
     ia32,
     x64,
+    x64c,
     arm,
     armv6,
-    armv5te,
+    arm_x64,
     arm64,
+    arm64c,
     simarm,
     simarmv6,
-    simarmv5te,
     simarm64,
-    simdbc,
-    simdbc64
+    simarm64c,
   ], key: (architecture) => (architecture as Architecture).name);
 
   static Architecture find(String name) {
     var architecture = _all[name];
     if (architecture != null) return architecture;
 
-    throw new ArgumentError('Unknown architecture "$name".');
+    throw ArgumentError('Unknown architecture "$name".');
   }
 
   const Architecture._(String name) : super(name);
 }
 
 class Compiler extends NamedEnum {
-  static const none = const Compiler._('none');
-  static const precompiler = const Compiler._('precompiler');
-  static const dart2js = const Compiler._('dart2js');
-  static const dart2analyzer = const Compiler._('dart2analyzer');
-  static const compareAnalyzerCfe = const Compiler._('compare_analyzer_cfe');
-  static const dartdevc = const Compiler._('dartdevc');
-  static const dartdevk = const Compiler._('dartdevk');
-  static const appJit = const Compiler._('app_jit');
-  static const appJitk = const Compiler._('app_jitk');
-  static const dartk = const Compiler._('dartk');
-  static const dartkp = const Compiler._('dartkp');
-  static const dartkb = const Compiler._('dartkb');
-  static const specParser = const Compiler._('spec_parser');
-  static const fasta = const Compiler._('fasta');
+  static const none = Compiler._('none');
+  static const dart2js = Compiler._('dart2js');
+  static const dart2analyzer = Compiler._('dart2analyzer');
+  static const compareAnalyzerCfe = Compiler._('compare_analyzer_cfe');
+  static const dartdevc = Compiler._('dartdevc');
+  static const dartdevk = Compiler._('dartdevk');
+  static const appJitk = Compiler._('app_jitk');
+  static const dartk = Compiler._('dartk');
+  static const dartkp = Compiler._('dartkp');
+  static const specParser = Compiler._('spec_parser');
+  static const fasta = Compiler._('fasta');
 
   static final List<String> names = _all.keys.toList();
 
-  static final _all = new Map<String, Compiler>.fromIterable([
+  static final _all = Map<String, Compiler>.fromIterable([
     none,
-    precompiler,
     dart2js,
     dart2analyzer,
     compareAnalyzerCfe,
     dartdevc,
     dartdevk,
-    appJit,
     appJitk,
     dartk,
     dartkp,
-    dartkb,
     specParser,
     fasta,
   ], key: (compiler) => (compiler as Compiler).name);
@@ -618,7 +645,7 @@ class Compiler extends NamedEnum {
     var compiler = _all[name];
     if (compiler != null) return compiler;
 
-    throw new ArgumentError('Unknown compiler "$name".');
+    throw ArgumentError('Unknown compiler "$name".');
   }
 
   const Compiler._(String name) : super(name);
@@ -647,22 +674,21 @@ class Compiler extends NamedEnum {
 
       case Compiler.dartdevc:
       case Compiler.dartdevk:
-        // TODO(rnystrom): Expand to support other JS execution environments
-        // (other browsers, d8) when tested and working.
         return const [
           Runtime.none,
+          Runtime.d8,
           Runtime.chrome,
+          Runtime.edge,
+          Runtime.firefox,
+          Runtime.safari,
         ];
 
       case Compiler.dart2analyzer:
       case Compiler.compareAnalyzerCfe:
         return const [Runtime.none];
-      case Compiler.appJit:
       case Compiler.appJitk:
       case Compiler.dartk:
-      case Compiler.dartkb:
         return const [Runtime.vm, Runtime.selfCheck];
-      case Compiler.precompiler:
       case Compiler.dartkp:
         return const [Runtime.dartPrecompiled];
       case Compiler.specParser:
@@ -688,12 +714,9 @@ class Compiler extends NamedEnum {
       case Compiler.dart2analyzer:
       case Compiler.compareAnalyzerCfe:
         return Runtime.none;
-      case Compiler.appJit:
       case Compiler.appJitk:
       case Compiler.dartk:
-      case Compiler.dartkb:
         return Runtime.vm;
-      case Compiler.precompiler:
       case Compiler.dartkp:
         return Runtime.dartPrecompiled;
       case Compiler.specParser:
@@ -723,21 +746,20 @@ class Compiler extends NamedEnum {
 }
 
 class Mode extends NamedEnum {
-  static const debug = const Mode._('debug');
-  static const product = const Mode._('product');
-  static const release = const Mode._('release');
+  static const debug = Mode._('debug');
+  static const product = Mode._('product');
+  static const release = Mode._('release');
 
   static final List<String> names = _all.keys.toList();
 
-  static final _all = new Map<String, Mode>.fromIterable(
-      [debug, product, release],
+  static final _all = Map<String, Mode>.fromIterable([debug, product, release],
       key: (mode) => (mode as Mode).name);
 
   static Mode find(String name) {
     var mode = _all[name];
     if (mode != null) return mode;
 
-    throw new ArgumentError('Unknown mode "$name".');
+    throw ArgumentError('Unknown mode "$name".');
   }
 
   const Mode._(String name) : super(name);
@@ -745,26 +767,50 @@ class Mode extends NamedEnum {
   bool get isDebug => this == debug;
 }
 
-class Runtime extends NamedEnum {
-  static const vm = const Runtime._('vm');
-  static const flutter = const Runtime._('flutter');
-  static const dartPrecompiled = const Runtime._('dart_precompiled');
-  static const d8 = const Runtime._('d8');
-  static const jsshell = const Runtime._('jsshell');
-  static const firefox = const Runtime._('firefox');
-  static const chrome = const Runtime._('chrome');
-  static const safari = const Runtime._('safari');
-  static const ie9 = const Runtime._('ie9');
-  static const ie10 = const Runtime._('ie10');
-  static const ie11 = const Runtime._('ie11');
-  static const edge = const Runtime._('edge');
-  static const chromeOnAndroid = const Runtime._('chromeOnAndroid');
-  static const selfCheck = const Runtime._('self_check');
-  static const none = const Runtime._('none');
+class Sanitizer extends NamedEnum {
+  static const none = Sanitizer._('none');
+  static const asan = Sanitizer._('asan');
+  static const lsan = Sanitizer._('lsan');
+  static const msan = Sanitizer._('msan');
+  static const tsan = Sanitizer._('tsan');
+  static const ubsan = Sanitizer._('ubsan');
 
   static final List<String> names = _all.keys.toList();
 
-  static final _all = new Map<String, Runtime>.fromIterable([
+  static final _all = Map<String, Sanitizer>.fromIterable(
+      [none, asan, lsan, msan, tsan, ubsan],
+      key: (mode) => (mode as Sanitizer).name);
+
+  static Sanitizer find(String name) {
+    var mode = _all[name];
+    if (mode != null) return mode;
+
+    throw ArgumentError('Unknown sanitizer "$name".');
+  }
+
+  const Sanitizer._(String name) : super(name);
+}
+
+class Runtime extends NamedEnum {
+  static const vm = Runtime._('vm');
+  static const flutter = Runtime._('flutter');
+  static const dartPrecompiled = Runtime._('dart_precompiled');
+  static const d8 = Runtime._('d8');
+  static const jsshell = Runtime._('jsshell');
+  static const firefox = Runtime._('firefox');
+  static const chrome = Runtime._('chrome');
+  static const safari = Runtime._('safari');
+  static const ie9 = Runtime._('ie9');
+  static const ie10 = Runtime._('ie10');
+  static const ie11 = Runtime._('ie11');
+  static const edge = Runtime._('edge');
+  static const chromeOnAndroid = Runtime._('chromeOnAndroid');
+  static const selfCheck = Runtime._('self_check');
+  static const none = Runtime._('none');
+
+  static final List<String> names = _all.keys.toList();
+
+  static final _all = Map<String, Runtime>.fromIterable([
     vm,
     flutter,
     dartPrecompiled,
@@ -786,7 +832,7 @@ class Runtime extends NamedEnum {
     var runtime = _all[name];
     if (runtime != null) return runtime;
 
-    throw new ArgumentError('Unknown runtime "$name".');
+    throw ArgumentError('Unknown runtime "$name".');
   }
 
   const Runtime._(String name) : super(name);
@@ -821,7 +867,7 @@ class Runtime extends NamedEnum {
         return Compiler.none;
 
       case dartPrecompiled:
-        return Compiler.precompiler;
+        return Compiler.dartkp;
 
       case d8:
       case jsshell:
@@ -848,15 +894,15 @@ class Runtime extends NamedEnum {
 }
 
 class System extends NamedEnum {
-  static const android = const System._('android');
-  static const fuchsia = const System._('fuchsia');
-  static const linux = const System._('linux');
-  static const mac = const System._('mac');
-  static const win = const System._('win');
+  static const android = System._('android');
+  static const fuchsia = System._('fuchsia');
+  static const linux = System._('linux');
+  static const mac = System._('mac');
+  static const win = System._('win');
 
   static final List<String> names = _all.keys.toList();
 
-  static final _all = new Map<String, System>.fromIterable(
+  static final _all = Map<String, System>.fromIterable(
       [android, fuchsia, linux, mac, win],
       key: (system) => (system as System).name);
 
@@ -876,7 +922,7 @@ class System extends NamedEnum {
     }
     // TODO(rnystrom): What about ios?
 
-    throw new ArgumentError('Unknown operating system "$name".');
+    throw ArgumentError('Unknown operating system "$name".');
   }
 
   const System._(String name) : super(name);
@@ -896,6 +942,34 @@ class System extends NamedEnum {
 
     throw "unreachable";
   }
+}
+
+/// What level of non-nullability support should be applied to the test files.
+class NnbdMode extends NamedEnum {
+  /// "Opted out" legacy mode with no NNBD features allowed.
+  static const legacy = NnbdMode._('legacy');
+
+  /// Opted in to NNBD features, but only static checking and weak runtime
+  /// checks.
+  static const weak = NnbdMode._('weak');
+
+  /// Opted in to NNBD features and with full sound runtime checks.
+  static const strong = NnbdMode._('strong');
+
+  static final List<String> names = _all.keys.toList();
+
+  static final _all = {
+    for (var mode in [legacy, weak, strong]) mode.name: mode
+  };
+
+  static NnbdMode find(String name) {
+    var mode = _all[name];
+    if (mode != null) return mode;
+
+    throw ArgumentError('Unknown NNBD mode "$name".');
+  }
+
+  const NnbdMode._(String name) : super(name);
 }
 
 /// Base class for an enum-like class whose values are identified by name.

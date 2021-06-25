@@ -48,9 +48,8 @@ class AsciiCodec extends Encoding {
   ///
   /// If [allowInvalid] is not provided, it defaults to the value used to create
   /// this [AsciiCodec].
-  String decode(List<int> bytes, {bool allowInvalid}) {
-    allowInvalid ??= _allowInvalid;
-    if (allowInvalid) {
+  String decode(List<int> bytes, {bool? allowInvalid}) {
+    if (allowInvalid ?? _allowInvalid) {
       return const AsciiDecoder(allowInvalid: true).convert(bytes);
     } else {
       return const AsciiDecoder(allowInvalid: false).convert(bytes);
@@ -75,7 +74,7 @@ class _UnicodeSubsetEncoder extends Converter<String, List<int>> {
   ///
   /// If [start] and [end] are provided, only the substring
   /// `string.substring(start, end)` is used as input to the conversion.
-  Uint8List convert(String string, [int start = 0, int end]) {
+  Uint8List convert(String string, [int start = 0, int? end]) {
     var stringLength = string.length;
     end = RangeError.checkValidRange(start, end, stringLength);
     var length = end - start;
@@ -162,11 +161,8 @@ abstract class _UnicodeSubsetDecoder extends Converter<List<int>, String> {
   ///
   /// If [start] and [end] are provided, only the sub-list of bytes from
   /// `start` to `end` (`end` not inclusive) is used as input to the conversion.
-  String convert(List<int> bytes, [int start = 0, int end]) {
-    var byteCount = bytes.length;
-    RangeError.checkValidRange(start, end, byteCount);
-    end ??= byteCount;
-
+  String convert(List<int> bytes, [int start = 0, int? end]) {
+    end = RangeError.checkValidRange(start, end, bytes.length);
     for (var i = start; i < end; i++) {
       var byte = bytes[i];
       if ((byte & ~_subsetMask) != 0) {

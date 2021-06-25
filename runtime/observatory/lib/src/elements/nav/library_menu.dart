@@ -7,23 +7,21 @@ import 'dart:async';
 import 'package:observatory/models.dart' as M show IsolateRef, LibraryRef;
 import 'package:observatory/src/elements/helpers/nav_menu.dart';
 import 'package:observatory/src/elements/helpers/rendering_scheduler.dart';
-import 'package:observatory/src/elements/helpers/tag.dart';
+import 'package:observatory/src/elements/helpers/custom_element.dart';
 import 'package:observatory/src/elements/helpers/uris.dart';
 
-class NavLibraryMenuElement extends HtmlElement implements Renderable {
-  static const tag = const Tag<NavLibraryMenuElement>('nav-library-menu');
-
-  RenderingScheduler _r;
+class NavLibraryMenuElement extends CustomElement implements Renderable {
+  late RenderingScheduler<NavLibraryMenuElement> _r;
 
   Stream<RenderedEvent<NavLibraryMenuElement>> get onRendered => _r.onRendered;
 
-  M.IsolateRef _isolate;
-  M.LibraryRef _library;
-  Iterable<Element> _content = const [];
+  late M.IsolateRef _isolate;
+  late M.LibraryRef _library;
+  List<Element> _content = const [];
 
   M.IsolateRef get isolate => _isolate;
   M.LibraryRef get library => _library;
-  Iterable<Element> get content => _content;
+  List<Element> get content => _content;
 
   set content(Iterable<Element> value) {
     _content = value.toList();
@@ -31,17 +29,17 @@ class NavLibraryMenuElement extends HtmlElement implements Renderable {
   }
 
   factory NavLibraryMenuElement(M.IsolateRef isolate, M.LibraryRef library,
-      {RenderingQueue queue}) {
+      {RenderingQueue? queue}) {
     assert(isolate != null);
     assert(library != null);
-    NavLibraryMenuElement e = document.createElement(tag.name);
+    NavLibraryMenuElement e = new NavLibraryMenuElement.created();
     e._r = new RenderingScheduler<NavLibraryMenuElement>(e, queue: queue);
     e._isolate = isolate;
     e._library = library;
     return e;
   }
 
-  NavLibraryMenuElement.created() : super.created();
+  NavLibraryMenuElement.created() : super.created('nav-library-menu');
 
   @override
   void attached() {
@@ -58,7 +56,7 @@ class NavLibraryMenuElement extends HtmlElement implements Renderable {
 
   void render() {
     children = <Element>[
-      navMenu(library.name,
+      navMenu(library.name!,
           content: _content,
           link: Uris.inspect(isolate, object: library).toString())
     ];

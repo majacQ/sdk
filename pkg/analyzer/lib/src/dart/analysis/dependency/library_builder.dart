@@ -1,10 +1,11 @@
-// Copyright (c) 2018, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2018, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/ast/token.dart';
 import 'package:analyzer/src/dart/analysis/dependency/node.dart';
+import 'package:analyzer/src/dart/analysis/dependency/reference_collector.dart';
 import 'package:analyzer/src/dart/ast/token.dart';
 import 'package:analyzer/src/summary/api_signature.dart';
 
@@ -14,12 +15,8 @@ import 'package:analyzer/src/summary/api_signature.dart';
 /// If the [units] are just parsed, then only token signatures and referenced
 /// names of nodes can be computed. If the [units] are fully resolved, then
 /// also class member references can be recorded.
-Library buildLibrary(
-  Uri uri,
-  List<CompilationUnit> units,
-  ReferenceCollector referenceCollector,
-) {
-  return _LibraryBuilder(uri, units, referenceCollector).build();
+Library buildLibrary(Uri uri, List<CompilationUnit> units) {
+  return _LibraryBuilder(uri, units).build();
 }
 
 /// The `show` or `hide` namespace combinator.
@@ -61,7 +58,7 @@ class Import {
   final Uri uri;
 
   /// The import prefix, or `null` if not specified.
-  final String prefix;
+  final String? prefix;
 
   /// The list of namespace combinators to apply, not `null`.
   final List<Combinator> combinators;
@@ -86,28 +83,28 @@ class Library {
   final List<Export> exports;
 
   /// The list of libraries that correspond to the [imports].
-  List<Library> importedLibraries;
+  List<Library>? importedLibraries;
 
   /// The list of top-level nodes defined in the library.
   ///
   /// This list is sorted.
-  final List<DependencyNode> declaredNodes;
+  final List<Node> declaredNodes;
 
   /// The map of [declaredNodes], used for fast search.
   /// TODO(scheglov) consider using binary search instead.
-  final Map<DependencyName, DependencyNode> declaredNodeMap = {};
+  final Map<LibraryQualifiedName, Node> declaredNodeMap = {};
 
   /// The list of nodes exported from this library, either using `export`
   /// directives, or declared in this library.
   ///
   /// This list is sorted.
-  List<DependencyNode> exportedNodes;
+  List<Node>? exportedNodes;
 
   /// The map of nodes that are visible in the library, either imported,
   /// or declared in this library.
   ///
   /// TODO(scheglov) support for imports with prefixes
-  Map<String, DependencyNode> libraryScope;
+  Map<String, Node>? libraryScope;
 
   Library(this.uri, this.imports, this.exports, this.declaredNodes) {
     for (var node in declaredNodes) {
@@ -119,47 +116,6 @@ class Library {
   String toString() => '$uri';
 }
 
-/// The interface for a class that collects information about external nodes
-/// referenced by a node.
-///
-/// The workflow for using it is that the library builder creates a new
-/// instance, fills it with names of import prefixes using [addImportPrefix].
-/// Then for each node defined in the library, methods `appendXyz` called
-/// zero or more times to record references to external names to record API or
-/// implementation dependencies. When all dependencies of a node are appended,
-/// [finish] is invoked to construct the full [DependencyNodeDependencies].
-/// TODO(scheglov) In following CLs we will provide single implementation.
-abstract class ReferenceCollector {
-  final Uri libraryUri;
-
-  ReferenceCollector(this.libraryUri);
-
-  /// Record that the [name] is a name of an import prefix.
-  ///
-  /// So, when we see code like `prefix.foo` we know that `foo` should be
-  /// resolved in the import scope that corresponds to `prefix` (unless the
-  /// name `prefix` is shadowed by a local declaration).
-  void addImportPrefix(String name);
-
-  /// Collect external nodes referenced from the given [node].
-  void appendExpression(Expression node);
-
-  /// Collect external nodes referenced from the given [node].
-  void appendFormalParameters(FormalParameterList node);
-
-  /// Collect external nodes referenced from the given [node].
-  void appendFunctionBody(FunctionBody node);
-
-  /// Collect external nodes referenced from the given [node].
-  void appendTypeAnnotation(TypeAnnotation node);
-
-  /// Construct and return a new [DependencyNodeDependencies] with the given
-  /// [tokenSignature] and all recorded references to external nodes. Clear
-  /// data structures with recorded references and be ready to start recording
-  /// references for a new node.
-  DependencyNodeDependencies finish(List<int> tokenSignature);
-}
-
 class _LibraryBuilder {
   /// The URI of the library.
   final Uri uri;
@@ -168,7 +124,7 @@ class _LibraryBuilder {
   final List<CompilationUnit> units;
 
   /// The instance of the referenced names, class members collector.
-  final ReferenceCollector referenceCollector;
+  final ReferenceCollector referenceCollector = ReferenceCollector();
 
   /// The list of imports in the library.
   final List<Import> imports = [];
@@ -177,153 +133,259 @@ class _LibraryBuilder {
   final List<Export> exports = [];
 
   /// The top-level nodes declared in the library.
-  final List<DependencyNode> declaredNodes = [];
+  final List<Node> declaredNodes = [];
 
-  _LibraryBuilder(this.uri, this.units, this.referenceCollector);
+  /// The precomputed signature of the [uri].
+  ///
+  /// It is mixed into every API token signature, because for example even
+  /// though types of two functions might be the same, their locations
+  /// are different.
+  late List<int> uriSignature;
+
+  /// The precomputed signature of the enclosing class name, or `null` if
+  /// outside a class.
+  ///
+  /// It is mixed into every API token signature of every class member, because
+  /// for example even though types of two methods might be the same, their
+  /// locations are different.
+  List<int>? enclosingClassNameSignature;
+
+  _LibraryBuilder(this.uri, this.units);
 
   Library build() {
+    uriSignature = (ApiSignature()..addString(uri.toString())).toByteList();
+
     _addImports();
     _addExports();
-
-    // TODO(scheglov) import prefixes are shadowed by class members
 
     for (var unit in units) {
       _addUnit(unit);
     }
-    declaredNodes.sort(DependencyNode.compare);
+    declaredNodes.sort(Node.compare);
 
     return Library(uri, imports, exports, declaredNodes);
   }
 
   void _addClassOrMixin(ClassOrMixinDeclaration node) {
+    var enclosingClassName = node.name.name;
+
+    TypeName? enclosingSuperClass;
+    if (node is ClassDeclaration) {
+      enclosingSuperClass = node.extendsClause?.superclass;
+    }
+
+    enclosingClassNameSignature =
+        (ApiSignature()..addString(enclosingClassName)).toByteList();
+
+    var apiTokenSignature = _computeTokenSignature(
+      node.beginToken,
+      node.leftBracket,
+    );
+
+    var typeParameters = node.typeParameters;
+
+    Dependencies api;
+    if (node is ClassDeclaration) {
+      api = referenceCollector.collect(
+        apiTokenSignature,
+        thisNodeName: enclosingClassName,
+        typeParameters: typeParameters,
+        extendsClause: node.extendsClause,
+        withClause: node.withClause,
+        implementsClause: node.implementsClause,
+      );
+    } else if (node is MixinDeclaration) {
+      api = referenceCollector.collect(
+        apiTokenSignature,
+        thisNodeName: enclosingClassName,
+        typeParameters: typeParameters,
+        onClause: node.onClause,
+        implementsClause: node.implementsClause,
+      );
+    } else {
+      throw UnimplementedError('(${node.runtimeType}) $node');
+    }
+
+    var enclosingClass = Node(
+      LibraryQualifiedName(uri, enclosingClassName),
+      node is MixinDeclaration ? NodeKind.MIXIN : NodeKind.CLASS,
+      api,
+      Dependencies.none,
+    );
+
     var hasConstConstructor = node.members.any(
       (m) => m is ConstructorDeclaration && m.constKeyword != null,
     );
 
-    List<DependencyNode> classTypeParameters;
-    if (node.typeParameters != null) {
-      classTypeParameters = <DependencyNode>[];
-      for (var typeParameter in node.typeParameters.typeParameters) {
-        classTypeParameters.add(DependencyNode(
-          DependencyName(uri, typeParameter.name.name),
-          DependencyNodeKind.TYPE_PARAMETER,
-          _computeApiDependencies(
-            _computeNodeTokenSignature(typeParameter),
-            typeParameter,
-          ),
-          DependencyNodeDependencies.none,
+    // TODO(scheglov) do we need type parameters at all?
+    List<Node> classTypeParameters;
+    if (typeParameters != null) {
+      classTypeParameters = <Node>[];
+      for (var typeParameter in typeParameters.typeParameters) {
+        var api = referenceCollector.collect(
+          _computeNodeTokenSignature(typeParameter),
+          enclosingClassName: enclosingClassName,
+          thisNodeName: typeParameter.name.name,
+          type: typeParameter.bound,
+        );
+        classTypeParameters.add(Node(
+          LibraryQualifiedName(uri, typeParameter.name.name),
+          NodeKind.TYPE_PARAMETER,
+          api,
+          Dependencies.none,
+          enclosingClass: enclosingClass,
         ));
       }
-      classTypeParameters.sort(DependencyNode.compare);
+      classTypeParameters.sort(Node.compare);
+      enclosingClass.setTypeParameters(classTypeParameters);
     }
 
-    var classMembers = <DependencyNode>[];
+    var classMembers = <Node>[];
     var hasConstructor = false;
     for (var member in node.members) {
       if (member is ConstructorDeclaration) {
         hasConstructor = true;
-        _addConstructor(classMembers, member);
+        _addConstructor(
+          enclosingClass,
+          enclosingSuperClass,
+          classMembers,
+          member,
+        );
       } else if (member is FieldDeclaration) {
         _addVariables(
+          enclosingClass,
           classMembers,
           member.metadata,
           member.fields,
           hasConstConstructor,
         );
       } else if (member is MethodDeclaration) {
-        _addMethod(classMembers, member);
+        _addMethod(enclosingClass, classMembers, member);
       } else {
         throw UnimplementedError('(${member.runtimeType}) $member');
       }
     }
 
-    if (!hasConstructor && node is ClassDeclaration) {
-      classMembers.add(DependencyNode(
-        DependencyName(uri, ''),
-        DependencyNodeKind.CONSTRUCTOR,
-        DependencyNodeDependencies.none,
-        DependencyNodeDependencies.none,
+    if (node is ClassDeclaration && !hasConstructor) {
+      classMembers.add(Node(
+        LibraryQualifiedName(uri, ''),
+        NodeKind.CONSTRUCTOR,
+        Dependencies.none,
+        Dependencies.none,
+        enclosingClass: enclosingClass,
       ));
     }
 
-    var classTokenSignature = _computeTokenSignature(
-      node.beginToken,
-      node.leftBracket,
-    );
-    // TODO(scheglov) add library URI
+    classMembers.sort(Node.compare);
+    enclosingClass.setClassMembers(classMembers);
 
-    var classNode = DependencyNode(
-      DependencyName(uri, node.name.name),
-      node is MixinDeclaration
-          ? DependencyNodeKind.MIXIN
-          : DependencyNodeKind.CLASS,
-      _computeApiDependencies(classTokenSignature, node),
-      DependencyNodeDependencies.none,
-      classTypeParameters: classTypeParameters,
-    );
-
-    classMembers.sort(DependencyNode.compare);
-    classNode.setClassMembers(classMembers);
-
-    declaredNodes.add(classNode);
+    declaredNodes.add(enclosingClass);
+    enclosingClassNameSignature = null;
   }
 
   void _addClassTypeAlias(ClassTypeAlias node) {
-    var tokenSignature = _computeNodeTokenSignature(node);
-    declaredNodes.add(DependencyNode(
-      DependencyName(uri, node.name.name),
-      DependencyNodeKind.CLASS_TYPE_ALIAS,
-      _computeApiDependencies(tokenSignature, node),
-      DependencyNodeDependencies.none,
+    var apiTokenSignature = _computeNodeTokenSignature(node);
+    var api = referenceCollector.collect(
+      apiTokenSignature,
+      typeParameters: node.typeParameters,
+      superClass: node.superclass,
+      withClause: node.withClause,
+      implementsClause: node.implementsClause,
+    );
+
+    declaredNodes.add(Node(
+      LibraryQualifiedName(uri, node.name.name),
+      NodeKind.CLASS_TYPE_ALIAS,
+      api,
+      Dependencies.none,
     ));
   }
 
   void _addConstructor(
-      List<DependencyNode> classMembers, ConstructorDeclaration node) {
-    var signature = ApiSignature();
-    _appendMetadataTokens(signature, node.metadata);
-    _appendFormalParametersTokens(signature, node.parameters);
-    var tokenSignature = signature.toByteList();
+    Node enclosingClass,
+    TypeName? enclosingSuperClass,
+    List<Node> classMembers,
+    ConstructorDeclaration node,
+  ) {
+    var builder = _newApiSignatureBuilder();
+    _appendMetadataTokens(builder, node.metadata);
+    _appendFormalParametersTokens(builder, node.parameters);
+    var apiTokenSignature = builder.toByteList();
 
-    classMembers.add(DependencyNode(
-      DependencyName(uri, node.name?.name ?? ''),
-      DependencyNodeKind.CONSTRUCTOR,
-      _computeApiDependencies(tokenSignature, node),
-      DependencyNodeDependencies.none,
+    var api = referenceCollector.collect(
+      apiTokenSignature,
+      enclosingClassName: enclosingClass.name.name,
+      formalParameters: node.parameters,
+    );
+
+    var implTokenSignature = _computeNodeTokenSignature(node.body);
+    var impl = referenceCollector.collect(
+      implTokenSignature,
+      enclosingClassName: enclosingClass.name.name,
+      enclosingSuperClass: enclosingSuperClass,
+      formalParametersForImpl: node.parameters,
+      constructorInitializers: node.initializers,
+      redirectedConstructor: node.redirectedConstructor,
+      functionBody: node.body,
+    );
+
+    classMembers.add(Node(
+      LibraryQualifiedName(uri, node.name?.name ?? ''),
+      NodeKind.CONSTRUCTOR,
+      api,
+      impl,
+      enclosingClass: enclosingClass,
     ));
   }
 
   void _addEnum(EnumDeclaration node) {
-    var classMembers = <DependencyNode>[];
+    var enumTokenSignature = _newApiSignatureBuilder().toByteList();
+
+    var enumNode = Node(
+      LibraryQualifiedName(uri, node.name.name),
+      NodeKind.ENUM,
+      Dependencies(enumTokenSignature, [], [], [], [], []),
+      Dependencies.none,
+    );
+
+    Dependencies fieldDependencies;
+    {
+      var builder = _newApiSignatureBuilder();
+      builder.addString(node.name.name);
+      _appendTokens(builder, node.leftBracket, node.rightBracket);
+      var tokenSignature = builder.toByteList();
+      fieldDependencies = Dependencies(tokenSignature, [], [], [], [], []);
+    }
+
+    var members = <Node>[];
     for (var constant in node.constants) {
-      classMembers.add(DependencyNode(
-        DependencyName(uri, constant.name.name),
-        DependencyNodeKind.GETTER,
-        DependencyNodeDependencies.none,
-        DependencyNodeDependencies.none,
+      members.add(Node(
+        LibraryQualifiedName(uri, constant.name.name),
+        NodeKind.GETTER,
+        fieldDependencies,
+        Dependencies.none,
+        enclosingClass: enumNode,
       ));
     }
-    classMembers.add(DependencyNode(
-      DependencyName(uri, 'index'),
-      DependencyNodeKind.GETTER,
-      DependencyNodeDependencies.none,
-      DependencyNodeDependencies.none,
-    ));
-    classMembers.add(DependencyNode(
-      DependencyName(uri, 'values'),
-      DependencyNodeKind.GETTER,
-      DependencyNodeDependencies.none,
-      DependencyNodeDependencies.none,
-    ));
-    classMembers.sort(DependencyNode.compare);
 
-    var enumNode = DependencyNode(
-      DependencyName(uri, node.name.name),
-      DependencyNodeKind.ENUM,
-      DependencyNodeDependencies.none,
-      DependencyNodeDependencies.none,
-    );
-    enumNode.setClassMembers(classMembers);
+    members.add(Node(
+      LibraryQualifiedName(uri, 'index'),
+      NodeKind.GETTER,
+      fieldDependencies,
+      Dependencies.none,
+      enclosingClass: enumNode,
+    ));
+
+    members.add(Node(
+      LibraryQualifiedName(uri, 'values'),
+      NodeKind.GETTER,
+      fieldDependencies,
+      Dependencies.none,
+      enclosingClass: enumNode,
+    ));
+
+    members.sort(Node.compare);
+    enumNode.setClassMembers(members);
 
     declaredNodes.add(enumNode);
   }
@@ -333,9 +395,11 @@ class _LibraryBuilder {
     for (var directive in units.first.directives) {
       if (directive is ExportDirective) {
         var refUri = directive.uri.stringValue;
-        var importUri = uri.resolve(refUri);
-        var combinators = _getCombinators(directive);
-        exports.add(Export(importUri, combinators));
+        if (refUri != null) {
+          var importUri = uri.resolve(refUri);
+          var combinators = _getCombinators(directive);
+          exports.add(Export(importUri, combinators));
+        }
       }
     }
   }
@@ -343,71 +407,94 @@ class _LibraryBuilder {
   void _addFunction(FunctionDeclaration node) {
     var functionExpression = node.functionExpression;
 
-    var signature = ApiSignature();
-    _appendMetadataTokens(signature, node.metadata);
-    _appendNodeTokens(signature, node.returnType);
-    _appendNodeTokens(signature, functionExpression.typeParameters);
-    _appendFormalParametersTokens(signature, functionExpression.parameters);
-    var tokenSignature = signature.toByteList();
+    var builder = _newApiSignatureBuilder();
+    _appendMetadataTokens(builder, node.metadata);
+    _appendNodeTokens(builder, node.returnType);
+    _appendNodeTokens(builder, functionExpression.typeParameters);
+    _appendFormalParametersTokens(builder, functionExpression.parameters);
+    var apiTokenSignature = builder.toByteList();
 
     var rawName = node.name.name;
-    var name = DependencyName(uri, node.isSetter ? '$rawName=' : rawName);
+    var name = LibraryQualifiedName(uri, node.isSetter ? '$rawName=' : rawName);
 
-    DependencyNodeKind kind;
+    NodeKind kind;
     if (node.isGetter) {
-      kind = DependencyNodeKind.GETTER;
+      kind = NodeKind.GETTER;
     } else if (node.isSetter) {
-      kind = DependencyNodeKind.SETTER;
+      kind = NodeKind.SETTER;
     } else {
-      kind = DependencyNodeKind.FUNCTION;
+      kind = NodeKind.FUNCTION;
     }
 
-    referenceCollector.appendTypeAnnotation(node.returnType);
-    referenceCollector.appendFormalParameters(
-      node.functionExpression.parameters,
+    var api = referenceCollector.collect(
+      apiTokenSignature,
+      thisNodeName: node.name.name,
+      typeParameters: functionExpression.typeParameters,
+      formalParameters: functionExpression.parameters,
+      returnType: node.returnType,
     );
-    var api = referenceCollector.finish(tokenSignature);
 
-    var bodyNode = node.functionExpression.body;
-    var implTokenSignature = _computeNodeTokenSignature(bodyNode);
-    referenceCollector.appendFunctionBody(bodyNode);
-    var impl = referenceCollector.finish(implTokenSignature);
+    var body = functionExpression.body;
+    var implTokenSignature = _computeNodeTokenSignature(body);
+    var impl = referenceCollector.collect(
+      implTokenSignature,
+      thisNodeName: node.name.name,
+      formalParametersForImpl: functionExpression.parameters,
+      functionBody: body,
+    );
 
-    declaredNodes.add(DependencyNode(name, kind, api, impl));
+    declaredNodes.add(Node(name, kind, api, impl));
   }
 
   void _addFunctionTypeAlias(FunctionTypeAlias node) {
-    var signature = ApiSignature();
-    _appendMetadataTokens(signature, node.metadata);
-    _appendNodeTokens(signature, node.typeParameters);
-    _appendNodeTokens(signature, node.returnType);
-    _appendFormalParametersTokens(signature, node.parameters);
-    var tokenSignature = signature.toByteList();
+    var builder = _newApiSignatureBuilder();
+    _appendMetadataTokens(builder, node.metadata);
+    _appendNodeTokens(builder, node.typeParameters);
+    _appendNodeTokens(builder, node.returnType);
+    _appendFormalParametersTokens(builder, node.parameters);
+    var apiTokenSignature = builder.toByteList();
 
-    declaredNodes.add(DependencyNode(
-      DependencyName(uri, node.name.name),
-      DependencyNodeKind.FUNCTION_TYPE_ALIAS,
-      _computeApiDependencies(tokenSignature, node),
-      DependencyNodeDependencies.none,
+    var api = referenceCollector.collect(
+      apiTokenSignature,
+      thisNodeName: node.name.name,
+      typeParameters: node.typeParameters,
+      formalParameters: node.parameters,
+      returnType: node.returnType,
+    );
+
+    declaredNodes.add(Node(
+      LibraryQualifiedName(uri, node.name.name),
+      NodeKind.FUNCTION_TYPE_ALIAS,
+      api,
+      Dependencies.none,
     ));
   }
 
   void _addGenericTypeAlias(GenericTypeAlias node) {
+    // TODO(scheglov) Support all types.
     var functionType = node.functionType;
 
-    var signature = ApiSignature();
-    _appendMetadataTokens(signature, node.metadata);
-    _appendNodeTokens(signature, node.typeParameters);
-    _appendNodeTokens(signature, functionType.returnType);
-    _appendNodeTokens(signature, functionType.typeParameters);
-    _appendFormalParametersTokens(signature, functionType.parameters);
-    var tokenSignature = signature.toByteList();
+    var builder = _newApiSignatureBuilder();
+    _appendMetadataTokens(builder, node.metadata);
+    _appendNodeTokens(builder, node.typeParameters);
+    _appendNodeTokens(builder, functionType?.returnType);
+    _appendNodeTokens(builder, functionType?.typeParameters);
+    _appendFormalParametersTokens(builder, functionType?.parameters);
+    var apiTokenSignature = builder.toByteList();
 
-    declaredNodes.add(DependencyNode(
-      DependencyName(uri, node.name.name),
-      DependencyNodeKind.GENERIC_TYPE_ALIAS,
-      _computeApiDependencies(tokenSignature, node),
-      DependencyNodeDependencies.none,
+    var api = referenceCollector.collect(
+      apiTokenSignature,
+      typeParameters: node.typeParameters,
+      typeParameters2: functionType?.typeParameters,
+      formalParameters: functionType?.parameters,
+      returnType: functionType?.returnType,
+    );
+
+    declaredNodes.add(Node(
+      LibraryQualifiedName(uri, node.name.name),
+      NodeKind.GENERIC_TYPE_ALIAS,
+      api,
+      Dependencies.none,
     ));
   }
 
@@ -417,6 +504,10 @@ class _LibraryBuilder {
     for (var directive in units.first.directives) {
       if (directive is ImportDirective) {
         var refUri = directive.uri.stringValue;
+        if (refUri == null) {
+          continue;
+        }
+
         var importUri = uri.resolve(refUri);
 
         if (importUri.toString() == 'dart:core') {
@@ -425,10 +516,11 @@ class _LibraryBuilder {
 
         var combinators = _getCombinators(directive);
 
-        imports.add(Import(importUri, directive.prefix?.name, combinators));
+        var prefix = directive.prefix;
+        imports.add(Import(importUri, prefix?.name, combinators));
 
-        if (directive.prefix != null) {
-          referenceCollector.addImportPrefix(directive.prefix.name);
+        if (prefix != null) {
+          referenceCollector.addImportPrefix(prefix.name);
         }
       }
     }
@@ -438,33 +530,50 @@ class _LibraryBuilder {
     }
   }
 
-  void _addMethod(List<DependencyNode> classMembers, MethodDeclaration node) {
-    var signature = ApiSignature();
-    _appendMetadataTokens(signature, node.metadata);
-    _appendNodeTokens(signature, node.returnType);
-    _appendNodeTokens(signature, node.typeParameters);
-    _appendFormalParametersTokens(signature, node.parameters);
-    var tokenSignature = signature.toByteList();
+  void _addMethod(
+    Node enclosingClass,
+    List<Node> classMembers,
+    MethodDeclaration node,
+  ) {
+    var builder = _newApiSignatureBuilder();
+    _appendMetadataTokens(builder, node.metadata);
+    _appendNodeTokens(builder, node.returnType);
+    _appendNodeTokens(builder, node.typeParameters);
+    _appendFormalParametersTokens(builder, node.parameters);
+    var apiTokenSignature = builder.toByteList();
 
-    DependencyNodeKind kind;
+    NodeKind kind;
     if (node.isGetter) {
-      kind = DependencyNodeKind.GETTER;
+      kind = NodeKind.GETTER;
     } else if (node.isSetter) {
-      kind = DependencyNodeKind.SETTER;
+      kind = NodeKind.SETTER;
     } else {
-      kind = DependencyNodeKind.METHOD;
+      kind = NodeKind.METHOD;
     }
 
-    referenceCollector.appendTypeAnnotation(node.returnType);
-    referenceCollector.appendFormalParameters(node.parameters);
-    var api = referenceCollector.finish(tokenSignature);
+    // TODO(scheglov) metadata, here and everywhere
+    var api = referenceCollector.collect(
+      apiTokenSignature,
+      enclosingClassName: enclosingClass.name.name,
+      thisNodeName: node.name.name,
+      typeParameters: node.typeParameters,
+      formalParameters: node.parameters,
+      returnType: node.returnType,
+    );
 
     var implTokenSignature = _computeNodeTokenSignature(node.body);
-    referenceCollector.appendFunctionBody(node.body);
-    var impl = referenceCollector.finish(implTokenSignature);
+    var impl = referenceCollector.collect(
+      implTokenSignature,
+      enclosingClassName: enclosingClass.name.name,
+      thisNodeName: node.name.name,
+      formalParametersForImpl: node.parameters,
+      functionBody: node.body,
+    );
 
+    var name = LibraryQualifiedName(uri, node.name.name);
     classMembers.add(
-        DependencyNode(DependencyName(uri, node.name.name), kind, api, impl));
+      Node(name, kind, api, impl, enclosingClass: enclosingClass),
+    );
   }
 
   void _addUnit(CompilationUnit unit) {
@@ -483,6 +592,7 @@ class _LibraryBuilder {
         _addGenericTypeAlias(declaration);
       } else if (declaration is TopLevelVariableDeclaration) {
         _addVariables(
+          null,
           declaredNodes,
           declaration.metadata,
           declaration.variables,
@@ -495,75 +605,121 @@ class _LibraryBuilder {
   }
 
   void _addVariables(
-      List<DependencyNode> variableNodes,
-      List<Annotation> metadata,
-      VariableDeclarationList variables,
-      bool appendInitializerToApi) {
+    Node? enclosingClass,
+    List<Node> variableNodes,
+    List<Annotation> metadata,
+    VariableDeclarationList variables,
+    bool appendInitializerToApi,
+  ) {
     if (variables.isConst || variables.type == null) {
       appendInitializerToApi = true;
     }
 
     for (var variable in variables.variables) {
-      var signature = ApiSignature();
-      signature.addInt(variables.isConst ? 1 : 0); // const flag
-      _appendMetadataTokens(signature, metadata);
+      var initializer = variable.initializer;
 
-      _appendNodeTokens(signature, variables.type);
-      referenceCollector.appendTypeAnnotation(variables.type);
-
+      var builder = _newApiSignatureBuilder();
+      builder.addInt(variables.isConst ? 1 : 0); // const flag
+      _appendMetadataTokens(builder, metadata);
+      _appendNodeTokens(builder, variables.type);
       if (appendInitializerToApi) {
-        _appendNodeTokens(signature, variable.initializer);
-        referenceCollector.appendExpression(variable.initializer);
+        _appendNodeTokens(builder, initializer);
       }
 
-      var tokenSignature = signature.toByteList();
-      var api = referenceCollector.finish(tokenSignature);
+      var apiTokenSignature = builder.toByteList();
+      var api = referenceCollector.collect(
+        apiTokenSignature,
+        enclosingClassName: enclosingClass?.name.name,
+        thisNodeName: variable.name.name,
+        type: variables.type,
+        expression: appendInitializerToApi ? initializer : null,
+      );
+
+      var implTokenSignature = _computeNodeTokenSignature(initializer);
+      var impl = referenceCollector.collect(
+        implTokenSignature,
+        enclosingClassName: enclosingClass?.name.name,
+        thisNodeName: variable.name.name,
+        expression: initializer,
+      );
 
       var rawName = variable.name.name;
-      variableNodes.add(
-        DependencyNode(
-          DependencyName(uri, rawName),
-          DependencyNodeKind.GETTER,
-          api,
-          DependencyNodeDependencies.none,
-        ),
-      );
+      variableNodes.add(Node(
+        LibraryQualifiedName(uri, rawName),
+        NodeKind.GETTER,
+        api,
+        impl,
+        enclosingClass: enclosingClass,
+      ));
+
       if (!variables.isConst && !variables.isFinal) {
+        // Note that one set of dependencies is enough for body.
+        // So, the setter has empty "impl" dependencies.
         variableNodes.add(
-          DependencyNode(
-            DependencyName(uri, '$rawName='),
-            DependencyNodeKind.SETTER,
+          Node(
+            LibraryQualifiedName(uri, '$rawName='),
+            NodeKind.SETTER,
             api,
-            DependencyNodeDependencies.none,
+            Dependencies.none,
+            enclosingClass: enclosingClass,
           ),
         );
       }
     }
   }
 
+  /// Return the signature for all tokens of the [node].
+  List<int> _computeNodeTokenSignature(AstNode? node) {
+    if (node == null) {
+      return const <int>[];
+    }
+    return _computeTokenSignature(node.beginToken, node.endToken);
+  }
+
+  /// Return the signature for tokens from [begin] to [end] (both including).
+  List<int> _computeTokenSignature(Token begin, Token end) {
+    var signature = _newApiSignatureBuilder();
+    _appendTokens(signature, begin, end);
+    return signature.toByteList();
+  }
+
+  /// Return a new signature builder, primed with the current context salts.
+  ApiSignature _newApiSignatureBuilder() {
+    var builder = ApiSignature();
+    builder.addBytes(uriSignature);
+
+    final enclosingClassNameSignature = this.enclosingClassNameSignature;
+    if (enclosingClassNameSignature != null) {
+      builder.addBytes(enclosingClassNameSignature);
+    }
+
+    return builder;
+  }
+
   /// Append tokens of the given [parameters] to the [signature].
   static void _appendFormalParametersTokens(
-      ApiSignature signature, FormalParameterList parameters) {
+      ApiSignature signature, FormalParameterList? parameters) {
     if (parameters == null) return;
 
     for (var parameter in parameters.parameters) {
-      if (parameter.isRequired) {
+      if (parameter.isRequiredPositional) {
         signature.addInt(1);
+      } else if (parameter.isRequiredNamed) {
+        signature.addInt(4);
       } else if (parameter.isOptionalPositional) {
         signature.addInt(2);
-      } else {
+      } else if (parameter.isOptionalNamed) {
         signature.addInt(3);
       }
 
       // If a simple not named parameter, we don't need its name.
       // We should be careful to include also annotations.
-      if (parameter is SimpleFormalParameter && parameter.type != null) {
-        _appendTokens(
-          signature,
-          parameter.beginToken,
-          parameter.type.endToken,
-        );
-        continue;
+      if (parameter is SimpleFormalParameter) {
+        var type = parameter.type;
+        if (type != null) {
+          _appendTokens(signature, parameter.beginToken, type.endToken);
+          continue;
+        }
       }
 
       // We don't know anything better than adding the whole parameter.
@@ -573,15 +729,13 @@ class _LibraryBuilder {
 
   static void _appendMetadataTokens(
       ApiSignature signature, List<Annotation> metadata) {
-    if (metadata != null) {
-      for (var annotation in metadata) {
-        _appendNodeTokens(signature, annotation);
-      }
+    for (var annotation in metadata) {
+      _appendNodeTokens(signature, annotation);
     }
   }
 
   /// Append tokens of the given [node] to the [signature].
-  static void _appendNodeTokens(ApiSignature signature, AstNode node) {
+  static void _appendNodeTokens(ApiSignature signature, AstNode? node) {
     if (node != null) {
       _appendTokens(signature, node.beginToken, node.endToken);
     }
@@ -590,10 +744,10 @@ class _LibraryBuilder {
   /// Append tokens from [begin] to [end] (both including) to the [signature].
   static void _appendTokens(ApiSignature signature, Token begin, Token end) {
     if (begin is CommentToken) {
-      begin = (begin as CommentToken).parent;
+      begin = begin.parent!;
     }
 
-    Token token = begin;
+    Token? token = begin;
     while (token != null) {
       signature.addString(token.lexeme);
 
@@ -608,37 +762,6 @@ class _LibraryBuilder {
 
       token = nextToken;
     }
-  }
-
-  /// TODO(scheglov) Replace all uses with [referenceCollector].
-  static DependencyNodeDependencies _computeApiDependencies(
-      List<int> tokenSignature, AstNode node,
-      [AstNode node2]) {
-    List<String> importPrefixes = [];
-    List<String> unprefixedReferencedNames = [];
-    List<List<String>> importPrefixedReferencedNames = [];
-    return DependencyNodeDependencies(
-      tokenSignature,
-      unprefixedReferencedNames,
-      importPrefixes,
-      importPrefixedReferencedNames,
-      const [],
-    );
-  }
-
-  /// Return the signature for all tokens of the [node].
-  static List<int> _computeNodeTokenSignature(AstNode node) {
-    if (node == null) {
-      return const <int>[];
-    }
-    return _computeTokenSignature(node.beginToken, node.endToken);
-  }
-
-  /// Return the signature for tokens from [begin] to [end] (both including).
-  static List<int> _computeTokenSignature(Token begin, Token end) {
-    var signature = ApiSignature();
-    _appendTokens(signature, begin, end);
-    return signature.toByteList();
   }
 
   /// Return [Combinator]s for the given import or export [directive].

@@ -17,9 +17,6 @@ cc/Fail0: Fail # These tests are expected to crash on all platforms.
 cc/Fail1: Fail # These tests are expected to crash on all platforms.
 cc/Fail2: Fail # These tests are expected to crash on all platforms.
 
-cc/Dart2JSCompileAll: Fail, Crash # Issue 27369
-cc/Dart2JSCompilerStats: Fail, Crash # Issue 27369
-
 cc/Profiler_InliningIntervalBoundry: Skip # Differences in ia32, debug, release
 
 cc/Sleep: Skip # Flaky # Flaky on buildbot. Issue 5133 and 10409.
@@ -50,11 +47,10 @@ cc/CorelibIsolateStartup: Skip # OOM crash can bring down the OS.
 dart/data_uri_spawn_test: Skip # TODO(zra): package:unittest is not in the image.
 cc/Read: Fail  # TODO(zra): Investigate, ../../dart/runtime/bin/file_test.cc: 34: error: expected: !file->WriteByte(1)
 
-# Profiler is completely disabled in SIMDBC builds.
 # On the simluator stack traces produced by the Profiler do not match
 # up with the real Dart stack trace and hence we don't get correct
 # symbol names.
-[ $arch == simarm || $arch == simarmv6 || $arch == simarmv5te || $arch == simarm64 || $arch == simdbc  || $arch == simdbc64 ]
+[ $arch == simarm || $arch == simarm64 || $arch == simarm64c]
 cc/Service_Profile: Skip
 cc/Profiler_AllocationSampleTest: Skip
 cc/Profiler_ArrayAllocation: Skip
@@ -129,17 +125,11 @@ dart/optimized_stacktrace_line_and_column_test: StaticWarning
 [ $compiler == dart2analyzer && $strong ]
 *: Skip # Issue 28649
 
-[ $compiler == app_jit ]
-dart/snapshot_version_test: Fail,OK # Expects to find script snapshot relative to Dart source.
-
 [ $runtime != vm ]
 dart/snapshot_version_test: SkipByDesign  # Spawns processes
 dart/spawn_infinite_loop_test: Skip  # VM shutdown test
 dart/spawn_shutdown_test: Skip  # VM Shutdown test
 dart/hello_fuchsia_test: SkipByDesign # This is a test for fuchsia OS
-
-[ ($runtime == vm || $runtime == dart_precompiled) && $mode == debug && $builder_tag == asan ]
-cc/Dart2JSCompileAll: SkipSlow  # Timeout.
 
 [ $builder_tag == asan ]
 cc/CodeImmutability: Fail,OK # Address Sanitizer turns a crash into a failure.
@@ -162,17 +152,11 @@ cc/IsolateReload_TypeIdentity: Fail # Issue 28349
 cc/IsolateReload_TypeIdentityGeneric: Fail # Issue 28349
 cc/IsolateReload_TypeIdentityParameter: Fail # Issue 28349
 
-[ $compiler == precompiler ]
-dart/byte_array_test: Skip # Incompatible flag --disable_alloc_stubs_after_gc
-
-[ $compiler == precompiler || $mode == product ]
+[ $mode == product ]
 dart/redirection_type_shuffling_test: SkipByDesign # Imports dart:mirrors
 cc/CreateMirrorSystem: SkipByDesign # Imports dart:mirrors
 cc/CoreSnapshotSize: SkipByDesign # Imports dart:mirrors
 cc/StandaloneSnapshotSize: SkipByDesign # Imports dart:mirrors
-
-[ $compiler == app_jit ]
-dart/optimized_stacktrace_line_and_column_test: RuntimeError,OK # app-jit lacks column information
 
 [ $runtime == dart_precompiled ]
 dart/optimized_stacktrace_line_and_column_test: RuntimeError,OK # AOT lacks column information
@@ -180,20 +164,6 @@ dart/data_uri_spawn_test: SkipByDesign # Isolate.spawnUri
 
 [ $runtime == vm && $mode == product ]
 cc/DartAPI_IsolateSetCheckedMode: Fail,OK  # Checked mode disabled in product mode.
-
-[ $arch == simdbc  || $arch == simdbc64 ]
-cc/RegExp_ExternalOneByteString: Skip # TODO(vegorov) These tests don't seem to work if FLAG_interpret_irregexp is switched on by default because they attempt to call regexp functions directly instead of going through JSSyntaxRegExp_ExecuteMatch.
-cc/RegExp_ExternalTwoByteString: Skip # TODO(vegorov) These tests don't seem to work if FLAG_interpret_irregexp is switched on by default because they attempt to call regexp functions directly instead of going through JSSyntaxRegExp_ExecuteMatch.
-cc/RegExp_OneByteString: Skip # TODO(vegorov) These tests don't seem to work if FLAG_interpret_irregexp is switched on by default because they attempt to call regexp functions directly instead of going through JSSyntaxRegExp_ExecuteMatch.
-cc/RegExp_TwoByteString: Skip # TODO(vegorov) These tests don't seem to work if FLAG_interpret_irregexp is switched on by default because they attempt to call regexp functions directly instead of going through JSSyntaxRegExp_ExecuteMatch.
-
-cc/GuardFieldConstructor2Test: Skip # TODO(vegorov) Field guards are disabled for SIMDBC
-cc/GuardFieldConstructorTest: Skip # TODO(vegorov) Field guards are disabled for SIMDBC
-cc/GuardFieldFinalListTest: Skip # TODO(vegorov) Field guards are disabled for SIMDBC
-cc/GuardFieldFinalVariableLengthListTest: Skip # TODO(vegorov) Field guards are disabled for SIMDBC
-cc/GuardFieldSimpleTest: Skip # TODO(vegorov) Field guards are disabled for SIMDBC
-
-cc/RegenerateAllocStubs: Skip # This test is meaningless for DBC as allocation stubs are not used.
 
 [ $hot_reload || $hot_reload_rollback ]
 dart/spawn_shutdown_test: Skip # We can shutdown an isolate before it reloads.

@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -7,7 +7,7 @@ import 'package:analyzer/src/dart/error/syntactic_errors.dart';
 import 'partial_code_support.dart';
 
 main() {
-  new MixinDeclarationTest().buildAll();
+  MixinDeclarationTest().buildAll();
 }
 
 class MixinDeclarationTest extends PartialCodeTest {
@@ -15,105 +15,105 @@ class MixinDeclarationTest extends PartialCodeTest {
     buildTests(
         'mixin_declaration',
         [
-          new TestDescriptor(
+          TestDescriptor(
               'keyword',
               'mixin',
               [
                 ParserErrorCode.MISSING_IDENTIFIER,
-                ParserErrorCode.MISSING_CLASS_BODY
+                ParserErrorCode.EXPECTED_BODY
               ],
               'mixin _s_ {}',
               failing: ['functionNonVoid', 'getter']),
-          new TestDescriptor('named', 'mixin A',
-              [ParserErrorCode.MISSING_CLASS_BODY], 'mixin A {}'),
-          new TestDescriptor(
+          TestDescriptor('named', 'mixin A', [ParserErrorCode.EXPECTED_BODY],
+              'mixin A {}'),
+          TestDescriptor(
               'on',
               'mixin A on',
               [
                 ParserErrorCode.EXPECTED_TYPE_NAME,
-                ParserErrorCode.MISSING_CLASS_BODY
+                ParserErrorCode.EXPECTED_BODY
               ],
               'mixin A on _s_ {}',
               failing: ['functionVoid', 'functionNonVoid', 'getter', 'mixin']),
-          new TestDescriptor(
+          TestDescriptor(
               'extend',
               'mixin A extend',
               [
                 ParserErrorCode.EXPECTED_INSTEAD,
                 ParserErrorCode.EXPECTED_TYPE_NAME,
-                ParserErrorCode.MISSING_CLASS_BODY
+                ParserErrorCode.EXPECTED_BODY
               ],
               'mixin A extend _s_ {}',
               expectedErrorsInValidCode: [ParserErrorCode.EXPECTED_INSTEAD],
               failing: ['functionVoid', 'functionNonVoid', 'getter', 'mixin']),
-          new TestDescriptor(
+          TestDescriptor(
               'extends',
               'mixin A extends',
               [
                 ParserErrorCode.EXPECTED_INSTEAD,
                 ParserErrorCode.EXPECTED_TYPE_NAME,
-                ParserErrorCode.MISSING_CLASS_BODY
+                ParserErrorCode.EXPECTED_BODY
               ],
               'mixin A extends _s_ {}',
               expectedErrorsInValidCode: [ParserErrorCode.EXPECTED_INSTEAD],
               failing: ['functionVoid', 'functionNonVoid', 'getter', 'mixin']),
-          new TestDescriptor('onBody', 'mixin A on {}',
+          TestDescriptor('onBody', 'mixin A on {}',
               [ParserErrorCode.EXPECTED_TYPE_NAME], 'mixin A on _s_ {}'),
-          new TestDescriptor(
+          TestDescriptor(
               'onNameComma',
               'mixin A on B,',
               [
                 ParserErrorCode.EXPECTED_TYPE_NAME,
-                ParserErrorCode.MISSING_CLASS_BODY
+                ParserErrorCode.EXPECTED_BODY
               ],
               'mixin A on B, _s_ {}',
               failing: ['functionVoid', 'functionNonVoid', 'getter', 'mixin']),
-          new TestDescriptor('onNameCommaBody', 'mixin A on B, {}',
+          TestDescriptor('onNameCommaBody', 'mixin A on B, {}',
               [ParserErrorCode.EXPECTED_TYPE_NAME], 'mixin A on B, _s_ {}'),
-          new TestDescriptor(
+          TestDescriptor(
               'onImplementsNameBody',
               'mixin A on implements B {}',
               [ParserErrorCode.EXPECTED_TYPE_NAME],
               'mixin A on _s_ implements B {}',
               allFailing: true),
-          new TestDescriptor(
+          TestDescriptor(
               'onNameImplements',
               'mixin A on B implements',
               [
                 ParserErrorCode.EXPECTED_TYPE_NAME,
-                ParserErrorCode.MISSING_CLASS_BODY
+                ParserErrorCode.EXPECTED_BODY
               ],
               'mixin A on B implements _s_ {}',
               failing: ['functionVoid', 'functionNonVoid', 'getter', 'mixin']),
-          new TestDescriptor(
+          TestDescriptor(
               'onNameImplementsBody',
               'mixin A on B implements {}',
               [ParserErrorCode.EXPECTED_TYPE_NAME],
               'mixin A on B implements _s_ {}'),
-          new TestDescriptor(
+          TestDescriptor(
               'implements',
               'mixin A implements',
               [
                 ParserErrorCode.EXPECTED_TYPE_NAME,
-                ParserErrorCode.MISSING_CLASS_BODY
+                ParserErrorCode.EXPECTED_BODY
               ],
               'mixin A implements _s_ {}',
               failing: ['functionVoid', 'functionNonVoid', 'getter', 'mixin']),
-          new TestDescriptor(
+          TestDescriptor(
               'implementsBody',
               'mixin A implements {}',
               [ParserErrorCode.EXPECTED_TYPE_NAME],
               'mixin A implements _s_ {}'),
-          new TestDescriptor(
+          TestDescriptor(
               'implementsNameComma',
               'mixin A implements B,',
               [
                 ParserErrorCode.EXPECTED_TYPE_NAME,
-                ParserErrorCode.MISSING_CLASS_BODY
+                ParserErrorCode.EXPECTED_BODY
               ],
               'mixin A implements B, _s_ {}',
               failing: ['functionVoid', 'functionNonVoid', 'getter', 'mixin']),
-          new TestDescriptor(
+          TestDescriptor(
               'implementsNameCommaBody',
               'mixin A implements B, {}',
               [ParserErrorCode.EXPECTED_TYPE_NAME],

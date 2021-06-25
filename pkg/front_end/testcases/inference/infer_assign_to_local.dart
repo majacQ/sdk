@@ -1,7 +1,7 @@
 // Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-
+// @dart=2.9
 /*@testedFeatures=inference*/
 library test;
 
@@ -20,19 +20,35 @@ T f<T>() => null;
 
 void test() {
   B local;
-  local = /*@typeArgs=B*/ f();
-  local ??= /*@typeArgs=B*/ f();
-  local += /*@typeArgs=dynamic*/ f();
-  local *= /*@typeArgs=dynamic*/ f();
-  local &= /*@typeArgs=dynamic*/ f();
-  --local;
-  local--;
-  var /*@type=B*/ v1 = local = /*@typeArgs=B*/ f();
-  var /*@type=B*/ v2 = local ??= /*@typeArgs=B*/ f();
-  var /*@type=B*/ v4 = local *= /*@typeArgs=dynamic*/ f();
-  var /*@type=C*/ v5 = local &= /*@typeArgs=dynamic*/ f();
-  var /*@type=B*/ v6 = --local;
-  var /*@type=B*/ v7 = local--;
+  local = /*@ typeArgs=B* */ f();
+
+  local /*@target=A.==*/ ??= /*@ typeArgs=B* */ f();
+
+  local /*@target=B.+*/ += /*@ typeArgs=C* */ f();
+
+  local /*@target=B.**/ *= /*@ typeArgs=B* */ f();
+
+  local /*@target=B.&*/ &= /*@ typeArgs=A* */ f();
+
+  /*@target=B.-*/ --local;
+
+  local /*@target=B.-*/ --;
+
+  var /*@ type=B* */ v1 = local = /*@ typeArgs=B* */ f();
+
+  var /*@ type=B* */ v2 =
+      local /*@target=A.==*/ ??= /*@ typeArgs=B* */ f();
+
+  var /*@ type=A* */ v3 = local /*@target=B.+*/ += /*@ typeArgs=C* */ f();
+
+  var /*@ type=B* */ v4 = local /*@target=B.**/ *= /*@ typeArgs=B* */ f();
+
+  var /*@ type=C* */ v5 = local /*@target=B.&*/ &= /*@ typeArgs=A* */ f();
+
+  var /*@ type=B* */ v6 = /*@target=B.-*/ --local;
+
+  var /*@ type=B* */ v7 = /*@ type=B* */ local
+      /*@ type=B* */ /*@target=B.-*/ --;
 }
 
 main() {}

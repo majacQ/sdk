@@ -1,4 +1,4 @@
-// Copyright (c) 2016, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2016, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -13,7 +13,7 @@ main() {
 }
 
 List<int> _b(int length) {
-  return new List<int>(length);
+  return List<int>.filled(length, 0);
 }
 
 @reflectiveTest
@@ -95,7 +95,7 @@ class CacheTest {
   }
 
   Cache<String, List<int>> _newBytesCache(int maxSizeBytes) =>
-      new Cache<String, List<int>>(maxSizeBytes, (bytes) => bytes.length);
+      Cache<String, List<int>>(maxSizeBytes, (bytes) => bytes.length);
 
-  static List<int> _noBytes() => null;
+  static List<int>? _noBytes() => null;
 }

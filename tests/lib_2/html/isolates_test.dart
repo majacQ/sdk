@@ -1,7 +1,8 @@
+
+// @dart = 2.9
 library IsolatesTest;
 
-import 'package:unittest/unittest.dart';
-import 'package:unittest/html_config.dart';
+import 'package:async_helper/async_minitest.dart';
 import 'dart:async';
 import 'dart:html';
 import 'dart:convert';
@@ -41,7 +42,6 @@ Future sendReceive(isolate.SendPort port, msg) {
 }
 
 main() {
-  useHtmlConfiguration();
   test('IsolateSpawn', () {
     var port = new isolate.ReceivePort();
     isolate.Isolate.spawn(isolateEntry, port.sendPort);

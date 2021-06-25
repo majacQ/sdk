@@ -5,7 +5,7 @@
 import 'dart:developer';
 
 import 'package:observatory/service_io.dart';
-import 'package:unittest/unittest.dart';
+import 'package:test/test.dart';
 
 import 'service_test_common.dart';
 import 'test_helper.dart';
@@ -34,58 +34,48 @@ var tests = <IsolateTest>[
     expect(stack['frames'].length, greaterThanOrEqualTo(1));
     expect(stack['frames'][0].function.name, equals('foo'));
 
-    Library lib = await isolate.rootLibrary.load();
-    Field thing1Field =
-        await lib.variables.singleWhere((v) => v.name == "thing1").load();
-    var thing1 = thing1Field.staticValue;
+    Library lib = await isolate.rootLibrary.load() as Library;
+    Field thing1Field = await lib.variables
+        .singleWhere((v) => v.name == "thing1")
+        .load() as Field;
+    var thing1 = thing1Field.staticValue!;
     print(thing1);
-    Field thing2Field =
-        await lib.variables.singleWhere((v) => v.name == "thing2").load();
-    var thing2 = thing2Field.staticValue;
+    Field thing2Field = await lib.variables
+        .singleWhere((v) => v.name == "thing2")
+        .load() as Field;
+    var thing2 = thing2Field.staticValue!;
     print(thing2);
 
-    final isInstanceOf<Instance> isInstanceOfInstance =
-        new isInstanceOf<Instance>();
     ServiceObject result = await isolate.evalFrame(0, "x + y + a + b",
         scope: <String, ServiceObject>{"a": thing1, "b": thing2});
-    expect(result, isInstanceOfInstance);
+    expect(result, isA<Instance>());
     print(result);
     expect((result as Instance).valueAsString, equals('2033'));
 
     result = await isolate.evalFrame(0, "local + a + b",
         scope: <String, ServiceObject>{"a": thing1, "b": thing2});
-    expect(result, isInstanceOfInstance);
+    expect(result, isA<Instance>());
     print(result);
     expect((result as Instance).valueAsString, equals('2033'));
 
     // Note the eval's scope is shadowing the locals' scope.
     result = await isolate.evalFrame(0, "x + y",
         scope: <String, ServiceObject>{"x": thing1, "y": thing2});
-    expect(result, isInstanceOfInstance);
+    expect(result, isA<Instance>());
     print(result);
     expect((result as Instance).valueAsString, equals('7'));
 
-    bool didThrow = false;
-    try {
-      await lib.evaluate("x + y",
-          scope: <String, ServiceObject>{"x": lib, "y": lib});
-    } catch (e) {
-      didThrow = true;
-      expect(e.toString(),
-          contains("Cannot evaluate against a VM-internal object"));
-    }
-    expect(didThrow, isTrue);
+    DartError errorResult = await lib.evaluate("x + y",
+        scope: <String, ServiceObject>{"x": lib, "y": lib}) as DartError;
+    print(errorResult);
+    expect(errorResult.toString(),
+        contains("Cannot evaluate against a VM-internal object"));
 
-    didThrow = false;
-    try {
-      result = await lib.evaluate("x + y",
-          scope: <String, ServiceObject>{"not&an&identifier": thing1});
-      print(result);
-    } catch (e) {
-      didThrow = true;
-      expect(e.toString(), contains("invalid 'scope' parameter"));
-    }
-    expect(didThrow, isTrue);
+    errorResult = await lib.evaluate("x + y",
+            scope: <String, ServiceObject>{"not&an&identifier": thing1})
+        as DartError;
+    print(errorResult);
+    expect(errorResult.toString(), contains("invalid 'scope' parameter"));
   },
 ];
 

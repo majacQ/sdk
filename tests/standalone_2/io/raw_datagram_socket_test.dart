@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import "dart:async";
 import "dart:io";
 import "dart:typed_data";
@@ -73,14 +75,14 @@ testDatagramSocketReuseAddress() {
     RawDatagramSocket.bind(address, 0,
             reuseAddress: reuseAddress,
             reusePort: Platform.isMacOS && reuseAddress)
-        .then((socket) {
+        .then((socket) async {
       if (reuseAddress) {
         RawDatagramSocket.bind(address, socket.port,
                 reusePort: Platform.isMacOS)
             .then((s) => Expect.isTrue(s is RawDatagramSocket))
             .then(asyncSuccess);
       } else {
-        FutureExpect.throws(RawDatagramSocket.bind(address, socket.port))
+        await FutureExpect.throws(RawDatagramSocket.bind(address, socket.port))
             .then(asyncSuccess);
       }
     });
@@ -114,6 +116,50 @@ testDatagramSocketTtl() {
   test(InternetAddress.loopbackIPv6, 256, false);
   test(InternetAddress.loopbackIPv6, 0, false);
   test(InternetAddress.loopbackIPv6, null, false);
+}
+
+testDatagramSocketMulticastIf() {
+  test(address) async {
+    asyncStart();
+    final socket = await RawDatagramSocket.bind(address, 0);
+    RawSocketOption option;
+    int idx;
+    if (address.type == InternetAddressType.IPv4) {
+      option = RawSocketOption(RawSocketOption.levelIPv4,
+          RawSocketOption.IPv4MulticastInterface, address.rawAddress);
+    } else {
+      if (!NetworkInterface.listSupported) {
+        asyncEnd();
+        return;
+      }
+      var interface = await NetworkInterface.list();
+      if (interface.length == 0) {
+        asyncEnd();
+        return;
+      }
+      idx = interface[0].index;
+      option = RawSocketOption.fromInt(RawSocketOption.levelIPv6,
+          RawSocketOption.IPv6MulticastInterface, idx);
+    }
+
+    socket.setRawOption(option);
+    final getResult = socket.getRawOption(option);
+
+    if (address.type == InternetAddressType.IPv4) {
+      Expect.listEquals(getResult, address.rawAddress);
+    } else {
+      // RawSocketOption.fromInt() will create a Uint8List(4).
+      Expect.equals(
+          getResult.buffer.asByteData().getUint32(0, Endian.host), idx);
+    }
+
+    asyncSuccess(socket);
+  }
+
+  test(InternetAddress.loopbackIPv4);
+  test(InternetAddress.anyIPv4);
+  test(InternetAddress.loopbackIPv6);
+  test(InternetAddress.anyIPv6);
 }
 
 testBroadcast() {
@@ -363,6 +409,7 @@ main() {
   testDatagramMulticastOptions();
   testDatagramSocketReuseAddress();
   testDatagramSocketTtl();
+  testDatagramSocketMulticastIf();
   testBroadcast();
   testLoopbackMulticast();
   testLoopbackMulticastError();

@@ -2,12 +2,13 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import "package:async_helper/async_helper.dart";
 import "package:expect/expect.dart";
 import "package:path/path.dart";
 import "dart:async";
 import "dart:io";
-import "dart:isolate";
 
 // Test the dart:io Link class.
 
@@ -57,8 +58,8 @@ testCreateSync() {
 
   // Test FileSystemEntity.identical on files, directories, and links,
   // reached by different paths.
-  Expect
-      .isTrue(FileSystemEntity.identicalSync(createdDirectly, createdDirectly));
+  Expect.isTrue(
+      FileSystemEntity.identicalSync(createdDirectly, createdDirectly));
   Expect.isFalse(
       FileSystemEntity.identicalSync(createdDirectly, createdThroughLink));
   Expect.isTrue(FileSystemEntity.identicalSync(
@@ -190,6 +191,38 @@ testRenameSync() {
     Expect.isFalse(link2.existsSync());
   }
 
+  testRenameToLink(String base, String target) {
+    Link link1 = Link(join(base, '1'))..createSync(target);
+    Link link2 = Link(join(base, '2'))..createSync(target);
+    Expect.isTrue(link1.existsSync());
+    Expect.isTrue(link2.existsSync());
+    Link renamed = link1.renameSync(link2.path);
+    Expect.isFalse(link1.existsSync());
+    Expect.isTrue(renamed.existsSync());
+    renamed.deleteSync();
+    Expect.isFalse(renamed.existsSync());
+  }
+
+  testRenameToTarget(String linkName, String target, bool isDirectory) {
+    Link link = Link(linkName)..createSync(target);
+    Expect.isTrue(link.existsSync());
+    try {
+      Link renamed = link.renameSync(target);
+      if (isDirectory) {
+        Expect.fail('Renaming a link to the name of an existing directory ' +
+            'should fail');
+      }
+      Expect.isTrue(renamed.existsSync());
+      renamed.deleteSync();
+    } on FileSystemException catch (_) {
+      if (isDirectory) {
+        return;
+      }
+      Expect.fail('Renaming a link to the name of an existing file should ' +
+          'not fail');
+    }
+  }
+
   Directory baseDir = Directory.systemTemp.createTempSync('dart_link');
   String base = baseDir.path;
   Directory dir = new Directory(join(base, 'a'))..createSync();
@@ -197,6 +230,11 @@ testRenameSync() {
 
   testRename(base, file.path);
   testRename(base, dir.path);
+
+  testRenameToLink(base, file.path);
+
+  testRenameToTarget(join(base, 'fileLink'), file.path, false);
+  testRenameToTarget(join(base, 'dirLink'), dir.path, true);
 
   baseDir.deleteSync(recursive: true);
 }
@@ -239,10 +277,50 @@ testRelativeLinksSync() {
   tempDirectory.deleteSync(recursive: true);
 }
 
+testIsDir() async {
+  // Only run on Platforms that supports file watcher
+  if (!Platform.isWindows && !Platform.isLinux && !Platform.isMacOS) return;
+  Directory sandbox = Directory.systemTemp.createTempSync();
+  Directory dir = new Directory(sandbox.path + Platform.pathSeparator + "dir");
+  dir.createSync();
+  File target = new File(sandbox.path + Platform.pathSeparator + "target");
+  target.createSync();
+
+  var eventCompleter = new Completer<FileSystemEvent>();
+  var subscription;
+  // Check for link pointing to file
+  subscription = dir.watch().listen((FileSystemEvent event) {
+    if (event.path.endsWith('link')) {
+      eventCompleter.complete(event);
+      subscription.cancel();
+    }
+  });
+  Link link = new Link(dir.path + Platform.pathSeparator + "link");
+  link.createSync(target.path);
+  var event = await eventCompleter.future;
+  Expect.isFalse(event.isDirectory);
+
+  // Check for link pointing to directory
+  eventCompleter = new Completer<FileSystemEvent>();
+  subscription = dir.watch().listen((FileSystemEvent event) {
+    if (event.path.endsWith('link2')) {
+      eventCompleter.complete(event);
+      subscription.cancel();
+    }
+  });
+  link = new Link(dir.path + Platform.pathSeparator + "link2");
+  link.createSync(dir.path);
+  event = await eventCompleter.future;
+  Expect.isFalse(event.isDirectory);
+
+  sandbox.deleteSync(recursive: true);
+}
+
 main() {
   testCreateSync();
   testCreateLoopingLink();
   testRenameSync();
   testLinkErrorSync();
   testRelativeLinksSync();
+  testIsDir();
 }

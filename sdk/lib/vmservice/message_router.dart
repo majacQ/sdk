@@ -5,7 +5,7 @@
 part of dart._vmservice;
 
 abstract class MessageRouter {
-  Future<Response> routeRequest(VMService service, Message message);
+  Future<Response?> routeRequest(VMService service, Message message);
   void routeResponse(Message message);
 }
 
@@ -33,6 +33,8 @@ class Response {
         case ResponsePayloadKind.Binary:
         case ResponsePayloadKind.Utf8String:
           return payload is Uint8List;
+        default:
+          return false;
       }
     }());
   }
@@ -42,14 +44,12 @@ class Response {
   Response.json(Object value)
       : this(ResponsePayloadKind.String, json.encode(value));
 
-  factory Response.internalError(String message) {
-    return new Response.json({
-      'type': 'ServiceError',
-      'id': '',
-      'kind': 'InternalError',
-      'message': message,
-    });
-  }
+  factory Response.internalError(String message) => Response.json({
+        'type': 'ServiceError',
+        'id': '',
+        'kind': 'InternalError',
+        'message': message,
+      });
 
   /// Construct response from the response [value] which can be either:
   ///     String: a string
@@ -57,13 +57,12 @@ class Response {
   ///     Utf8String: a single element list containing Uint8List
   factory Response.from(Object value) {
     if (value is String) {
-      return new Response(ResponsePayloadKind.String, value);
+      return Response(ResponsePayloadKind.String, value);
     } else if (value is Uint8List) {
-      return new Response(ResponsePayloadKind.Binary, value);
+      return Response(ResponsePayloadKind.Binary, value);
     } else if (value is List) {
       assert(value.length == 1);
-      return new Response(
-          ResponsePayloadKind.Utf8String, value[0] as Uint8List);
+      return Response(ResponsePayloadKind.Utf8String, value[0] as Uint8List);
     } else if (value is Response) {
       return value;
     } else {

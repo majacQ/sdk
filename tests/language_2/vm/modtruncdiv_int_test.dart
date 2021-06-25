@@ -2,7 +2,10 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 // VMOptions=--no_background_compilation --optimization_counter_threshold=10
+// VMOptions=--no_background_compilation --optimization_counter_threshold=10 --use_slow_path
 
 import "package:expect/expect.dart";
 
@@ -79,6 +82,23 @@ doModConstants() {
   Expect.equals(1, mod(maxInt32 + 1, maxInt32));
   Expect.equals(maxInt32 - 2, mod(minInt32 - 1, maxInt32));
   Expect.equals(0, mod(minInt32 + 1, maxInt32));
+
+  Expect.equals(15, mod(-1, 16));
+  Expect.equals(15, mod(-17, 16));
+  Expect.equals(15, mod(-1, -16));
+  Expect.equals(15, mod(-17, -16));
+  Expect.equals(100, mod(100, 1 << 32));
+  Expect.equals(100, mod(100, -(1 << 32)));
+  Expect.equals((1 << 32) - 1, mod((1 << 35) - 1, 1 << 32));
+  Expect.equals((1 << 32) - 1, mod((1 << 35) - 1, -(1 << 32)));
+  Expect.equals(maxInt64, mod(-1, 1 << 63));
+  Expect.equals(0, mod(minInt64, 1 << 63));
+}
+
+doModVarConstant() {
+  for (int i = -10; i < 10; i++) {
+    Expect.equals(i & maxInt64, mod(i, minInt64));
+  }
 }
 
 doTruncDivConstants() {
@@ -164,6 +184,7 @@ main() {
     // Constants.
 
     doModConstants();
+    doModVarConstant();
     doTruncDivConstants();
 
     // Variable ranges.

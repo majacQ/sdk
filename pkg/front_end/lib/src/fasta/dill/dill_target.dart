@@ -2,15 +2,22 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library fasta.dill_target;
 
-import 'dart:async' show Future;
+import 'package:front_end/src/fasta/builder/library_builder.dart'
+    show LibraryBuilder;
+
+import 'package:kernel/ast.dart' show Library;
 
 import 'package:kernel/target/targets.dart' show Target;
 
-import '../kernel/kernel_builder.dart' show ClassBuilder;
+import '../builder/class_builder.dart';
 
 import '../problems.dart' show unsupported;
+
+import '../source/source_library_builder.dart' show LanguageVersion;
 
 import '../target_implementation.dart' show TargetImplementation;
 
@@ -23,7 +30,11 @@ import 'dill_library_builder.dart' show DillLibraryBuilder;
 import 'dill_loader.dart' show DillLoader;
 
 class DillTarget extends TargetImplementation {
+  final Map<Uri, DillLibraryBuilder> libraryBuilders =
+      <Uri, DillLibraryBuilder>{};
+
   bool isLoaded = false;
+
   DillLoader loader;
 
   DillTarget(Ticker ticker, UriTranslator uriTranslator, Target backendTarget)
@@ -33,7 +44,7 @@ class DillTarget extends TargetImplementation {
 
   @override
   void addSourceInformation(
-      Uri uri, List<int> lineStarts, List<int> sourceCode) {
+      Uri importUri, Uri fileUri, List<int> lineStarts, List<int> sourceCode) {
     unsupported("addSourceInformation", -1, null);
   }
 
@@ -43,23 +54,40 @@ class DillTarget extends TargetImplementation {
   }
 
   @override
-  Future<Null> buildOutlines() async {
+  Future<Null> buildOutlines({bool suppressFinalizationErrors: false}) async {
     if (loader.libraries.isNotEmpty) {
       await loader.buildOutlines();
-      loader.finalizeExports();
+      loader.finalizeExports(
+          suppressFinalizationErrors: suppressFinalizationErrors);
     }
     isLoaded = true;
   }
 
   @override
-  DillLibraryBuilder createLibraryBuilder(Uri uri, Uri fileUri, origin) {
+  DillLibraryBuilder createLibraryBuilder(
+      Uri uri,
+      Uri fileUri,
+      Uri packageUri,
+      LanguageVersion packageLanguageVersion,
+      LibraryBuilder origin,
+      Library referencesFrom,
+      bool referenceIsPartOwner) {
     assert(origin == null);
-    return new DillLibraryBuilder(uri, loader);
+    assert(referencesFrom == null);
+    DillLibraryBuilder libraryBuilder = libraryBuilders.remove(uri);
+    assert(libraryBuilder != null, "No library found for $uri.");
+    return libraryBuilder;
   }
 
   @override
-  void addDirectSupertype(ClassBuilder cls, Set<ClassBuilder> set) {}
-
-  @override
   void breakCycle(ClassBuilder cls) {}
+
+  void addLibrary(Library library) {
+    libraryBuilders[library.importUri] =
+        new DillLibraryBuilder(library, loader);
+  }
+
+  void releaseAncillaryResources() {
+    libraryBuilders.clear();
+  }
 }

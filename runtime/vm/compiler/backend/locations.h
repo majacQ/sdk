@@ -5,34 +5,105 @@
 #ifndef RUNTIME_VM_COMPILER_BACKEND_LOCATIONS_H_
 #define RUNTIME_VM_COMPILER_BACKEND_LOCATIONS_H_
 
+#if defined(DART_PRECOMPILED_RUNTIME)
+#error "AOT runtime should not use compiler sources (including header files)"
+#endif  // defined(DART_PRECOMPILED_RUNTIME)
+
 #include "vm/allocation.h"
 #include "vm/bitfield.h"
+#include "vm/bitmap.h"
 #include "vm/compiler/assembler/assembler.h"
-#include "vm/log.h"
+#include "vm/constants.h"
+#include "vm/cpu.h"
 
 namespace dart {
 
-class BufferFormatter;
+class BaseTextBuffer;
 class ConstantInstr;
 class Definition;
 class PairLocation;
 class Value;
-struct FrameLayout;
+
+// All unboxed integer representations.
+// Format: (representation name, is unsigned, value type)
+#define FOR_EACH_INTEGER_REPRESENTATION_KIND(M)                                \
+  M(UnboxedUint8, true, uint8_t)                                               \
+  M(UnboxedUint16, true, uint16_t)                                             \
+  M(UnboxedInt32, false, int32_t)                                              \
+  M(UnboxedUint32, true, uint32_t)                                             \
+  M(UnboxedInt64, false, int64_t)
+
+// All unboxed representations.
+// Format: (representation name, is unsigned, value type)
+#define FOR_EACH_UNBOXED_REPRESENTATION_KIND(M)                                \
+  M(UnboxedDouble, false, double_t)                                            \
+  M(UnboxedFloat, false, float_t)                                              \
+  FOR_EACH_INTEGER_REPRESENTATION_KIND(M)                                      \
+  M(UnboxedFloat32x4, false, simd128_value_t)                                  \
+  M(UnboxedInt32x4, false, simd128_value_t)                                    \
+  M(UnboxedFloat64x2, false, simd128_value_t)
+
+// All representations that represent a single boxed or unboxed value.
+// (Note that packed SIMD values are considered a single value here.)
+// Format: (representation name, is unsigned, value type)
+#define FOR_EACH_SIMPLE_REPRESENTATION_KIND(M)                                 \
+  M(Tagged, false, compiler::target::word)                                     \
+  M(Untagged, false, compiler::target::word)                                   \
+  FOR_EACH_UNBOXED_REPRESENTATION_KIND(M)
+
+// All representations, including sentinel and multi-value representations.
+// Format: (representation name, _, _)  (only the name is guaranteed to exist)
+// Ordered so that NoRepresentation is first (and thus 0 in the enum).
+#define FOR_EACH_REPRESENTATION_KIND(M)                                        \
+  M(NoRepresentation, _, _)                                                    \
+  FOR_EACH_SIMPLE_REPRESENTATION_KIND(M)                                       \
+  M(PairOfTagged, _, _)
 
 enum Representation {
-  kNoRepresentation,
-  kTagged,
-  kUntagged,
-  kUnboxedDouble,
-  kUnboxedInt32,
-  kUnboxedUint32,
-  kUnboxedInt64,
-  kUnboxedFloat32x4,
-  kUnboxedInt32x4,
-  kUnboxedFloat64x2,
-  kPairOfTagged,
-  kNumRepresentations
+#define DECLARE_REPRESENTATION(name, __, ___) k##name,
+  FOR_EACH_REPRESENTATION_KIND(DECLARE_REPRESENTATION)
+#undef DECLARE_REPRESENTATION
+      kNumRepresentations
 };
+
+struct RepresentationUtils : AllStatic {
+  // Whether the representation is for a type of unboxed integer.
+  static bool IsUnboxedInteger(Representation rep);
+
+  // Whether the representation is for a type of unboxed value.
+  static bool IsUnboxed(Representation rep);
+
+  // The size of values described by this representation.
+  static size_t ValueSize(Representation rep);
+
+  // Whether the values described by this representation are unsigned integers.
+  static bool IsUnsigned(Representation rep);
+
+  static compiler::OperandSize OperandSize(Representation rep);
+};
+
+// The representation for word-sized unboxed fields.
+static constexpr Representation kUnboxedWord =
+    compiler::target::kWordSize == 4 ? kUnboxedInt32 : kUnboxedInt64;
+// The representation for unsigned word-sized unboxed fields.
+//
+// Note: kUnboxedUword is identical to kUnboxedWord until range analysis can
+// handle unsigned 64-bit ranges. This means that range analysis will give
+// signed results for unboxed uword field values.
+static constexpr Representation kUnboxedUword = kUnboxedWord;
+
+// 'UnboxedFfiIntPtr' should be able to hold a pointer of the target word-size.
+// On a 32-bit platform, it's an unsigned 32-bit int because it should be
+// zero-extended to 64-bits, not sign-extended (pointers are inherently
+// unsigned).
+//
+// Issue(36370): Use [kUnboxedIntPtr] instead.
+static constexpr Representation kUnboxedFfiIntPtr =
+    compiler::target::kWordSize == 4 ? kUnboxedUint32 : kUnboxedInt64;
+
+// The representation which can be used for native pointers. We use signed 32/64
+// bit representation to be able to do arithmetic on pointers.
+static constexpr Representation kUnboxedIntPtr = kUnboxedWord;
 
 // Location objects are used to connect register allocator and code generator.
 // Instruction templates used by code generator have a corresponding
@@ -63,13 +134,8 @@ class Location : public ValueObject {
   static const uword kLocationTagMask = 0x3;
 
  public:
-#if defined(TARGET_ARCH_DBC)
-  enum SpecialDbcRegister{
-      kArgsDescriptorReg,
-      kExceptionReg,
-      kStackTraceReg,
-  };
-#endif
+  static bool ParseRepresentation(const char* str, Representation* out);
+  static const char* RepresentationToCString(Representation repr);
 
   // Constant payload can overlap with kind field so Kind values
   // have to be chosen in a way that their last 2 bits are never
@@ -77,7 +143,7 @@ class Location : public ValueObject {
   // Note that two locations with different kinds should never point to
   // the same place. For example kQuadStackSlot location should never intersect
   // with kDoubleStackSlot location.
-  enum Kind {
+  enum Kind : intptr_t {
     // This location is invalid.  Payload must be zero.
     kInvalid = 0,
 
@@ -91,27 +157,21 @@ class Location : public ValueObject {
     // allocated by a register allocator.  Each unallocated location has
     // a policy that specifies what kind of location is suitable. Payload
     // contains register allocation policy.
-    kUnallocated = 3,
+    kUnallocated = 1 << 2,
 
     // Spill slots allocated by the register allocator.  Payload contains
     // a spill index.
-    kStackSlot = 4,        // Word size slot.
-    kDoubleStackSlot = 7,  // 64bit stack slot.
-    kQuadStackSlot = 11,   // 128bit stack slot.
+    kStackSlot = 2 << 2,        // Word size slot.
+    kDoubleStackSlot = 3 << 2,  // 64bit stack slot.
+    kQuadStackSlot = 4 << 2,    // 128bit stack slot.
 
     // Register location represents a fixed register.  Payload contains
     // register code.
-    kRegister = 8,
+    kRegister = 5 << 2,
 
     // FpuRegister location represents a fixed fpu register.  Payload contains
     // its code.
-    kFpuRegister = 12,
-
-#ifdef TARGET_ARCH_DBC
-    // We use this to signify a special `Location` where the different
-    // [SpecialDbcRegister]s can be found on DBC.
-    kSpecialDbcRegister = 15,
-#endif
+    kFpuRegister = 6 << 2,
   };
 
   Location() : value_(kInvalidLocation) {
@@ -138,12 +198,6 @@ class Location : public ValueObject {
     COMPILE_ASSERT((kFpuRegister & kLocationTagMask) != kConstantTag);
     COMPILE_ASSERT((kFpuRegister & kLocationTagMask) != kPairLocationTag);
 
-#ifdef TARGET_ARCH_DBC
-    COMPILE_ASSERT((kSpecialDbcRegister & kLocationTagMask) != kConstantTag);
-    COMPILE_ASSERT((kSpecialDbcRegister & kLocationTagMask) !=
-                   kPairLocationTag);
-#endif
-
     // Verify tags and tagmask.
     COMPILE_ASSERT((kConstantTag & kLocationTagMask) == kConstantTag);
 
@@ -162,14 +216,21 @@ class Location : public ValueObject {
   bool IsInvalid() const { return value_ == kInvalidLocation; }
 
   // Constants.
-  bool IsConstant() const {
-    return (value_ & kLocationTagMask) == kConstantTag;
+  bool IsConstant() const { return (value_ & kConstantTag) == kConstantTag; }
+
+  static Location Constant(const ConstantInstr* obj, int pair_index = 0) {
+    ASSERT((pair_index == 0) || (pair_index == 1));
+    Location loc(reinterpret_cast<uword>(obj) |
+                 (pair_index != 0 ? static_cast<uword>(kPairLocationTag) : 0) |
+                 static_cast<uword>(kConstantTag));
+    ASSERT(obj == loc.constant_instruction());
+    ASSERT(loc.pair_index() == pair_index);
+    return loc;
   }
 
-  static Location Constant(const ConstantInstr* obj) {
-    Location loc(reinterpret_cast<uword>(obj) | kConstantTag);
-    ASSERT(obj == loc.constant_instruction());
-    return loc;
+  intptr_t pair_index() const {
+    ASSERT(IsConstant());
+    return (value_ & kPairLocationTag) != 0 ? 1 : 0;
   }
 
   ConstantInstr* constant_instruction() const {
@@ -187,12 +248,16 @@ class Location : public ValueObject {
 
   PairLocation* AsPairLocation() const;
 
+  // For pair locations, returns the ith component (for i in {0, 1}).
+  Location Component(intptr_t i) const;
+
   // Unallocated locations.
   enum Policy {
     kAny,
     kPrefersRegister,
     kRequiresRegister,
     kRequiresFpuRegister,
+    kRequiresStackSlot,
     kWritableRegister,
     kSameAsFirstInput,
   };
@@ -218,6 +283,10 @@ class Location : public ValueObject {
 
   static Location RequiresFpuRegister() {
     return UnallocatedLocation(kRequiresFpuRegister);
+  }
+
+  static Location RequiresStackSlot() {
+    return UnallocatedLocation(kRequiresStackSlot);
   }
 
   static Location WritableRegister() {
@@ -257,46 +326,6 @@ class Location : public ValueObject {
 
   bool IsFpuRegister() const { return kind() == kFpuRegister; }
 
-  static Location ArgumentsDescriptorLocation() {
-#ifdef TARGET_ARCH_DBC
-    return Location(kSpecialDbcRegister, kArgsDescriptorReg);
-#else
-    return Location::RegisterLocation(ARGS_DESC_REG);
-#endif
-  }
-
-  static Location ExceptionLocation() {
-#ifdef TARGET_ARCH_DBC
-    return Location(kSpecialDbcRegister, kExceptionReg);
-#else
-    return Location::RegisterLocation(kExceptionObjectReg);
-#endif
-  }
-
-  static Location StackTraceLocation() {
-#ifdef TARGET_ARCH_DBC
-    return Location(kSpecialDbcRegister, kStackTraceReg);
-#else
-    return Location::RegisterLocation(kStackTraceObjectReg);
-#endif
-  }
-
-#ifdef TARGET_ARCH_DBC
-  bool IsArgsDescRegister() const {
-    return IsSpecialDbcRegister(kArgsDescriptorReg);
-  }
-  bool IsExceptionRegister() const {
-    return IsSpecialDbcRegister(kExceptionReg);
-  }
-  bool IsStackTraceRegister() const {
-    return IsSpecialDbcRegister(kStackTraceReg);
-  }
-
-  bool IsSpecialDbcRegister(SpecialDbcRegister reg) const {
-    return kind() == kSpecialDbcRegister && payload() == reg;
-  }
-#endif
-
   FpuRegister fpu_reg() const {
     ASSERT(IsFpuRegister());
     return static_cast<FpuRegister>(payload());
@@ -328,7 +357,7 @@ class Location : public ValueObject {
     return static_cast<uword>(kStackIndexBias + stack_index);
   }
 
-  static Location StackSlot(intptr_t stack_index, Register base = FPREG) {
+  static Location StackSlot(intptr_t stack_index, Register base) {
     uword payload = StackSlotBaseField::encode(base) |
                     StackIndexField::encode(EncodeStackIndex(stack_index));
     Location loc(kStackSlot, payload);
@@ -339,8 +368,8 @@ class Location : public ValueObject {
 
   bool IsStackSlot() const { return kind() == kStackSlot; }
 
-  static Location DoubleStackSlot(intptr_t stack_index) {
-    uword payload = StackSlotBaseField::encode(FPREG) |
+  static Location DoubleStackSlot(intptr_t stack_index, Register base) {
+    uword payload = StackSlotBaseField::encode(base) |
                     StackIndexField::encode(EncodeStackIndex(stack_index));
     Location loc(kDoubleStackSlot, payload);
     // Ensure that sign is preserved.
@@ -350,8 +379,8 @@ class Location : public ValueObject {
 
   bool IsDoubleStackSlot() const { return kind() == kDoubleStackSlot; }
 
-  static Location QuadStackSlot(intptr_t stack_index) {
-    uword payload = StackSlotBaseField::encode(FPREG) |
+  static Location QuadStackSlot(intptr_t stack_index, Register base) {
+    uword payload = StackSlotBaseField::encode(base) |
                     StackIndexField::encode(EncodeStackIndex(stack_index));
     Location loc(kQuadStackSlot, payload);
     // Ensure that sign is preserved.
@@ -376,25 +405,11 @@ class Location : public ValueObject {
     return IsStackSlot() || IsDoubleStackSlot() || IsQuadStackSlot();
   }
 
-// DBC does not have an notion of 'address' in its instruction set.
-#if !defined(TARGET_ARCH_DBC)
-  // Return a memory operand for stack slot locations.
-  Address ToStackSlotAddress() const;
-#endif
-
   // Returns the offset from the frame pointer for stack slot locations.
   intptr_t ToStackSlotOffset() const;
 
-  // Constants.
-  static Location RegisterOrConstant(Value* value);
-  static Location RegisterOrSmiConstant(Value* value);
-  static Location WritableRegisterOrSmiConstant(Value* value);
-  static Location FixedRegisterOrConstant(Value* value, Register reg);
-  static Location FixedRegisterOrSmiConstant(Value* value, Register reg);
-  static Location AnyOrConstant(Value* value);
-
   const char* Name() const;
-  void PrintTo(BufferFormatter* f) const;
+  void PrintTo(BaseTextBuffer* f) const;
   void Print() const;
   const char* ToCString() const;
 
@@ -407,12 +422,23 @@ class Location : public ValueObject {
 
   Location Copy() const;
 
-  Location RemapForSlowPath(Definition* def,
-                            intptr_t* cpu_reg_slots,
-                            intptr_t* fpu_reg_slots) const;
+  static Location read(uword value) { return Location(value); }
+  uword write() const { return value_; }
 
  private:
   explicit Location(uword value) : value_(value) {}
+
+  void set_stack_index(intptr_t index) {
+    ASSERT(HasStackIndex());
+    value_ = PayloadField::update(
+        StackIndexField::update(EncodeStackIndex(index), payload()), value_);
+  }
+
+  void set_base_reg(Register reg) {
+    ASSERT(HasStackIndex());
+    value_ = PayloadField::update(StackSlotBaseField::update(reg, payload()),
+                                  value_);
+  }
 
   Location(Kind kind, uword payload)
       : value_(KindField::encode(kind) | PayloadField::encode(payload)) {}
@@ -449,6 +475,25 @@ class Location : public ValueObject {
   // way that none of them can be interpreted as a kConstant tag.
   uword value_;
 };
+
+Location LocationArgumentsDescriptorLocation();
+Location LocationExceptionLocation();
+Location LocationStackTraceLocation();
+// Constants.
+Location LocationRegisterOrConstant(Value* value);
+Location LocationRegisterOrSmiConstant(Value* value);
+Location LocationWritableRegisterOrSmiConstant(Value* value);
+Location LocationFixedRegisterOrConstant(Value* value, Register reg);
+Location LocationFixedRegisterOrSmiConstant(Value* value, Register reg);
+Location LocationAnyOrConstant(Value* value);
+
+Location LocationRemapForSlowPath(Location loc,
+                                  Definition* def,
+                                  intptr_t* cpu_reg_slots,
+                                  intptr_t* fpu_reg_slots);
+
+// Return a memory operand for stack slot locations.
+compiler::Address LocationToStackSlotAddress(Location loc);
 
 class PairLocation : public ZoneAllocated {
  public:
@@ -517,15 +562,80 @@ class RegisterSet : public ValueObject {
     ASSERT(kNumberOfFpuRegisters <= (kWordSize * kBitsPerByte));
   }
 
+  explicit RegisterSet(intptr_t cpu_register_mask,
+                       intptr_t fpu_register_mask = 0)
+      : RegisterSet() {
+    AddTaggedRegisters(cpu_register_mask, fpu_register_mask);
+  }
+
   void AddAllNonReservedRegisters(bool include_fpu_registers) {
     for (intptr_t i = kNumberOfCpuRegisters - 1; i >= 0; --i) {
-      if (kReservedCpuRegisters & (1 << i)) continue;
+      if ((kReservedCpuRegisters & (1 << i)) != 0u) continue;
       Add(Location::RegisterLocation(static_cast<Register>(i)));
     }
 
     if (include_fpu_registers) {
       for (intptr_t i = kNumberOfFpuRegisters - 1; i >= 0; --i) {
         Add(Location::FpuRegisterLocation(static_cast<FpuRegister>(i)));
+      }
+    }
+  }
+
+  // Adds all registers which don't have a special purpose (e.g. FP, SP, PC,
+  // CSP, etc.).
+  void AddAllGeneralRegisters() {
+    for (intptr_t i = kNumberOfCpuRegisters - 1; i >= 0; --i) {
+      Register reg = static_cast<Register>(i);
+      if (reg == FPREG || reg == SPREG) continue;
+#if defined(TARGET_ARCH_ARM)
+      if (reg == PC) continue;
+#elif defined(TARGET_ARCH_ARM64)
+      if (reg == R31) continue;
+#endif
+      Add(Location::RegisterLocation(reg));
+    }
+
+#if defined(TARGET_ARCH_ARM)
+    if (TargetCPUFeatures::vfp_supported()) {
+#endif
+      for (intptr_t i = kNumberOfFpuRegisters - 1; i >= 0; --i) {
+        Add(Location::FpuRegisterLocation(static_cast<FpuRegister>(i)));
+      }
+#if defined(TARGET_ARCH_ARM)
+    }
+#endif
+  }
+
+  void AddAllArgumentRegisters() {
+    // All (native) arguments are passed on the stack in IA32.
+#if !defined(TARGET_ARCH_IA32)
+    for (intptr_t i = 0; i < kNumberOfCpuRegisters; ++i) {
+      const Register reg = static_cast<Register>(i);
+      if (IsArgumentRegister(reg)) {
+        Add(Location::RegisterLocation(reg));
+      }
+    }
+    for (intptr_t i = 0; i < kNumberOfFpuRegisters; ++i) {
+      const FpuRegister reg = static_cast<FpuRegister>(i);
+      if (IsFpuArgumentRegister(reg)) {
+        Add(Location::FpuRegisterLocation(reg));
+      }
+    }
+#endif
+  }
+
+  void AddTaggedRegisters(intptr_t cpu_register_mask,
+                          intptr_t fpu_register_mask) {
+    for (intptr_t i = 0; i < kNumberOfCpuRegisters; ++i) {
+      if (Utils::TestBit(cpu_register_mask, i)) {
+        const Register reg = static_cast<Register>(i);
+        Add(Location::RegisterLocation(reg));
+      }
+    }
+    for (intptr_t i = 0; i < kNumberOfFpuRegisters; ++i) {
+      if (Utils::TestBit(fpu_register_mask, i)) {
+        const FpuRegister reg = static_cast<FpuRegister>(i);
+        Add(Location::FpuRegisterLocation(reg));
       }
     }
   }
@@ -561,22 +671,7 @@ class RegisterSet : public ValueObject {
     }
   }
 
-  void DebugPrint() {
-    for (intptr_t i = 0; i < kNumberOfCpuRegisters; i++) {
-      Register r = static_cast<Register>(i);
-      if (ContainsRegister(r)) {
-        THR_Print("%s %s\n", Assembler::RegisterName(r),
-                  IsTagged(r) ? "tagged" : "untagged");
-      }
-    }
-
-    for (intptr_t i = 0; i < kNumberOfFpuRegisters; i++) {
-      FpuRegister r = static_cast<FpuRegister>(i);
-      if (ContainsFpuRegister(r)) {
-        THR_Print("%s\n", Assembler::FpuRegisterName(r));
-      }
-    }
-  }
+  void DebugPrint();
 
   void MarkUntagged(Location loc) {
     ASSERT(loc.IsRegister());
@@ -649,12 +744,7 @@ class LocationSummary : public ZoneAllocated {
     return &input_locations_[index];
   }
 
-  void set_in(intptr_t index, Location loc) {
-    ASSERT(index >= 0);
-    ASSERT(index < num_inputs_);
-    ASSERT(!always_calls() || loc.IsMachineRegister());
-    input_locations_[index] = loc;
-  }
+  void set_in(intptr_t index, Location loc);
 
   intptr_t temp_count() const { return num_temps_; }
 
@@ -689,16 +779,7 @@ class LocationSummary : public ZoneAllocated {
     return &output_location_;
   }
 
-  void set_out(intptr_t index, Location loc) {
-    ASSERT(index == 0);
-// DBC calls are different from call on other architectures so this
-// assert doesn't make sense.
-#if !defined(TARGET_ARCH_DBC)
-    ASSERT(!always_calls() || (loc.IsMachineRegister() || loc.IsInvalid() ||
-                               loc.IsPairLocation()));
-#endif
-    output_location_ = loc;
-  }
+  void set_out(intptr_t index, Location loc);
 
   BitmapBuilder* stack_bitmap() {
     if (stack_bitmap_ == NULL) {
@@ -722,7 +803,7 @@ class LocationSummary : public ZoneAllocated {
     return contains_call_ == kCallOnSharedSlowPath;
   }
 
-  void PrintTo(BufferFormatter* f) const;
+  void PrintTo(BaseTextBuffer* f) const;
 
   static LocationSummary* Make(Zone* zone,
                                intptr_t input_count,

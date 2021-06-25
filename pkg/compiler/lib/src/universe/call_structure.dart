@@ -67,6 +67,15 @@ class CallStructure {
     sink.end(tag);
   }
 
+  /// Returns `true` if this call structure is normalized, that is, its named
+  /// arguments are sorted.
+  bool get isNormalized => true;
+
+  /// Returns the normalized version of this call structure.
+  ///
+  /// A [CallStructure] is normalized if its named arguments are sorted.
+  CallStructure toNormalized() => this;
+
   CallStructure withTypeArgumentCount(int typeArgumentCount) =>
       new CallStructure(argumentCount, namedArguments, typeArgumentCount);
 
@@ -86,6 +95,19 @@ class CallStructure {
       ? this
       : new CallStructure(argumentCount, namedArguments);
 
+  /// Short textual representation use for testing.
+  String get shortText {
+    StringBuffer sb = new StringBuffer();
+    sb.write('(');
+    sb.write(positionalArgumentCount);
+    if (namedArgumentCount > 0) {
+      sb.write(',');
+      sb.write(getOrderedNamedArguments().join(','));
+    }
+    sb.write(')');
+    return sb.toString();
+  }
+
   /// A description of the argument structure.
   String structureToString() {
     StringBuffer sb = new StringBuffer();
@@ -96,6 +118,7 @@ class CallStructure {
     return sb.toString();
   }
 
+  @override
   String toString() => 'CallStructure(${structureToString()})';
 
   Selector get callSelector => new Selector.call(Names.call, this);
@@ -109,6 +132,7 @@ class CallStructure {
   }
 
   // TODO(johnniwinther): Cache hash code?
+  @override
   int get hashCode {
     return Hashing.listHash(
         namedArguments,
@@ -116,15 +140,16 @@ class CallStructure {
             Hashing.objectHash(typeArgumentCount, namedArguments.length)));
   }
 
+  @override
   bool operator ==(other) {
     if (other is! CallStructure) return false;
     return match(other);
   }
 
   bool signatureApplies(ParameterStructure parameters) {
-    int requiredParameterCount = parameters.requiredParameters;
+    int requiredParameterCount = parameters.requiredPositionalParameters;
     int optionalParameterCount = parameters.optionalParameters;
-    int parameterCount = requiredParameterCount + optionalParameterCount;
+    int parameterCount = parameters.totalParameters;
     if (argumentCount > parameterCount) return false;
     if (positionalArgumentCount < requiredParameterCount) return false;
     if (typeArgumentCount != 0) {
@@ -141,15 +166,22 @@ class CallStructure {
     } else {
       if (positionalArgumentCount > requiredParameterCount) return false;
       assert(positionalArgumentCount == requiredParameterCount);
-      if (namedArgumentCount > optionalParameterCount) return false;
+      if (namedArgumentCount >
+          optionalParameterCount + parameters.requiredNamedParameters.length)
+        return false;
 
       int nameIndex = 0;
       List<String> namedParameters = parameters.namedParameters;
+      int seenRequiredNamedParameters = 0;
+
       for (String name in getOrderedNamedArguments()) {
         bool found = false;
         // Note: we start at the existing index because arguments are sorted.
         while (nameIndex < namedParameters.length) {
-          if (name == namedParameters[nameIndex]) {
+          String parameterName = namedParameters[nameIndex];
+          if (name == parameterName) {
+            if (parameters.requiredNamedParameters.contains(name))
+              seenRequiredNamedParameters++;
             found = true;
             break;
           }
@@ -157,7 +189,8 @@ class CallStructure {
         }
         if (!found) return false;
       }
-      return true;
+      return seenRequiredNamedParameters ==
+          parameters.requiredNamedParameters.length;
     }
   }
 
@@ -169,16 +202,21 @@ class CallStructure {
   }
 }
 
-///
+/// Call structure with named arguments.
 class NamedCallStructure extends CallStructure {
+  @override
   final List<String> namedArguments;
-  final List<String> _orderedNamedArguments = <String>[];
+  final List<String> _orderedNamedArguments;
 
   NamedCallStructure(
-      int argumentCount, this.namedArguments, int typeArgumentCount)
-      : super.unnamed(argumentCount, typeArgumentCount) {
-    assert(namedArguments.isNotEmpty);
-  }
+      int argumentCount, List<String> namedArguments, int typeArgumentCount)
+      : this.internal(
+            argumentCount, namedArguments, typeArgumentCount, <String>[]);
+
+  NamedCallStructure.internal(int argumentCount, this.namedArguments,
+      int typeArgumentCount, this._orderedNamedArguments)
+      : assert(namedArguments.isNotEmpty),
+        super.unnamed(argumentCount, typeArgumentCount);
 
   @override
   bool get isNamed => true;
@@ -191,6 +229,16 @@ class NamedCallStructure extends CallStructure {
 
   @override
   int get positionalArgumentCount => argumentCount - namedArgumentCount;
+
+  @override
+  bool get isNormalized => namedArguments == _orderedNamedArguments;
+
+  @override
+  CallStructure toNormalized() => new NamedCallStructure.internal(
+      argumentCount,
+      getOrderedNamedArguments(),
+      typeArgumentCount,
+      getOrderedNamedArguments());
 
   @override
   List<String> getOrderedNamedArguments() {

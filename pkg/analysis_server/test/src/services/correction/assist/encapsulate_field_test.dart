@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'assist_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(EncapsulateFieldTest);
   });
@@ -19,31 +19,31 @@ class EncapsulateFieldTest extends AssistProcessorTest {
   @override
   AssistKind get kind => DartAssistKind.ENCAPSULATE_FIELD;
 
-  test_alreadyPrivate() async {
-    await resolveTestUnit('''
+  Future<void> test_alreadyPrivate() async {
+    await resolveTestCode('''
 class A {
   int _test = 42;
 }
-main(A a) {
+void f(A a) {
   print(a._test);
 }
 ''');
     await assertNoAssistAt('_test =');
   }
 
-  test_documentation() async {
-    await resolveTestUnit('''
+  Future<void> test_documentation() async {
+    await resolveTestCode('''
 class A {
   /// AAA
   /// BBB
-  int test;
+  int test = 0;
 }
 ''');
-    await assertHasAssistAt('test;', '''
+    await assertHasAssistAt('test', '''
 class A {
   /// AAA
   /// BBB
-  int _test;
+  int _test = 0;
 
   /// AAA
   /// BBB
@@ -58,8 +58,18 @@ class A {
 ''');
   }
 
-  test_final() async {
-    await resolveTestUnit('''
+  Future<void> test_extension_hasType() async {
+    verifyNoTestUnitErrors = false;
+    await resolveTestCode('''
+extension E on int {
+  int test = 42;
+}
+''');
+    await assertNoAssistAt('test = 42');
+  }
+
+  Future<void> test_final() async {
+    await resolveTestCode('''
 class A {
   final int test = 42;
 }
@@ -67,13 +77,13 @@ class A {
     await assertNoAssistAt('test =');
   }
 
-  test_hasType() async {
-    await resolveTestUnit('''
+  Future<void> test_hasType() async {
+    await resolveTestCode('''
 class A {
   int test = 42;
   A(this.test);
 }
-main(A a) {
+void f(A a) {
   print(a.test);
 }
 ''');
@@ -88,26 +98,45 @@ class A {
   }
   A(this._test);
 }
-main(A a) {
+void f(A a) {
   print(a.test);
 }
 ''');
   }
 
-  test_multipleFields() async {
-    await resolveTestUnit('''
-class A {
-  int aaa, bbb, ccc;
+  Future<void> test_mixin_hasType() async {
+    await resolveTestCode('''
+mixin M {
+  int test = 42;
 }
-main(A a) {
+''');
+    await assertHasAssistAt('test = 42', '''
+mixin M {
+  int _test = 42;
+
+  int get test => _test;
+
+  set test(int test) {
+    _test = test;
+  }
+}
+''');
+  }
+
+  Future<void> test_multipleFields() async {
+    await resolveTestCode('''
+class A {
+  int aaa = 0, bbb = 0, ccc = 0;
+}
+void f(A a) {
   print(a.bbb);
 }
 ''');
-    await assertNoAssistAt('bbb, ');
+    await assertNoAssistAt('bbb ');
   }
 
-  test_notOnName() async {
-    await resolveTestUnit('''
+  Future<void> test_notOnName() async {
+    await resolveTestCode('''
 class A {
   int test = 1 + 2 + 3;
 }
@@ -115,12 +144,12 @@ class A {
     await assertNoAssistAt('+ 2');
   }
 
-  test_noType() async {
-    await resolveTestUnit('''
+  Future<void> test_noType() async {
+    await resolveTestCode('''
 class A {
   var test = 42;
 }
-main(A a) {
+void f(A a) {
   print(a.test);
 }
 ''');
@@ -134,15 +163,15 @@ class A {
     _test = test;
   }
 }
-main(A a) {
+void f(A a) {
   print(a.test);
 }
 ''');
   }
 
-  test_parseError() async {
+  Future<void> test_parseError() async {
     verifyNoTestUnitErrors = false;
-    await resolveTestUnit('''
+    await resolveTestCode('''
 class A {
   int; // marker
 }
@@ -153,8 +182,8 @@ main(A a) {
     await assertNoAssistAt('; // marker');
   }
 
-  test_static() async {
-    await resolveTestUnit('''
+  Future<void> test_static() async {
+    await resolveTestCode('''
 class A {
   static int test = 42;
 }

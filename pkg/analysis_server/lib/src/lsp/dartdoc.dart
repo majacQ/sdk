@@ -2,11 +2,11 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-final _dartdocCodeBlockSections = new RegExp(r'(```\w+) +\w+');
+final _dartdocCodeBlockSections = RegExp(r'(```\w+) +\w+');
 final _dartdocDirectives =
-    new RegExp(r'(\n *{@.*?}$)|(^{@.*?}\n)', multiLine: true);
+    RegExp(r'(\n *{@.*?}$)|(^{@.*?}\n)', multiLine: true);
 
-String cleanDartdoc(String doc) {
+String? cleanDartdoc(String? doc) {
   if (doc == null) {
     return null;
   }
@@ -17,7 +17,7 @@ String cleanDartdoc(String doc) {
   // docs contain.
   doc = doc.replaceAllMapped(
     _dartdocCodeBlockSections,
-    (match) => match.group(1),
+    (match) => match.group(1)!,
   );
 
   return doc;

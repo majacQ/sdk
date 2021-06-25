@@ -6,91 +6,177 @@
 #define RUNTIME_VM_HEAP_SAFEPOINT_H_
 
 #include "vm/globals.h"
+#include "vm/isolate.h"
 #include "vm/lockers.h"
 #include "vm/thread.h"
+#include "vm/thread_stack_resource.h"
 
 namespace dart {
 
 // A stack based scope that can be used to perform an operation after getting
 // all threads to a safepoint. At the end of the operation all the threads are
 // resumed.
-class SafepointOperationScope : public StackResource {
- public:
-  explicit SafepointOperationScope(Thread* T);
+class SafepointOperationScope : public ThreadStackResource {
+ protected:
+  SafepointOperationScope(Thread* T, SafepointLevel level);
   ~SafepointOperationScope();
 
  private:
+  SafepointLevel level_;
+
   DISALLOW_COPY_AND_ASSIGN(SafepointOperationScope);
 };
 
-// Implements handling of safepoint operations for all threads in an Isolate.
+// Gets all mutators to a safepoint where GC is allowed.
+class GcSafepointOperationScope : public SafepointOperationScope {
+ public:
+  explicit GcSafepointOperationScope(Thread* T)
+      : SafepointOperationScope(T, SafepointLevel::kGC) {}
+  ~GcSafepointOperationScope() {}
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(GcSafepointOperationScope);
+};
+
+// Gets all mutators to a safepoint where GC and Deopt is allowed.
+class DeoptSafepointOperationScope : public SafepointOperationScope {
+ public:
+  explicit DeoptSafepointOperationScope(Thread* T)
+      : SafepointOperationScope(T, SafepointLevel::kGCAndDeopt) {}
+  ~DeoptSafepointOperationScope() {}
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(DeoptSafepointOperationScope);
+};
+
+// A stack based scope that can be used to perform an operation after getting
+// all threads to a safepoint. At the end of the operation all the threads are
+// resumed. Allocations in the scope will force heap growth.
+class ForceGrowthSafepointOperationScope : public ThreadStackResource {
+ public:
+  ForceGrowthSafepointOperationScope(Thread* T, SafepointLevel level);
+  ~ForceGrowthSafepointOperationScope();
+
+ private:
+  SafepointLevel level_;
+  bool current_growth_controller_state_;
+
+  DISALLOW_COPY_AND_ASSIGN(ForceGrowthSafepointOperationScope);
+};
+
+// Implements handling of safepoint operations for all threads in an
+// IsolateGroup.
 class SafepointHandler {
  public:
-  explicit SafepointHandler(Isolate* I);
+  explicit SafepointHandler(IsolateGroup* I);
   ~SafepointHandler();
 
   void EnterSafepointUsingLock(Thread* T);
   void ExitSafepointUsingLock(Thread* T);
-
   void BlockForSafepoint(Thread* T);
 
+  bool IsOwnedByTheThread(Thread* thread) {
+    for (intptr_t level = 0; level < SafepointLevel::kNumLevels; ++level) {
+      if (handlers_[level]->owner_ == thread) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool AnySafepointInProgress() {
+    for (intptr_t level = 0; level < SafepointLevel::kNumLevels; ++level) {
+      if (handlers_[level]->SafepointInProgress()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
  private:
-  void SafepointThreads(Thread* T);
-  void ResumeThreads(Thread* T);
+  class LevelHandler {
+   public:
+    LevelHandler(IsolateGroup* isolate_group, SafepointLevel level)
+        : isolate_group_(isolate_group), level_(level) {}
 
-  Isolate* isolate() const { return isolate_; }
-  Monitor* threads_lock() const { return isolate_->threads_lock(); }
-  bool SafepointInProgress() const {
-    ASSERT(threads_lock()->IsOwnedByCurrentThread());
-    return ((safepoint_operation_count_ > 0) && (owner_ != NULL));
-  }
-  void SetSafepointInProgress(Thread* T) {
-    ASSERT(threads_lock()->IsOwnedByCurrentThread());
-    ASSERT(owner_ == NULL);
-    ASSERT(safepoint_operation_count_ == 0);
-    safepoint_operation_count_ = 1;
-    owner_ = T;
-  }
-  void ResetSafepointInProgress(Thread* T) {
-    ASSERT(threads_lock()->IsOwnedByCurrentThread());
-    ASSERT(owner_ == T);
-    ASSERT(safepoint_operation_count_ == 1);
-    safepoint_operation_count_ = 0;
-    owner_ = NULL;
-  }
-  int32_t safepoint_operation_count() const {
-    ASSERT(threads_lock()->IsOwnedByCurrentThread());
-    return safepoint_operation_count_;
-  }
-  void increment_safepoint_operation_count() {
-    ASSERT(threads_lock()->IsOwnedByCurrentThread());
-    ASSERT(safepoint_operation_count_ < kMaxInt32);
-    safepoint_operation_count_ += 1;
-  }
-  void decrement_safepoint_operation_count() {
-    ASSERT(threads_lock()->IsOwnedByCurrentThread());
-    ASSERT(safepoint_operation_count_ > 0);
-    safepoint_operation_count_ -= 1;
-  }
+    bool SafepointInProgress() const {
+      ASSERT(threads_lock()->IsOwnedByCurrentThread());
+      ASSERT((operation_count_ > 0) == (owner_ != nullptr));
+      return ((operation_count_ > 0) && (owner_ != NULL));
+    }
+    void SetSafepointInProgress(Thread* T) {
+      ASSERT(threads_lock()->IsOwnedByCurrentThread());
+      ASSERT(owner_ == NULL);
+      ASSERT(operation_count_ == 0);
+      operation_count_ = 1;
+      owner_ = T;
+    }
+    void ResetSafepointInProgress(Thread* T) {
+      ASSERT(threads_lock()->IsOwnedByCurrentThread());
+      ASSERT(owner_ == T);
+      ASSERT(operation_count_ == 1);
+      operation_count_ = 0;
+      owner_ = NULL;
+    }
+    void NotifyWeAreParked(Thread* T);
 
-  Isolate* isolate_;
+    IsolateGroup* isolate_group() const { return isolate_group_; }
+    Monitor* threads_lock() const { return isolate_group_->threads_lock(); }
 
-  // Monitor used by thread initiating a safepoint operation to track threads
-  // not at a safepoint and wait for these threads to reach a safepoint.
-  Monitor* safepoint_lock_;
-  int32_t number_threads_not_at_safepoint_;
+   private:
+    friend class SafepointHandler;
 
-  // Count that indicates if a safepoint operation is currently in progress
-  // and also tracks the number of recursive safepoint operations on the
-  // same thread.
-  int32_t safepoint_operation_count_;
+    // Helper methods for [SafepointThreads]
+    void NotifyThreadsToGetToSafepointLevel(Thread* T);
+    void WaitUntilThreadsReachedSafepointLevel();
 
-  // If a safepoint operation is currently in progress, this field contains
-  // the thread that initiated the safepoint operation, otherwise it is NULL.
-  Thread* owner_;
+    // Helper methods for [ResumeThreads]
+    void NotifyThreadsToContinue(Thread* T);
+
+    IsolateGroup* isolate_group_;
+    SafepointLevel level_;
+
+    // Monitor used by thread initiating a safepoint operation to track threads
+    // not at a safepoint and wait for these threads to reach a safepoint.
+    Monitor parked_lock_;
+
+    // If a safepoint operation is currently in progress, this field contains
+    // the thread that initiated the safepoint operation, otherwise it is NULL.
+    Thread* owner_ = nullptr;
+
+    // The number of nested safepoint operations currently held.
+    int32_t operation_count_ = 0;
+
+    // Count the number of threads the currently in-progress safepoint operation
+    // is waiting for to check-in.
+    int32_t num_threads_not_parked_ = 0;
+  };
+
+  void SafepointThreads(Thread* T, SafepointLevel level);
+  void ResumeThreads(Thread* T, SafepointLevel level);
+
+  // Helper methods for [SafepointThreads]
+  void AssertWeOwnLowerLevelSafepoints(Thread* T, SafepointLevel level);
+  void AssertWeDoNotOwnLowerLevelSafepoints(Thread* T, SafepointLevel level);
+  void AcquireLowerLevelSafepoints(Thread* T, SafepointLevel level);
+
+  // Helper methods for [ResumeThreads]
+  void ReleaseLowerLevelSafepoints(Thread* T, SafepointLevel level);
+
+  void EnterSafepointLocked(Thread* T, MonitorLocker* tl);
+  void ExitSafepointLocked(Thread* T, MonitorLocker* tl);
+
+  IsolateGroup* isolate_group() const { return isolate_group_; }
+  Monitor* threads_lock() const { return isolate_group_->threads_lock(); }
+
+  IsolateGroup* isolate_group_;
+
+  LevelHandler* handlers_[SafepointLevel::kNumLevels];
 
   friend class Isolate;
+  friend class IsolateGroup;
   friend class SafepointOperationScope;
+  friend class ForceGrowthSafepointOperationScope;
   friend class HeapIterationScope;
 };
 
@@ -136,9 +222,9 @@ class SafepointHandler {
  *   ==> kThreadInGenerated
  *       - Invalid transition.
  */
-class TransitionSafepointState : public StackResource {
+class TransitionSafepointState : public ThreadStackResource {
  public:
-  explicit TransitionSafepointState(Thread* T) : StackResource(T) {}
+  explicit TransitionSafepointState(Thread* T) : ThreadStackResource(T) {}
   ~TransitionSafepointState() {}
 
   SafepointHandler* handler() const {
@@ -165,7 +251,7 @@ class TransitionGeneratedToVM : public TransitionSafepointState {
     // We do the more expensive operation of blocking the thread
     // only if a safepoint is requested.
     if (T->IsSafepointRequested()) {
-      handler()->BlockForSafepoint(T);
+      T->BlockForSafepoint();
     }
   }
 
@@ -212,6 +298,7 @@ class TransitionGeneratedToNative : public TransitionSafepointState {
 class TransitionVMToBlocked : public TransitionSafepointState {
  public:
   explicit TransitionVMToBlocked(Thread* T) : TransitionSafepointState(T) {
+    ASSERT(!T->isolate_group()->safepoint_handler()->IsOwnedByTheThread(T));
     // A thread blocked on a monitor is considered to be at a safepoint.
     ASSERT(T->execution_state() == Thread::kThreadInVM);
     T->set_execution_state(Thread::kThreadInBlockedState);
@@ -269,10 +356,8 @@ class TransitionVMToGenerated : public TransitionSafepointState {
     ASSERT(thread()->execution_state() == Thread::kThreadInGenerated);
     thread()->set_execution_state(Thread::kThreadInVM);
     // Fast check to see if a safepoint is requested or not.
-    // We do the more expensive operation of blocking the thread
-    // only if a safepoint is requested.
     if (thread()->IsSafepointRequested()) {
-      handler()->BlockForSafepoint(thread());
+      thread()->BlockForSafepoint();
     }
   }
 
@@ -289,7 +374,9 @@ class TransitionNativeToVM : public TransitionSafepointState {
   explicit TransitionNativeToVM(Thread* T) : TransitionSafepointState(T) {
     // We are about to execute vm code and so we are not at a safepoint anymore.
     ASSERT(T->execution_state() == Thread::kThreadInNative);
-    T->ExitSafepoint();
+    if (T->no_callback_scope_depth() == 0) {
+      T->ExitSafepoint();
+    }
     T->set_execution_state(Thread::kThreadInVM);
   }
 
@@ -297,7 +384,9 @@ class TransitionNativeToVM : public TransitionSafepointState {
     // We are returning to native code and so we are at a safepoint.
     ASSERT(thread()->execution_state() == Thread::kThreadInVM);
     thread()->set_execution_state(Thread::kThreadInNative);
-    thread()->EnterSafepoint();
+    if (thread()->no_callback_scope_depth() == 0) {
+      thread()->EnterSafepoint();
+    }
   }
 
  private:

@@ -16,24 +16,24 @@
 
 namespace dart {
 
-void VerifyObjectVisitor::VisitObject(RawObject* raw_obj) {
+void VerifyObjectVisitor::VisitObject(ObjectPtr raw_obj) {
   if (raw_obj->IsHeapObject()) {
-    uword raw_addr = RawObject::ToAddr(raw_obj);
+    uword raw_addr = UntaggedObject::ToAddr(raw_obj);
     if (raw_obj->IsFreeListElement() || raw_obj->IsForwardingCorpse()) {
-      if (raw_obj->IsMarked()) {
+      if (raw_obj->IsOldObject() && raw_obj->untag()->IsMarked()) {
         FATAL1("Marked free list element encountered %#" Px "\n", raw_addr);
       }
     } else {
       switch (mark_expectation_) {
         case kForbidMarked:
-          if (raw_obj->IsOldObject() && raw_obj->IsMarked()) {
+          if (raw_obj->IsOldObject() && raw_obj->untag()->IsMarked()) {
             FATAL1("Marked object encountered %#" Px "\n", raw_addr);
           }
           break;
         case kAllowMarked:
           break;
         case kRequireMarked:
-          if (raw_obj->IsOldObject() && !raw_obj->IsMarked()) {
+          if (raw_obj->IsOldObject() && !raw_obj->untag()->IsMarked()) {
             FATAL1("Unmarked object encountered %#" Px "\n", raw_addr);
           }
           break;
@@ -41,15 +41,37 @@ void VerifyObjectVisitor::VisitObject(RawObject* raw_obj) {
     }
   }
   allocated_set_->Add(raw_obj);
-  raw_obj->Validate(isolate_);
+  raw_obj->Validate(isolate_group_);
 }
 
-void VerifyPointersVisitor::VisitPointers(RawObject** first, RawObject** last) {
-  for (RawObject** current = first; current <= last; current++) {
-    RawObject* raw_obj = *current;
+void VerifyPointersVisitor::VisitPointers(ObjectPtr* first, ObjectPtr* last) {
+  for (ObjectPtr* current = first; current <= last; current++) {
+    ObjectPtr raw_obj = *current;
     if (raw_obj->IsHeapObject()) {
       if (!allocated_set_->Contains(raw_obj)) {
-        uword raw_addr = RawObject::ToAddr(raw_obj);
+        if (raw_obj->IsInstructions() &&
+            allocated_set_->Contains(OldPage::ToWritable(raw_obj))) {
+          continue;
+        }
+        uword raw_addr = UntaggedObject::ToAddr(raw_obj);
+        FATAL1("Invalid object pointer encountered %#" Px "\n", raw_addr);
+      }
+    }
+  }
+}
+
+void VerifyPointersVisitor::VisitCompressedPointers(uword heap_base,
+                                                    CompressedObjectPtr* first,
+                                                    CompressedObjectPtr* last) {
+  for (CompressedObjectPtr* current = first; current <= last; current++) {
+    ObjectPtr raw_obj = current->Decompress(heap_base);
+    if (raw_obj->IsHeapObject()) {
+      if (!allocated_set_->Contains(raw_obj)) {
+        if (raw_obj->IsInstructions() &&
+            allocated_set_->Contains(OldPage::ToWritable(raw_obj))) {
+          continue;
+        }
+        uword raw_addr = UntaggedObject::ToAddr(raw_obj);
         FATAL1("Invalid object pointer encountered %#" Px "\n", raw_addr);
       }
     }
@@ -59,43 +81,62 @@ void VerifyPointersVisitor::VisitPointers(RawObject** first, RawObject** last) {
 void VerifyWeakPointersVisitor::VisitHandle(uword addr) {
   FinalizablePersistentHandle* handle =
       reinterpret_cast<FinalizablePersistentHandle*>(addr);
-  RawObject* raw_obj = handle->raw();
+  ObjectPtr raw_obj = handle->ptr();
   visitor_->VisitPointer(&raw_obj);
 }
 
 void VerifyPointersVisitor::VerifyPointers(MarkExpectation mark_expectation) {
   Thread* thread = Thread::Current();
-  Isolate* isolate = thread->isolate();
+  auto isolate_group = thread->isolate_group();
   HeapIterationScope iteration(thread);
   StackZone stack_zone(thread);
-  ObjectSet* allocated_set = isolate->heap()->CreateAllocatedObjectSet(
+  ObjectSet* allocated_set = isolate_group->heap()->CreateAllocatedObjectSet(
       stack_zone.GetZone(), mark_expectation);
 
-  VerifyPointersVisitor visitor(isolate, allocated_set);
+  VerifyPointersVisitor visitor(isolate_group, allocated_set);
   // Visit all strongly reachable objects.
   iteration.IterateObjectPointers(&visitor, ValidationPolicy::kValidateFrames);
   VerifyWeakPointersVisitor weak_visitor(&visitor);
+
   // Visit weak handles and prologue weak handles.
-  isolate->VisitWeakPersistentHandles(&weak_visitor);
+  isolate_group->VisitWeakPersistentHandles(&weak_visitor);
 }
 
 #if defined(DEBUG)
 VerifyCanonicalVisitor::VerifyCanonicalVisitor(Thread* thread)
     : thread_(thread), instanceHandle_(Instance::Handle(thread->zone())) {}
 
-void VerifyCanonicalVisitor::VisitObject(RawObject* obj) {
-  if ((obj->GetClassId() >= kInstanceCid) &&
-      (obj->GetClassId() != kTypeArgumentsCid)) {
-    if (obj->IsCanonical()) {
-      instanceHandle_ ^= obj;
-      const bool is_canonical = instanceHandle_.CheckIsCanonical(thread_);
-      if (!is_canonical) {
-        OS::PrintErr("Instance `%s` is not canonical!\n",
-                     instanceHandle_.ToCString());
+void VerifyCanonicalVisitor::VisitObject(ObjectPtr obj) {
+  // The caller of this function is walking heap pages using the
+  // ExclusivePageIterator - which holds the pages lock.
+  //
+  // If we allow handle verification, then any assignment to a handle will call
+  // `heap()->Contains()` for heap objects, which in return is implemented by
+  // walking pages using ExclusivePageIterator, which can cause a deadlock.
+  //
+  // Therefore we disable the handle verification here.
+  const bool old_verify_flag = FLAG_verify_handles;
+  FLAG_verify_handles = false;
+
+  // TODO(dartbug.com/36097): The heap walk can encounter canonical objects of
+  // other isolates. We should either scan live objects from the roots of each
+  // individual isolate, or wait until we are ready to share constants across
+  // isolates.
+  if (!IsolateGroup::AreIsolateGroupsEnabled() || FLAG_precompiled_mode) {
+    if ((obj->GetClassId() >= kInstanceCid) &&
+        (obj->GetClassId() != kTypeArgumentsCid)) {
+      if (obj->untag()->IsCanonical()) {
+        instanceHandle_ ^= obj;
+        const bool is_canonical = instanceHandle_.CheckIsCanonical(thread_);
+        if (!is_canonical) {
+          OS::PrintErr("Instance `%s` is not canonical!\n",
+                       instanceHandle_.ToCString());
+        }
+        ASSERT(is_canonical);
       }
-      ASSERT(is_canonical);
     }
   }
+  FLAG_verify_handles = old_verify_flag;
 }
 #endif  // defined(DEBUG)
 

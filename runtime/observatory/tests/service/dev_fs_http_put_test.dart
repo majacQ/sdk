@@ -6,13 +6,13 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:observatory/service_io.dart';
-import 'package:unittest/unittest.dart';
+import 'package:test/test.dart';
 import 'test_helper.dart';
 
 Future<String> readResponse(HttpClientResponse response) {
   var completer = new Completer<String>();
   var contents = new StringBuffer();
-  response.transform(utf8.decoder).listen((String data) {
+  response.cast<List<int>>().transform(utf8.decoder).listen((String data) {
     contents.write(data);
   }, onDone: () => completer.complete(contents.toString()));
   return completer.future;
@@ -31,7 +31,7 @@ var tests = <VMTest>[
     result = await vm.invokeRpcNoUpgrade('_createDevFS', {'fsName': fsId});
     expect(result['type'], equals('FileSystem'));
     expect(result['name'], equals(fsId));
-    expect(result['uri'], new isInstanceOf<String>());
+    expect(result['uri'], isA<String>());
 
     // Write the file by issuing an HTTP PUT.
     HttpClient client = new HttpClient();

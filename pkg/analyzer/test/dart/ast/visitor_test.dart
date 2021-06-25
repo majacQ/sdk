@@ -7,8 +7,8 @@ import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
-import '../../generated/parser_test.dart' show ParserTestCase;
-import '../../generated/test_support.dart';
+import '../../generated/parser_test_base.dart' show ParserTestCase;
+import '../../util/ast_type_matchers.dart';
 
 main() {
   defineReflectiveSuite(() {
@@ -39,31 +39,21 @@ A f(var p) {
   }
 }''';
     CompilationUnit unit = parseCompilationUnit(source);
-    List<AstNode> nodes = new List<AstNode>();
+    List<AstNode> nodes = <AstNode>[];
     _BreadthFirstVisitorTestHelper visitor =
-        new _BreadthFirstVisitorTestHelper(nodes);
+        _BreadthFirstVisitorTestHelper(nodes);
     visitor.visitAllNodes(unit);
     expect(nodes, hasLength(59));
-    EngineTestCase.assertInstanceOf(
-        (obj) => obj is CompilationUnit, CompilationUnit, nodes[0]);
-    EngineTestCase.assertInstanceOf(
-        (obj) => obj is ClassDeclaration, ClassDeclaration, nodes[2]);
-    EngineTestCase.assertInstanceOf(
-        (obj) => obj is FunctionDeclaration, FunctionDeclaration, nodes[3]);
-    EngineTestCase.assertInstanceOf(
-        (obj) => obj is FunctionDeclarationStatement,
-        FunctionDeclarationStatement,
-        nodes[27]);
-    EngineTestCase.assertInstanceOf(
-        (obj) => obj is IntegerLiteral, IntegerLiteral, nodes[58]);
-    //3
+    expect(nodes[0], isCompilationUnit);
+    expect(nodes[2], isClassDeclaration);
+    expect(nodes[3], isFunctionDeclaration);
+    expect(nodes[27], isFunctionDeclarationStatement);
+    expect(nodes[58], isIntegerLiteral); // 3
   }
 }
 
-/**
- * A helper class used to collect the nodes that were visited and to preserve
- * the order in which they were visited.
- */
+/// A helper class used to collect the nodes that were visited and to preserve
+/// the order in which they were visited.
 class _BreadthFirstVisitorTestHelper extends BreadthFirstVisitor<void> {
   List<AstNode> nodes;
 

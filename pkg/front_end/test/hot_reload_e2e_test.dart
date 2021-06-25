@@ -2,12 +2,14 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 /// Integration test that runs the incremental compiler, runs the compiled
 /// program, incrementally rebuild portions of the app, and triggers a hot
 /// reload on the running program.
 library front_end.incremental.hot_reload_e2e_test;
 
-import 'dart:async' show Completer, Future;
+import 'dart:async' show Completer;
 
 import 'dart:convert' show LineSplitter, utf8;
 
@@ -19,8 +21,7 @@ import 'package:expect/expect.dart' show Expect;
 
 import 'package:kernel/ast.dart' show Component;
 
-import 'package:kernel/binary/limited_ast_to_binary.dart'
-    show LimitedBinaryPrinter;
+import 'package:kernel/binary/ast_to_binary.dart';
 
 import 'package:front_end/src/api_prototype/compiler_options.dart'
     show CompilerOptions;
@@ -38,6 +39,8 @@ import 'package:front_end/src/compute_platform_binaries_location.dart'
 
 import 'package:front_end/src/fasta/hybrid_file_system.dart'
     show HybridFileSystem;
+import 'package:kernel/target/targets.dart';
+import 'package:vm/target/vm.dart';
 
 import 'tool/reload.dart' show RemoteVm;
 
@@ -103,6 +106,11 @@ abstract class TestCase {
     var vmArgs = [
       '--enable-vm-service=0', // Note: use 0 to avoid port collisions.
       '--pause_isolates_on_start',
+      '--disable-service-auth-codes',
+      // TODO(bkonyi): The service isolate starts before DartDev has a chance
+      // to spawn DDS. We should suppress the Observatory message until DDS
+      // starts (#42727).
+      '--disable-dart-dev',
       outputUri.toFilePath()
     ];
     vmArgs.add('$reloadCount');
@@ -125,6 +133,7 @@ abstract class TestCase {
       Expect.equals(expectedLines, i);
     });
 
+    // ignore: unawaited_futures
     vm.stderr.transform(utf8.decoder).transform(splitter).toList().then((err) {
       Expect.isTrue(err.isEmpty, err.join('\n'));
     });
@@ -299,8 +308,9 @@ IncrementalKernelGenerator createIncrementalCompiler(
   var options = new CompilerOptions()
     ..sdkRoot = sdkRoot
     ..librariesSpecificationUri = Uri.base.resolve("sdk/lib/libraries.json")
-    ..legacyMode = true
-    ..fileSystem = fs;
+    ..fileSystem = fs
+    ..target = new VmTarget(new TargetFlags())
+    ..environmentDefines = {};
   return new IncrementalKernelGenerator(options, entryUri);
 }
 
@@ -320,8 +330,8 @@ Future<Null> writeProgram(Component component, Uri outputUri) async {
   var sink = new File.fromUri(outputUri).openWrite();
   // TODO(sigmund): the incremental generator should always filter these
   // libraries instead.
-  new LimitedBinaryPrinter(
-          sink, (library) => library.importUri.scheme != 'dart', false)
+  new BinaryPrinter(sink,
+          libraryFilter: (library) => library.importUri.scheme != 'dart')
       .writeComponentFile(component);
   await sink.close();
 }

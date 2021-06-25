@@ -17,6 +17,7 @@ import 'call_structure.dart' show CallStructure;
 
 class SelectorKind {
   final String name;
+  @override
   final int hashCode;
   const SelectorKind(this.name, this.hashCode);
 
@@ -29,6 +30,7 @@ class SelectorKind {
 
   int get index => hashCode;
 
+  @override
   String toString() => name;
 
   static List<SelectorKind> values = const <SelectorKind>[
@@ -50,6 +52,7 @@ class Selector {
   final Name memberName;
   final CallStructure callStructure;
 
+  @override
   final int hashCode;
 
   int get argumentCount => callStructure.argumentCount;
@@ -233,9 +236,7 @@ class Selector {
   bool get isOperator => kind == SelectorKind.OPERATOR;
   bool get isUnaryOperator => isOperator && argumentCount == 0;
 
-  /**
-   * The member name for invocation mirrors created from this selector.
-   */
+  /// The member name for invocation mirrors created from this selector.
   String get invocationMirrorMemberName => isSetter ? '$name=' : name;
 
   int get invocationMirrorKind {
@@ -250,11 +251,6 @@ class Selector {
 
   bool appliesUnnamed(MemberEntity element) {
     assert(name == element.name);
-    return appliesUntyped(element);
-  }
-
-  bool appliesUntyped(MemberEntity element) {
-    assert(name == element.name);
     if (memberName.isPrivate && memberName.library != element.library) {
       // TODO(johnniwinther): Maybe this should be
       // `memberName != element.memberName`.
@@ -268,6 +264,27 @@ class Selector {
     if (isGetter) return true;
     if (isSetter) return false;
     return signatureApplies(element);
+  }
+
+  /// Whether [this] could be a valid selector on `Null` without throwing.
+  bool appliesToNullWithoutThrow() {
+    var name = this.name;
+    if (isOperator && name == "==") return true;
+    // Known getters and valid tear-offs.
+    if (isGetter &&
+        (name == "hashCode" ||
+            name == "runtimeType" ||
+            name == "toString" ||
+            name == "noSuchMethod")) return true;
+    // Calling toString always succeeds, calls to `noSuchMethod` (even well
+    // formed calls) always throw.
+    if (isCall &&
+        name == "toString" &&
+        positionalArgumentCount == 0 &&
+        namedArgumentCount == 0) {
+      return true;
+    }
+    return false;
   }
 
   bool signatureApplies(FunctionEntity function) {
@@ -293,9 +310,19 @@ class Selector {
     return Hashing.mixHashCodeBits(hash, callStructure.hashCode);
   }
 
+  @override
   String toString() {
     return 'Selector($kind, $name, ${callStructure.structureToString()})';
   }
+
+  /// Returns the normalized version of this selector.
+  ///
+  /// A selector is normalized if its call structure is normalized.
+  // TODO(johnniwinther): Use normalized selectors as much as possible,
+  // especially where selectors are used in sets or as keys in maps.
+  Selector toNormalized() => callStructure.isNormalized
+      ? this
+      : new Selector(kind, memberName, callStructure.toNormalized());
 
   Selector toCallSelector() => new Selector.callClosureFrom(this);
 

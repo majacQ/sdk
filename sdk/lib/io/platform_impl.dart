@@ -13,38 +13,34 @@ class _Platform {
   external static _executable();
   external static _resolvedExecutable();
 
-  /**
-   * Retrieve the entries of the process environment.
-   *
-   * The result is an [Iterable] of strings, where each string represents
-   * an environment entry.
-   *
-   * Environment entries should be strings containing
-   * a non-empty name and a value separated by a '=' character.
-   * The name does not contain a '=' character,
-   * so the name is everything up to the first '=' character.
-   * Values are everything after the first '=' character.
-   * A value may contain further '=' characters, and it may be empty.
-   *
-   * Returns an [OSError] if retrieving the environment fails.
-   */
+  /// Retrieve the entries of the process environment.
+  ///
+  /// The result is an [Iterable] of strings, where each string represents
+  /// an environment entry.
+  ///
+  /// Environment entries should be strings containing
+  /// a non-empty name and a value separated by a '=' character.
+  /// The name does not contain a '=' character,
+  /// so the name is everything up to the first '=' character.
+  /// Values are everything after the first '=' character.
+  /// A value may contain further '=' characters, and it may be empty.
+  ///
+  /// Returns an [OSError] if retrieving the environment fails.
   external static _environment();
   external static List<String> _executableArguments();
-  external static String _packageRoot(); // TODO(mfairhurst): remove this
-  external static String _packageConfig();
+  external static String? _packageConfig();
   external static String _version();
   external static String _localeName();
   external static Uri _script();
 
   static String executable = _executable();
   static String resolvedExecutable = _resolvedExecutable();
-  static String packageRoot; // TODO(mfairhurst): remove this
-  static String packageConfig = _packageConfig();
+  static String? packageConfig = _packageConfig();
 
   @pragma("vm:entry-point")
-  static String Function() _localeClosure;
+  static String Function()? _localeClosure;
   static String localeName() {
-    final result = (_localeClosure == null) ? _localeName() : _localeClosure();
+    final result = (_localeClosure == null) ? _localeName() : _localeClosure!();
     if (result is OSError) {
       throw result;
     }
@@ -53,14 +49,14 @@ class _Platform {
 
   // Cache the OS environment. This can be an OSError instance if
   // retrieving the environment failed.
-  static var /*OSError|Map<String,String>*/ _environmentCache;
+  static var /*OSError?|Map<String,String>?*/ _environmentCache;
 
   static int get numberOfProcessors => _numberOfProcessors();
   static String get pathSeparator => _pathSeparator();
   static String get operatingSystem => _operatingSystem();
   static Uri get script => _script();
 
-  static String _cachedOSVersion;
+  static String? _cachedOSVersion;
   static String get operatingSystemVersion {
     if (_cachedOSVersion == null) {
       var result = _operatingSystemVersion();
@@ -69,7 +65,7 @@ class _Platform {
       }
       _cachedOSVersion = result;
     }
-    return _cachedOSVersion;
+    return _cachedOSVersion!;
   }
 
   static String get localHostname {
@@ -114,7 +110,7 @@ class _Platform {
     if (_environmentCache is OSError) {
       throw _environmentCache;
     } else {
-      return _environmentCache;
+      return _environmentCache!;
     }
   }
 
@@ -126,10 +122,10 @@ class _Platform {
 class _CaseInsensitiveStringMap<V> extends MapBase<String, V> {
   final Map<String, V> _map = new Map<String, V>();
 
-  bool containsKey(Object key) =>
+  bool containsKey(Object? key) =>
       key is String && _map.containsKey(key.toUpperCase());
-  bool containsValue(Object value) => _map.containsValue(value);
-  V operator [](Object key) => key is String ? _map[key.toUpperCase()] : null;
+  bool containsValue(Object? value) => _map.containsValue(value);
+  V? operator [](Object? key) => key is String ? _map[key.toUpperCase()] : null;
   void operator []=(String key, V value) {
     _map[key.toUpperCase()] = value;
   }
@@ -142,7 +138,8 @@ class _CaseInsensitiveStringMap<V> extends MapBase<String, V> {
     other.forEach((key, value) => this[key.toUpperCase()] = value);
   }
 
-  V remove(Object key) => key is String ? _map.remove(key.toUpperCase()) : null;
+  V? remove(Object? key) =>
+      key is String ? _map.remove(key.toUpperCase()) : null;
 
   void clear() {
     _map.clear();
@@ -163,7 +160,7 @@ class _CaseInsensitiveStringMap<V> extends MapBase<String, V> {
   Map<K2, V2> map<K2, V2>(MapEntry<K2, V2> transform(String key, V value)) =>
       _map.map(transform);
 
-  V update(String key, V update(V value), {V ifAbsent()}) =>
+  V update(String key, V update(V value), {V ifAbsent()?}) =>
       _map.update(key.toUpperCase(), update, ifAbsent: ifAbsent);
 
   void updateAll(V update(String key, V value)) {

@@ -2,9 +2,12 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+#include <functional>
+
 #include "include/dart_native_api.h"
 
 #include "platform/assert.h"
+#include "platform/utils.h"
 #include "vm/dart_api_impl.h"
 #include "vm/dart_api_message.h"
 #include "vm/dart_api_state.h"
@@ -17,16 +20,16 @@ namespace dart {
 
 // --- Message sending/receiving from native code ---
 
-class IsolateSaver {
+class IsolateLeaveScope {
  public:
-  explicit IsolateSaver(Isolate* current_isolate)
+  explicit IsolateLeaveScope(Isolate* current_isolate)
       : saved_isolate_(current_isolate) {
     if (current_isolate != NULL) {
       ASSERT(current_isolate == Isolate::Current());
       Dart_ExitIsolate();
     }
   }
-  ~IsolateSaver() {
+  ~IsolateLeaveScope() {
     if (saved_isolate_ != NULL) {
       Dart_Isolate I = reinterpret_cast<Dart_Isolate>(saved_isolate_);
       Dart_EnterIsolate(I);
@@ -36,20 +39,20 @@ class IsolateSaver {
  private:
   Isolate* saved_isolate_;
 
-  DISALLOW_COPY_AND_ASSIGN(IsolateSaver);
+  DISALLOW_COPY_AND_ASSIGN(IsolateLeaveScope);
 };
 
 static bool PostCObjectHelper(Dart_Port port_id, Dart_CObject* message) {
   ApiMessageWriter writer;
-  Message* msg =
+  std::unique_ptr<Message> msg =
       writer.WriteCMessage(message, port_id, Message::kNormalPriority);
 
-  if (msg == NULL) {
+  if (msg == nullptr) {
     return false;
   }
 
   // Post the message at the given port.
-  return PortMap::PostMessage(msg);
+  return PortMap::PostMessage(std::move(msg));
 }
 
 DART_EXPORT bool Dart_PostCObject(Dart_Port port_id, Dart_CObject* message) {
@@ -59,7 +62,7 @@ DART_EXPORT bool Dart_PostCObject(Dart_Port port_id, Dart_CObject* message) {
 DART_EXPORT bool Dart_PostInteger(Dart_Port port_id, int64_t message) {
   if (Smi::IsValid(message)) {
     return PortMap::PostMessage(
-        new Message(port_id, Smi::New(message), Message::kNormalPriority));
+        Message::New(port_id, Smi::New(message), Message::kNormalPriority));
   }
   Dart_CObject cobj;
   cobj.type = Dart_CObject_kInt64;
@@ -79,7 +82,7 @@ DART_EXPORT Dart_Port Dart_NewNativePort(const char* name,
     return ILLEGAL_PORT;
   }
   // Start the native port without a current isolate.
-  IsolateSaver saver(Isolate::Current());
+  IsolateLeaveScope saver(Isolate::Current());
 
   NativeMessageHandler* nmh = new NativeMessageHandler(name, handler);
   Dart_Port port_id = PortMap::CreatePort(nmh);
@@ -90,7 +93,7 @@ DART_EXPORT Dart_Port Dart_NewNativePort(const char* name,
 
 DART_EXPORT bool Dart_CloseNativePort(Dart_Port native_port_id) {
   // Close the native port without a current isolate.
-  IsolateSaver saver(Isolate::Current());
+  IsolateLeaveScope saver(Isolate::Current());
 
   // TODO(turnidge): Check that the port is native before trying to close.
   return PortMap::ClosePort(native_port_id);
@@ -103,9 +106,10 @@ DART_EXPORT bool Dart_InvokeVMServiceMethod(uint8_t* request_json,
                                             uint8_t** response_json,
                                             intptr_t* response_json_length,
                                             char** error) {
+#if !defined(PRODUCT)
   Isolate* isolate = Isolate::Current();
   ASSERT(isolate == nullptr || !isolate->is_service_isolate());
-  IsolateSaver saver(isolate);
+  IsolateLeaveScope saver(isolate);
 
   // We only allow one isolate reload at a time.  If this turns out to be on the
   // critical path, we can change it to have a global datastructure which is
@@ -137,14 +141,18 @@ DART_EXPORT bool Dart_InvokeVMServiceMethod(uint8_t* request_json,
   auto port =
       ::Dart_NewNativePort("service-rpc", &Utils::HandleResponse, false);
   if (port == ILLEGAL_PORT) {
-    return Api::NewError("Was unable to create native port.");
+    if (error != nullptr) {
+      *error = ::dart::Utils::StrDup("Was unable to create native port.");
+    }
+    return false;
   }
 
   // Before sending the message we'll lock the monitor, which the receiver
   // will later on notify once the answer has been received.
   MonitorLocker monitor(vm_service_call_monitor);
 
-  if (ServiceIsolate::SendServiceRpc(request_json, request_json_length, port)) {
+  if (ServiceIsolate::SendServiceRpc(request_json, request_json_length, port,
+                                     error)) {
     // We posted successfully and expect the vm-service to send the reply, so
     // we will wait for it now.
     auto wait_result = monitor.Wait();
@@ -168,12 +176,14 @@ DART_EXPORT bool Dart_InvokeVMServiceMethod(uint8_t* request_json,
     // We couldn't post the message and will not receive any reply. Therefore we
     // clean up the port and return an error.
     Dart_CloseNativePort(port);
-
-    if (error != nullptr) {
-      *error = strdup("Was unable to post message to isolate.");
-    }
     return false;
   }
+#else   // !defined(PRODUCT)
+  if (error != nullptr) {
+    *error = Utils::StrDup("VM Service is not supported in PRODUCT mode.");
+  }
+  return false;
+#endif  // !defined(PRODUCT)
 }
 
 // --- Verification tools ---
@@ -185,36 +195,89 @@ DART_EXPORT Dart_Handle Dart_CompileAll() {
   DARTSCOPE(Thread::Current());
   API_TIMELINE_DURATION(T);
   Dart_Handle result = Api::CheckAndFinalizePendingClasses(T);
-  if (::Dart_IsError(result)) {
+  if (Api::IsError(result)) {
     return result;
   }
   CHECK_CALLBACK_STATE(T);
   const Error& error = Error::Handle(T->zone(), Library::CompileAll());
   if (!error.IsNull()) {
-    return Api::NewHandle(T, error.raw());
+    return Api::NewHandle(T, error.ptr());
   }
   return Api::Success();
 #endif  // defined(DART_PRECOMPILED_RUNTIME)
 }
 
-DART_EXPORT Dart_Handle Dart_ReadAllBytecode() {
+DART_EXPORT Dart_Handle Dart_FinalizeAllClasses() {
 #if defined(DART_PRECOMPILED_RUNTIME)
-  return Api::NewError("%s: Cannot read bytecode on an AOT runtime.",
+  return Api::NewError("%s: All classes are already finalized in AOT runtime.",
                        CURRENT_FUNC);
 #else
   DARTSCOPE(Thread::Current());
   API_TIMELINE_DURATION(T);
   Dart_Handle result = Api::CheckAndFinalizePendingClasses(T);
-  if (::Dart_IsError(result)) {
+  if (Api::IsError(result)) {
     return result;
   }
   CHECK_CALLBACK_STATE(T);
-  const Error& error = Error::Handle(T->zone(), Library::ReadAllBytecode());
+  const Error& error = Error::Handle(T->zone(), Library::FinalizeAllClasses());
   if (!error.IsNull()) {
-    return Api::NewHandle(T, error.raw());
+    return Api::NewHandle(T, error.ptr());
   }
   return Api::Success();
 #endif  // defined(DART_PRECOMPILED_RUNTIME)
+}
+
+struct RunInSafepointAndRWCodeArgs {
+  Isolate* isolate;
+  std::function<void()>* callback;
+};
+
+DART_EXPORT void* Dart_ExecuteInternalCommand(const char* command, void* arg) {
+  if (strcmp(command, "gc-on-nth-allocation") == 0) {
+    TransitionNativeToVM _(Thread::Current());
+    intptr_t argument = reinterpret_cast<intptr_t>(arg);
+    ASSERT(argument > 0);
+    IsolateGroup::Current()->heap()->CollectOnNthAllocation(argument);
+    return nullptr;
+
+  } else if (strcmp(command, "gc-now") == 0) {
+    ASSERT(arg == nullptr);  // Don't pass an argument to this command.
+    TransitionNativeToVM _(Thread::Current());
+    IsolateGroup::Current()->heap()->CollectAllGarbage();
+    return nullptr;
+
+  } else if (strcmp(command, "is-thread-in-generated") == 0) {
+    if (Thread::Current()->execution_state() == Thread::kThreadInGenerated) {
+      return reinterpret_cast<void*>(1);
+    }
+    return nullptr;
+
+  } else if (strcmp(command, "is-mutator-in-native") == 0) {
+    Isolate* const isolate = reinterpret_cast<Isolate*>(arg);
+    if (isolate->mutator_thread()->execution_state_cross_thread_for_testing() ==
+        Thread::kThreadInNative) {
+      return arg;
+    } else {
+      return nullptr;
+    }
+
+  } else if (strcmp(command, "run-in-safepoint-and-rw-code") == 0) {
+    const RunInSafepointAndRWCodeArgs* const args =
+        reinterpret_cast<RunInSafepointAndRWCodeArgs*>(arg);
+    Thread::EnterIsolateAsHelper(args->isolate, Thread::TaskKind::kUnknownTask);
+    Thread* const thread = Thread::Current();
+    {
+      GcSafepointOperationScope scope(thread);
+      args->isolate->group()->heap()->WriteProtectCode(/*read_only=*/false);
+      (*args->callback)();
+      args->isolate->group()->heap()->WriteProtectCode(/*read_only=*/true);
+    }
+    Thread::ExitIsolateAsHelper();
+    return nullptr;
+
+  } else {
+    UNREACHABLE();
+  }
 }
 
 }  // namespace dart

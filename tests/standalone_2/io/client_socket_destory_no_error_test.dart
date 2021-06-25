@@ -4,6 +4,8 @@
 //
 // Tests socket exceptions.
 
+// @dart = 2.9
+
 import "dart:async";
 import "dart:io";
 
@@ -13,7 +15,7 @@ import "package:expect/expect.dart";
 void clientSocketDestroyNoErrorTest() {
   ServerSocket.bind("127.0.0.1", 0).then((server) {
     server.listen((socket) {
-      socket.pipe(socket);
+      socket.cast<List<int>>().pipe(socket);
     });
     Socket.connect("127.0.0.1", server.port).then((client) {
       client.listen((data) {}, onDone: server.close);

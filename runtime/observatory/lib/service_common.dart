@@ -26,9 +26,9 @@ class WebSocketVMTarget implements M.Target {
   bool get standalone => !chrome;
 
   // User defined name.
-  String name;
+  late String name;
   // Network address of VM.
-  String networkAddress;
+  late String networkAddress;
 
   WebSocketVMTarget(this.networkAddress) {
     name = networkAddress;
@@ -65,8 +65,8 @@ class _WebSocketRequest {
 
 /// Minimal common interface for 'WebSocket' in [dart:io] and [dart:html].
 abstract class CommonWebSocket {
-  void connect(String address, void onOpen(), void onMessage(dynamic data),
-      void onError(), void onClose());
+  Future<void> connect(WebSocketVMTarget target, void onOpen(),
+      void onMessage(dynamic data), void onError(), void onClose());
   bool get isOpen;
   void send(dynamic data);
   void close();
@@ -89,7 +89,7 @@ abstract class CommonWebSocketVM extends VM {
 
   String get displayName => '${name}@${target.name}';
 
-  CommonWebSocket _webSocket;
+  CommonWebSocket? _webSocket;
 
   CommonWebSocketVM(this.target, this._webSocket) {
     assert(target != null);
@@ -120,7 +120,7 @@ abstract class CommonWebSocketVM extends VM {
   void disconnect({String reason: 'WebSocket closed'}) {
     if (_hasInitiatedConnect) {
       if (_webSocket != null) {
-        _webSocket.close();
+        _webSocket!.close();
       }
     }
     // We don't need to cancel requests and notify here.  These
@@ -131,12 +131,12 @@ abstract class CommonWebSocketVM extends VM {
     _notifyDisconnect(reason);
   }
 
-  Future<Map> invokeRpcRaw(String method, Map params) {
+  Future<Map> invokeRpcRaw(String method, Map params) async {
     if (!_hasInitiatedConnect) {
       _hasInitiatedConnect = true;
       try {
-        _webSocket.connect(
-            target.networkAddress, _onOpen, _onMessage, _onError, _onClose);
+        await _webSocket!
+            .connect(target, _onOpen, _onMessage, _onError, _onClose);
       } catch (_, stack) {
         _webSocket = null;
         var exception = new NetworkRpcException('WebSocket closed');
@@ -145,12 +145,12 @@ abstract class CommonWebSocketVM extends VM {
     }
     if (_disconnected.isCompleted) {
       // This connection was closed already.
-      var exception = new NetworkRpcException('WebSocket closed');
+      var exception = new NetworkRpcException(await onDisconnect);
       return new Future.error(exception);
     }
     String serial = (_requestSerial++).toString();
     var request = new _WebSocketRequest(method, params);
-    if ((_webSocket != null) && _webSocket.isOpen) {
+    if ((_webSocket != null) && _webSocket!.isOpen) {
       // Already connected, send request immediately.
       _sendRequest(serial, request);
     } else {
@@ -180,7 +180,7 @@ abstract class CommonWebSocketVM extends VM {
     _notifyConnect();
   }
 
-  Map _parseJSON(String message) {
+  Map? _parseJSON(String message) {
     var map;
     try {
       map = json.decode(message);
@@ -198,19 +198,16 @@ abstract class CommonWebSocketVM extends VM {
   }
 
   void _onBinaryMessage(dynamic data) {
-    _webSocket.nonStringToByteData(data).then((ByteData bytes) {
-      // See format spec. in VMs Service::SendEvent.
-      int offset = 0;
-      // Dart2JS workaround (no getUint64). Limit to 4 GB metadata.
-      assert(bytes.getUint32(offset, Endian.big) == 0);
-      int metaSize = bytes.getUint32(offset + 4, Endian.big);
-      offset += 8;
-      var meta = _utf8Decoder.convert(new Uint8List.view(
-          bytes.buffer, bytes.offsetInBytes + offset, metaSize));
-      offset += metaSize;
-      var data = new ByteData.view(bytes.buffer, bytes.offsetInBytes + offset,
-          bytes.lengthInBytes - offset);
-      var map = _parseJSON(meta);
+    _webSocket!.nonStringToByteData(data).then((ByteData bytes) {
+      var metadataOffset = 4;
+      var dataOffset = bytes.getUint32(0, Endian.little);
+      var metadataLength = dataOffset - metadataOffset;
+      var dataLength = bytes.lengthInBytes - dataOffset;
+      var metadata = _utf8Decoder.convert(new Uint8List.view(
+          bytes.buffer, bytes.offsetInBytes + metadataOffset, metadataLength));
+      var data = new Uint8List.view(
+          bytes.buffer, bytes.offsetInBytes + dataOffset, dataLength);
+      var map = _parseJSON(metadata);
       if (map == null || map['method'] != 'streamNotify') {
         return;
       }
@@ -295,7 +292,7 @@ abstract class CommonWebSocketVM extends VM {
 
   /// Send all delayed requests.
   void _sendAllDelayedRequests() {
-    assert(_webSocket.isOpen);
+    assert(_webSocket!.isOpen);
     if (_delayedRequests.length == 0) {
       return;
     }
@@ -308,7 +305,7 @@ abstract class CommonWebSocketVM extends VM {
 
   /// Send the request over WebSocket.
   void _sendRequest(String serial, _WebSocketRequest request) {
-    assert(_webSocket.isOpen);
+    assert(_webSocket!.isOpen);
     // Mark request as pending.
     assert(_pendingRequests.containsKey(serial) == false);
     _pendingRequests[serial] = request;
@@ -321,8 +318,12 @@ abstract class CommonWebSocketVM extends VM {
         'params': {'id': serial, 'query': request.method}
       });
     } else {
-      message = json.encode(
-          {'id': serial, 'method': request.method, 'params': request.params});
+      message = json.encode({
+        'jsonrpc': '2.0',
+        'id': serial,
+        'method': request.method,
+        'params': request.params
+      });
     }
     if (request.method != 'getTagProfile' &&
         request.method != 'getIsolateMetric' &&
@@ -331,7 +332,7 @@ abstract class CommonWebSocketVM extends VM {
           'GET [${serial}] ${request.method}(${request.params}) from ${target.networkAddress}');
     }
     // Send message.
-    _webSocket.send(message);
+    _webSocket!.send(message);
   }
 
   String toString() => displayName;

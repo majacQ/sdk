@@ -2,8 +2,10 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-main() {
+// @dart = 2.9
+
+void main() {
   /*nb*/ // no break on empty line
-  /*bl*/ print("Hello, World!");
+  /*bl*/ print('Hello, World!');
 /*s:1*/
 }

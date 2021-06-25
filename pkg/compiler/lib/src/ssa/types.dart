@@ -4,9 +4,10 @@
 
 import '../common_elements.dart' show CommonElements;
 import '../elements/entities.dart';
+import '../elements/types.dart';
+import '../inferrer/abstract_value_domain.dart';
+import '../inferrer/types.dart';
 import '../native/behavior.dart';
-import '../types/abstract_value_domain.dart';
-import '../types/types.dart';
 import '../universe/selector.dart' show Selector;
 import '../world.dart' show JClosedWorld;
 
@@ -29,9 +30,9 @@ class AbstractValueFactory {
         results.closedWorld.abstractValueDomain.dynamicType;
   }
 
-  static AbstractValue inferredTypeForSelector(Selector selector,
+  static AbstractValue inferredResultTypeForSelector(Selector selector,
       AbstractValue receiver, GlobalTypeInferenceResults results) {
-    return results.typeOfSelector(selector, receiver) ??
+    return results.resultTypeOfSelector(selector, receiver) ??
         results.closedWorld.abstractValueDomain.dynamicType;
   }
 
@@ -49,14 +50,12 @@ class AbstractValueFactory {
       if (type == SpecialType.JsObject) {
         return abstractValueDomain
             .createNonNullExact(commonElements.objectClass);
-      } else if (type.isVoid) {
+      } else if (type is VoidType) {
         return abstractValueDomain.nullType;
-      } else if (type.isDynamic) {
+      } else if (closedWorld.dartTypes.isTopType(type)) {
         return abstractValueDomain.dynamicType;
       } else if (type == commonElements.nullType) {
         return abstractValueDomain.nullType;
-      } else if (type.treatAsDynamic) {
-        return abstractValueDomain.dynamicType;
       } else {
         return abstractValueDomain.createNonNullSubtype(type.element);
       }
@@ -64,7 +63,7 @@ class AbstractValueFactory {
 
     AbstractValue result =
         abstractValueDomain.unionOfMany(typesReturned.map(fromNativeType));
-    assert(!abstractValueDomain.isEmpty(result),
+    assert(abstractValueDomain.isEmpty(result).isPotentiallyFalse,
         "Unexpected empty return value for $nativeBehavior.");
     return result;
   }

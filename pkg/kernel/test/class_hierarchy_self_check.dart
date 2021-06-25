@@ -2,8 +2,11 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import 'package:kernel/kernel.dart';
 import 'package:kernel/class_hierarchy.dart';
+import 'package:kernel/core_types.dart';
 import 'package:test/test.dart';
 import 'class_hierarchy_basic.dart';
 import 'dart:io';
@@ -18,7 +21,9 @@ main(List<String> args) {
 
 void testClassHierarchyOnComponent(Component component, {bool verbose: false}) {
   BasicClassHierarchy basic = new BasicClassHierarchy(component);
-  ClosedWorldClassHierarchy classHierarchy = new ClassHierarchy(component);
+  CoreTypes coreTypes = new CoreTypes(component);
+  ClosedWorldClassHierarchy classHierarchy =
+      new ClassHierarchy(component, coreTypes);
   int total = classHierarchy.numberOfClasses;
   int progress = 0;
   for (var class1 in classHierarchy.classes) {

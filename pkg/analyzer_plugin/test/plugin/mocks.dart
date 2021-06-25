@@ -3,15 +3,12 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'dart:async';
-import 'dart:collection';
 
 import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/error/error.dart';
 import 'package:analyzer/file_system/file_system.dart';
 import 'package:analyzer/src/dart/analysis/driver.dart';
-import 'package:analyzer/src/dart/analysis/file_state.dart';
-import 'package:analyzer/src/generated/engine.dart'
-    show AnalysisOptionsImpl, TimestampedData;
+import 'package:analyzer/src/generated/engine.dart' show TimestampedData;
 import 'package:analyzer/src/generated/source.dart';
 import 'package:analyzer/src/generated/timestamped_data.dart';
 import 'package:analyzer_plugin/channel/channel.dart';
@@ -21,29 +18,12 @@ import 'package:analyzer_plugin/protocol/protocol_generated.dart';
 import 'package:analyzer_plugin/src/protocol/protocol_internal.dart';
 import 'package:test/test.dart';
 
-class MockAnalysisDriver extends AnalysisDriver {
+class MockAnalysisDriver implements AnalysisDriver {
   @override
-  Set<String> addedFiles = new HashSet<String>();
-
-  MockAnalysisDriver()
-      : super(
-            new AnalysisDriverScheduler(null),
-            null,
-            new MockResourceProvider(),
-            null,
-            new FileContentOverlay(),
-            null,
-            new SourceFactory([]),
-            new AnalysisOptionsImpl());
-
-  @override
-  bool get hasFilesToAnalyze => false;
+  final Set<String> addedFiles = {};
 
   @override
   set priorityFiles(List<String> priorityPaths) {}
-
-  @override
-  AnalysisDriverPriority get workPriority => AnalysisDriverPriority.nothing;
 
   @override
   void addFile(String path) {
@@ -51,19 +31,18 @@ class MockAnalysisDriver extends AnalysisDriver {
   }
 
   @override
-  void dispose() {}
-
-  @override
-  Future<Null> performWork() => new Future.value(null);
+  dynamic noSuchMethod(Invocation invocation) {
+    return super.noSuchMethod(invocation);
+  }
 }
 
 class MockChannel implements PluginCommunicationChannel {
   bool _closed = false;
 
-  void Function() _onDone;
-  Function _onError;
-  void Function(Notification) _onNotification;
-  void Function(Request) _onRequest;
+  void Function()? _onDone;
+  Function? _onError;
+  void Function(Notification)? _onNotification;
+  void Function(Request)? _onRequest;
 
   List<Notification> sentNotifications = <Notification>[];
 
@@ -77,10 +56,10 @@ class MockChannel implements PluginCommunicationChannel {
   }
 
   @override
-  void listen(void onRequest(Request request),
-      {void onDone(),
-      Function onError,
-      Function(Notification) onNotification}) {
+  void listen(void Function(Request request)? onRequest,
+      {void Function()? onDone,
+      Function? onError,
+      Function(Notification)? onNotification}) {
     _onDone = onDone;
     _onError = onError;
     _onNotification = onNotification;
@@ -88,43 +67,47 @@ class MockChannel implements PluginCommunicationChannel {
   }
 
   void sendDone() {
-    _onDone();
+    if (_onDone != null) {
+      _onDone!();
+    }
   }
 
   void sendError(Object exception, StackTrace stackTrace) {
-    _onError(exception, stackTrace);
+    if (_onError != null) {
+      _onError!(exception, stackTrace);
+    }
   }
 
   @override
   void sendNotification(Notification notification) {
     if (_closed) {
-      throw new StateError('Sent a notification to a closed channel');
+      throw StateError('Sent a notification to a closed channel');
     }
     if (_onNotification == null) {
       fail('Unexpected invocation of sendNotification');
     }
-    _onNotification(notification);
+    _onNotification!(notification);
   }
 
   Future<Response> sendRequest(RequestParams params) {
     if (_onRequest == null) {
       fail('Unexpected invocation of sendNotification');
     }
-    String id = (idCounter++).toString();
-    Request request = params.toRequest(id);
-    Completer<Response> completer = new Completer<Response>();
+    var id = (idCounter++).toString();
+    var request = params.toRequest(id);
+    var completer = Completer<Response>();
     completers[request.id] = completer;
-    _onRequest(request);
+    _onRequest!(request);
     return completer.future;
   }
 
   @override
   void sendResponse(Response response) {
     if (_closed) {
-      throw new StateError('Sent a response to a closed channel');
+      throw StateError('Sent a response to a closed channel');
     }
-    Completer<Response> completer = completers.remove(response.id);
-    completer.complete(response);
+    var completer = completers.remove(response.id);
+    completer?.complete(response);
   }
 }
 
@@ -138,20 +121,22 @@ class MockResolvedUnitResult implements ResolvedUnitResult {
   @override
   final String path;
 
-  MockResolvedUnitResult({this.errors, this.lineInfo, this.path});
+  MockResolvedUnitResult(
+      {List<AnalysisError>? errors, LineInfo? lineInfo, String? path})
+      : errors = errors ?? [],
+        lineInfo = lineInfo ?? LineInfo([0]),
+        path = path ?? '';
 
   @override
-  noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 class MockResourceProvider implements ResourceProvider {
   @override
-  noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
-/**
- * A concrete implementation of a server plugin that is suitable for testing.
- */
+/// A concrete implementation of a server plugin that is suitable for testing.
 class MockServerPlugin extends ServerPlugin {
   MockServerPlugin(ResourceProvider resourceProvider) : super(resourceProvider);
 
@@ -166,16 +151,16 @@ class MockServerPlugin extends ServerPlugin {
 
   @override
   AnalysisDriverGeneric createAnalysisDriver(ContextRoot contextRoot) {
-    return new MockAnalysisDriver();
+    return MockAnalysisDriver();
   }
 }
 
 class MockSource implements Source {
   @override
-  TimestampedData<String> get contents => null;
+  TimestampedData<String> get contents => TimestampedData(0, '');
 
   @override
-  String get encoding => null;
+  String get encoding => '';
 
   @override
   String get fullName => '/pkg/lib/test.dart';

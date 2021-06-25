@@ -6,11 +6,11 @@
 
 #include "bin/dartutils.h"
 #include "bin/io_buffer.h"
-#include "bin/log.h"
 #include "bin/namespace.h"
 #include "bin/platform.h"
 #include "bin/socket.h"
 #include "bin/utils.h"
+#include "platform/syslog.h"
 
 #include "include/dart_api.h"
 
@@ -164,13 +164,29 @@ void FUNCTION_NAME(Process_Start)(Dart_NativeArguments args) {
     result =
         DartUtils::SetIntegerField(status_handle, "_errorCode", error_code);
     ThrowIfError(result);
-    Dart_Handle val = DartUtils::NewString(os_error_message != NULL
-                                               ? os_error_message
-                                               : "Cannot get error message");
+
+    const char* error_message = (os_error_message != NULL)
+                                    ? os_error_message
+                                    : "Failed to get error message";
+    Dart_Handle val = DartUtils::NewString(error_message);
     if (Dart_IsError(val)) {
-      // If conversion of the OS error message to a Dart string fails, fall back
-      // on a stock message.
-      val = DartUtils::NewString("OS error message was a not a utf8 string.");
+      // Try to clean the message from non-ASCII characters.
+      const intptr_t len = strlen(error_message);
+      char* ascii_message =
+          reinterpret_cast<char*>(Dart_ScopeAllocate(len + 1));
+      for (intptr_t i = 0; i < len; i++) {
+        if (static_cast<uint8_t>(error_message[i]) < 0x80) {
+          ascii_message[i] = error_message[i];
+        } else {
+          ascii_message[i] = '?';
+        }
+      }
+      ascii_message[len] = '\0';
+
+      val = DartUtils::NewStringFormatted(
+          "Failed to start %s. OS returned an error (code %d) which can't be "
+          "fully converted to Dart string (%s): %s",
+          path, error_code, Dart_GetError(val), ascii_message);
     }
     result = Dart_SetField(status_handle, DartUtils::NewString("_errorMessage"),
                            val);
@@ -196,10 +212,10 @@ void FUNCTION_NAME(Process_Wait)(Dart_NativeArguments args) {
                                process_stderr->fd(), exit_event->fd(), &result);
   // Process::Wait() closes the file handles, so blow away the fds in the
   // Sockets so that they don't get picked up by the finalizer on _NativeSocket.
-  process_stdin->SetClosedFd();
-  process_stdout->SetClosedFd();
-  process_stderr->SetClosedFd();
-  exit_event->SetClosedFd();
+  process_stdin->CloseFd();
+  process_stdout->CloseFd();
+  process_stderr->CloseFd();
+  exit_event->CloseFd();
   if (success) {
     Dart_Handle out = result.stdout_data();
     ThrowIfError(out);
@@ -358,8 +374,11 @@ void FUNCTION_NAME(ProcessInfo_MaxRSS)(Dart_NativeArguments args) {
 void Process::GetRSSInformation(int64_t* max_rss, int64_t* current_rss) {
   ASSERT(max_rss != NULL);
   ASSERT(current_rss != NULL);
-  *max_rss = Process::MaxRSS();
+  // Max RSS should be queried after current RSS to produce
+  // consistent values as current RSS can grow beyond max RSS which
+  // was queried before.
   *current_rss = Process::CurrentRSS();
+  *max_rss = Process::MaxRSS();
 }
 
 }  // namespace bin

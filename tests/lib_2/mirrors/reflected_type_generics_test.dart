@@ -2,9 +2,10 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library test.reflected_type_generics_test;
 
-@MirrorsUsed(targets: "test.reflected_type_generics_test")
 import 'dart:mirrors';
 
 import 'package:expect/expect.dart';
@@ -44,7 +45,7 @@ main() {
   expectReflectedType(reflectType(D, [P]), new D<P>().runtimeType);
   expectReflectedType(reflectType(E, [P]), new E<P>().runtimeType);
   expectReflectedType(
-      reflectType(FBounded, [new FBounded<Null>().runtimeType]), new FBounded<FBounded<Null>>().runtimeType);
+      reflectType(FBounded, [new FBounded<Never>().runtimeType]), new FBounded<FBounded<Never>>().runtimeType);
 
   var predicateHelper = new Helper<Predicate<P>>();
   expectReflectedType(reflectType(Predicate, [P]), predicateHelper.param); //# 01: ok

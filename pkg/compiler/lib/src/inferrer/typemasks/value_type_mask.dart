@@ -9,6 +9,7 @@ class ValueTypeMask extends ForwardingTypeMask {
   /// debugging data stream.
   static const String tag = 'value-type-mask';
 
+  @override
   final TypeMask forwardTo;
   final PrimitiveConstantValue value;
 
@@ -16,15 +17,16 @@ class ValueTypeMask extends ForwardingTypeMask {
 
   /// Deserializes a [ValueTypeMask] object from [source].
   factory ValueTypeMask.readFromDataSource(
-      DataSource source, JClosedWorld closedWorld) {
+      DataSource source, CommonMasks domain) {
     source.begin(tag);
-    TypeMask forwardTo = new TypeMask.readFromDataSource(source, closedWorld);
+    TypeMask forwardTo = new TypeMask.readFromDataSource(source, domain);
     ConstantValue constant = source.readConstant();
     source.end(tag);
     return new ValueTypeMask(forwardTo, constant);
   }
 
   /// Serializes this [ValueTypeMask] to [sink].
+  @override
   void writeToDataSink(DataSink sink) {
     sink.writeEnum(TypeMaskKind.value);
     sink.begin(tag);
@@ -33,36 +35,44 @@ class ValueTypeMask extends ForwardingTypeMask {
     sink.end(tag);
   }
 
+  @override
   TypeMask nullable() {
     return isNullable ? this : new ValueTypeMask(forwardTo.nullable(), value);
   }
 
+  @override
   TypeMask nonNullable() {
     return isNullable
         ? new ValueTypeMask(forwardTo.nonNullable(), value)
         : this;
   }
 
+  @override
   bool get isValue => true;
 
+  @override
   bool equalsDisregardNull(other) {
     if (other is! ValueTypeMask) return false;
     return super.equalsDisregardNull(other) && value == other.value;
   }
 
-  TypeMask intersection(TypeMask other, JClosedWorld closedWorld) {
-    TypeMask forwardIntersection = forwardTo.intersection(other, closedWorld);
+  @override
+  TypeMask intersection(TypeMask other, CommonMasks domain) {
+    TypeMask forwardIntersection = forwardTo.intersection(other, domain);
     if (forwardIntersection.isEmptyOrNull) return forwardIntersection;
     return forwardIntersection.isNullable ? nullable() : nonNullable();
   }
 
+  @override
   bool operator ==(other) => super == other;
 
+  @override
   int get hashCode {
     return computeHashCode(value, isNullable, forwardTo);
   }
 
+  @override
   String toString() {
-    return 'Value($forwardTo, value: ${value.toDartText()})';
+    return 'Value($forwardTo, value: ${value.toDartText(null)})';
   }
 }

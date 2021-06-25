@@ -2,9 +2,10 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library symbol_validation_test;
 
-@MirrorsUsed(targets: "symbol_validation_test")
 import 'dart:mirrors';
 import 'package:expect/expect.dart';
 
@@ -23,8 +24,8 @@ invalidSymbol(String string) {
 }
 
 validPrivateSymbol(String string) {
-  ClosureMirror closure = reflect(main);
-  LibraryMirror library = closure.function.owner;
+  ClosureMirror closure = reflect(main) as ClosureMirror;
+  LibraryMirror library = closure.function.owner as LibraryMirror;
   Expect.equals(
       string,
       MirrorSystem.getName(MirrorSystem.getSymbol(string, library)),

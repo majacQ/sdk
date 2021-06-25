@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'assist_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(FlutterRemoveWidgetTest);
   });
@@ -19,19 +19,26 @@ class FlutterRemoveWidgetTest extends AssistProcessorTest {
   @override
   AssistKind get kind => DartAssistKind.FLUTTER_REMOVE_WIDGET;
 
-  test_childIntoChild_multiLine() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  @override
+  void setUp() {
+    super.setUp();
+    writeTestPackageConfig(
+      flutter: true,
+    );
+  }
+
+  Future<void> test_childIntoChild_multiLine() async {
+    await resolveTestCode('''
 import 'package:flutter/material.dart';
 main() {
-  new Column(
-    children: <Widget>[
-      new Center(
-        child: new /*caret*/Padding(
+  Column(
+    children: [
+      Center(
+        child: /*caret*/Padding(
           padding: const EdgeInsets.all(8.0),
-          child: new Center(
+          child: Center(
             heightFactor: 0.5,
-            child: new Text('foo'),
+            child: Text('foo'),
           ),
         ),
       ),
@@ -42,12 +49,12 @@ main() {
     await assertHasAssist('''
 import 'package:flutter/material.dart';
 main() {
-  new Column(
-    children: <Widget>[
-      new Center(
-        child: new Center(
+  Column(
+    children: [
+      Center(
+        child: Center(
           heightFactor: 0.5,
-          child: new Text('foo'),
+          child: Text('foo'),
         ),
       ),
     ],
@@ -56,16 +63,15 @@ main() {
 ''');
   }
 
-  test_childIntoChild_singleLine() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  Future<void> test_childIntoChild_singleLine() async {
+    await resolveTestCode('''
 import 'package:flutter/material.dart';
 main() {
-  new Padding(
+  Padding(
     padding: const EdgeInsets.all(8.0),
-    child: new /*caret*/Center(
+    child: /*caret*/Center(
       heightFactor: 0.5,
-      child: new Text('foo'),
+      child: Text('foo'),
     ),
   );
 }
@@ -73,30 +79,29 @@ main() {
     await assertHasAssist('''
 import 'package:flutter/material.dart';
 main() {
-  new Padding(
+  Padding(
     padding: const EdgeInsets.all(8.0),
-    child: new Text('foo'),
+    child: Text('foo'),
   );
 }
 ''');
   }
 
-  test_childIntoChildren() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  Future<void> test_childIntoChildren() async {
+    await resolveTestCode('''
 import 'package:flutter/material.dart';
 main() {
-  new Column(
-    children: <Widget>[
-      new Text('foo'),
-      new /*caret*/Center(
+  Column(
+    children: [
+      Text('foo'),
+      /*caret*/Center(
         heightFactor: 0.5,
-        child: new Padding(
+        child: Padding(
           padding: const EdgeInsets.all(8.0),
-          child: new Text('bar'),
+          child: Text('bar'),
         ),
       ),
-      new Text('baz'),
+      Text('baz'),
     ],
   );
 }
@@ -104,30 +109,29 @@ main() {
     await assertHasAssist('''
 import 'package:flutter/material.dart';
 main() {
-  new Column(
-    children: <Widget>[
-      new Text('foo'),
-      new Padding(
+  Column(
+    children: [
+      Text('foo'),
+      Padding(
         padding: const EdgeInsets.all(8.0),
-        child: new Text('bar'),
+        child: Text('bar'),
       ),
-      new Text('baz'),
+      Text('baz'),
     ],
   );
 }
 ''');
   }
 
-  test_childrenMultipleIntoChild() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  Future<void> test_childrenMultipleIntoChild() async {
+    await resolveTestCode('''
 import 'package:flutter/material.dart';
 main() {
-  new Center(
-    child: new /*caret*/Row(
+  Center(
+    child: /*caret*/Row(
       children: [
-        new Text('aaa'),
-        new Text('bbb'),
+        Text('aaa'),
+        Text('bbb'),
       ],
     ),
   );
@@ -136,15 +140,14 @@ main() {
     await assertNoAssist();
   }
 
-  test_childrenOneIntoChild() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  Future<void> test_childrenOneIntoChild() async {
+    await resolveTestCode('''
 import 'package:flutter/material.dart';
 main() {
-  new Center(
-    child: /*caret*/new Column(
+  Center(
+    child: /*caret*/Column(
       children: [
-        new Text('foo'),
+        Text('foo'),
       ],
     ),
   );
@@ -153,21 +156,20 @@ main() {
     await assertHasAssist('''
 import 'package:flutter/material.dart';
 main() {
-  new Center(
-    child: /*caret*/new Text('foo'),
+  Center(
+    child: Text('foo'),
   );
 }
 ''');
   }
 
-  test_childrenOneIntoReturn() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  Future<void> test_childrenOneIntoReturn() async {
+    await resolveTestCode('''
 import 'package:flutter/material.dart';
 main() {
-  return /*caret*/new Column(
+  return /*caret*/Column(
     children: [
-      new Text('foo'),
+      Text('foo'),
     ],
   );
 }
@@ -175,36 +177,35 @@ main() {
     await assertHasAssist('''
 import 'package:flutter/material.dart';
 main() {
-  return /*caret*/new Text('foo');
+  return Text('foo');
 }
 ''');
   }
 
-  test_intoChildren() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  Future<void> test_intoChildren() async {
+    await resolveTestCode('''
 import 'package:flutter/material.dart';
 main() {
-  new Column(
-    children: <Widget>[
-      new Text('aaa'),
-      new /*caret*/Column(
+  Column(
+    children: [
+      Text('aaa'),
+      /*caret*/Column(
         children: [
-          new Row(
+          Row(
             children: [
-              new Text('bbb'),
-              new Text('ccc'),
+              Text('bbb'),
+              Text('ccc'),
             ],
           ),
-          new Row(
+          Row(
             children: [
-              new Text('ddd'),
-              new Text('eee'),
+              Text('ddd'),
+              Text('eee'),
             ],
           ),
         ],
       ),
-      new Text('fff'),
+      Text('fff'),
     ],
   );
 }
@@ -212,22 +213,22 @@ main() {
     await assertHasAssist('''
 import 'package:flutter/material.dart';
 main() {
-  new Column(
-    children: <Widget>[
-      new Text('aaa'),
-      new Row(
+  Column(
+    children: [
+      Text('aaa'),
+      Row(
         children: [
-          new Text('bbb'),
-          new Text('ccc'),
+          Text('bbb'),
+          Text('ccc'),
         ],
       ),
-      new Row(
+      Row(
         children: [
-          new Text('ddd'),
-          new Text('eee'),
+          Text('ddd'),
+          Text('eee'),
         ],
       ),
-      new Text('fff'),
+      Text('fff'),
     ],
   );
 }

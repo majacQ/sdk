@@ -4,21 +4,18 @@
 
 part of js_ast;
 
-typedef String Renamer(Name name);
-
 class JavaScriptPrintingOptions {
+  final bool utf8;
   final bool shouldCompressOutput;
   final bool minifyLocalVariables;
   final bool preferSemicolonToNewlineInMinifiedOutput;
-  final Renamer renamerForNames;
 
-  JavaScriptPrintingOptions(
-      {this.shouldCompressOutput: false,
-      this.minifyLocalVariables: false,
-      this.preferSemicolonToNewlineInMinifiedOutput: false,
-      this.renamerForNames: identityRenamer});
-
-  static String identityRenamer(Name name) => name.name;
+  const JavaScriptPrintingOptions({
+    this.utf8 = false,
+    this.shouldCompressOutput = false,
+    this.minifyLocalVariables = false,
+    this.preferSemicolonToNewlineInMinifiedOutput = false,
+  });
 }
 
 /// An environment in which JavaScript printing is done.  Provides emitting of
@@ -61,11 +58,10 @@ class SimpleJavaScriptPrintingContext extends JavaScriptPrintingContext {
   String getText() => buffer.toString();
 }
 
-String DebugPrint(Node node) {
-  JavaScriptPrintingOptions options = new JavaScriptPrintingOptions();
-  SimpleJavaScriptPrintingContext context =
-      new SimpleJavaScriptPrintingContext();
-  Printer printer = new Printer(options, context);
+String DebugPrint(Node node, {bool utf8 = false}) {
+  JavaScriptPrintingOptions options = JavaScriptPrintingOptions(utf8: utf8);
+  SimpleJavaScriptPrintingContext context = SimpleJavaScriptPrintingContext();
+  Printer printer = Printer(options, context);
   printer.visit(node);
   return context.getText();
 }
@@ -88,8 +84,8 @@ class Printer implements NodeVisitor {
   // A cache of all indentation strings used so far.
   List<String> _indentList = <String>[""];
 
-  static final identifierCharacterRegExp = new RegExp(r'^[a-zA-Z_0-9$]');
-  static final expressionContinuationRegExp = new RegExp(r'^[-+([]');
+  static final identifierCharacterRegExp = RegExp(r'^[a-zA-Z_0-9$]');
+  static final expressionContinuationRegExp = RegExp(r'^[-+([]');
 
   Printer(JavaScriptPrintingOptions options, JavaScriptPrintingContext context)
       : options = options,
@@ -223,6 +219,9 @@ class Printer implements NodeVisitor {
 
   void startNode(Node node) {
     currentNode = new EnterExitNode(currentNode, node);
+    if (node is DeferredExpression) {
+      startNode(node.value);
+    }
   }
 
   void enterNode() {
@@ -230,6 +229,9 @@ class Printer implements NodeVisitor {
   }
 
   void endNode(Node node) {
+    if (node is DeferredExpression) {
+      endNode(node.value);
+    }
     assert(currentNode.node == node);
     currentNode = currentNode.exitNode(context, _charCount);
   }
@@ -293,11 +295,16 @@ class Printer implements NodeVisitor {
     return false;
   }
 
+  /// Elide Blocks and DeferredStatements with Blocks as children.
   void blockOutWithoutBraces(Node node) {
     if (node is Block) {
       startNode(node);
       Block block = node;
       block.statements.forEach(blockOutWithoutBraces);
+      endNode(node);
+    } else if (node is DeferredStatement) {
+      startNode(node);
+      blockOutWithoutBraces(node.statement);
       endNode(node);
     } else {
       visit(node);
@@ -614,17 +621,17 @@ class Printer implements NodeVisitor {
     }
     out(")");
     switch (fun.asyncModifier) {
-      case const AsyncModifier.sync():
+      case AsyncModifier.sync:
         break;
-      case const AsyncModifier.async():
+      case AsyncModifier.async:
         out(' ', isWhitespace: true);
         out('async');
         break;
-      case const AsyncModifier.syncStar():
+      case AsyncModifier.syncStar:
         out(' ', isWhitespace: true);
         out('sync*');
         break;
-      case const AsyncModifier.asyncStar():
+      case AsyncModifier.asyncStar:
         out(' ', isWhitespace: true);
         out('async*');
         break;
@@ -660,7 +667,7 @@ class Printer implements NodeVisitor {
             // ({a: 2, b: 3}.toString()).
             (newAtStatementBegin &&
                 (node is NamedFunction ||
-                    node is Fun ||
+                    node is FunctionExpression ||
                     node is ObjectInitializer));
     if (needsParentheses) {
       inForInit = false;
@@ -715,25 +722,90 @@ class Printer implements NodeVisitor {
 
   static bool _isSmallInitialization(Node node) {
     if (node is VariableInitialization) {
-      Node value = node.value;
+      Node value = undefer(node.value);
       if (value == null) return true;
       if (value is This) return true;
       if (value is LiteralNull) return true;
       if (value is LiteralNumber) return true;
-      if (value is LiteralString && value.value.length <= 8) return true;
+      if (value is LiteralString && value.value.length <= 6) return true;
       if (value is ObjectInitializer && value.properties.isEmpty) return true;
       if (value is ArrayInitializer && value.elements.isEmpty) return true;
+      if (value is Name && value.name.length <= 6) return true;
     }
     return false;
   }
 
+  void _outputIncDec(String op, Expression variable, [Expression alias]) {
+    if (op == '+') {
+      if (lastCharCode == charCodes.$PLUS) out(" ", isWhitespace: true);
+      out('++');
+    } else {
+      if (lastCharCode == charCodes.$MINUS) out(" ", isWhitespace: true);
+      out('--');
+    }
+    if (alias != null) startNode(alias);
+    visitNestedExpression(variable, UNARY,
+        newInForInit: inForInit, newAtStatementBegin: false);
+    if (alias != null) endNode(alias);
+  }
+
   @override
   visitAssignment(Assignment assignment) {
+    /// To print assignments like `a = a + 1` and `a = a + b` compactly as
+    /// `++a` and `a += b` in the face of [DeferredExpression]s we detect the
+    /// pattern of the undeferred assignment.
+    String op = assignment.op;
+    Node leftHandSide = undefer(assignment.leftHandSide);
+    Node rightHandSide = undefer(assignment.value);
+    if ((op == '+' || op == '-') &&
+        leftHandSide is VariableUse &&
+        rightHandSide is LiteralNumber &&
+        rightHandSide.value == "1") {
+      // Output 'a += 1' as '++a' and 'a -= 1' as '--a'.
+      _outputIncDec(op, assignment.leftHandSide);
+      return;
+    }
+    if (!assignment.isCompound &&
+        leftHandSide is VariableUse &&
+        rightHandSide is Binary) {
+      Node rLeft = undefer(rightHandSide.left);
+      Node rRight = undefer(rightHandSide.right);
+      String op = rightHandSide.op;
+      if (op == '+' ||
+          op == '-' ||
+          op == '/' ||
+          op == '*' ||
+          op == '%' ||
+          op == '^' ||
+          op == '&' ||
+          op == '|') {
+        if (rLeft is VariableUse && rLeft.name == leftHandSide.name) {
+          // Output 'a = a + 1' as '++a' and 'a = a - 1' as '--a'.
+          if ((op == '+' || op == '-') &&
+              rRight is LiteralNumber &&
+              rRight.value == "1") {
+            _outputIncDec(op, assignment.leftHandSide, rightHandSide.left);
+            return;
+          }
+          // Output 'a = a + b' as 'a += b'.
+          startNode(rightHandSide.left);
+          visitNestedExpression(assignment.leftHandSide, CALL,
+              newInForInit: inForInit, newAtStatementBegin: atStatementBegin);
+          endNode(rightHandSide.left);
+          spaceOut();
+          out(op);
+          out("=");
+          spaceOut();
+          visitNestedExpression(rRight, ASSIGNMENT,
+              newInForInit: inForInit, newAtStatementBegin: false);
+          return;
+        }
+      }
+    }
     visitNestedExpression(assignment.leftHandSide, CALL,
         newInForInit: inForInit, newAtStatementBegin: atStatementBegin);
     if (assignment.value != null) {
       spaceOut();
-      String op = assignment.op;
       if (op != null) out(op);
       out("=");
       spaceOut();
@@ -947,24 +1019,24 @@ class Printer implements NodeVisitor {
   }
 
   bool isValidJavaScriptId(String field) {
-    if (field.length < 3) return false;
+    if (field.length == 0) return false;
     // Ignore the leading and trailing string-delimiter.
-    for (int i = 1; i < field.length - 1; i++) {
+    for (int i = 0; i < field.length; i++) {
       // TODO(floitsch): allow more characters.
       int charCode = field.codeUnitAt(i);
       if (!(charCodes.$a <= charCode && charCode <= charCodes.$z ||
           charCodes.$A <= charCode && charCode <= charCodes.$Z ||
           charCode == charCodes.$$ ||
           charCode == charCodes.$_ ||
-          i != 1 && isDigit(charCode))) {
+          i > 0 && isDigit(charCode))) {
         return false;
       }
     }
     // TODO(floitsch): normally we should also check that the field is not a
     // reserved word.  We don't generate fields with reserved word names except
     // for 'super'.
-    if (field == '"super"') return false;
-    if (field == '"catch"') return false;
+    if (field == 'super') return false;
+    if (field == 'catch') return false;
     return true;
   }
 
@@ -972,36 +1044,41 @@ class Printer implements NodeVisitor {
   void visitAccess(PropertyAccess access) {
     visitNestedExpression(access.receiver, CALL,
         newInForInit: inForInit, newAtStatementBegin: atStatementBegin);
-    Node selector = access.selector;
+
+    Node selector = undefer(access.selector);
     if (selector is LiteralString) {
-      LiteralString selectorString = selector;
-      String fieldWithQuotes = selectorString.value;
-      if (isValidJavaScriptId(fieldWithQuotes)) {
-        if (access.receiver is LiteralNumber &&
-            lastCharCode != charCodes.$CLOSE_PAREN) {
-          out(" ", isWhitespace: true);
-        }
-        out(".");
-        startNode(selector);
-        out(fieldWithQuotes.substring(1, fieldWithQuotes.length - 1));
-        endNode(selector);
-        return;
-      }
+      _dotString(access.selector, access.receiver, selector.value);
+      return;
+    } else if (selector is StringConcatenation) {
+      _dotString(access.selector, access.receiver,
+          _StringContentsCollector().collect(selector));
+      return;
     } else if (selector is Name) {
-      if (access.receiver is LiteralNumber &&
-          lastCharCode != charCodes.$CLOSE_PAREN) {
-        out(" ", isWhitespace: true);
-      }
-      out(".");
-      startNode(selector);
-      selector.accept(this);
-      endNode(selector);
+      _dotString(access.selector, access.receiver, selector.name);
       return;
     }
-    out("[");
-    visitNestedExpression(selector, EXPRESSION,
+
+    out('[');
+    visitNestedExpression(access.selector, EXPRESSION,
         newInForInit: false, newAtStatementBegin: false);
-    out("]");
+    out(']');
+  }
+
+  void _dotString(Node selector, Node receiver, String selectorValue) {
+    if (isValidJavaScriptId(selectorValue)) {
+      if (undefer(receiver) is LiteralNumber &&
+          lastCharCode != charCodes.$CLOSE_PAREN) {
+        out(' ', isWhitespace: true);
+      }
+      out('.');
+      startNode(selector);
+      out(selectorValue);
+      endNode(selector);
+    } else {
+      out('[');
+      _handleString(selectorValue);
+      out(']');
+    }
   }
 
   @override
@@ -1025,10 +1102,62 @@ class Printer implements NodeVisitor {
   }
 
   @override
+  void visitArrowFunction(ArrowFunction fun) {
+    VarCollector vars = new VarCollector();
+    vars.visitArrowFunction(fun);
+    currentNode.closingPosition = arrowFunctionOut(fun, vars);
+  }
+
+  int arrowFunctionOut(ArrowFunction fun, VarCollector vars) {
+    // TODO: support static, get/set, async, and generators.
+    localNamer.enterScope(vars);
+    final List<Parameter> params = fun.params;
+    if (params.length == 1 && params.first is VariableReference) {
+      visitNestedExpression(params.single, ASSIGNMENT,
+          newInForInit: false, newAtStatementBegin: false);
+    } else {
+      out("(");
+      if (params != null) {
+        visitCommaSeparated(fun.params, PRIMARY,
+            newInForInit: false, newAtStatementBegin: false);
+      }
+      out(")");
+    }
+    spaceOut();
+    out("=>");
+    spaceOut();
+    int closingPosition;
+    Node body = fun.body;
+    if (body is Block) {
+      closingPosition =
+          blockOut(body, shouldIndent: false, needsNewline: false);
+    } else {
+      // Object initializers require parentheses to disambiguate
+      // AssignmentExpression from FunctionBody. See:
+      // https://tc39.github.io/ecma262/#sec-arrow-function-definitions
+      bool needsParens = body is ObjectInitializer;
+      if (needsParens) out("(");
+      visitNestedExpression(body, ASSIGNMENT,
+          newInForInit: false, newAtStatementBegin: false);
+      if (needsParens) out(")");
+      closingPosition = _charCount - 1;
+    }
+    localNamer.leaveScope();
+    return closingPosition;
+  }
+
+  @override
   visitDeferredExpression(DeferredExpression node) {
     // Continue printing with the expression value.
     assert(node.precedenceLevel == node.value.precedenceLevel);
     node.value.accept(this);
+  }
+
+  @override
+  visitDeferredStatement(DeferredStatement node) {
+    startNode(node);
+    visit(node.statement);
+    endNode(node);
   }
 
   outputNumberWithRequiredWhitespace(String number) {
@@ -1056,17 +1185,30 @@ class Printer implements NodeVisitor {
 
   @override
   void visitLiteralString(LiteralString node) {
-    out(node.value);
+    _handleString(node.value);
   }
 
   @override
   visitStringConcatenation(StringConcatenation node) {
-    node.visitChildren(this);
+    _handleString(_StringContentsCollector().collect(node));
+  }
+
+  void _handleString(String value) {
+    final kind = StringToSource.analyze(value, utf8: options.utf8);
+    out(kind.quote);
+    if (kind.simple) {
+      out(value);
+    } else {
+      final sb = StringBuffer();
+      StringToSource.writeString(sb, value, kind, utf8: options.utf8);
+      out(sb.toString());
+    }
+    out(kind.quote);
   }
 
   @override
   visitName(Name node) {
-    out(options.renamerForNames(node));
+    out(node.name);
   }
 
   @override
@@ -1155,27 +1297,63 @@ class Printer implements NodeVisitor {
 
   @override
   void visitProperty(Property node) {
-    startNode(node.name);
-    if (node.name is LiteralString) {
-      LiteralString nameString = node.name;
-      String name = nameString.value;
-      if (isValidJavaScriptId(name)) {
-        out(name.substring(1, name.length - 1));
-      } else {
-        out(name);
-      }
-    } else if (node.name is Name) {
-      node.name.accept(this);
-    } else {
-      assert(node.name is LiteralNumber);
-      LiteralNumber nameNumber = node.name;
-      out(nameNumber.value);
-    }
-    endNode(node.name);
+    propertyNameOut(node);
     out(":");
     spaceOut();
     visitNestedExpression(node.value, ASSIGNMENT,
         newInForInit: false, newAtStatementBegin: false);
+  }
+
+  @override
+  visitMethodDefinition(MethodDefinition node) {
+    propertyNameOut(node);
+    VarCollector vars = new VarCollector();
+    vars.visitMethodDefinition(node);
+    startNode(node.function);
+    currentNode.closingPosition = methodOut(node, vars);
+    endNode(node.function);
+  }
+
+  int methodOut(MethodDefinition node, VarCollector vars) {
+    // TODO: support static, get/set, async, and generators.
+    Fun fun = node.function;
+    localNamer.enterScope(vars);
+    out("(");
+    if (fun.params != null) {
+      visitCommaSeparated(fun.params, PRIMARY,
+          newInForInit: false, newAtStatementBegin: false);
+    }
+    out(")");
+    spaceOut();
+    int closingPosition =
+        blockOut(fun.body, shouldIndent: false, needsNewline: false);
+    localNamer.leaveScope();
+    return closingPosition;
+  }
+
+  void propertyNameOut(Property node) {
+    startNode(node.name);
+    Node name = undefer(node.name);
+    if (name is LiteralString) {
+      _outPropertyName(name.value);
+    } else if (name is Name) {
+      _outPropertyName(name.name);
+    } else if (name is LiteralNumber) {
+      out(name.value);
+    } else {
+      // TODO(sra): Handle StringConcatenation.
+      // TODO(sra): Handle general expressions, .e.g. `{[x]: 1}`.
+      throw StateError('Unexpected Property name: $name');
+    }
+    endNode(node.name);
+  }
+
+  void _outPropertyName(String name) {
+    if (isValidJavaScriptId(name)) {
+      out(name);
+    } else {
+      _handleString(name);
+    }
   }
 
   @override
@@ -1185,21 +1363,7 @@ class Printer implements NodeVisitor {
 
   @override
   void visitLiteralExpression(LiteralExpression node) {
-    String template = node.template;
-    List<Expression> inputs = node.inputs;
-
-    List<String> parts = template.split('#');
-    int inputsLength = inputs == null ? 0 : inputs.length;
-    if (parts.length != inputsLength + 1) {
-      context.error('Wrong number of arguments for JS: $template');
-    }
-    // Code that uses JS must take care of operator precedences, and
-    // put parenthesis if needed.
-    out(parts[0]);
-    for (int i = 0; i < inputsLength; i++) {
-      visit(inputs[i]);
-      out(parts[i + 1]);
-    }
+    out(node.template);
   }
 
   @override
@@ -1258,6 +1422,44 @@ class Printer implements NodeVisitor {
   }
 }
 
+class _StringContentsCollector extends BaseVisitor<void> {
+  final StringBuffer _buffer = StringBuffer();
+
+  String collect(Node node) {
+    node.accept(this);
+    return _buffer.toString();
+  }
+
+  void _add(String value) {
+    _buffer.write(value);
+  }
+
+  @override
+  void visitNode(Node node) {
+    throw StateError('Node should not be part of StringConcatenation: $node');
+  }
+
+  @override
+  void visitLiteralString(LiteralString node) {
+    _add(node.value);
+  }
+
+  @override
+  void visitLiteralNumber(LiteralNumber node) {
+    _add(node.value);
+  }
+
+  @override
+  void visitName(Name node) {
+    _add(node.name);
+  }
+
+  @override
+  void visitStringConcatenation(StringConcatenation node) {
+    node.visitChildren(this);
+  }
+}
+
 class OrderedSet<T> {
   final Set<T> set;
   final List<T> list;
@@ -1297,7 +1499,7 @@ class VarCollector extends BaseVisitor {
   void forEachVar(void fn(String v)) => vars.forEach(fn);
   void forEachParam(void fn(String p)) => params.forEach(fn);
 
-  void collectVarsInFunction(Fun fun) {
+  void collectVarsInFunction(FunctionExpression fun) {
     if (!nested) {
       nested = true;
       if (fun.params != null) {
@@ -1305,7 +1507,7 @@ class VarCollector extends BaseVisitor {
           params.add(fun.params[i].name);
         }
       }
-      visitBlock(fun.body);
+      fun.body.accept(this);
       nested = false;
     }
   }
@@ -1320,7 +1522,16 @@ class VarCollector extends BaseVisitor {
     collectVarsInFunction(namedFunction.function);
   }
 
+  void visitMethodDefinition(MethodDefinition method) {
+    // Note that we don't bother collecting the name of the function.
+    collectVarsInFunction(method.function);
+  }
+
   void visitFun(Fun fun) {
+    collectVarsInFunction(fun);
+  }
+
+  void visitArrowFunction(ArrowFunction fun) {
     collectVarsInFunction(fun);
   }
 
@@ -1358,6 +1569,10 @@ class DanglingElseVisitor extends BaseVisitor<bool> {
   bool visitBlock(Block node) => false;
   bool visitExpressionStatement(ExpressionStatement node) => false;
   bool visitEmptyStatement(EmptyStatement node) => false;
+  bool visitDeferredStatement(DeferredStatement node) {
+    return node.statement.accept(this);
+  }
+
   bool visitIf(If node) {
     if (!node.hasElse) return true;
     return node.otherwise.accept(this);

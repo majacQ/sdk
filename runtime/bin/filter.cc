@@ -240,7 +240,8 @@ void FUNCTION_NAME(Filter_Processed)(Dart_NativeArguments args) {
   intptr_t read = filter->Processed(
       filter->processed_buffer(), filter->processed_buffer_size(), flush, end);
   if (read < 0) {
-    Dart_ThrowException(DartUtils::NewInternalError("Filter error, bad data"));
+    Dart_ThrowException(
+        DartUtils::NewDartFormatException("Filter error, bad data"));
   } else if (read == 0) {
     Dart_SetReturnValue(args, Dart_Null());
   } else {
@@ -255,9 +256,7 @@ void FUNCTION_NAME(Filter_Processed)(Dart_NativeArguments args) {
   }
 }
 
-static void DeleteFilter(void* isolate_data,
-                         Dart_WeakPersistentHandle handle,
-                         void* filter_pointer) {
+static void DeleteFilter(void* isolate_data, void* filter_pointer) {
   Filter* filter = reinterpret_cast<Filter*>(filter_pointer);
   delete filter;
 }
@@ -271,8 +270,8 @@ Dart_Handle Filter::SetFilterAndCreateFinalizer(Dart_Handle filter,
   if (Dart_IsError(err)) {
     return err;
   }
-  Dart_NewWeakPersistentHandle(filter, reinterpret_cast<void*>(filter_pointer),
-                               size, DeleteFilter);
+  Dart_NewFinalizableHandle(filter, reinterpret_cast<void*>(filter_pointer),
+                            size, DeleteFilter);
   return err;
 }
 

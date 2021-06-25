@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library test.declarations_location;
 
 import "dart:mirrors";
@@ -25,11 +27,12 @@ class C<S, @metadata T> {
 // any number of absolute paths.
 expectLocation(
     DeclarationMirror mirror, String uriSuffix, int line, int column) {
-  Uri uri = mirror.location.sourceUri;
+  SourceLocation location = mirror.location;
+  Uri uri = location.sourceUri;
   Expect.isTrue(
       uri.toString().endsWith(uriSuffix), "Expected suffix $uriSuffix in $uri");
-  Expect.equals(line, mirror.location.line, "line");
-  Expect.equals(column, mirror.location.column, "column");
+  Expect.equals(line, location.line, "line");
+  Expect.equals(column, location.column, "column");
 }
 
 main() {

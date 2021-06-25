@@ -9,6 +9,8 @@
 // VMOptions=--short_socket_write
 // VMOptions=--short_socket_read --short_socket_write
 
+// @dart = 2.9
+
 import "package:expect/expect.dart";
 import 'dart:async';
 import 'dart:io';
@@ -38,5 +40,11 @@ main() {
     scriptFile = new File("../tests/standalone_2/io/$scriptName");
   }
   Expect.isTrue(scriptFile.existsSync());
-  test(Process.start(Platform.executable, [scriptFile.path]), 0);
+  test(
+      Process.start(
+          Platform.executable,
+          []
+            ..addAll(Platform.executableArguments)
+            ..add(scriptFile.path)),
+      0);
 }

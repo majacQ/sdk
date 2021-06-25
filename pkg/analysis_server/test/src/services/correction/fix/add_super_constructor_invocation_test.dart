@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'fix_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(AddSuperConstructorInvocationTest);
   });
@@ -19,8 +19,8 @@ class AddSuperConstructorInvocationTest extends FixProcessorTest {
   @override
   FixKind get kind => DartFixKind.ADD_SUPER_CONSTRUCTOR_INVOCATION;
 
-  test_hasInitializers() async {
-    await resolveTestUnit('''
+  Future<void> test_hasInitializers() async {
+    await resolveTestCode('''
 class A {
   A(int p);
 }
@@ -40,8 +40,8 @@ class B extends A {
 ''');
   }
 
-  test_named() async {
-    await resolveTestUnit('''
+  Future<void> test_named() async {
+    await resolveTestCode('''
 class A {
   A.named(int p);
 }
@@ -59,8 +59,8 @@ class B extends A {
 ''');
   }
 
-  test_named_private() async {
-    await resolveTestUnit('''
+  Future<void> test_named_private() async {
+    await resolveTestCode('''
 class A {
   A._named(int p);
 }
@@ -71,8 +71,8 @@ class B extends A {
     await assertNoFix();
   }
 
-  test_requiredAndNamed() async {
-    await resolveTestUnit('''
+  Future<void> test_requiredAndNamed() async {
+    await resolveTestCode('''
 class A {
   A(bool p1, int p2, double p3, String p4, {p5});
 }
@@ -90,8 +90,8 @@ class B extends A {
 ''');
   }
 
-  test_typeArgument() async {
-    await resolveTestUnit('''
+  Future<void> test_typeArgument() async {
+    await resolveTestCode('''
 class A<T> {
   A(T p);
 }

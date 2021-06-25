@@ -1,7 +1,9 @@
+
+// @dart = 2.9
 library async_cancellingisolate;
 
 import 'dart:async';
-import 'package:unittest/unittest.dart';
+import 'package:expect/minitest.dart';
 
 main(message, replyTo) {
   var command = message.first;

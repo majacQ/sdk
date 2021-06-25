@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'assist_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(FlutterWrapStreamBuilderTest);
   });
@@ -19,38 +19,44 @@ class FlutterWrapStreamBuilderTest extends AssistProcessorTest {
   @override
   AssistKind get kind => DartAssistKind.FLUTTER_WRAP_STREAM_BUILDER;
 
-  test_aroundStreamBuilder() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  @override
+  void setUp() {
+    super.setUp();
+    writeTestPackageConfig(
+      flutter: true,
+    );
+  }
+
+  Future<void> test_aroundStreamBuilder() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 
-main() {
+void f(Stream<int> s) {
   /*caret*/StreamBuilder(
-    stream: null,
-    builder: (context, snapshot) => null,
+    stream: s,
+    builder: (context, snapshot) => Text(''),
   );
 }
 ''');
     await assertNoAssist();
   }
 
-  test_aroundText() async {
-    addFlutterPackage();
-    await resolveTestUnit('''
+  Future<void> test_aroundText() async {
+    await resolveTestCode('''
 import 'package:flutter/widgets.dart';
 
 main() {
-  /*caret*/new Text('a');
+  /*caret*/Text('a');
 }
 ''');
     await assertHasAssist('''
 import 'package:flutter/widgets.dart';
 
 main() {
-  /*caret*/StreamBuilder<Object>(
+  StreamBuilder<Object>(
     stream: null,
     builder: (context, snapshot) {
-      return new Text('a');
+      return Text('a');
     }
   );
 }

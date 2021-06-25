@@ -7,6 +7,8 @@
 // VMOptions=--short_socket_write
 // VMOptions=--short_socket_read --short_socket_write
 
+// @dart = 2.9
+
 import "dart:async";
 import "dart:io";
 
@@ -79,13 +81,14 @@ void testCancelConnect() {
   RawSocket.startConnect(InternetAddress.loopbackIPv4, 0)
       .then((ConnectionTask<RawSocket> task) {
     task.cancel();
-    task.socket.catchError((error) {
-      Expect.isTrue(error is SocketException);
-      asyncEnd();
-    });
     task.socket.then((s) {
       Expect.fail("Unreachable");
+    }, onError: (e) {
+      Expect.isTrue(e is SocketException);
+      asyncEnd();
     });
+  }, onError: (e) {
+    Expect.fail("Unreachable");
   });
 }
 
@@ -428,7 +431,7 @@ void testSocketZone() {
 void testSocketZoneError() {
   asyncStart();
   Expect.equals(Zone.root, Zone.current);
-  runZoned(() {
+  runZonedGuarded(() {
     Expect.notEquals(Zone.root, Zone.current);
     RawServerSocket.bind(InternetAddress.loopbackIPv4, 0).then((server) {
       Expect.notEquals(Zone.root, Zone.current);
@@ -453,7 +456,7 @@ void testSocketZoneError() {
         socket.close();
       });
     });
-  }, onError: (e) {
+  }, (e, s) {
     asyncEnd();
   });
 }
@@ -470,6 +473,21 @@ void testClosedError() {
       Expect.throws(() => socket.remotePort, (e) => e is SocketException);
       Expect.throws(() => socket.remoteAddress, (e) => e is SocketException);
       asyncEnd();
+    });
+  });
+}
+
+void testClosedServer() {
+  asyncStart();
+  RawServerSocket.bind(InternetAddress.loopbackIPv4, 0).then((server) {
+    int port = server.port;
+    server.close().then((_) {
+      RawSocket.connect(InternetAddress.loopbackIPv4, server.port).then((_) {
+        Expect.fail('Connecting to the closed server socket should fail');
+      }, onError: (e) {
+        Expect.isTrue(e is SocketException);
+        asyncEnd();
+      });
     });
   });
 }
@@ -491,5 +509,6 @@ main() {
   testSocketZone();
   testSocketZoneError();
   testClosedError();
+  testClosedServer();
   asyncEnd();
 }

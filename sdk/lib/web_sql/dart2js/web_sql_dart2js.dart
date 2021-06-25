@@ -9,6 +9,7 @@
  * The [dart:indexed_db] APIs is a recommended alternatives.
  *
  * {@category Web}
+ * {@nodoc}
  */
 library dart.dom.web_sql;
 
@@ -23,6 +24,7 @@ import 'dart:_interceptors' show Interceptor;
 // https://code.google.com/p/dart/wiki/ContributingHTMLDocumentation
 // Auto-generated dart:audio library.
 
+@deprecated
 import 'dart:_js_helper'
     show
         applyExtension,
@@ -30,7 +32,8 @@ import 'dart:_js_helper'
         Creates,
         JSName,
         Native,
-        JavaScriptIndexingBehavior;
+        JavaScriptIndexingBehavior,
+        Returns;
 
 // Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
@@ -78,8 +81,9 @@ class SqlDatabase extends Interceptor {
   /// Checks if this type is supported on the current platform.
   static bool get supported => JS('bool', '!!(window.openDatabase)');
 
-  final String version;
+  String? get version native;
 
+  @JSName('changeVersion')
   /**
    * Atomically update the database version to [newVersion], asynchronously
    * running [callback] on the [SqlTransaction] representing this
@@ -94,18 +98,55 @@ class SqlDatabase extends Interceptor {
    *
    * * [Database.changeVersion](http://www.w3.org/TR/webdatabase/#dom-database-changeversion) from W3C.
    */
-  void changeVersion(String oldVersion, String newVersion,
-      [SqlTransactionCallback callback,
-      SqlTransactionErrorCallback errorCallback,
-      VoidCallback successCallback]) native;
+  void _changeVersion(String oldVersion, String newVersion,
+      [SqlTransactionCallback? callback,
+      SqlTransactionErrorCallback? errorCallback,
+      VoidCallback? successCallback]) native;
 
-  void readTransaction(SqlTransactionCallback callback,
-      [SqlTransactionErrorCallback errorCallback,
-      VoidCallback successCallback]) native;
+  @JSName('changeVersion')
+  /**
+   * Atomically update the database version to [newVersion], asynchronously
+   * running [callback] on the [SqlTransaction] representing this
+   * [changeVersion] transaction.
+   *
+   * If [callback] runs successfully, then [successCallback] is called.
+   * Otherwise, [errorCallback] is called.
+   *
+   * [oldVersion] should match the database's current [version] exactly.
+   *
+   * See also:
+   *
+   * * [Database.changeVersion](http://www.w3.org/TR/webdatabase/#dom-database-changeversion) from W3C.
+   */
+  Future<SqlTransaction> changeVersion(String oldVersion, String newVersion) {
+    var completer = new Completer<SqlTransaction>();
+    _changeVersion(oldVersion, newVersion, (value) {
+      completer.complete(value);
+    }, (error) {
+      completer.completeError(error);
+    });
+    return completer.future;
+  }
+
+  @JSName('readTransaction')
+  void _readTransaction(SqlTransactionCallback callback,
+      [SqlTransactionErrorCallback? errorCallback,
+      VoidCallback? successCallback]) native;
+
+  @JSName('readTransaction')
+  Future<SqlTransaction> readTransaction() {
+    var completer = new Completer<SqlTransaction>();
+    _readTransaction((value) {
+      completer.complete(value);
+    }, (error) {
+      completer.completeError(error);
+    });
+    return completer.future;
+  }
 
   void transaction(SqlTransactionCallback callback,
-      [SqlTransactionErrorCallback errorCallback,
-      VoidCallback successCallback]) native;
+      [SqlTransactionErrorCallback? errorCallback,
+      VoidCallback? successCallback]) native;
 
   @JSName('transaction')
   Future<SqlTransaction> transaction_future() {
@@ -146,9 +187,9 @@ class SqlError extends Interceptor {
 
   static const int VERSION_ERR = 2;
 
-  final int code;
+  int? get code native;
 
-  final String message;
+  String? get message native;
 }
 // Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
@@ -161,11 +202,11 @@ class SqlResultSet extends Interceptor {
     throw new UnsupportedError("Not supported");
   }
 
-  final int insertId;
+  int? get insertId native;
 
-  final SqlResultSetRowList rows;
+  SqlResultSetRowList? get rows native;
 
-  final int rowsAffected;
+  int? get rowsAffected native;
 }
 // Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
@@ -185,7 +226,7 @@ class SqlResultSetRowList extends Interceptor
   Map operator [](int index) {
     if (JS("bool", "# >>> 0 !== # || # >= #", index, index, index, length))
       throw new RangeError.index(index, this);
-    return this.item(index);
+    return this.item(index)!;
   }
 
   void operator []=(int index, Map value) {
@@ -225,7 +266,7 @@ class SqlResultSetRowList extends Interceptor
   Map elementAt(int index) => this[index];
   // -- end List<Map> mixins.
 
-  Map item(int index) {
+  Map? item(int index) {
     return convertNativeToDart_Dictionary(_item_1(index));
   }
 
@@ -249,12 +290,12 @@ class SqlTransaction extends Interceptor {
 
   @JSName('executeSql')
   void _executeSql(String sqlStatement,
-      [List arguments,
-      SqlStatementCallback callback,
-      SqlStatementErrorCallback errorCallback]) native;
+      [List? arguments,
+      SqlStatementCallback? callback,
+      SqlStatementErrorCallback? errorCallback]) native;
 
   @JSName('executeSql')
-  Future<SqlResultSet> executeSql(String sqlStatement, [List arguments]) {
+  Future<SqlResultSet> executeSql(String sqlStatement, [List? arguments]) {
     var completer = new Completer<SqlResultSet>();
     _executeSql(sqlStatement, arguments, (transaction, resultSet) {
       applyExtension('SQLResultSet', resultSet);

@@ -9,18 +9,17 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
-import '../compiler.dart' as api show Diagnostic;
+import 'package:front_end/src/api_unstable/dart2js.dart' as fe;
+
 import '../compiler_new.dart' as api;
 import '../compiler_new.dart';
 import 'colors.dart' as colors;
 import 'dart2js.dart' show AbortLeg;
-import 'filenames.dart';
 import 'io/source_file.dart';
-import 'util/uri_extras.dart';
 
 abstract class SourceFileProvider implements CompilerInput {
   bool isWindows = (Platform.operatingSystem == 'windows');
-  Uri cwd = currentDirectory;
+  Uri cwd = Uri.base;
   Map<Uri, api.Input> utf8SourceFiles = <Uri, api.Input>{};
   Map<Uri, api.Input> binarySourceFiles = <Uri, api.Input>{};
   int dartCharactersRead = 0;
@@ -107,7 +106,7 @@ abstract class SourceFileProvider implements CompilerInput {
         .getUrl(resourceUri)
         .then((HttpClientRequest request) => request.close())
         .then((HttpClientResponse response) {
-      if (response.statusCode != HttpStatus.OK) {
+      if (response.statusCode != HttpStatus.ok) {
         String msg = 'Failure getting $resourceUri: '
             '${response.statusCode} ${response.reasonPhrase}';
         throw msg;
@@ -145,7 +144,7 @@ abstract class SourceFileProvider implements CompilerInput {
     throw "unimplemented";
   }
 
-  relativizeUri(Uri uri) => relativize(cwd, uri, isWindows);
+  relativizeUri(Uri uri) => fe.relativizeUri(cwd, uri, isWindows);
 
   SourceFile<List<int>> getUtf8SourceFile(Uri resourceUri) {
     return utf8SourceFiles[resourceUri];
@@ -176,6 +175,7 @@ List<int> readAll(String filename, {bool zeroTerminated: true}) {
 class CompilerSourceFileProvider extends SourceFileProvider {
   // TODO(johnniwinther): Remove this when no longer needed for the old compiler
   // API.
+  @override
   Future<List<int>> call(Uri resourceUri) =>
       readFromUri(resourceUri).then((input) => input.data);
 
@@ -364,6 +364,9 @@ class RandomAccessFileOutputProvider implements CompilerOutput {
         }
         break;
       case OutputType.debug:
+        if (name == '') {
+          name = out.pathSegments.last;
+        }
         uri = out.resolve('$name.$extension');
         break;
       default:
@@ -372,6 +375,7 @@ class RandomAccessFileOutputProvider implements CompilerOutput {
     return uri;
   }
 
+  @override
   OutputSink createOutputSink(String name, String extension, OutputType type) {
     Uri uri = createUri(name, extension, type);
     bool isPrimaryOutput = uri == out;
@@ -382,12 +386,12 @@ class RandomAccessFileOutputProvider implements CompilerOutput {
 
     RandomAccessFile output;
     try {
-      output = new File(uri.toFilePath()).openSync(mode: FileMode.WRITE);
+      output = new File(uri.toFilePath()).openSync(mode: FileMode.write);
     } on FileSystemException catch (e) {
       onFailure('$e');
     }
 
-    allOutputFiles.add(relativize(currentDirectory, uri, Platform.isWindows));
+    allOutputFiles.add(fe.relativizeUri(Uri.base, uri, Platform.isWindows));
 
     int charactersWritten = 0;
 
@@ -420,9 +424,9 @@ class RandomAccessFileOutputProvider implements CompilerOutput {
 
   @override
   BinaryOutputSink createBinarySink(Uri uri) {
-    uri = currentDirectory.resolveUri(uri);
+    uri = Uri.base.resolveUri(uri);
 
-    allOutputFiles.add(relativize(currentDirectory, uri, Platform.isWindows));
+    allOutputFiles.add(fe.relativizeUri(Uri.base, uri, Platform.isWindows));
 
     if (uri.scheme != 'file') {
       onFailure('Unhandled scheme ${uri.scheme} in $uri.');
@@ -430,7 +434,7 @@ class RandomAccessFileOutputProvider implements CompilerOutput {
 
     RandomAccessFile output;
     try {
-      output = new File(uri.toFilePath()).openSync(mode: FileMode.WRITE);
+      output = new File(uri.toFilePath()).openSync(mode: FileMode.write);
     } on FileSystemException catch (e) {
       onFailure('$e');
     }
@@ -474,8 +478,10 @@ class _OutputSinkWrapper extends OutputSink {
 
   _OutputSinkWrapper(this.onAdd, this.onClose);
 
+  @override
   void add(String data) => onAdd(data);
 
+  @override
   void close() => onClose();
 }
 
@@ -485,9 +491,11 @@ class _BinaryOutputSinkWrapper extends BinaryOutputSink {
 
   _BinaryOutputSinkWrapper(this.onWrite, this.onClose);
 
+  @override
   void write(List<int> data, [int start = 0, int end]) =>
       onWrite(data, start, end);
 
+  @override
   void close() => onClose();
 }
 
@@ -532,7 +540,7 @@ class BazelInputProvider extends SourceFileProvider {
   BazelInputProvider(List<String> searchPaths)
       : dirs = searchPaths.map(_resolve).toList();
 
-  static Uri _resolve(String path) => currentDirectory.resolve(path);
+  static Uri _resolve(String path) => Uri.base.resolve(path);
 
   @override
   Future<api.Input<List<int>>> readFromUri(Uri uri,
@@ -568,6 +576,66 @@ class BazelInputProvider extends SourceFileProvider {
     if (path.startsWith('/bazel-root')) {
       path = path.substring('/bazel-root/'.length);
       for (var dir in dirs) {
+        var file = dir.resolve(path);
+        if (new File.fromUri(file).existsSync()) {
+          return super.autoReadFromFile(file);
+        }
+      }
+    }
+    return null;
+  }
+}
+
+/// Adapter to support one or more synthetic uri schemes.
+///
+/// These custom uris map to one or more real directories on the file system,
+/// providing a merged view - or "overlay" file system.
+///
+/// This also allows for hermetic builds which do not encode machine specific
+/// absolute uris by creating a synthetic "root" of the file system.
+///
+/// TODO(sigmund): Remove the [BazelInputProvider] in favor of this.
+/// TODO(sigmund): Remove this and use the common `MultiRootFileSystem`
+/// implementation.
+class MultiRootInputProvider extends SourceFileProvider {
+  final List<Uri> roots;
+  final String markerScheme;
+
+  MultiRootInputProvider(this.markerScheme, this.roots);
+
+  @override
+  Future<api.Input<List<int>>> readFromUri(Uri uri,
+      {InputKind inputKind: InputKind.UTF8}) async {
+    var resolvedUri = uri;
+    if (resolvedUri.scheme == markerScheme) {
+      var path = resolvedUri.path;
+      if (path.startsWith('/')) path = path.substring(1);
+      for (var dir in roots) {
+        var fileUri = dir.resolve(path);
+        if (await new File.fromUri(fileUri).exists()) {
+          resolvedUri = fileUri;
+          break;
+        }
+      }
+    }
+    api.Input<List<int>> result =
+        await readBytesFromUri(resolvedUri, inputKind);
+    switch (inputKind) {
+      case InputKind.UTF8:
+        utf8SourceFiles[uri] = utf8SourceFiles[resolvedUri];
+        break;
+      case InputKind.binary:
+        binarySourceFiles[uri] = binarySourceFiles[resolvedUri];
+        break;
+    }
+    return result;
+  }
+
+  @override
+  api.Input autoReadFromFile(Uri resourceUri) {
+    if (resourceUri.scheme == markerScheme) {
+      var path = resourceUri.path;
+      for (var dir in roots) {
         var file = dir.resolve(path);
         if (new File.fromUri(file).existsSync()) {
           return super.autoReadFromFile(file);

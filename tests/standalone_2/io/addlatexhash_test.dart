@@ -3,6 +3,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 // testing ../../../tools/addlatexhash.dart
 
 import 'dart:io';
@@ -14,9 +16,7 @@ final dartRootDir = path.dirname(path.dirname(execDir));
 final dartRootPath = dartRootDir.toString();
 
 List<String> packageOptions() {
-  if (Platform.packageRoot != null) {
-    return <String>['--package-root=${Platform.packageRoot}'];
-  } else if (Platform.packageConfig != null) {
+  if (Platform.packageConfig != null) {
     return <String>['--packages=${Platform.packageConfig}'];
   } else {
     return <String>[];
@@ -92,7 +92,7 @@ testSameHash(String tmpDirPath) {
 
   // actions to take
   runAddHash() {
-    var args = packageOptions();
+    var args = <String>[]..addAll(Platform.executableArguments);
     args.addAll([
       path.join(dartRootPath, "tools", "addlatexhash.dart"),
       tmpPar8timesPath,

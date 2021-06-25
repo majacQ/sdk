@@ -18,11 +18,11 @@
         '^tools/buildtools/'
       )
     },
+    'experimental_features': {
+      'filepath': 'tools/experimental_features\\.yaml',
+    },
     'front_end': {
       'filepath': '^pkg/front_end',
-    },
-    'http': {
-      'filepath': '^sdk/lib/_http',
     },
     'kernel': {
       'filepath': '^pkg/kernel',
@@ -30,11 +30,19 @@
     'dart2js': {
       'filepath': (
         '^pkg/compiler|'
-        '^tests/compiler'
+        '^sdk/lib/_internal/js_runtime|'
+        '^tests/web'
+      )
+    },
+    'dartdevc': {
+      'filepath': (
+        '^pkg/dev_compiler|'
+        '^sdk/lib/_internal/js_dev_runtime|'
+        '^tests/dartdevc'
       )
     },
     'package_vm': {
-      'filepath': '^pkg/vm',
+      'filepath': '^pkg/vm/',
     },
     'messages_review': {
       'filepath': (
@@ -49,9 +57,6 @@
         'pkg/dart_messages/lib/shared_messages\\.dart'
         ')$'
       )
-    },
-    'mirrors' : {
-      'filepath': '.*mirrors.*',
     },
     'observatory': {
       'filepath': (
@@ -71,16 +76,13 @@
   },
 
   'WATCHLISTS': {
-    'build': [ 'zra@google.com', 'keertip@google.com' ],
-    'dart2js': [ 'johnniwinther@google.com', 'sigmund@google.com',
-                 'sra@google.com'],
+    'dart2js': [ 'dart2js-team+reviews@google.com' ],
+    'dartdevc': [ 'dart-dc-team+reviews@google.com' ],
+    'experimental_features': [ 'scheglov@google.com' ],
     'front_end': [ 'dart-fe-team+reviews@google.com' ],
-    'http': [ 'zra@google.com' ],
-    'kernel': [ 'karlklose@google.com', 'jensj@google.com', 'kmillikin@google.com',
-                'alexmarkov@google.com' ],
+    'kernel': [ 'jensj@google.com', 'alexmarkov@google.com' ],
     'messages_review': [ 'dart-uxr+reviews@google.com' ],
-    'mirrors' : [ 'rmacnak@google.com' ],
-    'observatory': [ 'rmacnak@google.com' ],
+    'observatory': [ 'bkonyi@google.com' ],
     'package_vm': [ 'alexmarkov@google.com' ],
     'runtime': [ 'vm-dev@dartlang.org' ],
     'vm_compiler': [ 'dart-vm-compiler-team+reviews@google.com' ],

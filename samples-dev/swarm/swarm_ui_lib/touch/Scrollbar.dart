@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 part of touch;
 
 /**
@@ -218,7 +220,7 @@ class Scrollbar implements ScrollListener {
     _currentScrollStartMouse = coordinate;
   }
 
-  void _onEnd(UIEvent e) {
+  void _onEnd(Event e) {
     _scrollBarDragInProgress = false;
     // TODO(jacobr): make scrollbar less tightly coupled to the scroller.
     _scroller._onScrollerDragEnd.add(new Event(ScrollerEventType.DRAG_END));

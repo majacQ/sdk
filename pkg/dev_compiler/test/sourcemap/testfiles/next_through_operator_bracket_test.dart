@@ -2,19 +2,21 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 /*Debugger:stepOver*/
 
 class Class2 {
-  operator [](index) => index;
+  dynamic operator [](index) => index;
 
-  code() {
+  dynamic code() {
     this[42];
     return this[42];
   }
 }
 
-main() {
-  /*bl*/ /*sl:1*/ Class2 c = Class2();
+void main() {
+  /*bl*/ /*sl:1*/ var c = Class2();
   c /*sl:2*/ [42];
   c /*sl:3*/ .code();
 }

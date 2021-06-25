@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 // Dart test making sure we don't create an empty snapshot file when there
 // is an error in the script.
 
@@ -15,8 +17,11 @@ main() {
   Directory dir = thisscript.parent;
   String snapshot = "${dir.path}/dummy.snapshot";
   String script = "${dir.path}/snapshot_fail_script.dart";
-  var pr =
-      Process.runSync(Platform.executable, ["--snapshot=$snapshot", script]);
+  var pr = Process.runSync(Platform.executable, [
+    // We need to disable dartdev so this test doesn't try to create a snapshot
+    // of dartdev when we run from kernel on simarm configurations.
+    "--disable-dart-dev", "--snapshot=$snapshot", script,
+  ]);
 
   // There should be no dummy.snapshot file created.
   File dummy = new File(snapshot);

@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library test.generic_f_bounded;
 
 import 'dart:mirrors';
@@ -80,7 +82,7 @@ main() {
       collectionWithSerializableOfOrderedCollection.isOriginalDeclaration);
 
   TypeVariableMirror rFromSerializer = serializerDecl.typeVariables.single;
-  ClassMirror serializableOfR = rFromSerializer.upperBound;
+  ClassMirror serializableOfR = rFromSerializer.upperBound as ClassMirror;
   Expect.isFalse(serializableOfR.isOriginalDeclaration);
   Expect.equals(serializableDecl, serializableOfR.originalDeclaration);
   Expect.equals(rFromSerializer, serializableOfR.typeArguments.single);

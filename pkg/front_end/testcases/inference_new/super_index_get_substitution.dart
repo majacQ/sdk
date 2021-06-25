@@ -1,7 +1,7 @@
 // Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-
+// @dart=2.9
 /*@testedFeatures=inference*/
 library test;
 
@@ -20,8 +20,8 @@ class B<T> {
 class C<U> extends B<Future<U>> {
   E<Future<U>> operator [](Object x) => null;
   void h() {
-    var /*@type=D<Future<C::U>>*/ x =
-        super /*@target=B::[]*/ [/*@typeArgs=E<Future<C::U>>*/ f()];
+    var /*@ type=D<Future<C::U*>*>* */ x =
+        super /*@target=B.[]*/ [/*@ typeArgs=E<Future<C::U*>*>* */ f()];
   }
 }
 

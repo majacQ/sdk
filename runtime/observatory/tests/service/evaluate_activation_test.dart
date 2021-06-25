@@ -3,7 +3,7 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:observatory/service_io.dart';
-import 'package:unittest/unittest.dart';
+import 'package:test/test.dart';
 import 'test_helper.dart';
 
 import 'dart:async';
@@ -70,7 +70,7 @@ class C {
 Future testMethod(Isolate isolate) async {
   // silence analyzer.
   expect(math.sqrt(4), equals(2));
-  Library rootLib = await isolate.rootLibrary.load();
+  Library rootLib = await isolate.rootLibrary.load() as Library;
   ServiceFunction function =
       rootLib.functions.singleWhere((f) => f.name == 'breakHere');
   Breakpoint bpt = await isolate.addBreakpointAtEntry(function);
@@ -83,29 +83,29 @@ Future testMethod(Isolate isolate) async {
   sub = stream.listen((ServiceEvent event) async {
     print("Event $event");
     if (event.kind == ServiceEvent.kPauseBreakpoint) {
-      var frameNumber = 1, r;
-      r = await isolate.evalFrame(frameNumber, '123');  /// instance: ok
-      expect(r.valueAsString, equals('123'));  /// instance: continued
-      r = await isolate.evalFrame(frameNumber, 'this');  /// scope: ok
-      expect(r.clazz.name, equals('C'));  /// scope: continued
-      r = await isolate.evalFrame(frameNumber, 'instVar');  /// instance: continued
-      expect(r.valueAsString, equals('1'));  /// instance: continued
-      r = await isolate.evalFrame(frameNumber, 'classVar'); /// instance: continued
-      expect(r.valueAsString, equals('2'));  /// instance: continued
-      r = await isolate.evalFrame(frameNumber, 'methodParam');  /// scope: continued
-      expect(r.valueAsString, equals('3'));  /// scope: continued
-      r = await isolate.evalFrame(frameNumber, 'methodTemp');  /// scope: continued
-      expect(r.valueAsString, equals('4'));  /// scope: continued
-      r = await isolate.evalFrame(frameNumber, 'outerParam');  /// scope: continued
-      expect(r.valueAsString, equals('5'));  /// scope: continued
-      r = await isolate.evalFrame(frameNumber, 'outerTemp');  /// scope: continued
-      expect(r.valueAsString, equals('6'));  /// scope: continued
-      r = await isolate.evalFrame(frameNumber, 'innerParam');  /// instance: continued
-      expect(r.valueAsString, equals('7'));  /// instance: continued
-      r = await isolate.evalFrame(frameNumber, 'innerTemp');  /// instance: continued
-      expect(r.valueAsString, equals('8'));  /// instance: continued
-      r = await isolate.evalFrame(frameNumber, 'math.sqrt');  /// instance: continued
-      expect(r.isClosure, isTrue);  /// instance: continued
+      dynamic frameNumber = 1, r;
+      r = await isolate.evalFrame(frameNumber, '123');  //# instance: ok
+      expect(r.valueAsString, equals('123'));  //# instance: continued
+      r = await isolate.evalFrame(frameNumber, 'this');  //# scope: ok
+      expect(r.clazz.name, equals('C'));  //# scope: continued
+      r = await isolate.evalFrame(frameNumber, 'instVar');  //# instance: continued
+      expect(r.valueAsString, equals('1'));  //# instance: continued
+      r = await isolate.evalFrame(frameNumber, 'classVar'); //# instance: continued
+      expect(r.valueAsString, equals('2'));  //# instance: continued
+      r = await isolate.evalFrame(frameNumber, 'methodParam');  //# scope: continued
+      expect(r.valueAsString, equals('3'));  //# scope: continued
+      r = await isolate.evalFrame(frameNumber, 'methodTemp');  //# scope: continued
+      expect(r.valueAsString, equals('4'));  //# scope: continued
+      r = await isolate.evalFrame(frameNumber, 'outerParam');  //# scope: continued
+      expect(r.valueAsString, equals('5'));  //# scope: continued
+      r = await isolate.evalFrame(frameNumber, 'outerTemp');  //# scope: continued
+      expect(r.valueAsString, equals('6'));  //# scope: continued
+      r = await isolate.evalFrame(frameNumber, 'innerParam');  //# instance: continued
+      expect(r.valueAsString, equals('7'));  //# instance: continued
+      r = await isolate.evalFrame(frameNumber, 'innerTemp');  //# instance: continued
+      expect(r.valueAsString, equals('8'));  //# instance: continued
+      r = await isolate.evalFrame(frameNumber, 'math.sqrt');  //# instance: continued
+      expect(r.isClosure, isTrue);  //# instance: continued
 
       hitBreakpoint = true;
       sub.cancel();  // Do not handle events for the other tests.
@@ -119,7 +119,7 @@ Future testMethod(Isolate isolate) async {
 }
 
 Future testMethod2(Isolate isolate) async {
-  Library rootLib = await isolate.rootLibrary.load();
+  Library rootLib = await isolate.rootLibrary.load() as Library;
   ServiceFunction function =
       rootLib.functions.singleWhere((f) => f.name == 'breakHere');
   Breakpoint bpt = await isolate.addBreakpointAtEntry(function);
@@ -132,7 +132,7 @@ Future testMethod2(Isolate isolate) async {
   sub = stream.listen((ServiceEvent event) async {
     print("Event $event");
     if (event.kind == ServiceEvent.kPauseBreakpoint) {
-      var frameNumber = 1, r;
+      dynamic frameNumber = 1, r;
       r = await isolate.evalFrame(frameNumber, '123');
       expect(r.valueAsString, equals('123'));
       r = await isolate.evalFrame(frameNumber, 'this');
@@ -142,13 +142,13 @@ Future testMethod2(Isolate isolate) async {
       r = await isolate.evalFrame(frameNumber, 'classVar');
       expect(r.valueAsString, equals('2'));
       r = await isolate.evalFrame(frameNumber, 'methodParam');
-      expect(r.valueAsString, equals('3'));  /// scope: continued
+      expect(r.valueAsString, equals('3'));  //# scope: continued
       r = await isolate.evalFrame(frameNumber, 'methodTemp');
-      expect(r.valueAsString, equals('4'));  /// scope: continued
+      expect(r.valueAsString, equals('4'));  //# scope: continued
       r = await isolate.evalFrame(frameNumber, 'outerParam');
-      expect(r.valueAsString, equals('5'));  /// scope: continued
+      expect(r.valueAsString, equals('5'));  //# scope: continued
       r = await isolate.evalFrame(frameNumber, 'outerTemp');
-      expect(r.valueAsString, equals('6'));  /// scope: continued
+      expect(r.valueAsString, equals('6'));  //# scope: continued
       r = await isolate.evalFrame(frameNumber, 'innerParam');
       expect(r.valueAsString, equals('7'));
       r = await isolate.evalFrame(frameNumber, 'innerTemp');
@@ -168,7 +168,7 @@ Future testMethod2(Isolate isolate) async {
 }
 
 Future testMethod3(Isolate isolate) async {
-  Library rootLib = await isolate.rootLibrary.load();
+  Library rootLib = await isolate.rootLibrary.load() as Library;
   ServiceFunction function =
       rootLib.functions.singleWhere((f) => f.name == 'breakHere');
   Breakpoint bpt = await isolate.addBreakpointAtEntry(function);
@@ -181,7 +181,7 @@ Future testMethod3(Isolate isolate) async {
   sub = stream.listen((ServiceEvent event) async {
     print("Event $event");
     if (event.kind == ServiceEvent.kPauseBreakpoint) {
-      var frameNumber = 1, r;
+      dynamic frameNumber = 1, r;
       r = await isolate.evalFrame(frameNumber, '123');
       expect(r.valueAsString, equals('123'));
       r = await isolate.evalFrame(frameNumber, 'this');
@@ -210,7 +210,7 @@ Future testMethod3(Isolate isolate) async {
 
 
 Future testMethod4(Isolate isolate) async {
-  Library rootLib = await isolate.rootLibrary.load();
+  Library rootLib = await isolate.rootLibrary.load() as Library;
   ServiceFunction function =
       rootLib.functions.singleWhere((f) => f.name == 'breakHere');
   Breakpoint bpt = await isolate.addBreakpointAtEntry(function);
@@ -223,29 +223,29 @@ Future testMethod4(Isolate isolate) async {
   sub = stream.listen((ServiceEvent event) async {
     print("Event $event");
     if (event.kind == ServiceEvent.kPauseBreakpoint) {
-      var frameNumber = 1, r;
-      r = await isolate.evalFrame(frameNumber, '123');  /// instance: continued
-      expect(r.valueAsString, equals('123'));  /// instance: continued
-      r = await isolate.evalFrame(frameNumber, 'this');  /// scope: continued
-      expect(r.clazz.name, equals('C'));  /// scope: continued
-      r = await isolate.evalFrame(frameNumber, 'instVar');  /// instance: continued
-      expect(r.valueAsString, equals('1'));  /// instance: continued
-      r = await isolate.evalFrame(frameNumber, 'classVar');  /// instance: continued
-      expect(r.valueAsString, equals('2'));  /// instance: continued
-      r = await isolate.evalFrame(frameNumber, 'methodParam');  /// scope: continued
-      expect(r.valueAsString, equals('3'));  /// scope: continued
-      r = await isolate.evalFrame(frameNumber, 'methodTemp');  /// scope: continued
-      expect(r.valueAsString, equals('4'));  /// scope: continued
-      r = await isolate.evalFrame(frameNumber, 'outerParam');  /// scope: continued
-      expect(r.valueAsString, equals('5'));  /// scope: continued
-      r = await isolate.evalFrame(frameNumber, 'outerTemp');  /// scope: continued
-      expect(r.valueAsString, equals('6'));  /// scope: continued
-      r = await isolate.evalFrame(frameNumber, 'innerParam');  /// instance: continued
-      expect(r.valueAsString, equals('7'));  /// instance: continued
-      r = await isolate.evalFrame(frameNumber, 'innerTemp');  /// instance: continued
-      expect(r.valueAsString, equals('8'));  /// instance: continued
-      r = await isolate.evalFrame(frameNumber, 'math.sqrt');  /// instance: continued
-      expect(r.isClosure, isTrue);  /// instance: continued
+      dynamic frameNumber = 1, r;
+      r = await isolate.evalFrame(frameNumber, '123');  //# instance: continued
+      expect(r.valueAsString, equals('123'));  //# instance: continued
+      r = await isolate.evalFrame(frameNumber, 'this');  //# scope: continued
+      expect(r.clazz.name, equals('C'));  //# scope: continued
+      r = await isolate.evalFrame(frameNumber, 'instVar');  //# instance: continued
+      expect(r.valueAsString, equals('1'));  //# instance: continued
+      r = await isolate.evalFrame(frameNumber, 'classVar');  //# instance: continued
+      expect(r.valueAsString, equals('2'));  //# instance: continued
+      r = await isolate.evalFrame(frameNumber, 'methodParam');  //# scope: continued
+      expect(r.valueAsString, equals('3'));  //# scope: continued
+      r = await isolate.evalFrame(frameNumber, 'methodTemp');  //# scope: continued
+      expect(r.valueAsString, equals('4'));  //# scope: continued
+      r = await isolate.evalFrame(frameNumber, 'outerParam');  //# scope: continued
+      expect(r.valueAsString, equals('5'));  //# scope: continued
+      r = await isolate.evalFrame(frameNumber, 'outerTemp');  //# scope: continued
+      expect(r.valueAsString, equals('6'));  //# scope: continued
+      r = await isolate.evalFrame(frameNumber, 'innerParam');  //# instance: continued
+      expect(r.valueAsString, equals('7'));  //# instance: continued
+      r = await isolate.evalFrame(frameNumber, 'innerTemp');  //# instance: continued
+      expect(r.valueAsString, equals('8'));  //# instance: continued
+      r = await isolate.evalFrame(frameNumber, 'math.sqrt');  //# instance: continued
+      expect(r.isClosure, isTrue);  //# instance: continued
 
       hitBreakpoint = true;
       sub.cancel();  // Do not handle events for the other tests.

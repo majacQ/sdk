@@ -5,6 +5,8 @@
 library models;
 
 import 'dart:async';
+import 'dart:typed_data';
+import 'package:observatory/object_graph.dart';
 
 part 'src/models/exceptions.dart';
 
@@ -21,12 +23,12 @@ part 'src/models/objects/flag.dart';
 part 'src/models/objects/frame.dart';
 part 'src/models/objects/function.dart';
 part 'src/models/objects/guarded.dart';
-part 'src/models/objects/heap_snapshot.dart';
 part 'src/models/objects/heap_space.dart';
 part 'src/models/objects/icdata.dart';
 part 'src/models/objects/inbound_references.dart';
 part 'src/models/objects/instance.dart';
 part 'src/models/objects/isolate.dart';
+part 'src/models/objects/isolate_group.dart';
 part 'src/models/objects/library.dart';
 part 'src/models/objects/local_var_descriptors.dart';
 part 'src/models/objects/map_association.dart';
@@ -48,14 +50,12 @@ part 'src/models/objects/single_target_cache.dart';
 part 'src/models/objects/source_location.dart';
 part 'src/models/objects/subtype_test_cache.dart';
 part 'src/models/objects/target.dart';
-part 'src/models/objects/thread.dart';
 part 'src/models/objects/timeline.dart';
 part 'src/models/objects/timeline_event.dart';
 part 'src/models/objects/type_arguments.dart';
 part 'src/models/objects/unknown.dart';
 part 'src/models/objects/unlinked_call.dart';
 part 'src/models/objects/vm.dart';
-part 'src/models/objects/zone.dart';
 
 part 'src/models/repositories/allocation_profile.dart';
 part 'src/models/repositories/breakpoint.dart';
@@ -72,6 +72,7 @@ part 'src/models/repositories/icdata.dart';
 part 'src/models/repositories/inbound_references.dart';
 part 'src/models/repositories/instance.dart';
 part 'src/models/repositories/isolate.dart';
+part 'src/models/repositories/isolate_group.dart';
 part 'src/models/repositories/library.dart';
 part 'src/models/repositories/megamorphiccache.dart';
 part 'src/models/repositories/metric.dart';
@@ -91,7 +92,6 @@ part 'src/models/repositories/strongly_reachable_instances.dart';
 part 'src/models/repositories/subtype_test_cache.dart';
 part 'src/models/repositories/target.dart';
 part 'src/models/repositories/timeline.dart';
-part 'src/models/repositories/top_retaining_instances.dart';
 part 'src/models/repositories/type_arguments.dart';
 part 'src/models/repositories/unlinked_call.dart';
 part 'src/models/repositories/vm.dart';

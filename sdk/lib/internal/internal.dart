@@ -16,17 +16,24 @@ import 'dart:async'
         Zone;
 import 'dart:convert' show Converter;
 import 'dart:core' hide Symbol;
-import 'dart:core' as core;
+import 'dart:core' as core show Symbol;
 import 'dart:math' show Random;
+import 'dart:typed_data' show Uint8List;
 
 part 'async_cast.dart';
+part 'bytes_builder.dart';
 part 'cast.dart';
+part 'errors.dart';
 part 'iterable.dart';
 part 'list.dart';
+part 'linked_list.dart';
 part 'print.dart';
 part 'sort.dart';
 part 'symbol.dart';
-part 'linked_list.dart';
+
+// Returns true iff `null as T` will succeed based on the
+// execution mode.
+external bool typeAcceptsNull<T>();
 
 // Powers of 10 up to 10^22 are representable as doubles.
 // Powers of 10 above that are only approximate due to lack of precission.
@@ -112,6 +119,524 @@ int parseHexByte(String source, int index) {
   return digit1 * 16 + digit2 - (digit2 & 256);
 }
 
+/// A resusable `null`-valued future used by `dart:async`.
+///
+/// **DO NOT USE.**
+///
+/// This future is used in situations where a future is expected,
+/// but no asynchronous computation actually happens,
+/// like cancelling a stream from a controller with no `onCancel` callback.
+/// *Some code depends on recognizing this future in order to react
+/// synchronously.*
+/// It does so to avoid changing event interleaving during the null safety
+/// migration where, for example, the [StreamSubscription.cancel] method
+/// stopped being able to return `null`.
+/// The code that would be broken by such a timing change is fragile,
+/// but we are not able to simply change it.
+/// For better or worse, code depends on the precise timing that our libraries
+/// have so far exhibited.
+///
+/// This future will be removed again if we can ever do so.
+/// Do not use it for anything other than preserving timing
+/// during the null safety migration.
+final Future<Null> nullFuture = Zone.root.run(() => Future<Null>.value(null));
+
+/// A default hash function used by the platform in various places.
+///
+/// This is currently the [Jenkins hash function][1] but using masking to keep
+/// values in SMI range.
+///
+/// [1]: http://en.wikipedia.org/wiki/Jenkins_hash_function
+///
+/// Use:
+/// Hash each value with the hash of the previous value, then get the final
+/// hash by calling finish.
+/// ```
+/// var hash = 0;
+/// for (var value in values) {
+///   hash = SystemHash.combine(hash, value.hashCode);
+/// }
+/// hash = SystemHash.finish(hash);
+/// ```
+///
+/// TODO(lrn): Consider specializing this code per platform,
+/// so the VM can use its 64-bit integers directly.
+@Since("2.11")
+class SystemHash {
+  static int combine(int hash, int value) {
+    hash = 0x1fffffff & (hash + value);
+    hash = 0x1fffffff & (hash + ((0x0007ffff & hash) << 10));
+    return hash ^ (hash >> 6);
+  }
+
+  static int finish(int hash) {
+    hash = 0x1fffffff & (hash + ((0x03ffffff & hash) << 3));
+    hash = hash ^ (hash >> 11);
+    return 0x1fffffff & (hash + ((0x00003fff & hash) << 15));
+  }
+
+  static int hash2(int v1, int v2, [@Since("2.14") int seed = 0]) {
+    int hash = seed;
+    hash = combine(hash, v1);
+    hash = combine(hash, v2);
+    return finish(hash);
+  }
+
+  static int hash3(int v1, int v2, int v3, [@Since("2.14") int seed = 0]) {
+    int hash = seed;
+    hash = combine(hash, v1);
+    hash = combine(hash, v2);
+    hash = combine(hash, v3);
+    return finish(hash);
+  }
+
+  static int hash4(int v1, int v2, int v3, int v4,
+      [@Since("2.14") int seed = 0]) {
+    int hash = seed;
+    hash = combine(hash, v1);
+    hash = combine(hash, v2);
+    hash = combine(hash, v3);
+    hash = combine(hash, v4);
+    return finish(hash);
+  }
+
+  static int hash5(int v1, int v2, int v3, int v4, int v5,
+      [@Since("2.14") int seed = 0]) {
+    int hash = seed;
+    hash = combine(hash, v1);
+    hash = combine(hash, v2);
+    hash = combine(hash, v3);
+    hash = combine(hash, v4);
+    hash = combine(hash, v5);
+    return finish(hash);
+  }
+
+  static int hash6(int v1, int v2, int v3, int v4, int v5, int v6,
+      [@Since("2.14") int seed = 0]) {
+    int hash = seed;
+    hash = combine(hash, v1);
+    hash = combine(hash, v2);
+    hash = combine(hash, v3);
+    hash = combine(hash, v4);
+    hash = combine(hash, v5);
+    hash = combine(hash, v6);
+    return finish(hash);
+  }
+
+  static int hash7(int v1, int v2, int v3, int v4, int v5, int v6, int v7,
+      [@Since("2.14") int seed = 0]) {
+    int hash = seed;
+    hash = combine(hash, v1);
+    hash = combine(hash, v2);
+    hash = combine(hash, v3);
+    hash = combine(hash, v4);
+    hash = combine(hash, v5);
+    hash = combine(hash, v6);
+    hash = combine(hash, v7);
+    return finish(hash);
+  }
+
+  static int hash8(
+      int v1, int v2, int v3, int v4, int v5, int v6, int v7, int v8,
+      [@Since("2.14") int seed = 0]) {
+    int hash = seed;
+    hash = combine(hash, v1);
+    hash = combine(hash, v2);
+    hash = combine(hash, v3);
+    hash = combine(hash, v4);
+    hash = combine(hash, v5);
+    hash = combine(hash, v6);
+    hash = combine(hash, v7);
+    hash = combine(hash, v8);
+    return finish(hash);
+  }
+
+  static int hash9(
+      int v1, int v2, int v3, int v4, int v5, int v6, int v7, int v8, int v9,
+      [@Since("2.14") int seed = 0]) {
+    int hash = seed;
+    hash = combine(hash, v1);
+    hash = combine(hash, v2);
+    hash = combine(hash, v3);
+    hash = combine(hash, v4);
+    hash = combine(hash, v5);
+    hash = combine(hash, v6);
+    hash = combine(hash, v7);
+    hash = combine(hash, v8);
+    hash = combine(hash, v9);
+    return finish(hash);
+  }
+
+  static int hash10(int v1, int v2, int v3, int v4, int v5, int v6, int v7,
+      int v8, int v9, int v10,
+      [@Since("2.14") int seed = 0]) {
+    int hash = seed;
+    hash = combine(hash, v1);
+    hash = combine(hash, v2);
+    hash = combine(hash, v3);
+    hash = combine(hash, v4);
+    hash = combine(hash, v5);
+    hash = combine(hash, v6);
+    hash = combine(hash, v7);
+    hash = combine(hash, v8);
+    hash = combine(hash, v9);
+    hash = combine(hash, v10);
+    return finish(hash);
+  }
+
+  @Since("2.14")
+  static int hash11(int v1, int v2, int v3, int v4, int v5, int v6, int v7,
+      int v8, int v9, int v10, int v11,
+      [int seed = 0]) {
+    int hash = seed;
+    hash = combine(hash, v1);
+    hash = combine(hash, v2);
+    hash = combine(hash, v3);
+    hash = combine(hash, v4);
+    hash = combine(hash, v5);
+    hash = combine(hash, v6);
+    hash = combine(hash, v7);
+    hash = combine(hash, v8);
+    hash = combine(hash, v9);
+    hash = combine(hash, v10);
+    hash = combine(hash, v11);
+    return finish(hash);
+  }
+
+  @Since("2.14")
+  static int hash12(int v1, int v2, int v3, int v4, int v5, int v6, int v7,
+      int v8, int v9, int v10, int v11, int v12,
+      [int seed = 0]) {
+    int hash = seed;
+    hash = combine(hash, v1);
+    hash = combine(hash, v2);
+    hash = combine(hash, v3);
+    hash = combine(hash, v4);
+    hash = combine(hash, v5);
+    hash = combine(hash, v6);
+    hash = combine(hash, v7);
+    hash = combine(hash, v8);
+    hash = combine(hash, v9);
+    hash = combine(hash, v10);
+    hash = combine(hash, v11);
+    hash = combine(hash, v12);
+    return finish(hash);
+  }
+
+  @Since("2.14")
+  static int hash13(int v1, int v2, int v3, int v4, int v5, int v6, int v7,
+      int v8, int v9, int v10, int v11, int v12, int v13,
+      [int seed = 0]) {
+    int hash = seed;
+    hash = combine(hash, v1);
+    hash = combine(hash, v2);
+    hash = combine(hash, v3);
+    hash = combine(hash, v4);
+    hash = combine(hash, v5);
+    hash = combine(hash, v6);
+    hash = combine(hash, v7);
+    hash = combine(hash, v8);
+    hash = combine(hash, v9);
+    hash = combine(hash, v10);
+    hash = combine(hash, v11);
+    hash = combine(hash, v12);
+    hash = combine(hash, v13);
+    return finish(hash);
+  }
+
+  @Since("2.14")
+  static int hash14(int v1, int v2, int v3, int v4, int v5, int v6, int v7,
+      int v8, int v9, int v10, int v11, int v12, int v13, int v14,
+      [int seed = 0]) {
+    int hash = seed;
+    hash = combine(hash, v1);
+    hash = combine(hash, v2);
+    hash = combine(hash, v3);
+    hash = combine(hash, v4);
+    hash = combine(hash, v5);
+    hash = combine(hash, v6);
+    hash = combine(hash, v7);
+    hash = combine(hash, v8);
+    hash = combine(hash, v9);
+    hash = combine(hash, v10);
+    hash = combine(hash, v11);
+    hash = combine(hash, v12);
+    hash = combine(hash, v13);
+    hash = combine(hash, v14);
+    return finish(hash);
+  }
+
+  @Since("2.14")
+  static int hash15(int v1, int v2, int v3, int v4, int v5, int v6, int v7,
+      int v8, int v9, int v10, int v11, int v12, int v13, int v14, int v15,
+      [int seed = 0]) {
+    int hash = seed;
+    hash = combine(hash, v1);
+    hash = combine(hash, v2);
+    hash = combine(hash, v3);
+    hash = combine(hash, v4);
+    hash = combine(hash, v5);
+    hash = combine(hash, v6);
+    hash = combine(hash, v7);
+    hash = combine(hash, v8);
+    hash = combine(hash, v9);
+    hash = combine(hash, v10);
+    hash = combine(hash, v11);
+    hash = combine(hash, v12);
+    hash = combine(hash, v13);
+    hash = combine(hash, v14);
+    hash = combine(hash, v15);
+    return finish(hash);
+  }
+
+  @Since("2.14")
+  static int hash16(
+      int v1,
+      int v2,
+      int v3,
+      int v4,
+      int v5,
+      int v6,
+      int v7,
+      int v8,
+      int v9,
+      int v10,
+      int v11,
+      int v12,
+      int v13,
+      int v14,
+      int v15,
+      int v16,
+      [int seed = 0]) {
+    int hash = seed;
+    hash = combine(hash, v1);
+    hash = combine(hash, v2);
+    hash = combine(hash, v3);
+    hash = combine(hash, v4);
+    hash = combine(hash, v5);
+    hash = combine(hash, v6);
+    hash = combine(hash, v7);
+    hash = combine(hash, v8);
+    hash = combine(hash, v9);
+    hash = combine(hash, v10);
+    hash = combine(hash, v11);
+    hash = combine(hash, v12);
+    hash = combine(hash, v13);
+    hash = combine(hash, v14);
+    hash = combine(hash, v15);
+    hash = combine(hash, v16);
+    return finish(hash);
+  }
+
+  @Since("2.14")
+  static int hash17(
+      int v1,
+      int v2,
+      int v3,
+      int v4,
+      int v5,
+      int v6,
+      int v7,
+      int v8,
+      int v9,
+      int v10,
+      int v11,
+      int v12,
+      int v13,
+      int v14,
+      int v15,
+      int v16,
+      int v17,
+      [int seed = 0]) {
+    int hash = seed;
+    hash = combine(hash, v1);
+    hash = combine(hash, v2);
+    hash = combine(hash, v3);
+    hash = combine(hash, v4);
+    hash = combine(hash, v5);
+    hash = combine(hash, v6);
+    hash = combine(hash, v7);
+    hash = combine(hash, v8);
+    hash = combine(hash, v9);
+    hash = combine(hash, v10);
+    hash = combine(hash, v11);
+    hash = combine(hash, v12);
+    hash = combine(hash, v13);
+    hash = combine(hash, v14);
+    hash = combine(hash, v15);
+    hash = combine(hash, v16);
+    hash = combine(hash, v17);
+    return finish(hash);
+  }
+
+  @Since("2.14")
+  static int hash18(
+      int v1,
+      int v2,
+      int v3,
+      int v4,
+      int v5,
+      int v6,
+      int v7,
+      int v8,
+      int v9,
+      int v10,
+      int v11,
+      int v12,
+      int v13,
+      int v14,
+      int v15,
+      int v16,
+      int v17,
+      int v18,
+      [int seed = 0]) {
+    int hash = seed;
+    hash = combine(hash, v1);
+    hash = combine(hash, v2);
+    hash = combine(hash, v3);
+    hash = combine(hash, v4);
+    hash = combine(hash, v5);
+    hash = combine(hash, v6);
+    hash = combine(hash, v7);
+    hash = combine(hash, v8);
+    hash = combine(hash, v9);
+    hash = combine(hash, v10);
+    hash = combine(hash, v11);
+    hash = combine(hash, v12);
+    hash = combine(hash, v13);
+    hash = combine(hash, v14);
+    hash = combine(hash, v15);
+    hash = combine(hash, v16);
+    hash = combine(hash, v17);
+    hash = combine(hash, v18);
+    return finish(hash);
+  }
+
+  @Since("2.14")
+  static int hash19(
+      int v1,
+      int v2,
+      int v3,
+      int v4,
+      int v5,
+      int v6,
+      int v7,
+      int v8,
+      int v9,
+      int v10,
+      int v11,
+      int v12,
+      int v13,
+      int v14,
+      int v15,
+      int v16,
+      int v17,
+      int v18,
+      int v19,
+      [int seed = 0]) {
+    int hash = seed;
+    hash = combine(hash, v1);
+    hash = combine(hash, v2);
+    hash = combine(hash, v3);
+    hash = combine(hash, v4);
+    hash = combine(hash, v5);
+    hash = combine(hash, v6);
+    hash = combine(hash, v7);
+    hash = combine(hash, v8);
+    hash = combine(hash, v9);
+    hash = combine(hash, v10);
+    hash = combine(hash, v11);
+    hash = combine(hash, v12);
+    hash = combine(hash, v13);
+    hash = combine(hash, v14);
+    hash = combine(hash, v15);
+    hash = combine(hash, v16);
+    hash = combine(hash, v17);
+    hash = combine(hash, v18);
+    hash = combine(hash, v19);
+    return finish(hash);
+  }
+
+  @Since("2.14")
+  static int hash20(
+      int v1,
+      int v2,
+      int v3,
+      int v4,
+      int v5,
+      int v6,
+      int v7,
+      int v8,
+      int v9,
+      int v10,
+      int v11,
+      int v12,
+      int v13,
+      int v14,
+      int v15,
+      int v16,
+      int v17,
+      int v18,
+      int v19,
+      int v20,
+      [int seed = 0]) {
+    int hash = seed;
+    hash = combine(hash, v1);
+    hash = combine(hash, v2);
+    hash = combine(hash, v3);
+    hash = combine(hash, v4);
+    hash = combine(hash, v5);
+    hash = combine(hash, v6);
+    hash = combine(hash, v7);
+    hash = combine(hash, v8);
+    hash = combine(hash, v9);
+    hash = combine(hash, v10);
+    hash = combine(hash, v11);
+    hash = combine(hash, v12);
+    hash = combine(hash, v13);
+    hash = combine(hash, v14);
+    hash = combine(hash, v15);
+    hash = combine(hash, v16);
+    hash = combine(hash, v17);
+    hash = combine(hash, v18);
+    hash = combine(hash, v19);
+    hash = combine(hash, v20);
+    return finish(hash);
+  }
+
+  /// Bit shuffling operation to improve hash codes.
+  ///
+  /// Dart integers have very simple hash codes (their value),
+  /// which is acceptable for the hash above because it smears the bits
+  /// as part of the combination.
+  /// However, for the unordered hash, we need to improve
+  /// the hash code of, e.g., integers, to avoid collections of small integers
+  /// too easily having colliding hash results.
+  ///
+  /// Assumes the input hash code is an unsigned 32-bit integer.
+  /// Found by Christopher Wellons [https://github.com/skeeto/hash-prospector].
+  static int smear(int x) {
+    // TODO: Use >>> instead of >> when available.
+    x ^= x >> 16;
+    x = (x * 0x7feb352d) & 0xFFFFFFFF;
+    x ^= x >> 15;
+    x = (x * 0x846ca68b) & 0xFFFFFFFF;
+    x ^= x >> 16;
+    return x;
+  }
+}
+
+/// Sentinel values that should never be exposed outside of platform libraries.
+@Since("2.14")
+class SentinelValue {
+  final int id;
+  const SentinelValue(this.id);
+}
+
+/// A default value to use when only one sentinel is needed.
+@Since("2.14")
+const Object sentinelValue = const SentinelValue(0);
+
 /// Given an [instance] of some generic type [T], and [extract], a first-class
 /// generic function that takes the same number of type parameters as [T],
 /// invokes the function with the same type arguments that were passed to T
@@ -163,7 +688,7 @@ int parseHexByte(String source, int index) {
 ///
 /// See this issue for more context:
 /// https://github.com/dart-lang/sdk/issues/31371
-external Object extractTypeArguments<T>(T instance, Function extract);
+external Object? extractTypeArguments<T>(T instance, Function extract);
 
 /// Annotation class marking the version where SDK API was added.
 ///
@@ -180,7 +705,7 @@ external Object extractTypeArguments<T>(T instance, Function extract);
 /// of that class.
 /// If applied to a class method, or parameter of such,
 /// any method implementing that interface method is also annotated.
-/// I multiple `Since` annotations apply to the same declaration or
+/// If multiple `Since` annotations apply to the same declaration or
 /// parameter, the latest version takes precendence.
 ///
 /// Any use of a marked API may trigger a warning if the using code
@@ -201,4 +726,225 @@ external Object extractTypeArguments<T>(T instance, Function extract);
 class Since {
   final String version;
   const Since(this.version);
+}
+
+/// A null-check function for function parameters in Null Safety enabled code.
+///
+/// Because Dart does not have full null safety
+/// until all legacy code has been removed from a program,
+/// a non-nullable parameter can still end up with a `null` value.
+/// This function can be used to guard those functions against null arguments.
+/// It throws a [TypeError] because we are really seeing the failure to
+/// assign `null` to a non-nullable type.
+///
+/// See http://dartbug.com/40614 for context.
+T checkNotNullable<T extends Object>(T value, String name) {
+  if ((value as dynamic) == null) {
+    throw NotNullableError<T>(name);
+  }
+  return value;
+}
+
+/// A [TypeError] thrown by [checkNotNullable].
+class NotNullableError<T> extends Error implements TypeError {
+  final String _name;
+  NotNullableError(this._name);
+  String toString() =>
+      "Null is not a valid value for the parameter '$_name' of type '$T'";
+}
+
+/// A function that returns the value or default value (if invoked with `null`
+/// value) for non-nullable function parameters in Null safety enabled code.
+///
+/// Because Dart does not have full null safety
+/// until all legacy code has been removed from a program,
+/// a non-nullable parameter can still end up with a `null` value.
+/// This function can be used to get a default value for a parameter
+/// when a `null` value is passed in for a non-nullable parameter.
+///
+/// TODO(40810) - Remove uses of this function when Dart has full null safety.
+T valueOfNonNullableParamWithDefault<T extends Object>(T value, T defaultVal) {
+  if ((value as dynamic) == null) {
+    return defaultVal;
+  } else {
+    return value;
+  }
+}
+
+/**
+ * HTTP status codes.  Exported in dart:io and dart:html.
+ */
+abstract class HttpStatus {
+  static const int continue_ = 100;
+  static const int switchingProtocols = 101;
+  @Since("2.1")
+  static const int processing = 102;
+  static const int ok = 200;
+  static const int created = 201;
+  static const int accepted = 202;
+  static const int nonAuthoritativeInformation = 203;
+  static const int noContent = 204;
+  static const int resetContent = 205;
+  static const int partialContent = 206;
+  @Since("2.1")
+  static const int multiStatus = 207;
+  @Since("2.1")
+  static const int alreadyReported = 208;
+  @Since("2.1")
+  static const int imUsed = 226;
+  static const int multipleChoices = 300;
+  static const int movedPermanently = 301;
+  static const int found = 302;
+  static const int movedTemporarily = 302; // Common alias for found.
+  static const int seeOther = 303;
+  static const int notModified = 304;
+  static const int useProxy = 305;
+  static const int temporaryRedirect = 307;
+  @Since("2.1")
+  static const int permanentRedirect = 308;
+  static const int badRequest = 400;
+  static const int unauthorized = 401;
+  static const int paymentRequired = 402;
+  static const int forbidden = 403;
+  static const int notFound = 404;
+  static const int methodNotAllowed = 405;
+  static const int notAcceptable = 406;
+  static const int proxyAuthenticationRequired = 407;
+  static const int requestTimeout = 408;
+  static const int conflict = 409;
+  static const int gone = 410;
+  static const int lengthRequired = 411;
+  static const int preconditionFailed = 412;
+  static const int requestEntityTooLarge = 413;
+  static const int requestUriTooLong = 414;
+  static const int unsupportedMediaType = 415;
+  static const int requestedRangeNotSatisfiable = 416;
+  static const int expectationFailed = 417;
+  @Since("2.1")
+  static const int misdirectedRequest = 421;
+  @Since("2.1")
+  static const int unprocessableEntity = 422;
+  @Since("2.1")
+  static const int locked = 423;
+  @Since("2.1")
+  static const int failedDependency = 424;
+  static const int upgradeRequired = 426;
+  @Since("2.1")
+  static const int preconditionRequired = 428;
+  @Since("2.1")
+  static const int tooManyRequests = 429;
+  @Since("2.1")
+  static const int requestHeaderFieldsTooLarge = 431;
+  @Since("2.1")
+  static const int connectionClosedWithoutResponse = 444;
+  @Since("2.1")
+  static const int unavailableForLegalReasons = 451;
+  @Since("2.1")
+  static const int clientClosedRequest = 499;
+  static const int internalServerError = 500;
+  static const int notImplemented = 501;
+  static const int badGateway = 502;
+  static const int serviceUnavailable = 503;
+  static const int gatewayTimeout = 504;
+  static const int httpVersionNotSupported = 505;
+  @Since("2.1")
+  static const int variantAlsoNegotiates = 506;
+  @Since("2.1")
+  static const int insufficientStorage = 507;
+  @Since("2.1")
+  static const int loopDetected = 508;
+  @Since("2.1")
+  static const int notExtended = 510;
+  @Since("2.1")
+  static const int networkAuthenticationRequired = 511;
+  // Client generated status code.
+  static const int networkConnectTimeoutError = 599;
+
+  @Deprecated("Use continue_ instead")
+  static const int CONTINUE = continue_;
+  @Deprecated("Use switchingProtocols instead")
+  static const int SWITCHING_PROTOCOLS = switchingProtocols;
+  @Deprecated("Use ok instead")
+  static const int OK = ok;
+  @Deprecated("Use created instead")
+  static const int CREATED = created;
+  @Deprecated("Use accepted instead")
+  static const int ACCEPTED = accepted;
+  @Deprecated("Use nonAuthoritativeInformation instead")
+  static const int NON_AUTHORITATIVE_INFORMATION = nonAuthoritativeInformation;
+  @Deprecated("Use noContent instead")
+  static const int NO_CONTENT = noContent;
+  @Deprecated("Use resetContent instead")
+  static const int RESET_CONTENT = resetContent;
+  @Deprecated("Use partialContent instead")
+  static const int PARTIAL_CONTENT = partialContent;
+  @Deprecated("Use multipleChoices instead")
+  static const int MULTIPLE_CHOICES = multipleChoices;
+  @Deprecated("Use movedPermanently instead")
+  static const int MOVED_PERMANENTLY = movedPermanently;
+  @Deprecated("Use found instead")
+  static const int FOUND = found;
+  @Deprecated("Use movedTemporarily instead")
+  static const int MOVED_TEMPORARILY = movedTemporarily;
+  @Deprecated("Use seeOther instead")
+  static const int SEE_OTHER = seeOther;
+  @Deprecated("Use notModified instead")
+  static const int NOT_MODIFIED = notModified;
+  @Deprecated("Use useProxy instead")
+  static const int USE_PROXY = useProxy;
+  @Deprecated("Use temporaryRedirect instead")
+  static const int TEMPORARY_REDIRECT = temporaryRedirect;
+  @Deprecated("Use badRequest instead")
+  static const int BAD_REQUEST = badRequest;
+  @Deprecated("Use unauthorized instead")
+  static const int UNAUTHORIZED = unauthorized;
+  @Deprecated("Use paymentRequired instead")
+  static const int PAYMENT_REQUIRED = paymentRequired;
+  @Deprecated("Use forbidden instead")
+  static const int FORBIDDEN = forbidden;
+  @Deprecated("Use notFound instead")
+  static const int NOT_FOUND = notFound;
+  @Deprecated("Use methodNotAllowed instead")
+  static const int METHOD_NOT_ALLOWED = methodNotAllowed;
+  @Deprecated("Use notAcceptable instead")
+  static const int NOT_ACCEPTABLE = notAcceptable;
+  @Deprecated("Use proxyAuthenticationRequired instead")
+  static const int PROXY_AUTHENTICATION_REQUIRED = proxyAuthenticationRequired;
+  @Deprecated("Use requestTimeout instead")
+  static const int REQUEST_TIMEOUT = requestTimeout;
+  @Deprecated("Use conflict instead")
+  static const int CONFLICT = conflict;
+  @Deprecated("Use gone instead")
+  static const int GONE = gone;
+  @Deprecated("Use lengthRequired instead")
+  static const int LENGTH_REQUIRED = lengthRequired;
+  @Deprecated("Use preconditionFailed instead")
+  static const int PRECONDITION_FAILED = preconditionFailed;
+  @Deprecated("Use requestEntityTooLarge instead")
+  static const int REQUEST_ENTITY_TOO_LARGE = requestEntityTooLarge;
+  @Deprecated("Use requestUriTooLong instead")
+  static const int REQUEST_URI_TOO_LONG = requestUriTooLong;
+  @Deprecated("Use unsupportedMediaType instead")
+  static const int UNSUPPORTED_MEDIA_TYPE = unsupportedMediaType;
+  @Deprecated("Use requestedRangeNotSatisfiable instead")
+  static const int REQUESTED_RANGE_NOT_SATISFIABLE =
+      requestedRangeNotSatisfiable;
+  @Deprecated("Use expectationFailed instead")
+  static const int EXPECTATION_FAILED = expectationFailed;
+  @Deprecated("Use upgradeRequired instead")
+  static const int UPGRADE_REQUIRED = upgradeRequired;
+  @Deprecated("Use internalServerError instead")
+  static const int INTERNAL_SERVER_ERROR = internalServerError;
+  @Deprecated("Use notImplemented instead")
+  static const int NOT_IMPLEMENTED = notImplemented;
+  @Deprecated("Use badGateway instead")
+  static const int BAD_GATEWAY = badGateway;
+  @Deprecated("Use serviceUnavailable instead")
+  static const int SERVICE_UNAVAILABLE = serviceUnavailable;
+  @Deprecated("Use gatewayTimeout instead")
+  static const int GATEWAY_TIMEOUT = gatewayTimeout;
+  @Deprecated("Use httpVersionNotSupported instead")
+  static const int HTTP_VERSION_NOT_SUPPORTED = httpVersionNotSupported;
+  @Deprecated("Use networkConnectTimeoutError instead")
+  static const int NETWORK_CONNECT_TIMEOUT_ERROR = networkConnectTimeoutError;
 }

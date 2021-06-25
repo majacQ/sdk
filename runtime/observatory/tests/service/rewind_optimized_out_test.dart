@@ -4,22 +4,19 @@
 
 import 'dart:developer';
 import 'package:observatory/service_io.dart';
-import 'package:unittest/unittest.dart';
+import 'package:test/test.dart';
 import 'service_test_common.dart';
 import 'test_helper.dart';
 
-const alwaysInline = "AlwaysInline";
-const noInline = "NeverInline";
-
-int LINE_A = 34;
-int LINE_B = 39;
-int LINE_C = 42;
-int LINE_D = 46;
+int LINE_A = 31;
+int LINE_B = 36;
+int LINE_C = 39;
+int LINE_D = 43;
 
 int global = 0;
 
-@noInline
-b3(x) {
+@pragma('vm:never-inline')
+b3(int x) {
   int sum = 0;
   try {
     for (int i = 0; i < x; i++) {
@@ -35,10 +32,10 @@ b3(x) {
   return sum;
 }
 
-@alwaysInline
+@pragma('vm:prefer-inline')
 b2(x) => b3(x); // Line B
 
-@alwaysInline
+@pragma('vm:prefer-inline')
 b1(x) => b2(x); // Line C
 
 test() {
@@ -52,13 +49,13 @@ var tests = <IsolateTest>[
   stoppedAtLine(LINE_A),
   (Isolate isolate) async {
     // We are at our breakpoint with global=100.
-    Instance result = await isolate.rootLibrary.evaluate('global');
+    Instance result = await isolate.rootLibrary.evaluate('global') as Instance;
     print('global is $result');
     expect(result.type, equals('Instance'));
     expect(result.valueAsString, equals('100'));
 
     // Rewind the top stack frame.
-    bool caughtException;
+    bool caughtException = false;
     try {
       result = await isolate.rewind(1);
       expect(false, isTrue, reason: 'Unreachable');
@@ -79,7 +76,6 @@ var tests = <IsolateTest>[
 main(args) => runIsolateTests(args, tests, testeeConcurrent: test, extraArgs: [
       '--trace-rewind',
       '--prune-dead-locals',
-      '--enable-inlining-annotations',
       '--no-background-compilation',
       '--optimization-counter-threshold=10'
     ]);

@@ -48,7 +48,7 @@ intptr_t FileSystemWatcher::WatchPath(intptr_t id,
     list_events |= IN_CREATE;
   }
   if ((events & kModifyContent) != 0) {
-    list_events |= IN_CLOSE_WRITE | IN_ATTRIB;
+    list_events |= IN_CLOSE_WRITE | IN_ATTRIB | IN_MODIFY;
   }
   if ((events & kDelete) != 0) {
     list_events |= IN_DELETE;
@@ -76,11 +76,11 @@ intptr_t FileSystemWatcher::GetSocketId(intptr_t id, intptr_t path_id) {
 
 static int InotifyEventToMask(struct inotify_event* e) {
   int mask = 0;
-  if ((e->mask & IN_CLOSE_WRITE) != 0) {
+  if ((e->mask & IN_CLOSE_WRITE) != 0 || (e->mask & IN_MODIFY) != 0) {
     mask |= FileSystemWatcher::kModifyContent;
   }
   if ((e->mask & IN_ATTRIB) != 0) {
-    mask |= FileSystemWatcher::kModefyAttribute;
+    mask |= FileSystemWatcher::kModifyAttribute;
   }
   if ((e->mask & IN_CREATE) != 0) {
     mask |= FileSystemWatcher::kCreate;
@@ -132,7 +132,7 @@ Dart_Handle FileSystemWatcher::ReadEvents(intptr_t id, intptr_t path_id) {
       } else {
         Dart_ListSetAt(event, 2, Dart_Null());
       }
-      Dart_ListSetAt(event, 3, Dart_NewBoolean(e->mask & IN_MOVED_TO));
+      Dart_ListSetAt(event, 3, Dart_NewBoolean((e->mask & IN_MOVED_TO) != 0u));
       Dart_ListSetAt(event, 4, Dart_NewInteger(e->wd));
       Dart_ListSetAt(events, i, event);
       i++;

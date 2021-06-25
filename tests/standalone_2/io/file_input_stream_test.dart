@@ -7,6 +7,8 @@
 // OtherResources=readline_test1.dat
 // OtherResources=readline_test2.dat
 
+// @dart = 2.9
+
 import "dart:convert";
 import "dart:io";
 
@@ -22,8 +24,11 @@ void testStringLineSplitter() {
   // File contains "Hello Dart\nwassup!\n"
   File file = new File(fileName);
   int linesRead = 0;
-  var lineStream =
-      file.openRead().transform(utf8.decoder).transform(new LineSplitter());
+  var lineStream = file
+      .openRead()
+      .cast<List<int>>()
+      .transform(utf8.decoder)
+      .transform(new LineSplitter());
   lineStream.listen((line) {
     linesRead++;
     if (linesRead == 1) {
@@ -213,8 +218,11 @@ void testStringLineSplitterEnding(String name, int length) {
   // File contains 10 lines.
   File file = new File(fileName);
   Expect.equals(length, file.lengthSync());
-  var lineStream =
-      file.openRead().transform(utf8.decoder).transform(new LineSplitter());
+  var lineStream = file
+      .openRead()
+      .cast<List<int>>()
+      .transform(utf8.decoder)
+      .transform(new LineSplitter());
   int lineCount = 0;
   lineStream.listen((line) {
     lineCount++;

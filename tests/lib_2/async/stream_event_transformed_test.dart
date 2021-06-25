@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import 'package:expect/expect.dart';
 import 'package:async_helper/async_helper.dart';
 import 'dart:async';
@@ -267,7 +269,7 @@ main() {
 
     bool streamIsDone = false;
     int errorCount = 0;
-    runZoned(() {
+    runZonedGuarded(() {
       controller.stream
           .transform(new SinkTransformer((sink) =>
               new FutureWaitingTransformerSink(sink, closeCompleter.future)))
@@ -280,7 +282,7 @@ main() {
         Expect.listEquals([], events);
         streamIsDone = true;
       });
-    }, onError: (e) {
+    }, (e, s) {
       Expect.isTrue(e is StateError);
       errorCount++;
     });

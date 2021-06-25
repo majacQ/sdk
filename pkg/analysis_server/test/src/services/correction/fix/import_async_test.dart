@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'fix_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(ImportAsyncTest);
   });
@@ -19,12 +19,12 @@ class ImportAsyncTest extends FixProcessorTest {
   @override
   FixKind get kind => DartFixKind.IMPORT_ASYNC;
 
-  test_future() async {
+  Future<void> test_future() async {
     updateTestPubspecFile('''
 environment:
   sdk: ^2.0.0
 ''');
-    await resolveTestUnit('''
+    await resolveTestCode('''
 Future<int> zero() async => 0;
 ''');
     await assertHasFix('''
@@ -34,18 +34,18 @@ Future<int> zero() async => 0;
 ''');
   }
 
-  test_stream() async {
+  Future<void> test_stream() async {
     updateTestPubspecFile('''
 environment:
   sdk: ^2.0.0
 ''');
-    await resolveTestUnit('''
-Stream<int> zero() => null;
+    await resolveTestCode('''
+Stream<int> zero() => throw '';
 ''');
     await assertHasFix('''
 import 'dart:async';
 
-Stream<int> zero() => null;
+Stream<int> zero() => throw '';
 ''');
   }
 }

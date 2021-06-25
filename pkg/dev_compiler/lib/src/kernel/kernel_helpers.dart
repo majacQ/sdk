@@ -2,12 +2,15 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 import 'dart:collection';
+import 'package:front_end/src/api_unstable/ddc.dart';
 import 'package:kernel/core_types.dart';
 import 'package:kernel/kernel.dart';
 
 Constructor unnamedConstructor(Class c) =>
-    c.constructors.firstWhere((c) => c.name.name == '', orElse: () => null);
+    c.constructors.firstWhere((c) => c.name.text == '', orElse: () => null);
 
 /// Returns the enclosing library for reference [node].
 Library getLibrary(NamedNode node) {
@@ -17,11 +20,16 @@ Library getLibrary(NamedNode node) {
   return null;
 }
 
-final Pattern _syntheticTypeCharacters = RegExp('[&^#.]');
+final Pattern _syntheticTypeCharacters = RegExp('[&^#.|]');
 
-String _escapeIdentifier(String identifier) {
+String escapeIdentifier(String identifier) {
   // Remove the special characters used to encode mixin application class names
-  // which are legal in Kernel, but not in JavaScript.
+  // and extension method / parameter names which are legal in Kernel, but not
+  // in JavaScript.
+  //
+  // Note, there is an implicit assumption here that we won't have
+  // collisions since everything is mapped to \$.  That may work out fine given
+  // how these are sythesized, but may need to revisit.
   return identifier?.replaceAll(_syntheticTypeCharacters, r'$');
 }
 
@@ -32,20 +40,20 @@ String _escapeIdentifier(String identifier) {
 ///
 /// In the current encoding, generic classes are generated in a function scope
 /// which avoids name clashes of the escaped class name.
-String getLocalClassName(Class node) => _escapeIdentifier(node.name);
+String getLocalClassName(Class node) => escapeIdentifier(node.name);
 
 /// Returns the escaped name for the type parameter [node].
 ///
 /// In the current encoding, generic classes are generated in a function scope
 /// which avoids name clashes of the escaped parameter name.
-String getTypeParameterName(TypeParameter node) => _escapeIdentifier(node.name);
+String getTypeParameterName(TypeParameter node) => escapeIdentifier(node.name);
 
 String getTopLevelName(NamedNode n) {
-  if (n is Procedure) return n.name.name;
+  if (n is Procedure) return n.name.text;
   if (n is Class) return n.name;
   if (n is Typedef) return n.name;
-  if (n is Field) return n.name.name;
-  return n.canonicalName?.name;
+  if (n is Field) return n.name.text;
+  return n.reference.canonicalName?.name;
 }
 
 /// Given an annotated [node] and a [test] function, returns the first matching
@@ -61,7 +69,7 @@ String getTopLevelName(NamedNode n) {
 ///
 ///    (v) => v.type.name == 'Deprecated' && v.type.element.library.isDartCore
 ///
-Expression findAnnotation(TreeNode node, bool test(Expression value)) {
+Expression findAnnotation(TreeNode node, bool Function(Expression) test) {
   List<Expression> annotations;
   if (node is Class) {
     annotations = node.annotations;
@@ -79,16 +87,38 @@ Expression findAnnotation(TreeNode node, bool test(Expression value)) {
   return annotations.firstWhere(test, orElse: () => null);
 }
 
+/// Returns true if [value] represents an annotation for class [className] in
+/// "dart:" library [libraryName].
 bool isBuiltinAnnotation(
-    Expression value, String libraryName, String expectedName) {
-  if (value is ConstructorInvocation) {
-    var c = value.target.enclosingClass;
-    if (c.name == expectedName) {
-      var uri = c.enclosingLibrary.importUri;
-      return uri.scheme == 'dart' && uri.path == libraryName;
-    }
+    Expression value, String libraryName, String className) {
+  var c = getAnnotationClass(value);
+  if (c != null && c.name == className) {
+    var uri = c.enclosingLibrary.importUri;
+    return uri.scheme == 'dart' && uri.path == libraryName;
   }
   return false;
+}
+
+/// Gets the class of the instance referred to by metadata annotation [node].
+///
+/// For example:
+///
+/// - `@JS()` would return the "JS" class in "package:js".
+/// - `@anonymous` would return the "_Anonymous" class in "package:js".
+///
+/// This function works regardless of whether the CFE is evaluating constants,
+/// or whether the constant is a field reference (such as "anonymous" above).
+Class getAnnotationClass(Expression node) {
+  if (node is ConstantExpression) {
+    var constant = node.constant;
+    if (constant is InstanceConstant) return constant.classNode;
+  } else if (node is ConstructorInvocation) {
+    return node.target.enclosingClass;
+  } else if (node is StaticGet) {
+    var type = node.target.getterType;
+    if (type is InterfaceType) return type.classNode;
+  }
+  return null;
 }
 
 /// Returns true if [name] is an operator method that is available on primitive
@@ -105,6 +135,7 @@ bool isOperatorMethodName(String name) {
     case '&':
     case '>>':
     case '<<':
+    case '>>>':
     case '+':
     case 'unary-':
     case '-':
@@ -124,7 +155,7 @@ bool isOperatorMethodName(String name) {
 bool isFromEnvironmentInvocation(CoreTypes coreTypes, StaticInvocation node) {
   var target = node.target;
   return node.isConst &&
-      target.name.name == 'fromEnvironment' &&
+      target.name.text == 'fromEnvironment' &&
       target.enclosingLibrary == coreTypes.coreLibrary;
 }
 
@@ -160,14 +191,24 @@ List<Class> getImmediateSuperclasses(Class c) {
   return result;
 }
 
-Expression getInvocationReceiver(InvocationExpression node) =>
-    node is MethodInvocation
-        ? node.receiver
-        : node is DirectMethodInvocation ? node.receiver : null;
+Expression getInvocationReceiver(InvocationExpression node) {
+  if (node is MethodInvocation) {
+    return node.receiver;
+  } else if (node is InstanceInvocation) {
+    return node.receiver;
+  } else if (node is DynamicInvocation) {
+    return node.receiver;
+  } else if (node is FunctionInvocation) {
+    return node.receiver;
+  } else if (node is LocalFunctionInvocation) {
+    return VariableGet(node.variable);
+  }
+  return null;
+}
 
 bool isInlineJS(Member e) =>
     e is Procedure &&
-    e.name.name == 'JS' &&
+    e.name.text == 'JS' &&
     e.enclosingLibrary.importUri.toString() == 'dart:_foreign_helper';
 
 /// Whether the parameter [p] is covariant (either explicitly `covariant` or
@@ -196,12 +237,10 @@ bool isUnsupportedFactoryConstructor(Procedure node) {
           var expr = statement.expression;
           if (expr is Throw) {
             var error = expr.expression;
-            if (error is ConstructorInvocation &&
-                error.target.enclosingClass.name == 'UnsupportedError') {
-              // HTML adds a lot of private constructors that are unreachable.
-              // Skip these.
-              return true;
-            }
+
+            // HTML adds a lot of private constructors that are unreachable.
+            // Skip these.
+            return isBuiltinAnnotation(error, 'core', 'UnsupportedError');
           }
         }
       }
@@ -214,7 +253,7 @@ bool isUnsupportedFactoryConstructor(Procedure node) {
 /// if the field [f] is storing that information, otherwise returns `null`.
 Iterable<Member> getRedirectingFactories(Field f) {
   // TODO(jmesserly): this relies on implementation details in Kernel
-  if (f.name.name == "_redirecting#") {
+  if (isRedirectingFactoryField(f)) {
     assert(f.isStatic);
     var list = f.initializer as ListLiteral;
     return list.expressions.map((e) => (e as StaticGet).target);
@@ -227,8 +266,7 @@ Iterable<Member> getRedirectingFactories(Field f) {
 ///
 /// This is used to ignore synthetic mixin application classes.
 ///
-// TODO(jmesserly): consider replacing this with Kernel's mixin unrolling once
-// we don't have the Analyzer backend to maintain.
+// TODO(jmesserly): consider replacing this with Kernel's mixin unrolling
 Class getSuperclassAndMixins(Class c, List<Class> mixins) {
   assert(mixins.isEmpty);
 
@@ -242,3 +280,104 @@ Class getSuperclassAndMixins(Class c, List<Class> mixins) {
   }
   return sc;
 }
+
+/// Returns true if a switch statement contains any continues with a label.
+bool hasLabeledContinue(SwitchStatement node) {
+  var visitor = LabelContinueFinder();
+  node.accept(visitor);
+  return visitor.found;
+}
+
+class LabelContinueFinder extends StatementVisitor<void> {
+  var found = false;
+
+  void visit(Statement s) {
+    if (!found && s != null) s.accept(this);
+  }
+
+  @override
+  void visitBlock(Block node) => node.statements.forEach(visit);
+  @override
+  void visitAssertBlock(AssertBlock node) => node.statements.forEach(visit);
+  @override
+  void visitWhileStatement(WhileStatement node) => visit(node.body);
+  @override
+  void visitDoStatement(DoStatement node) => visit(node.body);
+  @override
+  void visitForStatement(ForStatement node) => visit(node.body);
+  @override
+  void visitForInStatement(ForInStatement node) => visit(node.body);
+  @override
+  void visitContinueSwitchStatement(ContinueSwitchStatement node) =>
+      found = true;
+
+  @override
+  void visitSwitchStatement(SwitchStatement node) {
+    node.cases.forEach((c) => visit(c.body));
+  }
+
+  @override
+  void visitIfStatement(IfStatement node) {
+    visit(node.then);
+    visit(node.otherwise);
+  }
+
+  @override
+  void visitTryCatch(TryCatch node) {
+    visit(node.body);
+    node.catches.forEach((c) => visit(c.body));
+  }
+
+  @override
+  void visitTryFinally(TryFinally node) {
+    visit(node.body);
+    visit(node.finalizer);
+  }
+
+  @override
+  void defaultStatement(Statement node) {}
+}
+
+/// Ensures that all of the known DartType implementors are handled.
+///
+/// The goal of the function is to catch a new unhandled implementor of
+/// [DartType] in a chain of if-else statements analysing possibilities for an
+/// object of DartType. It doesn't introduce a run-time overhead in production
+/// code if used in an assert.
+bool isKnownDartTypeImplementor(DartType t) {
+  return t is DynamicType ||
+      t is FunctionType ||
+      t is FutureOrType ||
+      t is InterfaceType ||
+      t is InvalidType ||
+      t is NeverType ||
+      t is NullType ||
+      t is TypeParameterType ||
+      t is TypedefType ||
+      t is VoidType;
+}
+
+/// Whether [member] is declared native, as in:
+///
+///    void foo() native;
+///
+/// This syntax is only allowed in sdk libraries and native tests.
+bool isNative(Member member) =>
+    // The CFE represents `native` members with the `external` bit and with an
+    // internal @ExternalName annotation as a marker.
+    member.isExternal && member.annotations.any(_isNativeMarkerAnnotation);
+
+bool _isNativeMarkerAnnotation(Expression annotation) {
+  if (annotation is ConstantExpression) {
+    var constant = annotation.constant;
+    if (constant is InstanceConstant &&
+        constant.classNode.name == 'ExternalName' &&
+        _isDartInternal(constant.classNode.enclosingLibrary.importUri)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool _isDartInternal(Uri uri) =>
+    uri.scheme == 'dart' && uri.path == '_internal';

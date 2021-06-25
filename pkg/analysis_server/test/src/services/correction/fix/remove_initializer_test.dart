@@ -3,13 +3,13 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:analysis_server/src/services/correction/fix.dart';
-import 'package:analysis_server/src/services/correction/fix_internal.dart';
+import 'package:analysis_server/src/services/linter/lint_names.dart';
 import 'package:analyzer_plugin/utilities/fixes/fixes.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'fix_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(RemoveInitializerTest);
   });
@@ -23,34 +23,67 @@ class RemoveInitializerTest extends FixProcessorLintTest {
   @override
   String get lintCode => LintNames.avoid_init_to_null;
 
-  test_field() async {
-    await resolveTestUnit('''
+  Future<void> test_field() async {
+    await resolveTestCode('''
 class Test {
-  int /*LINT*/x = null;
+  int? x = null;
 }
 ''');
     await assertHasFix('''
 class Test {
-  int /*LINT*/x;
+  int? x;
 }
 ''');
   }
 
-  test_listOfVariableDeclarations() async {
-    await resolveTestUnit('''
-String a = 'a', /*LINT*/b = null, c = 'c';
+  Future<void> test_forLoop() async {
+    await resolveTestCode('''
+void f() {
+  for (var i = null; i != null; i++) {
+  }
+}
 ''');
     await assertHasFix('''
-String a = 'a', /*LINT*/b, c = 'c';
+void f() {
+  for (var i; i != null; i++) {
+  }
+}
 ''');
   }
 
-  test_topLevel() async {
-    await resolveTestUnit('''
-var /*LINT*/x = null;
+  Future<void> test_listOfVariableDeclarations() async {
+    await resolveTestCode('''
+String? a = 'a', b = null, c = 'c';
 ''');
     await assertHasFix('''
-var /*LINT*/x;
+String? a = 'a', b, c = 'c';
+''');
+  }
+
+  Future<void> test_parameter_optionalNamed() async {
+    await resolveTestCode('''
+void f({String? s = null}) {}
+''');
+    await assertHasFix('''
+void f({String? s}) {}
+''');
+  }
+
+  Future<void> test_parameter_optionalPositional() async {
+    await resolveTestCode('''
+void f([String? s = null]) {}
+''');
+    await assertHasFix('''
+void f([String? s]) {}
+''');
+  }
+
+  Future<void> test_topLevel() async {
+    await resolveTestCode('''
+var x = null;
+''');
+    await assertHasFix('''
+var x;
 ''');
   }
 }

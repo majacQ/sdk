@@ -2,12 +2,14 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 // A simple test that ensure that reflection works on uninstantiated classes.
 
 import "dart:mirrors";
 
 class Foo {
-  int a;
+  int a = 0;
 }
 
 main() {

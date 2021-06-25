@@ -7,102 +7,74 @@ import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:analyzer/src/generated/source.dart';
 import 'package:analyzer_plugin/utilities/range_factory.dart';
 
-/**
- * A visitor for visiting [AstNode]s covered by a selection [SourceRange].
- */
+/// A visitor for visiting [AstNode]s covered by a selection [SourceRange].
 class SelectionAnalyzer extends GeneralizingAstVisitor<void> {
   final SourceRange selection;
 
-  AstNode _coveringNode;
-  List<AstNode> _selectedNodes;
+  AstNode? _coveringNode;
+  List<AstNode> _selectedNodes = [];
 
   SelectionAnalyzer(this.selection);
 
-  /**
-   * Return the [AstNode] with the shortest length which completely covers the
-   * specified selection.
-   */
-  AstNode get coveringNode => _coveringNode;
+  /// Return the [AstNode] with the shortest length which completely covers the
+  /// specified selection.
+  AstNode? get coveringNode => _coveringNode;
 
-  /**
-   * Returns the first selected [AstNode], may be `null`.
-   */
-  AstNode get firstSelectedNode {
-    if (_selectedNodes == null || _selectedNodes.isEmpty) {
+  /// Returns the first selected [AstNode], may be `null`.
+  AstNode? get firstSelectedNode {
+    if (_selectedNodes.isEmpty) {
       return null;
     }
     return _selectedNodes[0];
   }
 
-  /**
-   * Returns `true` if there are [AstNode]s fully covered by the
-   * selection [SourceRange].
-   */
-  bool get hasSelectedNodes =>
-      _selectedNodes != null && !_selectedNodes.isEmpty;
+  /// Returns `true` if there are [AstNode]s fully covered by the
+  /// selection [SourceRange].
+  bool get hasSelectedNodes => _selectedNodes.isNotEmpty;
 
-  /**
-   * Returns `true` if there was no selected nodes yet.
-   */
-  bool get isFirstNode => _selectedNodes == null;
+  /// Returns `true` if there was no selected nodes yet.
+  bool get isFirstNode => _selectedNodes.isEmpty;
 
-  /**
-   * Returns the last selected [AstNode], may be `null`.
-   */
-  AstNode get lastSelectedNode {
-    if (_selectedNodes == null || _selectedNodes.isEmpty) {
+  /// Returns the last selected [AstNode], may be `null`.
+  AstNode? get lastSelectedNode {
+    if (_selectedNodes.isEmpty) {
       return null;
     }
     return _selectedNodes[_selectedNodes.length - 1];
   }
 
-  /**
-   * Return the [AstNode]s fully covered by the selection [SourceRange].
-   */
+  /// Return the [AstNode]s fully covered by the selection [SourceRange].
   List<AstNode> get selectedNodes {
-    if (_selectedNodes == null || _selectedNodes.isEmpty) {
-      return [];
-    }
     return _selectedNodes;
   }
 
-  /**
-   * Adds first selected [AstNode].
-   */
+  /// Adds first selected [AstNode].
   void handleFirstSelectedNode(AstNode node) {
     _selectedNodes = [];
     _selectedNodes.add(node);
   }
 
-  /**
-   * Adds second or more selected [AstNode].
-   */
+  /// Adds second or more selected [AstNode].
   void handleNextSelectedNode(AstNode node) {
-    if (firstSelectedNode.parent == node.parent) {
+    if (firstSelectedNode?.parent == node.parent) {
       _selectedNodes.add(node);
     }
   }
 
-  /**
-   * Notifies that selection ends in given [AstNode].
-   */
+  /// Notifies that selection ends in given [AstNode].
   void handleSelectionEndsIn(AstNode node) {}
 
-  /**
-   * Notifies that selection starts in given [AstNode].
-   */
+  /// Notifies that selection starts in given [AstNode].
   void handleSelectionStartsIn(AstNode node) {}
 
-  /**
-   * Resets selected nodes.
-   */
+  /// Resets selected nodes.
   void reset() {
-    _selectedNodes = null;
+    _selectedNodes = [];
   }
 
   @override
   void visitNode(AstNode node) {
-    SourceRange nodeRange = range.node(node);
+    var nodeRange = range.node(node);
     if (selection.covers(nodeRange)) {
       if (isFirstNode) {
         handleFirstSelectedNode(node);

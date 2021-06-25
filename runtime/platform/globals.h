@@ -5,6 +5,28 @@
 #ifndef RUNTIME_PLATFORM_GLOBALS_H_
 #define RUNTIME_PLATFORM_GLOBALS_H_
 
+#if __cplusplus >= 201703L            // C++17
+#define FALL_THROUGH [[fallthrough]]  // NOLINT
+#elif defined(__GNUC__) && __GNUC__ >= 7
+#define FALL_THROUGH __attribute__((fallthrough));
+#elif defined(__clang__)
+#define FALL_THROUGH [[clang::fallthrough]]  // NOLINT
+#else
+#define FALL_THROUGH ((void)0)
+#endif
+
+#if !defined(NDEBUG) && !defined(DEBUG)
+#if defined(GOOGLE3)
+// google3 builds use NDEBUG to indicate non-debug builds which is different
+// from the way the Dart project expects it: DEBUG indicating a debug build.
+#define DEBUG
+#else
+// Since <cassert> uses NDEBUG to signify that assert() macros should be turned
+// off, we'll define it when DEBUG is _not_ set.
+#define NDEBUG
+#endif  // GOOGLE3
+#endif  // !NDEBUG && !DEBUG
+
 // __STDC_FORMAT_MACROS has to be defined before including <inttypes.h> to
 // enable platform independent printf format specifiers.
 #ifndef __STDC_FORMAT_MACROS
@@ -52,27 +74,26 @@
 
 #if !defined(_WIN32)
 #include <arpa/inet.h>
-#include <inttypes.h>
-#include <stdint.h>
 #include <unistd.h>
 #endif  // !defined(_WIN32)
 
 #include <float.h>
+#include <inttypes.h>
 #include <limits.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
 
-#if defined(_WIN32)
-#include "platform/c99_support_win.h"
-#include "platform/floating_point_win.h"
-#include "platform/inttypes_support_win.h"
-#endif  // defined(_WIN32)
+#include <cassert>  // For assert() in constant expressions.
 
-#include "platform/math.h"
+#if defined(_WIN32)
+#include "platform/floating_point_win.h"
+#endif  // defined(_WIN32)
 
 #if !defined(_WIN32)
 #include "platform/floating_point.h"
@@ -292,8 +313,7 @@ typedef simd128_value_t fpu_register_t;
 #endif
 
 #if !defined(TARGET_ARCH_ARM) && !defined(TARGET_ARCH_X64) &&                  \
-    !defined(TARGET_ARCH_IA32) && !defined(TARGET_ARCH_ARM64) &&               \
-    !defined(TARGET_ARCH_DBC)
+    !defined(TARGET_ARCH_IA32) && !defined(TARGET_ARCH_ARM64)
 // No target architecture specified pick the one matching the host architecture.
 #if defined(HOST_ARCH_ARM)
 #define TARGET_ARCH_ARM 1
@@ -308,17 +328,29 @@ typedef simd128_value_t fpu_register_t;
 #endif
 #endif
 
+#if defined(TARGET_ARCH_IA32) || defined(TARGET_ARCH_ARM)
+#define TARGET_ARCH_IS_32_BIT 1
+#elif defined(TARGET_ARCH_X64) || defined(TARGET_ARCH_ARM64)
+#define TARGET_ARCH_IS_64_BIT 1
+#else
+#error Automatic target architecture detection failed.
+#endif
+
 // Verify that host and target architectures match, we cannot
 // have a 64 bit Dart VM generating 32 bit code or vice-versa.
 #if defined(TARGET_ARCH_X64) || defined(TARGET_ARCH_ARM64)
-#if !defined(ARCH_IS_64_BIT)
+#if !defined(ARCH_IS_64_BIT) && !defined(FFI_UNIT_TESTS)
 #error Mismatched Host/Target architectures.
-#endif
+#endif  // !defined(ARCH_IS_64_BIT) && !defined(FFI_UNIT_TESTS)
 #elif defined(TARGET_ARCH_IA32) || defined(TARGET_ARCH_ARM)
-#if !defined(ARCH_IS_32_BIT)
+#if defined(HOST_ARCH_X64) && defined(TARGET_ARCH_ARM)
+// This is simarm_x64, which is the only case where host/target architecture
+// mismatch is allowed. Unless, we're running FFI unit tests.
+#define IS_SIMARM_X64 1
+#elif !defined(ARCH_IS_32_BIT) && !defined(FFI_UNIT_TESTS)
 #error Mismatched Host/Target architectures.
-#endif
-#endif
+#endif  // !defined(ARCH_IS_32_BIT) && !defined(FFI_UNIT_TESTS)
+#endif  // defined(TARGET_ARCH_IA32) || defined(TARGET_ARCH_ARM)
 
 // Determine whether we will be using the simulator.
 #if defined(TARGET_ARCH_IA32)
@@ -327,7 +359,10 @@ typedef simd128_value_t fpu_register_t;
 // No simulator used.
 #elif defined(TARGET_ARCH_ARM)
 #if !defined(HOST_ARCH_ARM)
+#define TARGET_HOST_MISMATCH 1
+#if !defined(IS_SIMARM_X64)
 #define USING_SIMULATOR 1
+#endif
 #endif
 
 #elif defined(TARGET_ARCH_ARM64)
@@ -335,17 +370,8 @@ typedef simd128_value_t fpu_register_t;
 #define USING_SIMULATOR 1
 #endif
 
-#elif defined(TARGET_ARCH_DBC)
-#define USING_SIMULATOR 1
-
 #else
 #error Unknown architecture.
-#endif
-
-// Disable background threads by default on armv5te. The relevant
-// implementations are uniprocessors.
-#if !defined(TARGET_ARCH_ARM_5TE)
-#define ARCH_IS_MULTI_CORE 1
 #endif
 
 #if !defined(TARGET_OS_ANDROID) && !defined(TARGET_OS_FUCHSIA) &&              \
@@ -368,6 +394,18 @@ typedef simd128_value_t fpu_register_t;
 #else
 #error Automatic target OS detection failed.
 #endif
+#endif
+
+// Determine whether dual mapping of code pages is supported.
+// We test dual mapping on linux x64 and deploy it on fuchsia.
+#if !defined(DART_PRECOMPILED_RUNTIME) &&                                      \
+    (defined(TARGET_OS_LINUX) && defined(TARGET_ARCH_X64) ||                   \
+     defined(TARGET_OS_FUCHSIA))
+#define DUAL_MAPPING_SUPPORTED 1
+#endif
+
+#if defined(DART_PRECOMPILED_RUNTIME) || defined(DART_PRECOMPILER)
+#define SUPPORT_UNBOXED_INSTANCE_FIELDS
 #endif
 
 // Short form printf format specifiers
@@ -405,106 +443,136 @@ typedef simd128_value_t fpu_register_t;
 #define strtoll _strtoi64
 #endif
 
+// Byte sizes.
+constexpr int kInt8SizeLog2 = 0;
+constexpr int kInt8Size = 1 << kInt8SizeLog2;
+static_assert(kInt8Size == sizeof(int8_t), "Mismatched int8 size constant");
+constexpr int kInt16SizeLog2 = 1;
+constexpr int kInt16Size = 1 << kInt16SizeLog2;
+static_assert(kInt16Size == sizeof(int16_t), "Mismatched int16 size constant");
+constexpr int kInt32SizeLog2 = 2;
+constexpr int kInt32Size = 1 << kInt32SizeLog2;
+static_assert(kInt32Size == sizeof(int32_t), "Mismatched int32 size constant");
+constexpr int kInt64SizeLog2 = 3;
+constexpr int kInt64Size = 1 << kInt64SizeLog2;
+static_assert(kInt64Size == sizeof(int64_t), "Mismatched int64 size constant");
+
+constexpr int kDoubleSize = sizeof(double);
+constexpr int kFloatSize = sizeof(float);
+constexpr int kQuadSize = 4 * kFloatSize;
+constexpr int kSimd128Size = sizeof(simd128_value_t);
+
+// Bit sizes.
+constexpr int kBitsPerByteLog2 = 3;
+constexpr int kBitsPerByte = 1 << kBitsPerByteLog2;
+constexpr int kBitsPerInt8 = kInt8Size * kBitsPerByte;
+constexpr int kBitsPerInt16 = kInt16Size * kBitsPerByte;
+constexpr int kBitsPerInt32 = kInt32Size * kBitsPerByte;
+constexpr int kBitsPerInt64 = kInt64Size * kBitsPerByte;
+
 // The following macro works on both 32 and 64-bit platforms.
 // Usage: instead of writing 0x1234567890123456ULL
 //      write DART_2PART_UINT64_C(0x12345678,90123456);
 #define DART_2PART_UINT64_C(a, b)                                              \
-  (((static_cast<uint64_t>(a) << 32) + 0x##b##u))
+  (((static_cast<uint64_t>(a) << kBitsPerInt32) + 0x##b##u))
 
 // Integer constants.
-const int8_t kMinInt8 = 0x80;
-const int8_t kMaxInt8 = 0x7F;
-const uint8_t kMaxUint8 = 0xFF;
-const int16_t kMinInt16 = 0x8000;
-const int16_t kMaxInt16 = 0x7FFF;
-const uint16_t kMaxUint16 = 0xFFFF;
-const int32_t kMinInt32 = 0x80000000;
-const int32_t kMaxInt32 = 0x7FFFFFFF;
-const uint32_t kMaxUint32 = 0xFFFFFFFF;
-const int64_t kMinInt64 = DART_INT64_C(0x8000000000000000);
-const int64_t kMaxInt64 = DART_INT64_C(0x7FFFFFFFFFFFFFFF);
-const uint64_t kMaxUint64 = DART_2PART_UINT64_C(0xFFFFFFFF, FFFFFFFF);
-const int64_t kSignBitDouble = DART_INT64_C(0x8000000000000000);
+constexpr int8_t kMinInt8 = 0x80;
+constexpr int8_t kMaxInt8 = 0x7F;
+constexpr uint8_t kMaxUint8 = 0xFF;
+constexpr int16_t kMinInt16 = 0x8000;
+constexpr int16_t kMaxInt16 = 0x7FFF;
+constexpr uint16_t kMaxUint16 = 0xFFFF;
+constexpr int32_t kMinInt32 = 0x80000000;
+constexpr int32_t kMaxInt32 = 0x7FFFFFFF;
+constexpr uint32_t kMaxUint32 = 0xFFFFFFFF;
+constexpr int64_t kMinInt64 = DART_INT64_C(0x8000000000000000);
+constexpr int64_t kMaxInt64 = DART_INT64_C(0x7FFFFFFFFFFFFFFF);
+constexpr uint64_t kMaxUint64 = DART_2PART_UINT64_C(0xFFFFFFFF, FFFFFFFF);
+
+constexpr int kMinInt = INT_MIN;
+constexpr int kMaxInt = INT_MAX;
+constexpr int kMaxUint = UINT_MAX;
+
+constexpr int64_t kMinInt64RepresentableAsDouble = kMinInt64;
+constexpr int64_t kMaxInt64RepresentableAsDouble =
+    DART_INT64_C(0x7FFFFFFFFFFFFC00);
+constexpr int64_t kSignBitDouble = DART_INT64_C(0x8000000000000000);
 
 // Types for native machine words. Guaranteed to be able to hold pointers and
 // integers.
 typedef intptr_t word;
 typedef uintptr_t uword;
 
-// Size of a class id.
-typedef uint16_t classid_t;
-
-// Byte sizes.
-const int kWordSize = sizeof(word);
-const int kDoubleSize = sizeof(double);  // NOLINT
-const int kFloatSize = sizeof(float);    // NOLINT
-const int kQuadSize = 4 * kFloatSize;
-const int kSimd128Size = sizeof(simd128_value_t);  // NOLINT
-const int kInt64Size = sizeof(int64_t);            // NOLINT
-const int kInt32Size = sizeof(int32_t);            // NOLINT
-const int kInt16Size = sizeof(int16_t);            // NOLINT
+// Byte sizes for native machine words.
 #ifdef ARCH_IS_32_BIT
-const int kWordSizeLog2 = 2;
-const uword kUwordMax = kMaxUint32;
+constexpr int kWordSizeLog2 = kInt32SizeLog2;
 #else
-const int kWordSizeLog2 = 3;
-const uword kUwordMax = kMaxUint64;
+constexpr int kWordSizeLog2 = kInt64SizeLog2;
 #endif
+constexpr int kWordSize = 1 << kWordSizeLog2;
+static_assert(kWordSize == sizeof(word), "Mismatched word size constant");
 
-// Bit sizes.
-const int kBitsPerByte = 8;
-const int kBitsPerByteLog2 = 3;
-const int kBitsPerInt32 = kInt32Size * kBitsPerByte;
-const int kBitsPerInt64 = kInt64Size * kBitsPerByte;
-const int kBitsPerWord = kWordSize * kBitsPerByte;
-const int kBitsPerWordLog2 = kWordSizeLog2 + kBitsPerByteLog2;
+// Bit sizes for native machine words.
+constexpr int kBitsPerWordLog2 = kWordSizeLog2 + kBitsPerByteLog2;
+constexpr int kBitsPerWord = 1 << kBitsPerWordLog2;
+
+// Integer constants for native machine words.
+constexpr word kWordMin = static_cast<uword>(1) << (kBitsPerWord - 1);
+constexpr word kWordMax = (static_cast<uword>(1) << (kBitsPerWord - 1)) - 1;
+constexpr uword kUwordMax = static_cast<uword>(-1);
+
+// Size of a class id assigned to concrete, abstract and top-level classes.
+//
+// We use a signed integer type here to make it comparable with intptr_t.
+typedef int32_t classid_t;
 
 // System-wide named constants.
-const intptr_t KB = 1024;
-const intptr_t KBLog2 = 10;
-const intptr_t MB = KB * KB;
-const intptr_t MBLog2 = KBLog2 + KBLog2;
-const intptr_t GB = MB * KB;
-const intptr_t GBLog2 = MBLog2 + KBLog2;
+constexpr intptr_t KBLog2 = 10;
+constexpr intptr_t KB = 1 << KBLog2;
+constexpr intptr_t MBLog2 = KBLog2 + KBLog2;
+constexpr intptr_t MB = 1 << MBLog2;
+constexpr intptr_t GBLog2 = MBLog2 + KBLog2;
+constexpr intptr_t GB = 1 << GBLog2;
 
-const intptr_t KBInWords = KB >> kWordSizeLog2;
-const intptr_t KBInWordsLog2 = KBLog2 - kWordSizeLog2;
-const intptr_t MBInWords = KB * KBInWords;
-const intptr_t MBInWordsLog2 = KBLog2 + KBInWordsLog2;
-const intptr_t GBInWords = MB * KBInWords;
-const intptr_t GBInWordsLog2 = MBLog2 + KBInWordsLog2;
+constexpr intptr_t KBInWordsLog2 = KBLog2 - kWordSizeLog2;
+constexpr intptr_t KBInWords = 1 << KBInWordsLog2;
+constexpr intptr_t MBInWordsLog2 = KBLog2 + KBInWordsLog2;
+constexpr intptr_t MBInWords = 1 << MBInWordsLog2;
+constexpr intptr_t GBInWordsLog2 = MBLog2 + KBInWordsLog2;
+constexpr intptr_t GBInWords = 1 << GBInWordsLog2;
 
 // Helpers to round memory sizes to human readable values.
-inline intptr_t RoundWordsToKB(intptr_t size_in_words) {
+constexpr intptr_t RoundWordsToKB(intptr_t size_in_words) {
   return (size_in_words + (KBInWords >> 1)) >> KBInWordsLog2;
 }
-inline intptr_t RoundWordsToMB(intptr_t size_in_words) {
+constexpr intptr_t RoundWordsToMB(intptr_t size_in_words) {
   return (size_in_words + (MBInWords >> 1)) >> MBInWordsLog2;
 }
-inline intptr_t RoundWordsToGB(intptr_t size_in_words) {
+constexpr intptr_t RoundWordsToGB(intptr_t size_in_words) {
   return (size_in_words + (GBInWords >> 1)) >> GBInWordsLog2;
 }
 
-const intptr_t kIntptrOne = 1;
-const intptr_t kIntptrMin = (kIntptrOne << (kBitsPerWord - 1));
-const intptr_t kIntptrMax = ~kIntptrMin;
+constexpr intptr_t kIntptrOne = 1;
+constexpr intptr_t kIntptrMin = (kIntptrOne << (kBitsPerWord - 1));
+constexpr intptr_t kIntptrMax = ~kIntptrMin;
 
 // Time constants.
-const int kMillisecondsPerSecond = 1000;
-const int kMicrosecondsPerMillisecond = 1000;
-const int kMicrosecondsPerSecond =
+constexpr int kMillisecondsPerSecond = 1000;
+constexpr int kMicrosecondsPerMillisecond = 1000;
+constexpr int kMicrosecondsPerSecond =
     (kMicrosecondsPerMillisecond * kMillisecondsPerSecond);
-const int kNanosecondsPerMicrosecond = 1000;
-const int kNanosecondsPerMillisecond =
+constexpr int kNanosecondsPerMicrosecond = 1000;
+constexpr int kNanosecondsPerMillisecond =
     (kNanosecondsPerMicrosecond * kMicrosecondsPerMillisecond);
-const int kNanosecondsPerSecond =
+constexpr int kNanosecondsPerSecond =
     (kNanosecondsPerMicrosecond * kMicrosecondsPerSecond);
 
 // Helpers to scale micro second times to human understandable values.
-inline double MicrosecondsToSeconds(int64_t micros) {
+constexpr double MicrosecondsToSeconds(int64_t micros) {
   return static_cast<double>(micros) / kMicrosecondsPerSecond;
 }
-inline double MicrosecondsToMilliseconds(int64_t micros) {
+constexpr double MicrosecondsToMilliseconds(int64_t micros) {
   return static_cast<double>(micros) / kMicrosecondsPerMillisecond;
 }
 
@@ -513,8 +581,8 @@ inline double MicrosecondsToMilliseconds(int64_t micros) {
 #if !defined(DISALLOW_COPY_AND_ASSIGN)
 #define DISALLOW_COPY_AND_ASSIGN(TypeName)                                     \
  private:                                                                      \
-  TypeName(const TypeName&);                                                   \
-  void operator=(const TypeName&)
+  TypeName(const TypeName&) = delete;                                          \
+  void operator=(const TypeName&) = delete
 #endif  // !defined(DISALLOW_COPY_AND_ASSIGN)
 
 // A macro to disallow all the implicit constructors, namely the default
@@ -525,7 +593,7 @@ inline double MicrosecondsToMilliseconds(int64_t micros) {
 #if !defined(DISALLOW_IMPLICIT_CONSTRUCTORS)
 #define DISALLOW_IMPLICIT_CONSTRUCTORS(TypeName)                               \
  private:                                                                      \
-  TypeName();                                                                  \
+  TypeName() = delete;                                                         \
   DISALLOW_COPY_AND_ASSIGN(TypeName)
 #endif  // !defined(DISALLOW_IMPLICIT_CONSTRUCTORS)
 
@@ -548,41 +616,7 @@ inline double MicrosecondsToMilliseconds(int64_t micros) {
 // The USE(x) template is used to silence C++ compiler warnings issued
 // for unused variables.
 template <typename T>
-static inline void USE(T) {}
-
-// Use implicit_cast as a safe version of static_cast or const_cast
-// for upcasting in the type hierarchy (i.e. casting a pointer to Foo
-// to a pointer to SuperclassOfFoo or casting a pointer to Foo to
-// a const pointer to Foo).
-// When you use implicit_cast, the compiler checks that the cast is safe.
-// Such explicit implicit_casts are necessary in surprisingly many
-// situations where C++ demands an exact type match instead of an
-// argument type convertible to a target type.
-//
-// The From type can be inferred, so the preferred syntax for using
-// implicit_cast is the same as for static_cast etc.:
-//
-//   implicit_cast<ToType>(expr)
-//
-// implicit_cast would have been part of the C++ standard library,
-// but the proposal was submitted too late.  It will probably make
-// its way into the language in the future.
-template <typename To, typename From>
-inline To implicit_cast(From const& f) {
-  return f;
-}
-
-// Use like this: down_cast<T*>(foo);
-template <typename To, typename From>  // use like this: down_cast<T*>(foo);
-inline To down_cast(From* f) {         // so we only accept pointers
-  // Ensures that To is a sub-type of From *.  This test is here only
-  // for compile-time type checking, and has no overhead in an
-  // optimized build at run-time, as it will be optimized away completely.
-  if (false) {
-    implicit_cast<From, To>(0);
-  }
-  return static_cast<To>(f);
-}
+static inline void USE(T&&) {}
 
 // The type-based aliasing rule allows the compiler to assume that
 // pointers of different types (for some definition of different)
@@ -611,9 +645,8 @@ inline To down_cast(From* f) {         // so we only accept pointers
 // type to another thus avoiding the warning.
 template <class D, class S>
 inline D bit_cast(const S& source) {
-  // Compile time assertion: sizeof(D) == sizeof(S). A compile error
-  // here means your D and S have different sizes.
-  DART_UNUSED typedef char VerifySizesAreEqual[sizeof(D) == sizeof(S) ? 1 : -1];
+  static_assert(sizeof(D) == sizeof(S),
+                "Source and destination must have the same size");
 
   D destination;
   // This use of memcpy is safe: source and destination cannot overlap.
@@ -634,36 +667,6 @@ inline D bit_copy(const S& source) {
          sizeof(destination));
   return destination;
 }
-
-#if defined(HOST_ARCH_ARM) || defined(HOST_ARCH_ARM64)
-// Similar to bit_copy and bit_cast, but does take the type from the argument.
-template <typename T>
-static inline T ReadUnaligned(const T* ptr) {
-  T value;
-  memcpy(reinterpret_cast<void*>(&value), reinterpret_cast<const void*>(ptr),
-         sizeof(value));
-  return value;
-}
-
-// Similar to bit_copy and bit_cast, but does take the type from the argument.
-template <typename T>
-static inline void StoreUnaligned(T* ptr, T value) {
-  memcpy(reinterpret_cast<void*>(ptr), reinterpret_cast<const void*>(&value),
-         sizeof(value));
-}
-#else   // !(HOST_ARCH_ARM || HOST_ARCH_ARM64)
-// Similar to bit_copy and bit_cast, but does take the type from the argument.
-template <typename T>
-static inline T ReadUnaligned(const T* ptr) {
-  return *ptr;
-}
-
-// Similar to bit_copy and bit_cast, but does take the type from the argument.
-template <typename T>
-static inline void StoreUnaligned(T* ptr, T value) {
-  *ptr = value;
-}
-#endif  // !(HOST_ARCH_ARM || HOST_ARCH_ARM64)
 
 // On Windows the reentrent version of strtok is called
 // strtok_s. Unify on the posix name strtok_r.
@@ -699,6 +702,24 @@ static inline void StoreUnaligned(T* ptr, T value) {
 #define STDIN_FILENO 0
 #define STDOUT_FILENO 1
 #define STDERR_FILENO 2
+#endif
+
+#ifndef PATH_MAX
+// Most platforms use PATH_MAX, but in Windows it's called MAX_PATH.
+#define PATH_MAX MAX_PATH
+#endif
+
+// Undefine math.h definition which clashes with our condition names.
+#undef OVERFLOW
+
+// Include IL printer functionality into non-PRODUCT builds or in all AOT
+// compiler builds or when forced.
+#if !defined(PRODUCT) || defined(DART_PRECOMPILER) ||                          \
+    defined(FORCE_INCLUDE_DISASSEMBLER)
+#if defined(DART_PRECOMPILED_RUNTIME) && defined(PRODUCT)
+#error Requested to include IL printer into PRODUCT AOT runtime
+#endif
+#define INCLUDE_IL_PRINTER 1
 #endif
 
 }  // namespace dart

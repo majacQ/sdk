@@ -2,35 +2,25 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'package:front_end/src/scanner/reader.dart';
+import 'package:_fe_analyzer_shared/src/scanner/reader.dart';
 
-export 'package:front_end/src/scanner/reader.dart'
+export 'package:_fe_analyzer_shared/src/scanner/reader.dart'
     show CharacterReader, CharSequenceReader, SubSequenceReader;
 
-/**
- * A [CharacterReader] that reads a range of characters from another character
- * reader.
- */
+/// A [CharacterReader] that reads a range of characters from another character
+/// reader.
 class CharacterRangeReader extends CharacterReader {
-  /**
-   * The reader from which the characters are actually being read.
-   */
+  /// The reader from which the characters are actually being read.
   final CharacterReader baseReader;
 
-  /**
-   * The first character to be read.
-   */
+  /// The first character to be read.
   final int startIndex;
 
-  /**
-   * The last character to be read.
-   */
+  /// The last character to be read.
   final int endIndex;
 
-  /**
-   * Initialize a newly created reader to read the characters from the given
-   * [baseReader] between the [startIndex] inclusive to [endIndex] exclusive.
-   */
+  /// Initialize a newly created reader to read the characters from the given
+  /// [baseReader] between the [startIndex] inclusive to [endIndex] exclusive.
   CharacterRangeReader(this.baseReader, this.startIndex, this.endIndex) {
     baseReader.offset = startIndex - 1;
   }
@@ -39,7 +29,7 @@ class CharacterRangeReader extends CharacterReader {
   int get offset => baseReader.offset;
 
   @override
-  void set offset(int offset) {
+  set offset(int offset) {
     baseReader.offset = offset;
   }
 

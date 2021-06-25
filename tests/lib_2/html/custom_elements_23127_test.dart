@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 // Regression test for http://dartbug.com/23127
 // Tests super calls to a custom element upgrade constructor with various
 // combinations of parameters and type arguments.
@@ -10,8 +12,7 @@ library custom_elements_23127_test;
 
 import 'dart:async';
 import 'dart:html';
-import 'package:unittest/html_individual_config.dart';
-import 'package:unittest/unittest.dart';
+import 'package:async_helper/async_minitest.dart';
 import 'utils.dart';
 
 abstract class B1 extends HtmlElement {
@@ -87,10 +88,8 @@ class C2T extends B2T {
 
 var callTwice;
 
-main() {
-  useHtmlIndividualConfiguration();
-
-  setUp(() => customElementsReady);
+main() async {
+  await customElementsReady;
 
   callTwice = (f) {
     f();

@@ -9,7 +9,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'assist_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(AssignToLocalVariableTest);
   });
@@ -20,8 +20,8 @@ class AssignToLocalVariableTest extends AssistProcessorTest {
   @override
   AssistKind get kind => DartAssistKind.ASSIGN_TO_LOCAL_VARIABLE;
 
-  test_alreadyAssignment() async {
-    await resolveTestUnit('''
+  Future<void> test_alreadyAssignment() async {
+    await resolveTestCode('''
 main() {
   var vvv;
   vvv = 42;
@@ -30,8 +30,8 @@ main() {
     await assertNoAssistAt('vvv =');
   }
 
-  test_inClosure() async {
-    await resolveTestUnit(r'''
+  Future<void> test_inClosure() async {
+    await resolveTestCode(r'''
 main() {
   print(() {
     12345;
@@ -47,8 +47,8 @@ main() {
 ''');
   }
 
-  test_invocation() async {
-    await resolveTestUnit('''
+  Future<void> test_invocation() async {
+    await resolveTestCode('''
 main() {
   List<int> bytes;
   readBytes();
@@ -69,8 +69,8 @@ List<int> readBytes() => <int>[];
             ['list', 'bytes2', 'readBytes']));
   }
 
-  test_invocationArgument() async {
-    await resolveTestUnit(r'''
+  Future<void> test_invocationArgument() async {
+    await resolveTestCode(r'''
 main() {
   f(12345);
 }
@@ -79,8 +79,19 @@ void f(p) {}
     await assertNoAssistAt('345');
   }
 
-  test_throw() async {
-    await resolveTestUnit('''
+  Future<void> test_recovery_splitExpression() async {
+    verifyNoTestUnitErrors = false;
+    await resolveTestCode('''
+Future<void> _extractDataForSite() async {
+  final Map<String, Object> data = {};
+  final data['table'][] //marker
+}
+''');
+    assertNoAssistAt('] //marker');
+  }
+
+  Future<void> test_throw() async {
+    await resolveTestCode('''
 main() {
   throw 42;
 }
@@ -88,8 +99,8 @@ main() {
     await assertNoAssistAt('throw ');
   }
 
-  test_void() async {
-    await resolveTestUnit('''
+  Future<void> test_void() async {
+    await resolveTestCode('''
 main() {
   f();
 }

@@ -16,38 +16,38 @@ library kernel;
 import 'ast.dart';
 import 'binary/ast_to_binary.dart';
 import 'binary/ast_from_binary.dart';
-import 'dart:async';
 import 'dart:io';
 import 'text/ast_to_text.dart';
 
 export 'ast.dart';
 
-Component loadComponentFromBinary(String path, [Component component]) {
+Component loadComponentFromBinary(String path, [Component? component]) {
   List<int> bytes = new File(path).readAsBytesSync();
   return loadComponentFromBytes(bytes, component);
 }
 
-Component loadComponentFromBytes(List<int> bytes, [Component component]) {
+Component loadComponentFromBytes(List<int> bytes, [Component? component]) {
   component ??= new Component();
   new BinaryBuilder(bytes).readComponent(component);
   return component;
 }
 
-Component loadComponentSourceFromBytes(List<int> bytes, [Component component]) {
+Component loadComponentSourceFromBytes(List<int> bytes,
+    [Component? component]) {
   component ??= new Component();
   new BinaryBuilder(bytes).readComponentSource(component);
   return component;
 }
 
 Future writeComponentToBinary(Component component, String path) {
-  var sink;
+  IOSink sink;
   if (path == 'null' || path == 'stdout') {
     sink = stdout.nonBlocking;
   } else {
     sink = new File(path).openWrite();
   }
 
-  var future;
+  Future future;
   try {
     new BinaryPrinter(sink).writeComponentFile(component);
   } finally {
@@ -61,7 +61,13 @@ Future writeComponentToBinary(Component component, String path) {
   return future;
 }
 
-void writeLibraryToText(Library library, {String path}) {
+List<int> writeComponentToBytes(Component component) {
+  BytesSink sink = new BytesSink();
+  new BinaryPrinter(sink).writeComponentFile(component);
+  return sink.builder.toBytes();
+}
+
+void writeLibraryToText(Library library, {String? path}) {
   StringBuffer buffer = new StringBuffer();
   new Printer(buffer).writeLibraryFile(library);
   if (path == null) {
@@ -72,15 +78,9 @@ void writeLibraryToText(Library library, {String path}) {
 }
 
 void writeComponentToText(Component component,
-    {String path,
-    bool showExternal: false,
-    bool showOffsets: false,
-    bool showMetadata: false}) {
+    {String? path, bool showOffsets: false, bool showMetadata: false}) {
   StringBuffer buffer = new StringBuffer();
-  new Printer(buffer,
-          showExternal: showExternal,
-          showOffsets: showOffsets,
-          showMetadata: showMetadata)
+  new Printer(buffer, showOffsets: showOffsets, showMetadata: showMetadata)
       .writeComponentFile(component);
   if (path == null) {
     print(buffer);

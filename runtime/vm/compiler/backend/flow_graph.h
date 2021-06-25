@@ -5,6 +5,10 @@
 #ifndef RUNTIME_VM_COMPILER_BACKEND_FLOW_GRAPH_H_
 #define RUNTIME_VM_COMPILER_BACKEND_FLOW_GRAPH_H_
 
+#if defined(DART_PRECOMPILED_RUNTIME)
+#error "AOT runtime should not use compiler sources (including header files)"
+#endif  // defined(DART_PRECOMPILED_RUNTIME)
+
 #include "vm/bit_vector.h"
 #include "vm/compiler/backend/il.h"
 #include "vm/growable_array.h"
@@ -16,6 +20,10 @@ namespace dart {
 
 class LoopHierarchy;
 class VariableLivenessAnalysis;
+
+namespace compiler {
+class GraphIntrinsifier;
+}
 
 class BlockIterator : public ValueObject {
  public:
@@ -41,34 +49,42 @@ class BlockIterator : public ValueObject {
   intptr_t current_;
 };
 
+struct ConstantAndRepresentation {
+  const Object& constant;
+  Representation representation;
+};
+
 struct ConstantPoolTrait {
   typedef ConstantInstr* Value;
-  typedef const Object& Key;
+  typedef ConstantAndRepresentation Key;
   typedef ConstantInstr* Pair;
 
-  static Key KeyOf(Pair kv) { return kv->value(); }
+  static Key KeyOf(Pair kv) {
+    return ConstantAndRepresentation{kv->value(), kv->representation()};
+  }
 
   static Value ValueOf(Pair kv) { return kv; }
 
-  static inline intptr_t Hashcode(Key key) {
-    if (key.IsSmi()) {
-      return Smi::Cast(key).Value();
+  static inline uword Hash(Key key) {
+    if (key.constant.IsSmi()) {
+      return Smi::Cast(key.constant).Value();
     }
-    if (key.IsDouble()) {
+    if (key.constant.IsDouble()) {
       return static_cast<intptr_t>(bit_cast<int32_t, float>(
-          static_cast<float>(Double::Cast(key).value())));
+          static_cast<float>(Double::Cast(key.constant).value())));
     }
-    if (key.IsMint()) {
-      return static_cast<intptr_t>(Mint::Cast(key).value());
+    if (key.constant.IsMint()) {
+      return static_cast<intptr_t>(Mint::Cast(key.constant).value());
     }
-    if (key.IsString()) {
-      return String::Cast(key).Hash();
+    if (key.constant.IsString()) {
+      return String::Cast(key.constant).Hash();
     }
-    return key.GetClassId();
+    return key.constant.GetClassId();
   }
 
   static inline bool IsKeyEqual(Pair kv, Key key) {
-    return kv->value().raw() == key.raw();
+    return (kv->value().ptr() == key.constant.ptr()) &&
+           (kv->representation() == key.representation);
   }
 };
 
@@ -108,6 +124,9 @@ class FlowGraph : public ZoneAllocated {
   // the arguments descriptor.
   intptr_t num_direct_parameters() const { return num_direct_parameters_; }
 
+  // The number of words on the stack used by the direct parameters.
+  intptr_t direct_parameters_size() const { return direct_parameters_size_; }
+
   // The number of variables (or boxes) which code can load from / store to.
   // The SSA renaming will insert phi's for them (and only them - i.e. there
   // will be no phi insertion for [LocalVariable]s pointing to the expression
@@ -115,6 +134,28 @@ class FlowGraph : public ZoneAllocated {
   intptr_t variable_count() const {
     return num_direct_parameters_ + parsed_function_.num_stack_locals();
   }
+
+  // The number of variables during OSR, which may include stack slots
+  // that pass in initial contents for the expression stack.
+  intptr_t osr_variable_count() const {
+    ASSERT(IsCompiledForOsr());
+    return variable_count() + graph_entry()->osr_entry()->stack_depth();
+  }
+
+  // This function returns the offset (in words) of the [index]th
+  // parameter, relative to the first parameter.
+  // If [last_slot] is true it gives the offset of the last slot of that
+  // location, otherwise it returns the first one.
+  static intptr_t ParameterOffsetAt(const Function& function,
+                                    intptr_t index,
+                                    bool last_slot = true);
+
+  static Representation ParameterRepresentationAt(const Function& function,
+                                                  intptr_t index);
+
+  static Representation ReturnRepresentationOf(const Function& function);
+
+  static Representation UnboxedFieldRepresentationOf(const Field& field);
 
   // The number of variables (or boxes) inside the functions frame - meaning
   // below the frame pointer.  This does not include the expression stack.
@@ -129,11 +170,6 @@ class FlowGraph : public ZoneAllocated {
   }
 
   intptr_t CurrentContextEnvIndex() const {
-#if !defined(DART_PRECOMPILED_RUNTIME)
-    if (function().HasBytecode()) {
-      return -1;
-    }
-#endif  // !defined(DART_PRECOMPILED_RUNTIME)
     return EnvIndex(parsed_function().current_context_var());
   }
 
@@ -148,6 +184,11 @@ class FlowGraph : public ZoneAllocated {
   intptr_t EnvIndex(const LocalVariable* variable) const {
     ASSERT(!variable->is_captured());
     return num_direct_parameters_ - variable->index().value();
+  }
+
+  static bool NeedsPairLocation(Representation representation) {
+    return representation == kUnboxedInt64 &&
+           compiler::target::kIntSpillFactor == 2;
   }
 
   // Flow graph orders.
@@ -178,7 +219,7 @@ class FlowGraph : public ZoneAllocated {
   Instruction* CreateCheckClass(Definition* to_check,
                                 const Cids& cids,
                                 intptr_t deopt_id,
-                                TokenPosition token_pos);
+                                const InstructionSource& source);
 
   Definition* CreateCheckBound(Definition* length,
                                Definition* index,
@@ -201,11 +242,11 @@ class FlowGraph : public ZoneAllocated {
   // Return value indicates that the call needs no check at all,
   // just a null check, or a full class check.
   ToCheck CheckForInstanceCall(InstanceCallInstr* call,
-                               RawFunction::Kind kind) const;
+                               UntaggedFunction::Kind kind) const;
 
   Thread* thread() const { return thread_; }
   Zone* zone() const { return thread()->zone(); }
-  Isolate* isolate() const { return thread()->isolate(); }
+  IsolateGroup* isolate_group() const { return thread()->isolate_group(); }
 
   intptr_t max_block_id() const { return max_block_id_; }
   void set_max_block_id(intptr_t id) { max_block_id_ = id; }
@@ -229,32 +270,95 @@ class FlowGraph : public ZoneAllocated {
 
   intptr_t InstructionCount() const;
 
-  ConstantInstr* GetConstant(const Object& object);
+  // Returns the definition for the object from the constant pool if
+  // one exists, otherwise returns nullptr.
+  ConstantInstr* GetExistingConstant(
+      const Object& object,
+      Representation representation = kTagged) const;
+
+  // Always returns a definition for the object from the constant pool,
+  // allocating one if it doesn't already exist.
+  ConstantInstr* GetConstant(const Object& object,
+                             Representation representation = kTagged);
+
   void AddToGraphInitialDefinitions(Definition* defn);
   void AddToInitialDefinitions(BlockEntryWithInitialDefs* entry,
                                Definition* defn);
+
+  // Tries to create a constant definition with the given value which can be
+  // used to replace the given operation. Ensures that the representation of
+  // the replacement matches the representation of the original definition.
+  // If the given value can't be represented using matching representation
+  // then returns op itself.
+  Definition* TryCreateConstantReplacementFor(Definition* op,
+                                              const Object& value);
+
+  // Returns true if the given constant value can be represented in the given
+  // representation.
+  static bool IsConstantRepresentable(const Object& value,
+                                      Representation target_rep,
+                                      bool tagged_value_must_be_smi);
 
   enum UseKind { kEffect, kValue };
 
   void InsertBefore(Instruction* next,
                     Instruction* instr,
                     Environment* env,
-                    UseKind use_kind);
+                    UseKind use_kind) {
+    InsertAfter(next->previous(), instr, env, use_kind);
+  }
+  void InsertSpeculativeBefore(Instruction* next,
+                               Instruction* instr,
+                               Environment* env,
+                               UseKind use_kind) {
+    InsertSpeculativeAfter(next->previous(), instr, env, use_kind);
+  }
   void InsertAfter(Instruction* prev,
                    Instruction* instr,
                    Environment* env,
                    UseKind use_kind);
+
+  // Inserts a speculative [instr] after existing [prev] instruction.
+  //
+  // If the inserted [instr] deopts eagerly or lazily we will always continue in
+  // unoptimized code at before-call using the given [env].
+  //
+  // This is mainly used during inlining / call specializing when replacing
+  // calls with N specialized instructions where the inserted [1..N[
+  // instructions cannot continue in unoptimized code after-call since they
+  // would miss instructions following the one that lazy-deopted.
+  //
+  // For example specializing an instance call to an implicit field setter
+  //
+  //     InstanceCall:<id>(v0, set:<name>, args = [v1])
+  //
+  // to
+  //
+  //     v2 <- AssertAssignable:<id>(v1, ...)
+  //     StoreInstanceField(v0, v2)
+  //
+  // If the [AssertAssignable] causes a lazy-deopt on return, we'll have to
+  // *re-try* the implicit setter call in unoptimized mode, i.e. lazy deopt to
+  // before-call (otherwise - if we continued after-call - the
+  // StoreInstanceField would not be performed).
+  void InsertSpeculativeAfter(Instruction* prev,
+                              Instruction* instr,
+                              Environment* env,
+                              UseKind use_kind);
   Instruction* AppendTo(Instruction* prev,
                         Instruction* instr,
                         Environment* env,
                         UseKind use_kind);
+  Instruction* AppendSpeculativeTo(Instruction* prev,
+                                   Instruction* instr,
+                                   Environment* env,
+                                   UseKind use_kind);
 
   // Operations on the flow graph.
   void ComputeSSA(intptr_t next_virtual_register_number,
                   ZoneGrowableArray<Definition*>* inlining_parameters);
 
-  // Verification methods for debugging.
-  bool VerifyUseLists();
+  // Verification method for debugging.
   bool VerifyRedefinitions();
 
   void DiscoverBlocks();
@@ -271,6 +375,10 @@ class FlowGraph : public ZoneAllocated {
 
   // Remove the redefinition instructions inserted to inhibit code motion.
   void RemoveRedefinitions(bool keep_checks = false);
+
+  // Insert PushArgument instructions and remove explicit def-use
+  // relations between calls and their arguments.
+  void InsertPushArguments();
 
   // Copy deoptimization target from one instruction to another if we still
   // have to keep deoptimization environment at gotos for LICM purposes.
@@ -324,12 +432,6 @@ class FlowGraph : public ZoneAllocated {
 
   bool IsCompiledForOsr() const { return graph_entry()->IsCompiledForOsr(); }
 
-  void AddToDeferredPrefixes(ZoneGrowableArray<const LibraryPrefix*>* from);
-
-  ZoneGrowableArray<const LibraryPrefix*>* deferred_prefixes() const {
-    return deferred_prefixes_;
-  }
-
   BitVector* captured_parameters() const { return captured_parameters_; }
 
   intptr_t inlining_id() const { return inlining_id_; }
@@ -355,15 +457,6 @@ class FlowGraph : public ZoneAllocated {
   // shift can be a truncating Smi shift-left and result is always Smi.
   // Merge instructions (only per basic-block).
   void TryOptimizePatterns();
-
-  ZoneGrowableArray<TokenPosition>* await_token_positions() const {
-    return await_token_positions_;
-  }
-
-  void set_await_token_positions(
-      ZoneGrowableArray<TokenPosition>* await_token_positions) {
-    await_token_positions_ = await_token_positions;
-  }
 
   // Replaces uses that are dominated by dom of 'def' with 'other'.
   // Note: uses that occur at instruction dom itself are not dominated by it.
@@ -408,21 +501,26 @@ class FlowGraph : public ZoneAllocated {
   // Adds a 2-way phi.
   PhiInstr* AddPhi(JoinEntryInstr* join, Definition* d1, Definition* d2);
 
+  // SSA transformation methods and fields.
+  void ComputeDominators(GrowableArray<BitVector*>* dominance_frontier);
+
+  void CreateCommonConstants();
+
  private:
   friend class FlowGraphCompiler;  // TODO(ajcbik): restructure
+  friend class FlowGraphChecker;
   friend class IfConverter;
   friend class BranchSimplifier;
   friend class ConstantPropagator;
   friend class DeadCodeElimination;
-  friend class Intrinsifier;
-
-  // SSA transformation methods and fields.
-  void ComputeDominators(GrowableArray<BitVector*>* dominance_frontier);
+  friend class compiler::GraphIntrinsifier;
 
   void CompressPath(intptr_t start_index,
                     intptr_t current_index,
                     GrowableArray<intptr_t>* parent,
                     GrowableArray<intptr_t>* label);
+
+  void AddSyntheticPhis(BlockEntryInstr* block);
 
   void Rename(GrowableArray<PhiInstr*>* live_phis,
               VariableLivenessAnalysis* variable_liveness,
@@ -432,6 +530,10 @@ class FlowGraph : public ZoneAllocated {
                        GrowableArray<PhiInstr*>* live_phis,
                        VariableLivenessAnalysis* variable_liveness,
                        ZoneGrowableArray<Definition*>* inlining_parameters);
+#if defined(DEBUG)
+  // Validates no phis are missing on join entry instructions.
+  void ValidatePhis();
+#endif  // defined(DEBUG)
 
   void PopulateEnvironmentFromFunctionEntry(
       FunctionEntryInstr* function_entry,
@@ -505,6 +607,7 @@ class FlowGraph : public ZoneAllocated {
   // Flow graph fields.
   const ParsedFunction& parsed_function_;
   intptr_t num_direct_parameters_;
+  intptr_t direct_parameters_size_;
   GraphEntryInstr* graph_entry_;
   GrowableArray<BlockEntryInstr*> preorder_;
   GrowableArray<BlockEntryInstr*> postorder_;
@@ -521,8 +624,6 @@ class FlowGraph : public ZoneAllocated {
   LoopHierarchy* loop_hierarchy_;
   ZoneGrowableArray<BitVector*>* loop_invariant_loads_;
 
-  ZoneGrowableArray<const LibraryPrefix*>* deferred_prefixes_;
-  ZoneGrowableArray<TokenPosition>* await_token_positions_;
   DirectChainedHashMap<ConstantPoolTrait> constant_instr_pool_;
   BitVector* captured_parameters_;
 
@@ -590,8 +691,8 @@ class LivenessAnalysis : public ValueObject {
   const GrowableArray<BlockEntryInstr*>& postorder_;
 
   // Live-out sets for each block.  They contain indices of variables
-  // that are live out from this block: that is values that were either
-  // defined in this block or live into it and that are used in some
+  // that are live out from this block. That is values that were (1) either
+  // defined in this block or live into it, and (2) that are used in some
   // successor block.
   GrowableArray<BitVector*> live_out_;
 

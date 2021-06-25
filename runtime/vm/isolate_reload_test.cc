@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+#include <array>
+
 #include "include/dart_api.h"
 #include "include/dart_tools_api.h"
 #include "platform/assert.h"
@@ -274,36 +276,43 @@ TEST_CASE(IsolateReload_KernelIncrementalCompileGenerics) {
 }
 
 TEST_CASE(IsolateReload_KernelIncrementalCompileBaseClass) {
+  const char* nullable_tag = TestCase::NullableTag();
   // clang-format off
-  Dart_SourceFile sourcefiles[] = {
+  auto kSourceFile1 =
+      Utils::CStringUniquePtr(OS::SCreate(nullptr,
+                                "class State<T, U> {\n"
+                                "  T%s t;\n"
+                                "  U%s u;\n"
+                                "  State(List l) {\n"
+                                "    t = l[0] is T ? l[0] : null;\n"
+                                "    u = l[1] is U ? l[1] : null;\n"
+                                "  }\n"
+                                "}\n",
+                                nullable_tag, nullable_tag),
+                              std::free);
+  Dart_SourceFile sourcefiles[3] = {
       {
           "file:///test-app.dart",
           "import 'test-util.dart';\n"
           "main() {\n"
           "  var v = doWork();"
-          "  return v == 42 ? 1: v == null ? -1: 0;\n"
+          "  return v == 42 ? 1 : v == null ? -1 : 0;\n"
           "}\n",
       },
       {
           "file:///test-lib.dart",
-          "class State<T, U> {\n"
-          "  T t;\n"
-          "  U u;\n"
-          "  State(List l) {\n"
-          "    t = l[0] is T? l[0]: null;\n"
-          "    u = l[1] is U? l[1]: null;\n"
-          "  }\n"
-          "}\n",
+          kSourceFile1.get()
       },
       {
-          "file:///test-util.dart",
-          "import 'test-lib.dart';\n"
-          "class MyAccountState extends State<int, String> {\n"
-          "  MyAccountState(List l): super(l) {}\n"
-          "  first() => t;\n"
-          "}\n"
-          "doWork() => new MyAccountState(<dynamic>[42, 'abc']).first();\n"
-      }};
+        "file:///test-util.dart",
+        "import 'test-lib.dart';\n"
+        "class MyAccountState extends State<int, String> {\n"
+        "  MyAccountState(List l): super(l) {}\n"
+        "  first() => t;\n"
+        "}\n"
+        "doWork() => new MyAccountState(<dynamic>[42, 'abc']).first();\n"
+      }
+  };
   // clang-format on
 
   Dart_Handle lib = TestCase::LoadTestScriptWithDFE(
@@ -316,20 +325,22 @@ TEST_CASE(IsolateReload_KernelIncrementalCompileBaseClass) {
   EXPECT_VALID(result);
   EXPECT_EQ(1, value);
 
-  // clang-format off
-  Dart_SourceFile updated_sourcefiles[] = {
-      {
-          "file:///test-lib.dart",
-          "class State<U, T> {\n"
-          "  T t;\n"
-          "  U u;\n"
-          "  State(List l) {\n"
-          "    t = l[0] is T? l[0]: null;\n"
-          "    u = l[1] is U? l[1]: null;\n"
-          "  }\n"
-          "}\n",
-      }};
-  // clang-format on
+  auto kUpdatedSourceFile =
+      Utils::CStringUniquePtr(OS::SCreate(nullptr,
+                                          "class State<U, T> {\n"
+                                          "  T%s t;\n"
+                                          "  U%s u;\n"
+                                          "  State(List l) {\n"
+                                          "    t = l[0] is T ? l[0] : null;\n"
+                                          "    u = l[1] is U ? l[1] : null;\n"
+                                          "  }\n"
+                                          "}\n",
+                                          nullable_tag, nullable_tag),
+                              std::free);
+  Dart_SourceFile updated_sourcefiles[1] = {{
+      "file:///test-lib.dart",
+      kUpdatedSourceFile.get(),
+  }};
   {
     const uint8_t* kernel_buffer = NULL;
     intptr_t kernel_buffer_size = 0;
@@ -578,6 +589,32 @@ TEST_CASE(IsolateReload_ClassAdded) {
   EXPECT_STREQ("hello from A", SimpleInvokeStr(lib, "main"));
 }
 
+TEST_CASE(IsolateReload_ClassRemoved) {
+  const char* kScript =
+      "class A {\n"
+      "  toString() => 'hello from A';\n"
+      "}\n"
+      "List<dynamic> list = <dynamic>[];"
+      "main() {\n"
+      "  list.add(new A());\n"
+      "  return list[0].toString();\n"
+      "}\n";
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+  EXPECT_VALID(lib);
+  EXPECT_STREQ("hello from A", SimpleInvokeStr(lib, "main"));
+
+  const char* kReloadScript =
+      "List<dynamic> list = <dynamic>[];\n"
+      "main() {\n"
+      "  return list[0].toString();\n"
+      "}\n";
+
+  lib = TestCase::ReloadTestScript(kReloadScript);
+  EXPECT_VALID(lib);
+  EXPECT_STREQ("hello from A", SimpleInvokeStr(lib, "main"));
+}
+
 TEST_CASE(IsolateReload_LibraryImportAdded) {
   const char* kScript =
       "main() {\n"
@@ -691,34 +728,45 @@ TEST_CASE(IsolateReload_ImplicitConstructorChanged) {
 }
 
 TEST_CASE(IsolateReload_ConstructorChanged) {
-  const char* kScript =
-      "class A {\n"
-      "  int field;\n"
-      "  A() { field = 20; }\n"
-      "}\n"
-      "var savedA = new A();\n"
-      "main() {\n"
-      "  var newA = new A();\n"
-      "  return 'saved:${savedA.field} new:${newA.field}';\n"
-      "}\n";
+  const char* late_tag = TestCase::LateTag();
+  // clang-format off
+  auto kScript = Utils::CStringUniquePtr(
+      OS::SCreate(nullptr,
+                  "class A {\n"
+                  "  %s int field;\n"
+                  "  A() { field = 20; }\n"
+                  "}\n"
+                  "var savedA = A();\n"
+                  "main() {\n"
+                  "  var newA = A();\n"
+                  "  return 'saved:${savedA.field} new:${newA.field}';\n"
+                  "}\n",
+                  late_tag),
+      std::free);
+  // clang-format on
 
-  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+  Dart_Handle lib = TestCase::LoadTestScript(kScript.get(), NULL);
   EXPECT_VALID(lib);
   EXPECT_STREQ("saved:20 new:20", SimpleInvokeStr(lib, "main"));
 
-  const char* kReloadScript =
-      "var _unused;"
-      "class A {\n"
-      "  int field;\n"
-      "  A() { field = 10; }\n"
-      "}\n"
-      "var savedA = new A();\n"
-      "main() {\n"
-      "  var newA = new A();\n"
-      "  return 'saved:${savedA.field} new:${newA.field}';\n"
-      "}\n";
+  // clang-format off
+  auto kReloadScript = Utils::CStringUniquePtr(
+      OS::SCreate(nullptr,
+                  "var _unused;"
+                  "class A {\n"
+                  "  %s int field;\n"
+                  "  A() { field = 10; }\n"
+                  "}\n"
+                  "var savedA = A();\n"
+                  "main() {\n"
+                  "  var newA = A();\n"
+                  "  return 'saved:${savedA.field} new:${newA.field}';\n"
+                  "}\n",
+                  late_tag),
+      std::free);
+  // clang-format on
 
-  lib = TestCase::ReloadTestScript(kReloadScript);
+  lib = TestCase::ReloadTestScript(kReloadScript.get());
   EXPECT_VALID(lib);
   EXPECT_STREQ("saved:20 new:10", SimpleInvokeStr(lib, "main"));
 }
@@ -1050,12 +1098,12 @@ TEST_CASE(IsolateReload_LibraryLookup) {
 
   const char* kScript =
       "main() {\n"
-      "  return importedFunc();\n"
+      "  return 'b';\n"
       "}\n";
   Dart_Handle result;
   Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
   EXPECT_VALID(lib);
-  EXPECT_ERROR(SimpleInvokeError(lib, "main"), "importedFunc");
+  EXPECT_STREQ("b", SimpleInvokeStr(lib, "main"));
 
   // Fail to find 'test:lib1' in the isolate.
   result = Dart_LookupLibrary(NewString("test:lib1"));
@@ -1076,7 +1124,7 @@ TEST_CASE(IsolateReload_LibraryLookup) {
   result = Dart_LookupLibrary(NewString("test:lib1"));
   EXPECT(Dart_IsLibrary(result));
 
-  // Reload and remove 'dart:math' from isolate.
+  // Reload and remove 'test:lib1' from isolate.
   lib = TestCase::ReloadTestScript(kScript);
   EXPECT_VALID(lib);
 
@@ -1316,21 +1364,14 @@ TEST_CASE(IsolateReload_PendingUnqualifiedCall_InstanceToStatic) {
       "}\n";
 
   EXPECT_VALID(TestCase::SetReloadTestScript(kReloadScript));
-
   const char* expected = "static";
   const char* result = SimpleInvokeStr(lib, "main");
   EXPECT_NOTNULL(result);
-
   // Bail out if we've already failed so we don't crash in StringEquals.
   if (result == NULL) {
     return;
   }
   EXPECT_STREQ(expected, result);
-
-  // Bail out if we've already failed so we don't crash in the tag handler.
-  if (strcmp(expected, result) != 0) {
-    return;
-  }
 
   lib = Dart_RootLibrary();
   EXPECT_NON_NULL(lib);
@@ -1344,7 +1385,6 @@ TEST_CASE(IsolateReload_PendingConstructorCall_AbstractToConcrete) {
       "class C {\n"
       "  test() {\n"
       "    reloadTest();\n"
-      "    return new Foo();\n"
       "  }\n"
       "}\n"
       "main() {\n"
@@ -1434,19 +1474,7 @@ TEST_CASE(IsolateReload_PendingConstructorCall_ConcreteToAbstract) {
       "}\n";
 
   EXPECT_VALID(TestCase::SetReloadTestScript(kReloadScript));
-
-  const char* expected = "exception";
-  const char* result = SimpleInvokeStr(lib, "main");
-  EXPECT_STREQ(expected, result);
-
-  // Bail out if we've already failed so we don't crash in the tag handler.
-  if ((result == NULL) || (strcmp(expected, result) != 0)) {
-    return;
-  }
-
-  lib = Dart_RootLibrary();
-  EXPECT_NON_NULL(lib);
-  EXPECT_STREQ(expected, SimpleInvokeStr(lib, "main"));
+  EXPECT_ERROR(SimpleInvokeError(lib, "main"), "is abstract");
 }
 
 TEST_CASE(IsolateReload_PendingStaticCall_DefinedToNSM) {
@@ -1487,7 +1515,6 @@ TEST_CASE(IsolateReload_PendingStaticCall_DefinedToNSM) {
       "}\n";
 
   EXPECT_VALID(TestCase::SetReloadTestScript(kReloadScript));
-
   const char* expected = "exception";
   const char* result = SimpleInvokeStr(lib, "main");
   EXPECT_NOTNULL(result);
@@ -1498,12 +1525,6 @@ TEST_CASE(IsolateReload_PendingStaticCall_DefinedToNSM) {
   }
   EXPECT_STREQ(expected, result);
 
-  // Bail out if we've already failed so we don't crash in the tag handler.
-  if (strcmp(expected, result) != 0) {
-    return;
-  }
-
-  EXPECT_STREQ(expected, result);
   lib = Dart_RootLibrary();
   EXPECT_NON_NULL(lib);
   EXPECT_STREQ(expected, SimpleInvokeStr(lib, "main"));
@@ -1550,12 +1571,12 @@ TEST_CASE(IsolateReload_PendingStaticCall_NSMToDefined) {
 
   const char* expected = "static";
   const char* result = SimpleInvokeStr(lib, "main");
-  EXPECT_STREQ(expected, result);
 
   // Bail out if we've already failed so we don't crash in the tag handler.
-  if ((result == NULL) || (strcmp(expected, result) != 0)) {
+  if (result == NULL) {
     return;
   }
+  EXPECT_STREQ(expected, result);
 
   lib = Dart_RootLibrary();
   EXPECT_NON_NULL(lib);
@@ -1674,7 +1695,7 @@ TEST_CASE(IsolateReload_TearOff_Parameter_Count_Mismatch) {
 
   const char* error;
   error =
-      "file:///test-lib:8:12: Error: Too few positional"
+      "/test-lib:8:12: Error: Too few positional"
       " arguments: 1 required, 0 given.\n"
       "  return f1();";
   EXPECT_ERROR(error_handle, error);
@@ -1797,10 +1818,10 @@ TEST_CASE(IsolateReload_TearOff_List_Set) {
       "class C {\n"
       "  foo() => 'old';\n"
       "}\n"
-      "List list = new List(2);\n"
-      "Set set = new Set();\n"
+      "List list = List<dynamic>.filled(2, null);\n"
+      "Set set = Set();\n"
       "main() {\n"
-      "  var c = new C();\n"
+      "  var c = C();\n"
       "  list[0] = c.foo;\n"
       "  list[1] = c.foo;\n"
       "  set.add(c.foo);\n"
@@ -1825,10 +1846,10 @@ TEST_CASE(IsolateReload_TearOff_List_Set) {
       "class C {\n"
       "  foo() => 'new';\n"
       "}\n"
-      "List list = new List(2);\n"
-      "Set set = new Set();\n"
+      "List list = List<dynamic>.filled(2, null);\n"
+      "Set set = Set();\n"
       "main() {\n"
-      "  var c = new C();\n"
+      "  var c = C();\n"
       "  list[0] = c.foo;\n"
       "  list[1] = c.foo;\n"
       "  set.add(c.foo);\n"
@@ -2125,6 +2146,7 @@ TEST_CASE(IsolateReload_EnumToNotEnum) {
       "  final int zero = 0;\n"
       "}\n"
       "main() {\n"
+      "  return new Fruit().zero.toString();\n"
       "}\n";
 
   Dart_Handle result = TestCase::ReloadTestScript(kReloadScript);
@@ -2137,12 +2159,12 @@ TEST_CASE(IsolateReload_NotEnumToEnum) {
       "  final int zero = 0;\n"
       "}\n"
       "main() {\n"
-      "  return 'yes';\n"
+      "  return new Fruit().zero.toString();\n"
       "}\n";
 
   Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
   EXPECT_VALID(lib);
-  EXPECT_STREQ("yes", SimpleInvokeStr(lib, "main"));
+  EXPECT_STREQ("0", SimpleInvokeStr(lib, "main"));
 
   const char* kReloadScript =
       "enum Fruit {\n"
@@ -2336,21 +2358,22 @@ ISOLATE_UNIT_TEST_CASE(IsolateReload_DirectSubclasses_Success) {
   Object& new_subclass = Object::Handle();
   String& name = String::Handle();
 
-  // Lookup the Iterator class by name from the dart core library.
-  ObjectStore* object_store = Isolate::Current()->object_store();
+  // Lookup the Stopwatch class by name from the dart core library.
+  ObjectStore* object_store = IsolateGroup::Current()->object_store();
   const Library& core_lib = Library::Handle(object_store->core_library());
-  name = String::New("Iterator");
-  const Class& iterator_cls = Class::Handle(core_lib.LookupClass(name));
+  name = String::New("Stopwatch");
+  const Class& stopwatch_cls = Class::Handle(core_lib.LookupClass(name));
 
-  // Keep track of how many subclasses an Iterator has.
+  // Keep track of how many subclasses an Stopwatch has.
   auto& subclasses =
-      GrowableObjectArray::Handle(iterator_cls.direct_subclasses());
-  intptr_t saved_subclass_count = subclasses.Length();
+      GrowableObjectArray::Handle(stopwatch_cls.direct_subclasses_unsafe());
+  intptr_t saved_subclass_count = subclasses.IsNull() ? 0 : subclasses.Length();
 
   const char* kScript =
-      "abstract class AIterator extends Iterator {\n"
+      "class AStopwatch extends Stopwatch {\n"
       "}\n"
       "main() {\n"
+      "  new AStopwatch();\n"  // Force finalization.
       "  return 1;\n"
       "}\n";
 
@@ -2361,21 +2384,23 @@ ISOLATE_UNIT_TEST_CASE(IsolateReload_DirectSubclasses_Success) {
     EXPECT_EQ(1, SimpleInvoke(lib, "main"));
   }
 
-  // Iterator has one non-core subclass.
-  subclasses = iterator_cls.direct_subclasses();
+  // Stopwatch has one non-core subclass.
+  subclasses = stopwatch_cls.direct_subclasses_unsafe();
   EXPECT_EQ(saved_subclass_count + 1, subclasses.Length());
 
-  // The new subclass is named AIterator.
+  // The new subclass is named AStopwatch.
   new_subclass = subclasses.At(subclasses.Length() - 1);
   name = Class::Cast(new_subclass).Name();
-  EXPECT_STREQ("AIterator", name.ToCString());
+  EXPECT_STREQ("AStopwatch", name.ToCString());
 
   const char* kReloadScript =
-      "class AIterator {\n"
+      "class AStopwatch {\n"
       "}\n"
-      "abstract class BIterator extends Iterator {\n"
+      "class BStopwatch extends Stopwatch {\n"
       "}\n"
       "main() {\n"
+      "  new AStopwatch();\n"  // Force finalization.
+      "  new BStopwatch();\n"  // Force finalization.
       "  return 2;\n"
       "}\n";
 
@@ -2386,35 +2411,36 @@ ISOLATE_UNIT_TEST_CASE(IsolateReload_DirectSubclasses_Success) {
     EXPECT_EQ(2, SimpleInvoke(lib, "main"));
   }
 
-  // Iterator still has only one non-core subclass (AIterator is gone).
-  subclasses = iterator_cls.direct_subclasses();
+  // Stopwatch still has only one non-core subclass (AStopwatch is gone).
+  subclasses = stopwatch_cls.direct_subclasses_unsafe();
   EXPECT_EQ(saved_subclass_count + 1, subclasses.Length());
 
-  // The new subclass is named BIterator.
+  // The new subclass is named BStopwatch.
   new_subclass = subclasses.At(subclasses.Length() - 1);
   name = Class::Cast(new_subclass).Name();
-  EXPECT_STREQ("BIterator", name.ToCString());
+  EXPECT_STREQ("BStopwatch", name.ToCString());
 }
 
 ISOLATE_UNIT_TEST_CASE(IsolateReload_DirectSubclasses_GhostSubclass) {
   Object& new_subclass = Object::Handle();
   String& name = String::Handle();
 
-  // Lookup the Iterator class by name from the dart core library.
-  ObjectStore* object_store = Isolate::Current()->object_store();
+  // Lookup the Stopwatch class by name from the dart core library.
+  ObjectStore* object_store = IsolateGroup::Current()->object_store();
   const Library& core_lib = Library::Handle(object_store->core_library());
-  name = String::New("Iterator");
-  const Class& iterator_cls = Class::Handle(core_lib.LookupClass(name));
+  name = String::New("Stopwatch");
+  const Class& stopwatch_cls = Class::Handle(core_lib.LookupClass(name));
 
-  // Keep track of how many subclasses an Iterator has.
+  // Keep track of how many subclasses an Stopwatch has.
   auto& subclasses =
-      GrowableObjectArray::Handle(iterator_cls.direct_subclasses());
-  intptr_t saved_subclass_count = subclasses.Length();
+      GrowableObjectArray::Handle(stopwatch_cls.direct_subclasses_unsafe());
+  intptr_t saved_subclass_count = subclasses.IsNull() ? 0 : subclasses.Length();
 
   const char* kScript =
-      "abstract class AIterator extends Iterator {\n"
+      "class AStopwatch extends Stopwatch {\n"
       "}\n"
       "main() {\n"
+      "  new AStopwatch();\n"  // Force finalization.
       "  return 1;\n"
       "}\n";
 
@@ -2425,19 +2451,20 @@ ISOLATE_UNIT_TEST_CASE(IsolateReload_DirectSubclasses_GhostSubclass) {
     EXPECT_EQ(1, SimpleInvoke(lib, "main"));
   }
 
-  // Iterator has one new subclass.
-  subclasses = iterator_cls.direct_subclasses();
+  // Stopwatch has one new subclass.
+  subclasses = stopwatch_cls.direct_subclasses_unsafe();
   EXPECT_EQ(saved_subclass_count + 1, subclasses.Length());
 
-  // The new subclass is named AIterator.
+  // The new subclass is named AStopwatch.
   new_subclass = subclasses.At(subclasses.Length() - 1);
   name = Class::Cast(new_subclass).Name();
-  EXPECT_STREQ("AIterator", name.ToCString());
+  EXPECT_STREQ("AStopwatch", name.ToCString());
 
   const char* kReloadScript =
-      "abstract class BIterator extends Iterator {\n"
+      "class BStopwatch extends Stopwatch {\n"
       "}\n"
       "main() {\n"
+      "  new BStopwatch();\n"  // Force finalization.
       "  return 2;\n"
       "}\n";
 
@@ -2448,18 +2475,18 @@ ISOLATE_UNIT_TEST_CASE(IsolateReload_DirectSubclasses_GhostSubclass) {
     EXPECT_EQ(2, SimpleInvoke(lib, "main"));
   }
 
-  // Iterator has two non-core subclasses.
-  subclasses = iterator_cls.direct_subclasses();
+  // Stopwatch has two non-core subclasses.
+  subclasses = stopwatch_cls.direct_subclasses_unsafe();
   EXPECT_EQ(saved_subclass_count + 2, subclasses.Length());
 
-  // The non-core subclasses are AIterator and BIterator.
+  // The non-core subclasses are AStopwatch and BStopwatch.
   new_subclass = subclasses.At(subclasses.Length() - 2);
   name = Class::Cast(new_subclass).Name();
-  EXPECT_STREQ("AIterator", name.ToCString());
+  EXPECT_STREQ("AStopwatch", name.ToCString());
 
   new_subclass = subclasses.At(subclasses.Length() - 1);
   name = Class::Cast(new_subclass).Name();
-  EXPECT_STREQ("BIterator", name.ToCString());
+  EXPECT_STREQ("BStopwatch", name.ToCString());
 }
 
 // Make sure that we restore the direct subclass info when we revert.
@@ -2467,26 +2494,27 @@ ISOLATE_UNIT_TEST_CASE(IsolateReload_DirectSubclasses_Failure) {
   Object& new_subclass = Object::Handle();
   String& name = String::Handle();
 
-  // Lookup the Iterator class by name from the dart core library.
-  ObjectStore* object_store = Isolate::Current()->object_store();
+  // Lookup the Stopwatch class by name from the dart core library.
+  ObjectStore* object_store = IsolateGroup::Current()->object_store();
   const Library& core_lib = Library::Handle(object_store->core_library());
-  name = String::New("Iterator");
-  const Class& iterator_cls = Class::Handle(core_lib.LookupClass(name));
+  name = String::New("Stopwatch");
+  const Class& stopwatch_cls = Class::Handle(core_lib.LookupClass(name));
 
-  // Keep track of how many subclasses an Iterator has.
+  // Keep track of how many subclasses an Stopwatch has.
   auto& subclasses =
-      GrowableObjectArray::Handle(iterator_cls.direct_subclasses());
-  intptr_t saved_subclass_count = subclasses.Length();
+      GrowableObjectArray::Handle(stopwatch_cls.direct_subclasses_unsafe());
+  intptr_t saved_subclass_count = subclasses.IsNull() ? 0 : subclasses.Length();
 
   const char* kScript =
-      "abstract class AIterator extends Iterator {\n"
+      "class AStopwatch extends Stopwatch {\n"
       "}\n"
       "class Foo {\n"
       "  final a;\n"
       "  Foo(this.a);\n"
       "}\n"
       "main() {\n"
-      "  new Foo(5);\n"  // Force Foo to be finalized.
+      "  new AStopwatch();\n"  // Force finalization.
+      "  new Foo(5);\n"        // Force finalization.
       "  return 1;\n"
       "}\n";
 
@@ -2497,25 +2525,27 @@ ISOLATE_UNIT_TEST_CASE(IsolateReload_DirectSubclasses_Failure) {
     EXPECT_EQ(1, SimpleInvoke(lib, "main"));
   }
 
-  // Iterator has one non-core subclass...
+  // Stopwatch has one non-core subclass...
+  subclasses = stopwatch_cls.direct_subclasses_unsafe();
   EXPECT_EQ(saved_subclass_count + 1, subclasses.Length());
 
-  // ... and the non-core subclass is named AIterator.
-  subclasses = iterator_cls.direct_subclasses();
+  // ... and the non-core subclass is named AStopwatch.
+  subclasses = stopwatch_cls.direct_subclasses_unsafe();
   new_subclass = subclasses.At(subclasses.Length() - 1);
   name = Class::Cast(new_subclass).Name();
-  EXPECT_STREQ("AIterator", name.ToCString());
+  EXPECT_STREQ("AStopwatch", name.ToCString());
 
   // Attempt to reload with a bogus script.
   const char* kReloadScript =
-      "abstract class BIterator extends Iterator {\n"
+      "class BStopwatch extends Stopwatch {\n"
       "}\n"
       "class Foo {\n"
       "  final a kjsdf ksjdf ;\n"  // When we refinalize, we get an error.
       "  Foo(this.a);\n"
       "}\n"
       "main() {\n"
-      "  new Foo(5);\n"
+      "  new BStopwatch();\n"  // Force finalization.
+      "  new Foo(5);\n"        // Force finalization.
       "  return 2;\n"
       "}\n";
 
@@ -2525,16 +2555,16 @@ ISOLATE_UNIT_TEST_CASE(IsolateReload_DirectSubclasses_Failure) {
     EXPECT_ERROR(lib, "Expected ';' after this");
   }
 
-  // If we don't clean up the subclasses, we would find BIterator in
+  // If we don't clean up the subclasses, we would find BStopwatch in
   // the list of subclasses, which would be bad.  Make sure that
-  // Iterator still has only one non-core subclass...
-  subclasses = iterator_cls.direct_subclasses();
+  // Stopwatch still has only one non-core subclass...
+  subclasses = stopwatch_cls.direct_subclasses_unsafe();
   EXPECT_EQ(saved_subclass_count + 1, subclasses.Length());
 
-  // ...and the non-core subclass is still named AIterator.
+  // ...and the non-core subclass is still named AStopwatch.
   new_subclass = subclasses.At(subclasses.Length() - 1);
   name = Class::Cast(new_subclass).Name();
-  EXPECT_STREQ("AIterator", name.ToCString());
+  EXPECT_STREQ("AStopwatch", name.ToCString());
 }
 
 // Tests reload succeeds when instance format changes.
@@ -2905,6 +2935,228 @@ TEST_CASE(IsolateReload_ShapeChangeRetainsHash) {
   EXPECT_STREQ("true", SimpleInvokeStr(lib, "main"));
 }
 
+TEST_CASE(IsolateReload_ShapeChangeRetainsHash_Const) {
+  const char* kScript =
+      "class A {\n"
+      "  final x;\n"
+      "  const A(this.x);\n"
+      "}\n"
+      "var a, hash1, hash2;\n"
+      "main() {\n"
+      "  a = const A(1);\n"
+      "  hash1 = a.hashCode;\n"
+      "  return 'okay';\n"
+      "}\n";
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+  EXPECT_VALID(lib);
+  EXPECT_STREQ("okay", SimpleInvokeStr(lib, "main"));
+
+  const char* kReloadScript =
+      "class A {\n"
+      "  final x, y, z;\n"
+      "  const A(this.x, this.y, this.z);\n"
+      "}\n"
+      "var a, hash1, hash2;\n"
+      "main() {\n"
+      "  hash2 = a.hashCode;\n"
+      "  return (hash1 == hash2).toString();\n"
+      "}\n";
+
+  lib = TestCase::ReloadTestScript(kReloadScript);
+  EXPECT_VALID(lib);
+  EXPECT_STREQ("true", SimpleInvokeStr(lib, "main"));
+}
+
+TEST_CASE(IsolateReload_ShapeChange_Const_AddSlot) {
+  // On IA32, instructions can contain direct pointers to const objects. We need
+  // to be careful that if the const objects are reallocated because of a shape
+  // change, they are allocated old. Because instructions normally contain
+  // pointers only to old objects, the scavenger does not bother to ensure code
+  // pages are writable when visiting the remembered set. Visiting the
+  // remembered involes writing to update the pointer for any target that gets
+  // promoted.
+  const char* kScript = R"(
+    import 'file:///test:isolate_reload_helper';
+    class A {
+      final x;
+      const A(this.x);
+    }
+    var a;
+    main() {
+      a = const A(1);
+      collectNewSpace();
+      return 'okay';
+    }
+  )";
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+  EXPECT_VALID(lib);
+  EXPECT_STREQ("okay", SimpleInvokeStr(lib, "main"));
+
+  const char* kReloadScript = R"(
+    import 'file:///test:isolate_reload_helper';
+    class A {
+      final x, y, z;
+      const A(this.x, this.y, this.z);
+    }
+    var a;
+    main() {
+      a = const A(1, null, null);
+      collectNewSpace();
+      return 'okay';
+    }
+  )";
+
+  lib = TestCase::ReloadTestScript(kReloadScript);
+  EXPECT_VALID(lib);
+  EXPECT_STREQ("okay", SimpleInvokeStr(lib, "main"));
+
+  const char* kReloadScript2 = R"(
+    import 'file:///test:isolate_reload_helper';
+    class A {
+      final x, y, z, w, u;
+      const A(this.x, this.y, this.z, this.w, this.u);
+    }
+    var a;
+    main() {
+      a = const A(1, null, null, null, null);
+      collectNewSpace();
+      return 'okay';
+    }
+  )";
+
+  lib = TestCase::ReloadTestScript(kReloadScript2);
+  EXPECT_VALID(lib);
+  EXPECT_STREQ("okay", SimpleInvokeStr(lib, "main"));
+}
+
+TEST_CASE(IsolateReload_ShapeChange_Const_RemoveSlot) {
+  const char* kScript = R"(
+    import 'file:///test:isolate_reload_helper';
+    class A {
+      final x, y, z;
+      const A(this.x, this.y, this.z);
+    }
+    var a;
+    main() {
+      a = const A(1, 2, 3);
+      collectNewSpace();
+      return 'okay';
+    }
+  )";
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+  EXPECT_VALID(lib);
+  EXPECT_STREQ("okay", SimpleInvokeStr(lib, "main"));
+
+  const char* kReloadScript = R"(
+    import 'file:///test:isolate_reload_helper';
+    class A {
+      final x, y;
+      const A(this.x, this.y);
+    }
+    var a;
+    main() {
+      a = const A(1, null);
+      collectNewSpace();
+      return 'okay';
+    }
+  )";
+
+  lib = TestCase::ReloadTestScript(kReloadScript);
+  EXPECT_ERROR(lib,
+               "Const class cannot remove fields: "
+               "Library:'file:///test-lib' Class: A");
+
+  // Rename is seen by the VM is unrelated add and remove.
+  const char* kReloadScript2 = R"(
+    import 'file:///test:isolate_reload_helper';
+    class A {
+      final x, y, w;
+      const A(this.x, this.y, this.w);
+    }
+    var a;
+    main() {
+      a = const A(1, null, null);
+      collectNewSpace();
+      return 'okay';
+    }
+  )";
+
+  lib = TestCase::ReloadTestScript(kReloadScript2);
+  EXPECT_ERROR(lib,
+               "Const class cannot remove fields: "
+               "Library:'file:///test-lib' Class: A");
+}
+
+TEST_CASE(IsolateReload_ConstToNonConstClass) {
+  const char* kScript = R"(
+    class A {
+      final dynamic x;
+      const A(this.x);
+    }
+    dynamic a;
+    main() {
+      a = const A(1);
+      return 'okay';
+    }
+  )";
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+  EXPECT_VALID(lib);
+  EXPECT_STREQ("okay", SimpleInvokeStr(lib, "main"));
+
+  const char* kReloadScript = R"(
+    class A {
+      dynamic x;
+      A(this.x);
+    }
+    dynamic a;
+    main() {
+      a.x = 10;
+    }
+  )";
+
+  lib = TestCase::ReloadTestScript(kReloadScript);
+  EXPECT_ERROR(lib,
+               "Const class cannot become non-const: "
+               "Library:'file:///test-lib' Class: A");
+}
+
+TEST_CASE(IsolateReload_ConstToNonConstClass_Empty) {
+  const char* kScript = R"(
+    class A {
+      const A();
+    }
+    dynamic a;
+    main() {
+      a = const A();
+      return 'okay';
+    }
+  )";
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+  EXPECT_VALID(lib);
+  EXPECT_STREQ("okay", SimpleInvokeStr(lib, "main"));
+
+  const char* kReloadScript = R"(
+    class A {
+      dynamic x;
+      A(this.x);
+    }
+    dynamic a;
+    main() {
+      a.x = 10;
+    }
+  )";
+
+  lib = TestCase::ReloadTestScript(kReloadScript);
+  EXPECT_ERROR(lib,
+               "Const class cannot become non-const: "
+               "Library:'file:///test-lib' Class: A");
+}
+
 TEST_CASE(IsolateReload_StaticTearOffRetainsHash) {
   const char* kScript =
       "foo() {}\n"
@@ -3166,333 +3418,612 @@ TEST_CASE(IsolateReload_ConstFieldUpdate) {
 }
 
 TEST_CASE(IsolateReload_RunNewFieldInitializers) {
-  const char* kScript =
-      "class Foo {\n"
-      "  int x = 4;\n"
-      "}\n"
-      "Foo value;\n"
-      "main() {\n"
-      "  value = new Foo();\n"
-      "  return value.x;\n"
-      "}\n";
+  const char* late_tag = TestCase::LateTag();
+  // clang-format off
+  auto kScript = Utils::CStringUniquePtr(OS::SCreate(nullptr,
+                                            "class Foo {\n"
+                                            "  int x = 4;\n"
+                                            "}\n"
+                                            "%s Foo value;\n"
+                                            "main() {\n"
+                                            "  value = Foo();\n"
+                                            "  return value.x;\n"
+                                            "}\n",
+                                            late_tag),
+                                         std::free);
+  // clang-format on
 
-  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+  Dart_Handle lib = TestCase::LoadTestScript(kScript.get(), NULL);
   EXPECT_VALID(lib);
   EXPECT_EQ(4, SimpleInvoke(lib, "main"));
 
   // Add the field y.
-  const char* kReloadScript =
-      "class Foo {\n"
-      "  int x = 4;\n"
-      "  int y = 7;\n"
-      "}\n"
-      "Foo value;\n"
-      "main() {\n"
-      "  return value.y;\n"
-      "}\n";
+  // clang-format off
+  auto kReloadScript = Utils::CStringUniquePtr(OS::SCreate(nullptr,
+                                                  "class Foo {\n"
+                                                  "  int x = 4;\n"
+                                                  "  int y = 7;\n"
+                                                  "}\n"
+                                                  "%s Foo value;\n"
+                                                  "main() {\n"
+                                                  "  return value.y;\n"
+                                                  "}\n",
+                                                  late_tag),
+                                               std::free);
+  // clang-format on
 
-  lib = TestCase::ReloadTestScript(kReloadScript);
+  lib = TestCase::ReloadTestScript(kReloadScript.get());
   EXPECT_VALID(lib);
   // Verify that we ran field initializers on existing instances.
   EXPECT_EQ(7, SimpleInvoke(lib, "main"));
 }
 
 TEST_CASE(IsolateReload_RunNewFieldInitializersReferenceStaticField) {
-  const char* kScript =
-      "int myInitialValue = 8 * 7;\n"
-      "class Foo {\n"
-      "  int x = 4;\n"
-      "}\n"
-      "Foo value;\n"
-      "main() {\n"
-      "  value = new Foo();\n"
-      "  return value.x;\n"
-      "}\n";
+  const char* late_tag = TestCase::LateTag();
+  // clang-format off
+  auto kScript =
+      Utils::CStringUniquePtr(OS::SCreate(nullptr,
+                                          "int myInitialValue = 8 * 7;\n"
+                                          "class Foo {\n"
+                                          "  int x = 4;\n"
+                                          "}\n"
+                                          "%s Foo value;\n"
+                                          "main() {\n"
+                                          "  value = Foo();\n"
+                                          "  return value.x;\n"
+                                          "}\n",
+                                          late_tag),
+                              std::free);
+  // clang-format on
 
-  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+  Dart_Handle lib = TestCase::LoadTestScript(kScript.get(), NULL);
   EXPECT_VALID(lib);
   EXPECT_EQ(4, SimpleInvoke(lib, "main"));
 
   // Add the field y.
-  const char* kReloadScript =
-      "int myInitialValue = 8 * 7;\n"
-      "class Foo {\n"
-      "  int x = 4;\n"
-      "  int y = myInitialValue;\n"
-      "}\n"
-      "Foo value;\n"
-      "main() {\n"
-      "  return value.y;\n"
-      "}\n";
+  // clang-format off
+  auto kReloadScript =
+      Utils::CStringUniquePtr(OS::SCreate(nullptr,
+                                          "int myInitialValue = 8 * 7;\n"
+                                          "class Foo {\n"
+                                          "  int x = 4;\n"
+                                          "  int y = myInitialValue;\n"
+                                          "}\n"
+                                          "%s Foo value;\n"
+                                          "main() {\n"
+                                          "  return value.y;\n"
+                                          "}\n",
+                                          late_tag),
+                              std::free);
+  // clang-format on
 
-  lib = TestCase::ReloadTestScript(kReloadScript);
+  lib = TestCase::ReloadTestScript(kReloadScript.get());
   EXPECT_VALID(lib);
   // Verify that we ran field initializers on existing instances.
   EXPECT_EQ(56, SimpleInvoke(lib, "main"));
 }
 
-TEST_CASE(IsolateReload_RunNewFieldInitializersMutateStaticField) {
-  const char* kScript =
-      "int myInitialValue = 8 * 7;\n"
-      "class Foo {\n"
-      "  int x = 4;\n"
-      "}\n"
-      "Foo value;\n"
-      "Foo value1;\n"
-      "main() {\n"
-      "  value = new Foo();\n"
-      "  value1 = new Foo();\n"
-      "  return value.x;\n"
-      "}\n";
+TEST_CASE(IsolateReload_RunNewFieldInitializersLazy) {
+  const char* late_tag = TestCase::LateTag();
+  // clang-format off
+  auto kScript =
+      Utils::CStringUniquePtr(OS::SCreate(nullptr,
+                                "int myInitialValue = 8 * 7;\n"
+                                "class Foo {\n"
+                                "  int x = 4;\n"
+                                "}\n"
+                                "%s Foo value;\n"
+                                "%s Foo value1;\n"
+                                "main() {\n"
+                                "  value = Foo();\n"
+                                "  value1 = Foo();\n"
+                                "  return value.x;\n"
+                                "}\n",
+                                late_tag, late_tag),
+                              std::free);
+  // clang-format on
 
-  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+  Dart_Handle lib = TestCase::LoadTestScript(kScript.get(), NULL);
   EXPECT_VALID(lib);
   EXPECT_EQ(4, SimpleInvoke(lib, "main"));
 
   // Add the field y.
-  const char* kReloadScript =
-      "int myInitialValue = 8 * 7;\n"
-      "class Foo {\n"
-      "  int x = 4;\n"
-      "  int y = myInitialValue++;\n"
-      "}\n"
-      "Foo value;\n"
-      "Foo value1;\n"
-      "main() {\n"
-      "  return myInitialValue;\n"
-      "}\n";
+  // clang-format off
+  auto kReloadScript = Utils::CStringUniquePtr(
+      OS::SCreate(nullptr,
+                  "int myInitialValue = 8 * 7;\n"
+                  "class Foo {\n"
+                  "  int x = 4;\n"
+                  "  int y = myInitialValue++;\n"
+                  "}\n"
+                  "%s Foo value;\n"
+                  "%s Foo value1;\n"
+                  "main() {\n"
+                  "  return '${myInitialValue} ${value.y} ${value1.y} "
+                  "${myInitialValue}';\n"
+                  "}\n",
+                  late_tag, late_tag),
+      std::free);
+  // clang-format on
 
-  lib = TestCase::ReloadTestScript(kReloadScript);
+  lib = TestCase::ReloadTestScript(kReloadScript.get());
   EXPECT_VALID(lib);
-  // Verify that we ran field initializers on existing instances and that
-  // they affected the value of the field myInitialValue.
-  EXPECT_EQ(58, SimpleInvoke(lib, "main"));
+  // Verify that field initializers ran lazily.
+  EXPECT_STREQ("56 56 57 58", SimpleInvokeStr(lib, "main"));
 }
 
-// When an initializer expression throws, we leave the field as null.
-TEST_CASE(IsolateReload_RunNewFieldInitializersThrows) {
-  const char* kScript =
-      "class Foo {\n"
-      "  int x = 4;\n"
-      "}\n"
-      "Foo value;\n"
-      "main() {\n"
-      "  value = new Foo();\n"
-      "  return value.x;\n"
-      "}\n";
+TEST_CASE(IsolateReload_RunNewFieldInitializersLazyConst) {
+  const char* late_tag = TestCase::LateTag();
+  // clang-format off
+  auto kScript = Utils::CStringUniquePtr(OS::SCreate(nullptr,
+                                            "class Foo {\n"
+                                            "  int x = 4;\n"
+                                            "}\n"
+                                            "%s Foo value;\n"
+                                            "main() {\n"
+                                            "  value = Foo();\n"
+                                            "  return value.x;\n"
+                                            "}\n",
+                                            late_tag),
+                                         std::free);
+  // clang-format on
 
-  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+  Dart_Handle lib = TestCase::LoadTestScript(kScript.get(), NULL);
+  EXPECT_VALID(lib);
+  EXPECT_EQ(4, SimpleInvoke(lib, "main"));
+
+  // Add the field y. Do not read it. Note field y does not get an initializer
+  // function in the VM because the initializer is a literal, but we should not
+  // eagerly initialize with the literal so that the behavior doesn't depend on
+  // this optimization.
+  // clang-format off
+  auto kReloadScript = Utils::CStringUniquePtr(OS::SCreate(nullptr,
+                                                  "class Foo {\n"
+                                                  "  int x = 4;\n"
+                                                  "  int y = 5;\n"
+                                                  "}\n"
+                                                  "%s Foo value;\n"
+                                                  "main() {\n"
+                                                  "  return 0;\n"
+                                                  "}\n",
+                                                  late_tag),
+                                               std::free);
+  // clang-format on
+
+  lib = TestCase::ReloadTestScript(kReloadScript.get());
+  EXPECT_VALID(lib);
+  EXPECT_EQ(0, SimpleInvoke(lib, "main"));
+
+  // Change y's initializer and check this new initializer is used.
+  auto kReloadScript2 =
+      Utils::CStringUniquePtr(OS::SCreate(nullptr,
+                                          "class Foo {\n"
+                                          "  int x = 4;\n"
+                                          "  int y = 6;\n"
+                                          "}\n"
+                                          "%s Foo value;\n"
+                                          "main() {\n"
+                                          "  return value.y;\n"
+                                          "}\n",
+                                          late_tag),
+                              std::free);
+
+  lib = TestCase::ReloadTestScript(kReloadScript2.get());
+  EXPECT_VALID(lib);
+  EXPECT_EQ(6, SimpleInvoke(lib, "main"));
+}
+
+TEST_CASE(IsolateReload_RunNewFieldInitializersLazyTransitive) {
+  const char* late_tag = TestCase::LateTag();
+  // clang-format off
+  auto kScript =
+      Utils::CStringUniquePtr(OS::SCreate(nullptr,
+                                "int myInitialValue = 8 * 7;\n"
+                                "class Foo {\n"
+                                "  int x = 4;\n"
+                                "}\n"
+                                "%s Foo value;\n"
+                                "%s Foo value1;\n"
+                                "main() {\n"
+                                "  value = Foo();\n"
+                                "  value1 = Foo();\n"
+                                "  return value.x;\n"
+                                "}\n",
+                                late_tag, late_tag),
+                              std::free);
+  // clang-format on
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScript.get(), NULL);
+  EXPECT_VALID(lib);
+  EXPECT_EQ(4, SimpleInvoke(lib, "main"));
+
+  // Add the field y. Do not touch y.
+  // clang-format off
+  auto kReloadScript =
+      Utils::CStringUniquePtr(OS::SCreate(nullptr,
+                                "int myInitialValue = 8 * 7;\n"
+                                "class Foo {\n"
+                                "  int x = 4;\n"
+                                "  int y = myInitialValue++;\n"
+                                "}\n"
+                                "%s Foo value;\n"
+                                "%s Foo value1;\n"
+                                "main() {\n"
+                                "  return '${myInitialValue}';\n"
+                                "}\n",
+                                late_tag, late_tag),
+                              std::free);
+  // clang-format on
+
+  lib = TestCase::ReloadTestScript(kReloadScript.get());
+  EXPECT_VALID(lib);
+  EXPECT_STREQ("56", SimpleInvokeStr(lib, "main"));
+
+  // Reload again. Field y's getter still needs to keep for initialization even
+  // though it is no longer new.
+  // clang-format off
+  auto kReloadScript2 = Utils::CStringUniquePtr(
+      OS::SCreate(nullptr,
+                  "int myInitialValue = 8 * 7;\n"
+                  "class Foo {\n"
+                  "  int x = 4;\n"
+                  "  int y = myInitialValue++;\n"
+                  "}\n"
+                  "%s Foo value;\n"
+                  "%s Foo value1;\n"
+                  "main() {\n"
+                  "  return '${myInitialValue} ${value.y} ${value1.y} "
+                  "${myInitialValue}';\n"
+                  "}\n",
+                  late_tag, late_tag),
+      std::free);
+  // clang-format on
+
+  lib = TestCase::ReloadTestScript(kReloadScript2.get());
+  EXPECT_VALID(lib);
+  // Verify that field initializers ran lazily.
+  EXPECT_STREQ("56 56 57 58", SimpleInvokeStr(lib, "main"));
+}
+
+TEST_CASE(IsolateReload_RunNewFieldInitializersThrows) {
+  const char* late_tag = TestCase::LateTag();
+  // clang-format off
+  auto kScript = Utils::CStringUniquePtr(OS::SCreate(nullptr,
+                                            "class Foo {\n"
+                                            "  int x = 4;\n"
+                                            "}\n"
+                                            "%s Foo value;\n"
+                                            "main() {\n"
+                                            "  value = Foo();\n"
+                                            "  return value.x;\n"
+                                            "}\n",
+                                            late_tag),
+                                         std::free);
+  // clang-format on
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScript.get(), NULL);
   EXPECT_VALID(lib);
   EXPECT_EQ(4, SimpleInvoke(lib, "main"));
 
   // Add the field y.
-  const char* kReloadScript =
-      "class Foo {\n"
-      "  int x = 4;\n"
-      "  int y = throw 'a';\n"
-      "}\n"
-      "Foo value;\n"
-      "main() {\n"
-      "  return '${value.y == null}';"
-      "}\n";
+  // clang-format off
+  auto kReloadScript =
+      Utils::CStringUniquePtr(OS::SCreate(nullptr,
+                                "class Foo {\n"
+                                "  int x = 4;\n"
+                                "  int y = throw 'exception';\n"
+                                "}\n"
+                                "%s Foo value;\n"
+                                "main() {\n"
+                                "  try {\n"
+                                "    return value.y.toString();\n"
+                                "  } catch (e) {\n"
+                                "    return e.toString();\n"
+                                "  }\n"
+                                "}\n",
+                                late_tag),
+                              std::free);
+  // clang-format on
 
-  lib = TestCase::ReloadTestScript(kReloadScript);
+  lib = TestCase::ReloadTestScript(kReloadScript.get());
   EXPECT_VALID(lib);
   // Verify that we ran field initializers on existing instances.
-  EXPECT_STREQ("true", SimpleInvokeStr(lib, "main"));
+  EXPECT_STREQ("exception", SimpleInvokeStr(lib, "main"));
+}
+
+TEST_CASE(IsolateReload_RunNewFieldInitializersCyclicInitialization) {
+  const char* late_tag = TestCase::LateTag();
+  // clang-format off
+  auto kScript = Utils::CStringUniquePtr(OS::SCreate(nullptr,
+                                          "class Foo {\n"
+                                            "  int x = 4;\n"
+                                            "}\n"
+                                            "%s Foo value;\n"
+                                            "main() {\n"
+                                            "  value = Foo();\n"
+                                            "  return value.x;\n"
+                                            "}\n",
+                                            late_tag),
+                                         std::free);
+  // clang-format on
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScript.get(), NULL);
+  EXPECT_VALID(lib);
+  EXPECT_EQ(4, SimpleInvoke(lib, "main"));
+
+  // Add the field y.
+  // clang-format off
+  auto kReloadScript =
+      Utils::CStringUniquePtr(OS::SCreate(nullptr,
+                                "class Foo {\n"
+                                "  int x = 4;\n"
+                                "  int y = value.y;\n"
+                                "}\n"
+                                "%s Foo value;\n"
+                                "main() {\n"
+                                "  try {\n"
+                                "    return value.y.toString();\n"
+                                "  } catch (e) {\n"
+                                "    return e.toString();\n"
+                                "  }\n"
+                                "}\n",
+                                late_tag),
+                              std::free);
+  // clang-format on
+  lib = TestCase::ReloadTestScript(kReloadScript.get());
+  EXPECT_VALID(lib);
+  EXPECT_STREQ("Stack Overflow", SimpleInvokeStr(lib, "main"));
 }
 
 // When an initializer expression has a syntax error, we detect it at reload
 // time.
 TEST_CASE(IsolateReload_RunNewFieldInitializersSyntaxError) {
-  const char* kScript =
-      "class Foo {\n"
-      "  int x = 4;\n"
-      "}\n"
-      "Foo value;\n"
-      "main() {\n"
-      "  value = new Foo();\n"
-      "  return value.x;\n"
-      "}\n";
+  const char* late_tag = TestCase::LateTag();
+  // clang-format off
+  auto kScript = Utils::CStringUniquePtr(OS::SCreate(nullptr,
+                                            "class Foo {\n"
+                                            "  int x = 4;\n"
+                                            "}\n"
+                                            "%s Foo value;\n"
+                                            "main() {\n"
+                                            "  value = Foo();\n"
+                                            "  return value.x;\n"
+                                            "}\n",
+                                            late_tag),
+                                         std::free);
+  // clang-format on
 
-  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+  Dart_Handle lib = TestCase::LoadTestScript(kScript.get(), NULL);
   EXPECT_VALID(lib);
   EXPECT_EQ(4, SimpleInvoke(lib, "main"));
 
   // Add the field y with a syntax error in the initializing expression.
-  const char* kReloadScript =
-      "class Foo {\n"
-      "  int x = 4;\n"
-      "  int y = ......;\n"
-      "}\n"
-      "Foo value;\n"
-      "main() {\n"
-      "  return '${value.y == null}';"
-      "}\n";
+  // clang-format off
+  auto kReloadScript =
+      Utils::CStringUniquePtr(OS::SCreate(nullptr,
+                                "class Foo {\n"
+                                "  int x = 4;\n"
+                                "  int y = ......;\n"
+                                "}\n"
+                                "%s Foo value;\n"
+                                "main() {\n"
+                                "  return '${value.y == null}';"
+                                "}\n",
+                                late_tag),
+                              std::free);
+  // clang-format on
 
   // The reload fails because the initializing expression is parsed at
   // class finalization time.
-  lib = TestCase::ReloadTestScript(kReloadScript);
+  lib = TestCase::ReloadTestScript(kReloadScript.get());
   EXPECT_ERROR(lib, "...");
 }
 
 // When an initializer expression has a syntax error, we detect it at reload
 // time.
 TEST_CASE(IsolateReload_RunNewFieldInitializersSyntaxError2) {
-  const char* kScript =
-      "class Foo {\n"
-      "  Foo() { /* default constructor */ }\n"
-      "  int x = 4;\n"
-      "}\n"
-      "Foo value;\n"
-      "main() {\n"
-      "  value = new Foo();\n"
-      "  return value.x;\n"
-      "}\n";
+  const char* late_tag = TestCase::LateTag();
+  // clang-format off
+  auto kScript = Utils::CStringUniquePtr(
+      OS::SCreate(nullptr,
+                  "class Foo {\n"
+                  "  Foo() { /* default constructor */ }\n"
+                  "  int x = 4;\n"
+                  "}\n"
+                  "%s Foo value;\n"
+                  "main() {\n"
+                  "  value = Foo();\n"
+                  "  return value.x;\n"
+                  "}\n",
+                  late_tag),
+      std::free);
+  // clang-format on
 
-  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+  Dart_Handle lib = TestCase::LoadTestScript(kScript.get(), NULL);
   EXPECT_VALID(lib);
   EXPECT_EQ(4, SimpleInvoke(lib, "main"));
 
   // Add the field y with a syntax error in the initializing expression.
-  const char* kReloadScript =
-      "class Foo {\n"
-      "  Foo() { /* default constructor */ }\n"
-      "  int x = 4;\n"
-      "  int y = ......;\n"
-      "}\n"
-      "Foo value;\n"
-      "main() {\n"
-      "  return '${value.y == null}';"
-      "}\n";
+  // clang-format off
+  auto kReloadScript = Utils::CStringUniquePtr(
+      OS::SCreate(nullptr,
+                  "class Foo {\n"
+                  "  Foo() { /* default constructor */ }\n"
+                  "  int x = 4;\n"
+                  "  int y = ......;\n"
+                  "}\n"
+                  "%s Foo value;\n"
+                  "main() {\n"
+                  "  return '${value.y == null}';"
+                  "}\n",
+                  late_tag),
+      std::free);
+  // clang-format on
 
   // The reload fails because the initializing expression is parsed at
   // class finalization time.
-  lib = TestCase::ReloadTestScript(kReloadScript);
+  lib = TestCase::ReloadTestScript(kReloadScript.get());
   EXPECT_ERROR(lib, "...");
 }
 
 // When an initializer expression has a syntax error, we detect it at reload
 // time.
 TEST_CASE(IsolateReload_RunNewFieldInitializersSyntaxError3) {
-  const char* kScript =
-      "class Foo {\n"
-      "  Foo() { /* default constructor */ }\n"
-      "  int x = 4;\n"
-      "}\n"
-      "Foo value;\n"
-      "main() {\n"
-      "  value = new Foo();\n"
-      "  return value.x;\n"
-      "}\n";
+  const char* late_tag = TestCase::LateTag();
+  // clang-format off
+  auto kScript = Utils::CStringUniquePtr(
+      OS::SCreate(nullptr,
+                  "class Foo {\n"
+                  "  Foo() { /* default constructor */ }\n"
+                  "  int x = 4;\n"
+                  "}\n"
+                  "%s Foo value;\n"
+                  "main() {\n"
+                  "  value = Foo();\n"
+                  "  return value.x;\n"
+                  "}\n",
+                  late_tag),
+      std::free);
+  // clang-format on
 
-  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+  Dart_Handle lib = TestCase::LoadTestScript(kScript.get(), NULL);
   EXPECT_VALID(lib);
   EXPECT_EQ(4, SimpleInvoke(lib, "main"));
 
   // Add the field y with a syntax error in the initializing expression.
-  const char* kReloadScript =
-      "class Foo {\n"
-      "  Foo() { /* default constructor */ }\n"
-      "  int x = 4;\n"
-      "  int y = ......\n"
-      "}\n"
-      "Foo value;\n"
-      "main() {\n"
-      "  return '${value.y == null}';"
-      "}\n";
+  // clang-format off
+  auto kReloadScript = Utils::CStringUniquePtr(
+      OS::SCreate(nullptr,
+                  "class Foo {\n"
+                  "  Foo() { /* default constructor */ }\n"
+                  "  int x = 4;\n"
+                  "  int y = ......\n"
+                  "}\n"
+                  "%s Foo value;\n"
+                  "main() {\n"
+                  "  return '${value.y == null}';"
+                  "}\n",
+                  late_tag),
+      std::free);
+  // clang-format on
 
   // The reload fails because the initializing expression is parsed at
   // class finalization time.
-  lib = TestCase::ReloadTestScript(kReloadScript);
+  lib = TestCase::ReloadTestScript(kReloadScript.get());
   EXPECT_ERROR(lib, "......");
 }
 
-TEST_CASE(IsolateReload_RunNewFieldInitialiazersSuperClass) {
-  const char* kScript =
-      "class Super {\n"
-      "  static var foo = 'right';\n"
-      "}\n"
-      "class Foo extends Super {\n"
-      "  static var foo = 'wrong';\n"
-      "}\n"
-      "Foo value;\n"
-      "main() {\n"
-      "  Super.foo;\n"
-      "  Foo.foo;\n"
-      "  value = new Foo();\n"
-      "  return 0;\n"
-      "}\n";
+TEST_CASE(IsolateReload_RunNewFieldInitializersSuperClass) {
+  const char* late_tag = TestCase::LateTag();
+  // clang-format off
+  auto kScript =
+      Utils::CStringUniquePtr(OS::SCreate(nullptr,
+                                "class Super {\n"
+                                "  static var foo = 'right';\n"
+                                "}\n"
+                                "class Foo extends Super {\n"
+                                "  static var foo = 'wrong';\n"
+                                "}\n"
+                                "%s Foo value;\n"
+                                "main() {\n"
+                                "  Super.foo;\n"
+                                "  Foo.foo;\n"
+                                "  value = Foo();\n"
+                                "  return 0;\n"
+                                "}\n",
+                                late_tag),
+                              std::free);
+  // clang-format on
 
-  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+  Dart_Handle lib = TestCase::LoadTestScript(kScript.get(), NULL);
   EXPECT_VALID(lib);
   EXPECT_EQ(0, SimpleInvoke(lib, "main"));
 
-  const char* kReloadScript =
-      "class Super {\n"
-      "  static var foo = 'right';\n"
-      "  var newField = foo;\n"
-      "}\n"
-      "class Foo extends Super {\n"
-      "  static var foo = 'wrong';\n"
-      "}\n"
-      "Foo value;\n"
-      "main() {\n"
-      "  return value.newField;\n"
-      "}\n";
+  // clang-format on
+  auto kReloadScript =
+      Utils::CStringUniquePtr(OS::SCreate(nullptr,
+                                          "class Super {\n"
+                                          "  static var foo = 'right';\n"
+                                          "  var newField = foo;\n"
+                                          "}\n"
+                                          "class Foo extends Super {\n"
+                                          "  static var foo = 'wrong';\n"
+                                          "}\n"
+                                          "%s Foo value;\n"
+                                          "main() {\n"
+                                          "  return value.newField;\n"
+                                          "}\n",
+                                          late_tag),
+                              std::free);
+  // clang-format off
 
-  lib = TestCase::ReloadTestScript(kReloadScript);
+  lib = TestCase::ReloadTestScript(kReloadScript.get());
   EXPECT_VALID(lib);
   // Verify that we ran field initializers on existing instances in the
   // correct scope.
-  EXPECT_STREQ("right", SimpleInvokeStr(lib, "main"));
+  const char* actual = SimpleInvokeStr(lib, "main");
+  EXPECT(actual != nullptr);
+  if (actual != nullptr) {
+    EXPECT_STREQ("right", actual);
+  }
 }
 
 TEST_CASE(IsolateReload_RunNewFieldInitializersWithConsts) {
-  const char* kScript =
-      "class C {\n"
-      "  final x;\n"
-      "  const C(this.x);\n"
-      "}\n"
-      "var a = const C(const C(1));\n"
-      "var b = const C(const C(2));\n"
-      "var c = const C(const C(3));\n"
-      "var d = const C(const C(4));\n"
-      "class Foo {\n"
-      "}\n"
-      "Foo value;\n"
-      "main() {\n"
-      "  value = new Foo();\n"
-      "  a; b; c; d;\n"
-      "  return 'Okay';\n"
-      "}\n";
+  const char* late_tag = TestCase::LateTag();
+  // clang-format off
+  auto kScript =
+      Utils::CStringUniquePtr(OS::SCreate(nullptr,
+                                "class C {\n"
+                                "  final x;\n"
+                                "  const C(this.x);\n"
+                                "}\n"
+                                "var a = const C(const C(1));\n"
+                                "var b = const C(const C(2));\n"
+                                "var c = const C(const C(3));\n"
+                                "var d = const C(const C(4));\n"
+                                "class Foo {\n"
+                                "}\n"
+                                "%s Foo value;\n"
+                                "main() {\n"
+                                "  value = Foo();\n"
+                                "  a; b; c; d;\n"
+                                "  return 'Okay';\n"
+                                "}\n",
+                                late_tag),
+                              std::free);
+  // clang-format on
 
-  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+  Dart_Handle lib = TestCase::LoadTestScript(kScript.get(), nullptr);
   EXPECT_VALID(lib);
   EXPECT_STREQ("Okay", SimpleInvokeStr(lib, "main"));
 
-  const char* kReloadScript =
-      "class C {\n"
-      "  final x;\n"
-      "  const C(this.x);\n"
-      "}\n"
-      "var a = const C(const C(1));\n"
-      "var b = const C(const C(2));\n"
-      "var c = const C(const C(3));\n"
-      "var d = const C(const C(4));\n"
-      "class Foo {\n"
-      "  var d = const C(const C(4));\n"
-      "  var c = const C(const C(3));\n"
-      "  var b = const C(const C(2));\n"
-      "  var a = const C(const C(1));\n"
-      "}\n"
-      "Foo value;\n"
-      "main() {\n"
-      "  return '${identical(a, value.a)} ${identical(b, value.b)}'"
-      "      ' ${identical(c, value.c)} ${identical(d, value.d)}';\n"
-      "}\n";
-
-  lib = TestCase::ReloadTestScript(kReloadScript);
+  // clang-format off
+  auto kReloadScript = Utils::CStringUniquePtr(
+      OS::SCreate(
+          nullptr,
+          "class C {\n"
+          "  final x;\n"
+          "  const C(this.x);\n"
+          "}\n"
+          "var a = const C(const C(1));\n"
+          "var b = const C(const C(2));\n"
+          "var c = const C(const C(3));\n"
+          "var d = const C(const C(4));\n"
+          "class Foo {\n"
+          "  var d = const C(const C(4));\n"
+          "  var c = const C(const C(3));\n"
+          "  var b = const C(const C(2));\n"
+          "  var a = const C(const C(1));\n"
+          "}\n"
+          "%s Foo value;\n"
+          "main() {\n"
+          "  return '${identical(a, value.a)} ${identical(b, value.b)}'"
+          "      ' ${identical(c, value.c)} ${identical(d, value.d)}';\n"
+          "}\n",
+          late_tag),
+      std::free);
+  // clang-format on
+  lib = TestCase::ReloadTestScript(kReloadScript.get());
   EXPECT_VALID(lib);
   // Verify that we ran field initializers on existing instances and the const
   // expressions were properly canonicalized.
@@ -3500,15 +4031,62 @@ TEST_CASE(IsolateReload_RunNewFieldInitializersWithConsts) {
 }
 
 TEST_CASE(IsolateReload_RunNewFieldInitializersWithGenerics) {
+  const char* nullable_tag = TestCase::NullableTag();
+  const char* late_tag = TestCase::LateTag();
+  // clang-format off
+  auto kScript =
+      Utils::CStringUniquePtr(OS::SCreate(nullptr,
+                                "class Foo<T> {\n"
+                                "  T%s x;\n"
+                                "}\n"
+                                "%s Foo value1;\n"
+                                "%s Foo value2;\n"
+                                "main() {\n"
+                                "  value1 = Foo<String>();\n"
+                                "  value2 = Foo<int>();\n"
+                                "  return 'Okay';\n"
+                                "}\n",
+                                nullable_tag, late_tag, late_tag),
+                              std::free);
+  // clang-format on
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScript.get(), NULL);
+  EXPECT_VALID(lib);
+  EXPECT_STREQ("Okay", SimpleInvokeStr(lib, "main"));
+
+  // clang-format off
+  auto kReloadScript = Utils::CStringUniquePtr(
+      OS::SCreate(nullptr,
+                  "class Foo<T> {\n"
+                  "  T%s x;\n"
+                  "  List<T> y = List<T>.empty();"
+                  "  dynamic z = <T,T>{};"
+                  "}\n"
+                  "%s Foo value1;\n"
+                  "%s Foo value2;\n"
+                  "main() {\n"
+                  "  return '${value1.y.runtimeType} ${value1.z.runtimeType}'"
+                  "      ' ${value2.y.runtimeType} ${value2.z.runtimeType}';\n"
+                  "}\n",
+                  nullable_tag, late_tag, late_tag),
+      std::free);
+  // clang-format on
+
+  lib = TestCase::ReloadTestScript(kReloadScript.get());
+  EXPECT_VALID(lib);
+  // Verify that we ran field initializers on existing instances and
+  // correct type arguments were used.
+  EXPECT_STREQ(
+      "List<String> _InternalLinkedHashMap<String, String> List<int> "
+      "_InternalLinkedHashMap<int, int>",
+      SimpleInvokeStr(lib, "main"));
+}
+
+TEST_CASE(IsolateReload_AddNewStaticField) {
   const char* kScript =
-      "class Foo<T> {\n"
-      "  T x;\n"
+      "class C {\n"
       "}\n"
-      "Foo value1;\n"
-      "Foo value2;\n"
       "main() {\n"
-      "  value1 = new Foo<String>();\n"
-      "  value2 = new Foo<int>();\n"
       "  return 'Okay';\n"
       "}\n";
 
@@ -3517,25 +4095,452 @@ TEST_CASE(IsolateReload_RunNewFieldInitializersWithGenerics) {
   EXPECT_STREQ("Okay", SimpleInvokeStr(lib, "main"));
 
   const char* kReloadScript =
-      "class Foo<T> {\n"
-      "  T x;\n"
-      "  List<T> y = new List<T>();"
-      "  dynamic z = <T,T>{};"
+      "class C {\n"
+      "  static var x = 42;\n"
       "}\n"
-      "Foo value1;\n"
-      "Foo value2;\n"
       "main() {\n"
-      "  return '${value1.y.runtimeType} ${value1.z.runtimeType}'"
-      "      ' ${value2.y.runtimeType} ${value2.z.runtimeType}';\n"
+      "  return '${C.x}';\n"
       "}\n";
 
   lib = TestCase::ReloadTestScript(kReloadScript);
   EXPECT_VALID(lib);
-  // Verify that we ran field initializers on existing instances and
-  // correct type arguments were used.
+  EXPECT_STREQ("42", SimpleInvokeStr(lib, "main"));
+}
+
+TEST_CASE(IsolateReload_StaticFieldInitialValueDoesnotChange) {
+  const char* kScript =
+      "class C {\n"
+      "  static var x = 42;\n"
+      "}\n"
+      "main() {\n"
+      "  return '${C.x}';\n"
+      "}\n";
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+  EXPECT_VALID(lib);
+  EXPECT_STREQ("42", SimpleInvokeStr(lib, "main"));
+
+  const char* kReloadScript =
+      "class C {\n"
+      "  static var x = 13;\n"
+      "}\n"
+      "main() {\n"
+      "  return '${C.x}';\n"
+      "}\n";
+
+  lib = TestCase::ReloadTestScript(kReloadScript);
+  EXPECT_VALID(lib);
+  // Newly loaded field maintained old static value
+  EXPECT_STREQ("42", SimpleInvokeStr(lib, "main"));
+}
+
+class FindNoInstancesOfClass : public FindObjectVisitor {
+ public:
+  explicit FindNoInstancesOfClass(intptr_t cid) : cid_(cid) {
+#if defined(DEBUG)
+    EXPECT_GT(Thread::Current()->no_safepoint_scope_depth(), 0);
+#endif
+  }
+  virtual ~FindNoInstancesOfClass() {}
+
+  virtual bool FindObject(ObjectPtr obj) const {
+    return obj->GetClassId() == cid_;
+  }
+
+ private:
+  intptr_t cid_;
+};
+
+TEST_CASE(IsolateReload_DeleteStaticField) {
+  const char* kScript =
+      "class C {\n"
+      "}\n"
+      "class Foo {\n"
+      "static var x = C();\n"
+      "}\n"
+      "main() {\n"
+      "  return Foo.x;\n"
+      "}\n";
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+  EXPECT_VALID(lib);
+  intptr_t cid = 1118;
+  {
+    Dart_EnterScope();
+    Dart_Handle result = Dart_Invoke(lib, NewString("main"), 0, NULL);
+    EXPECT_VALID(result);
+    {
+      TransitionNativeToVM transition(thread);
+      cid = Api::ClassId(result);
+    }
+    Dart_ExitScope();
+  }
+
+  const char* kReloadScript =
+      "class C {\n"
+      "}\n"
+      "class Foo {\n"
+      "}\n"
+      "main() {\n"
+      "  return '${Foo()}';\n"
+      "}\n";
+
+  lib = TestCase::ReloadTestScript(kReloadScript);
+  EXPECT_VALID(lib);
+  Dart_Handle result = Dart_Invoke(lib, NewString("main"), 0, NULL);
+  EXPECT_VALID(result);
+  {
+    TransitionNativeToVM transition(thread);
+    GCTestHelper::CollectAllGarbage();
+
+    {
+      HeapIterationScope iteration(thread);
+      NoSafepointScope no_safepoint;
+      FindNoInstancesOfClass find_only(cid);
+      Heap* heap = IsolateGroup::Current()->heap();
+      // We still expect to find references to static field values
+      // because they are not deleted after hot reload.
+      EXPECT_NE(heap->FindObject(&find_only), Object::null());
+    }
+  }
+}
+
+TEST_CASE(IsolateReload_ExistingFieldChangesType) {
+  const char* late_tag = TestCase::LateTag();
+  // clang-format off
+  auto kScript = Utils::CStringUniquePtr(OS::SCreate(nullptr,
+                                                     R"(
+    class Foo {
+      int x = 42;
+    }
+    %s Foo value;
+    main() {
+      value = Foo();
+      return 'Okay';
+    }
+  )",
+  late_tag), std::free);
+  // clang-format on
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScript.get(), NULL);
+  EXPECT_VALID(lib);
+  EXPECT_STREQ("Okay", SimpleInvokeStr(lib, "main"));
+
+  // clang-format off
+  auto kReloadScript = Utils::CStringUniquePtr(OS::SCreate(nullptr, R"(
+    class Foo {
+      double x = 42.0;
+    }
+    %s Foo value;
+    main() {
+      try {
+        return value.x.toString();
+      } catch (e) {
+        return e.toString();
+      }
+    }
+  )",
+  late_tag), std::free);
+  // clang-format on
+
+  lib = TestCase::ReloadTestScript(kReloadScript.get());
+  EXPECT_VALID(lib);
   EXPECT_STREQ(
-      "List<String> _InternalLinkedHashMap<String, String> List<int> "
-      "_InternalLinkedHashMap<int, int>",
+      "type 'int' is not a subtype of type 'double' of 'function result'",
+      SimpleInvokeStr(lib, "main"));
+}
+
+TEST_CASE(IsolateReload_ExistingStaticFieldChangesType) {
+  const char* kScript = R"(
+    int value = init();
+    init() => 42;
+    main() {
+      return value.toString();
+    }
+  )";
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+  EXPECT_VALID(lib);
+  EXPECT_STREQ("42", SimpleInvokeStr(lib, "main"));
+
+  const char* kReloadScript = R"(
+    double value = init();
+    init() => 42.0;
+    main() {
+      try {
+        return value.toString();
+      } catch (e) {
+        return e.toString();
+      }
+    }
+  )";
+
+  lib = TestCase::ReloadTestScript(kReloadScript);
+  EXPECT_VALID(lib);
+  EXPECT_STREQ(
+      "type 'int' is not a subtype of type 'double' of 'function result'",
+      SimpleInvokeStr(lib, "main"));
+}
+
+TEST_CASE(IsolateReload_ExistingFieldChangesTypeIndirect) {
+  const char* late_tag = TestCase::LateTag();
+  // clang-format off
+  auto kScript = Utils::CStringUniquePtr(OS::SCreate(nullptr, R"(
+    class A {}
+    class B extends A {}
+    class Foo {
+      A x;
+      Foo(this.x);
+    }
+    %s Foo value;
+    main() {
+      value = Foo(B());
+      return 'Okay';
+    }
+  )", late_tag), std::free);
+  // clang-format on
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScript.get(), NULL);
+  EXPECT_VALID(lib);
+  EXPECT_STREQ("Okay", SimpleInvokeStr(lib, "main"));
+
+  // B is no longer a subtype of A.
+  // clang-format off
+  auto kReloadScript = Utils::CStringUniquePtr(OS::SCreate(nullptr, R"(
+    class A {}
+    class B {}
+    class Foo {
+      A x;
+      Foo(this.x);
+    }
+    %s Foo value;
+    main() {
+      try {
+        return value.x.toString();
+      } catch (e) {
+        return e.toString();
+      }
+    }
+  )", late_tag), std::free);
+  // clang-format on
+
+  lib = TestCase::ReloadTestScript(kReloadScript.get());
+  EXPECT_VALID(lib);
+  EXPECT_STREQ("type 'B' is not a subtype of type 'A' of 'function result'",
+               SimpleInvokeStr(lib, "main"));
+}
+
+TEST_CASE(IsolateReload_ExistingStaticFieldChangesTypeIndirect) {
+  const char* kScript = R"(
+    class A {}
+    class B extends A {}
+    A value = init();
+    init() => new B();
+    main() {
+      return value.toString();
+    }
+  )";
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+  EXPECT_VALID(lib);
+  EXPECT_STREQ("Instance of 'B'", SimpleInvokeStr(lib, "main"));
+
+  // B is no longer a subtype of A.
+  const char* kReloadScript = R"(
+    class A {}
+    class B {}
+    A value = init();
+    init() => new A();
+    main() {
+      try {
+        return value.toString();
+      } catch (e) {
+        return e.toString();
+      }
+    }
+  )";
+
+  lib = TestCase::ReloadTestScript(kReloadScript);
+  EXPECT_VALID(lib);
+  EXPECT_STREQ("type 'B' is not a subtype of type 'A' of 'function result'",
+               SimpleInvokeStr(lib, "main"));
+}
+
+TEST_CASE(IsolateReload_ExistingFieldChangesTypeIndirectGeneric) {
+  const char* late_tag = TestCase::LateTag();
+  // clang-format off
+  auto kScript = Utils::CStringUniquePtr(OS::SCreate(nullptr, R"(
+    class A {}
+    class B extends A {}
+    class Foo {
+      List<A> x;
+      Foo(this.x);
+    }
+    %s Foo value;
+    main() {
+      value = Foo(List<B>.empty());
+      return 'Okay';
+    }
+  )", late_tag), std::free);
+  // clang-format on
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScript.get(), NULL);
+  EXPECT_VALID(lib);
+  EXPECT_STREQ("Okay", SimpleInvokeStr(lib, "main"));
+
+  // B is no longer a subtype of A.
+  // clang-format off
+  auto kReloadScript = Utils::CStringUniquePtr(OS::SCreate(nullptr, R"(
+    class A {}
+    class B {}
+    class Foo {
+      List<A> x;
+      Foo(this.x);
+    }
+    %s Foo value;
+    main() {
+      try {
+        return value.x.toString();
+      } catch (e) {
+        return e.toString();
+      }
+    }
+  )", late_tag), std::free);
+  // clang-format on
+
+  lib = TestCase::ReloadTestScript(kReloadScript.get());
+  EXPECT_VALID(lib);
+  EXPECT_STREQ(
+      "type 'List<B>' is not a subtype of type 'List<A>' of 'function result'",
+      SimpleInvokeStr(lib, "main"));
+}
+
+TEST_CASE(IsolateReload_ExistingStaticFieldChangesTypeIndirectGeneric) {
+  const char* kScript = R"(
+    class A {}
+    class B extends A {}
+    List<A> value = init();
+    init() => List<B>.empty();
+    main() {
+      return value.toString();
+    }
+  )";
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+  EXPECT_VALID(lib);
+  EXPECT_STREQ("[]", SimpleInvokeStr(lib, "main"));
+
+  // B is no longer a subtype of A.
+  const char* kReloadScript = R"(
+    class A {}
+    class B {}
+    List<A> value = init();
+    init() => List<A>.empty();
+    main() {
+      try {
+        return value.toString();
+      } catch (e) {
+        return e.toString();
+      }
+    }
+  )";
+
+  lib = TestCase::ReloadTestScript(kReloadScript);
+  EXPECT_VALID(lib);
+  EXPECT_STREQ(
+      "type 'List<B>' is not a subtype of type 'List<A>' of 'function result'",
+      SimpleInvokeStr(lib, "main"));
+}
+
+TEST_CASE(IsolateReload_ExistingFieldChangesTypeIndirectFunction) {
+  const char* late_tag = TestCase::LateTag();
+  // clang-format off
+  auto kScript = Utils::CStringUniquePtr(OS::SCreate(nullptr, R"(
+    class A {}
+    class B extends A {}
+    typedef bool Predicate(B b);
+    class Foo {
+      Predicate x;
+      Foo(this.x);
+    }
+    %s Foo value;
+    main() {
+      value = Foo((A a) => true);
+      return 'Okay';
+    }
+  )", late_tag), std::free);
+  // clang-format on
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScript.get(), NULL);
+  EXPECT_VALID(lib);
+  EXPECT_STREQ("Okay", SimpleInvokeStr(lib, "main"));
+
+  // B is no longer a subtype of A.
+  // clang-format off
+  auto kReloadScript = Utils::CStringUniquePtr(OS::SCreate(nullptr, R"(
+    class A {}
+    class B {}
+    typedef bool Predicate(B b);
+    class Foo {
+      Predicate x;
+      Foo(this.x);
+    }
+    %s Foo value;
+    main() {
+      try {
+        return value.x.toString();
+      } catch (e) {
+        return e.toString();
+      }
+    }
+  )", late_tag), std::free);
+  // clang-format on
+
+  lib = TestCase::ReloadTestScript(kReloadScript.get());
+  EXPECT_VALID(lib);
+  EXPECT_STREQ(
+      "type '(A) => bool' is not a subtype of type '(B) => bool' of 'function "
+      "result'",
+      SimpleInvokeStr(lib, "main"));
+}
+
+TEST_CASE(IsolateReload_ExistingStaticFieldChangesTypeIndirectFunction) {
+  const char* kScript = R"(
+    class A {}
+    class B extends A {}
+    typedef bool Predicate(B b);
+    Predicate value = init();
+    init() => (A a) => true;
+    main() {
+      return value.toString();
+    }
+  )";
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+  EXPECT_VALID(lib);
+  EXPECT_STREQ("Closure: (A) => bool", SimpleInvokeStr(lib, "main"));
+
+  // B is no longer a subtype of A.
+  const char* kReloadScript = R"(
+    class A {}
+    class B {}
+    typedef bool Predicate(B b);
+    Predicate value = init();
+    init() => (B a) => true;
+    main() {
+      try {
+        return value.toString();
+      } catch (e) {
+        return e.toString();
+      }
+    }
+  )";
+
+  lib = TestCase::ReloadTestScript(kReloadScript);
+  EXPECT_VALID(lib);
+  EXPECT_STREQ(
+      "type '(A) => bool' is not a subtype of type '(B) => bool' of 'function "
+      "result'",
       SimpleInvokeStr(lib, "main"));
 }
 
@@ -3633,6 +4638,253 @@ TEST_CASE(IsolateReload_PatchStaticInitializerWithClosure) {
   lib = TestCase::ReloadTestScript(kReloadScript);
   EXPECT_VALID(lib);
   EXPECT_STREQ("ac", SimpleInvokeStr(lib, "main"));
+}
+
+TEST_CASE(IsolateReload_StaticTargetArityChange) {
+  const char* kScript = R"(
+    class A {
+      final x;
+      final y;
+      const A(this.x, this.y);
+    }
+
+    dynamic closure;
+
+    main() {
+      closure = () => A(1, 2);
+      return "okay";
+    }
+  )";
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+  EXPECT_VALID(lib);
+  EXPECT_STREQ("okay", SimpleInvokeStr(lib, "main"));
+
+  const char* kReloadScript = R"(
+    class A {
+      final x;
+      const A(this.x);
+    }
+
+    dynamic closure;
+
+    main() {
+      // Call the old closure, which will try to call A(1, 2).
+      closure();
+
+      return "okay";
+    }
+  )";
+
+  lib = TestCase::ReloadTestScript(kReloadScript);
+  EXPECT_VALID(lib);
+  EXPECT_ERROR(SimpleInvokeError(lib, "main"),
+               "Unhandled exception:\n"
+               "NoSuchMethodError: No constructor 'A.' "
+               "with matching arguments declared in class 'A'.");
+}
+
+TEST_CASE(IsolateReload_SuperGetterReboundToMethod) {
+  const char* kScript = R"(
+    import 'file:///test:isolate_reload_helper';
+
+    class A {
+      get x => "123";
+    }
+
+    class B extends A {
+      f() {
+        var old_x = super.x;
+        reloadTest();
+        var new_x = super.x;
+        return "$old_x:$new_x";
+      }
+    }
+
+    main() {
+      return B().f().toString();
+    }
+  )";
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+  EXPECT_VALID(lib);
+
+  const char* kReloadScript = R"(
+    import 'file:///test:isolate_reload_helper';
+
+    class A {
+      x() => "123";
+    }
+
+    class B extends A {
+      f() {
+        var old_x = super.x;
+        reloadTest();
+        var new_x = super.x;
+        return "$old_x:$new_x";
+      }
+    }
+
+    main() {
+      return B().f();
+    }
+  )";
+
+  EXPECT_VALID(TestCase::SetReloadTestScript(kReloadScript));
+
+  EXPECT_STREQ("123:Closure: () => dynamic from Function 'x':.",
+               SimpleInvokeStr(lib, "main"));
+}
+
+// Regression test for b/179030011: incorrect lifetime management when reloading
+// with multicomponent Kernel binary. When loading kernel blobs through tag
+// handler (Dart_kKernelTag) we need to make sure to preserve a link between
+// KernelProgramInfo objects and original typed data, because it might be
+// comming with a finalizer, which otherwise might end up being called
+// prematurely.
+namespace {
+
+// Compile the given |source| to Kernel binary.
+static void CompileToKernel(Dart_SourceFile source,
+                            const uint8_t** kernel_buffer,
+                            intptr_t* kernel_buffer_size) {
+  Dart_SourceFile sources[] = {source};
+  char* error = TestCase::CompileTestScriptWithDFE(
+      sources[0].uri, ARRAY_SIZE(sources), sources, kernel_buffer,
+      kernel_buffer_size,
+      /*incrementally=*/false);
+  EXPECT(error == NULL);
+  EXPECT_NOTNULL(kernel_buffer);
+}
+
+// LibraryTagHandler which returns a fixed Kernel binary back every time it
+// receives a Dart_kKernelTag request. The binary is wrapped in an external
+// typed data with a finalizer attached to it. If this finalizer is called
+// it will set |was_finalized_| to true.
+class KernelTagHandler {
+ public:
+  KernelTagHandler(uint8_t* kernel_buffer, intptr_t kernel_buffer_size)
+      : kernel_buffer_(kernel_buffer), kernel_buffer_size_(kernel_buffer_size) {
+    Dart_SetLibraryTagHandler(&LibraryTagHandler);
+    instance_ = this;
+  }
+
+  ~KernelTagHandler() {
+    Dart_SetLibraryTagHandler(nullptr);
+    instance_ = nullptr;
+  }
+
+  static KernelTagHandler* Current() { return instance_; }
+
+  bool was_called() const { return was_called_; }
+  bool was_finalized() const { return was_finalized_; }
+
+ private:
+  static void Finalizer(void* isolate_callback_data, void* peer) {
+    if (auto handler = KernelTagHandler::Current()) {
+      handler->was_finalized_ = true;
+    }
+  }
+
+  static Dart_Handle LibraryTagHandler(Dart_LibraryTag tag,
+                                       Dart_Handle library,
+                                       Dart_Handle url) {
+    if (tag == Dart_kKernelTag) {
+      auto handler = KernelTagHandler::Current();
+      handler->was_called_ = true;
+
+      Dart_Handle result = Dart_NewExternalTypedData(
+          Dart_TypedData_kUint8, handler->kernel_buffer_,
+          handler->kernel_buffer_size_);
+      Dart_NewFinalizableHandle(result, handler->kernel_buffer_,
+                                handler->kernel_buffer_size_, &Finalizer);
+      return result;
+    }
+    UNREACHABLE();
+    return Dart_Null();
+  }
+
+  static KernelTagHandler* instance_;
+  uint8_t* kernel_buffer_;
+  intptr_t kernel_buffer_size_;
+  bool was_finalized_ = false;
+  bool was_called_ = false;
+};
+
+KernelTagHandler* KernelTagHandler::instance_ = nullptr;
+}  // namespace
+
+TEST_CASE(IsolateReload_RegressB179030011) {
+  struct Component {
+    Dart_SourceFile source;
+    const uint8_t* kernel_buffer;
+    intptr_t kernel_buffer_size;
+  };
+
+  // clang-format off
+  std::array<Component, 2> components = {{
+    {{
+      "file:///test-app",
+      R"(
+        class A {}
+        void main() {
+          A();
+        }
+      )"
+    }, nullptr, 0},
+    {{
+      "file:///library",
+      R"(
+        class B {}
+      )"
+    }, nullptr, 0}
+  }};
+  // clang-format on
+
+  for (auto& component : components) {
+    CompileToKernel(component.source, &component.kernel_buffer,
+                    &component.kernel_buffer_size);
+    TestCaseBase::AddToKernelBuffers(component.kernel_buffer);
+  }
+
+  // Concatenate all components.
+  intptr_t kernel_buffer_size = 0;
+  for (auto component : components) {
+    kernel_buffer_size += component.kernel_buffer_size;
+  }
+  uint8_t* kernel_buffer = static_cast<uint8_t*>(malloc(kernel_buffer_size));
+  TestCaseBase::AddToKernelBuffers(kernel_buffer);
+  intptr_t pos = 0;
+  for (auto component : components) {
+    memcpy(kernel_buffer + pos, component.kernel_buffer,  // NOLINT
+           component.kernel_buffer_size);
+    pos += component.kernel_buffer_size;
+  }
+
+  // Load the first component into the isolate (to have something set as
+  // root library).
+  Dart_Handle lib = Dart_LoadLibraryFromKernel(
+      components[0].kernel_buffer, components[0].kernel_buffer_size);
+  EXPECT_VALID(lib);
+  EXPECT_VALID(Dart_SetRootLibrary(lib));
+
+  {
+    KernelTagHandler handler(kernel_buffer, kernel_buffer_size);
+    {
+      // Additional API scope to prevent handles leaking into outer scope.
+      Dart_EnterScope();
+      // root_script_url does not really matter.
+      TestCase::TriggerReload(/*root_script_url=*/"something.dill");
+      Dart_ExitScope();
+    }
+    EXPECT(handler.was_called());
+
+    // Check that triggering GC does not cause finalizer registered by
+    // tag handler to fire - meaning that kernel binary continues to live.
+    TransitionNativeToVM transition(thread);
+    GCTestHelper::CollectAllGarbage();
+    EXPECT(!handler.was_finalized());
+  }
 }
 
 #endif  // !defined(PRODUCT) && !defined(DART_PRECOMPILED_RUNTIME)

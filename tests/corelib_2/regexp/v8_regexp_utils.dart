@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 // Utility functions to easily port V8 tests.
 
 import "package:expect/expect.dart";
@@ -20,6 +22,10 @@ void assertFalse(actual, [String message = null]) {
 
 void assertThrows(fn, [num testid = null]) {
   Expect.throws(fn, null, "Test $testid");
+}
+
+void assertDoesNotThrow(fn, [num testid = null]) {
+  fn();
 }
 
 void assertNull(actual, [num testid = null]) {

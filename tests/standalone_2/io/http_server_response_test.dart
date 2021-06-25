@@ -8,6 +8,8 @@
 // VMOptions=--short_socket_read --short_socket_write
 // OtherResources=http_server_response_test.dart
 
+// @dart = 2.9
+
 import "package:expect/expect.dart";
 import "dart:async";
 import "dart:io";
@@ -67,6 +69,7 @@ void testResponseDone() {
   testServerRequest((server, request) {
     new File("__nonexistent_file_")
         .openRead()
+        .cast<List<int>>()
         .pipe(request.response)
         .catchError((e) {
       server.close();
@@ -103,7 +106,7 @@ void testResponseAddStream() {
   }, bytes: bytes * 2);
 
   testServerRequest((server, request) {
-    var controller = new StreamController(sync: true);
+    var controller = new StreamController<List<int>>(sync: true);
     request.response.addStream(controller.stream).then((response) {
       response.close();
       response.done.then((_) => server.close());
@@ -122,6 +125,7 @@ void testResponseAddStream() {
   testServerRequest((server, request) {
     new File("__nonexistent_file_")
         .openRead()
+        .cast<List<int>>()
         .pipe(request.response)
         .catchError((e) {
       server.close();

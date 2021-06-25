@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'assist_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(ExchangeOperandsTest);
   });
@@ -19,27 +19,27 @@ class ExchangeOperandsTest extends AssistProcessorTest {
   @override
   AssistKind get kind => DartAssistKind.EXCHANGE_OPERANDS;
 
-  test_compare() async {
-    const initialOperators = const ['<', '<=', '>', '>='];
-    const resultOperators = const ['>', '>=', '<', '<='];
-    for (int i = 0; i <= 0; i++) {
-      String initialOperator = initialOperators[i];
-      String resultOperator = resultOperators[i];
-      await resolveTestUnit('''
-bool main(int a, int b) {
+  Future<void> test_compare() async {
+    const initialOperators = ['<', '<=', '>', '>='];
+    const resultOperators = ['>', '>=', '<', '<='];
+    for (var i = 0; i <= 0; i++) {
+      var initialOperator = initialOperators[i];
+      var resultOperator = resultOperators[i];
+      await resolveTestCode('''
+bool f(int a, int b) {
   return a $initialOperator b;
 }
 ''');
       await assertHasAssistAt(initialOperator, '''
-bool main(int a, int b) {
+bool f(int a, int b) {
   return b $resultOperator a;
 }
 ''');
     }
   }
 
-  test_extended_mixOperator_1() async {
-    await resolveTestUnit('''
+  Future<void> test_extended_mixOperator_1() async {
+    await resolveTestCode('''
 main() {
   1 * 2 * 3 + 4;
 }
@@ -51,8 +51,8 @@ main() {
 ''');
   }
 
-  test_extended_mixOperator_2() async {
-    await resolveTestUnit('''
+  Future<void> test_extended_mixOperator_2() async {
+    await resolveTestCode('''
 main() {
   1 + 2 - 3 + 4;
 }
@@ -64,8 +64,8 @@ main() {
 ''');
   }
 
-  test_extended_sameOperator_afterFirst() async {
-    await resolveTestUnit('''
+  Future<void> test_extended_sameOperator_afterFirst() async {
+    await resolveTestCode('''
 main() {
   1 + 2 + 3;
 }
@@ -77,8 +77,8 @@ main() {
 ''');
   }
 
-  test_extended_sameOperator_afterSecond() async {
-    await resolveTestUnit('''
+  Future<void> test_extended_sameOperator_afterSecond() async {
+    await resolveTestCode('''
 main() {
   1 + 2 + 3;
 }
@@ -90,8 +90,8 @@ main() {
 ''');
   }
 
-  test_extraLength() async {
-    await resolveTestUnit('''
+  Future<void> test_extraLength() async {
+    await resolveTestCode('''
 main() {
   111 + 222;
 }
@@ -99,8 +99,8 @@ main() {
     await assertNoAssistAt('+ 222', length: 3);
   }
 
-  test_onOperand() async {
-    await resolveTestUnit('''
+  Future<void> test_onOperand() async {
+    await resolveTestCode('''
 main() {
   111 + 222;
 }
@@ -108,8 +108,8 @@ main() {
     await assertNoAssistAt('11 +', length: 3);
   }
 
-  test_selectionWithBinary() async {
-    await resolveTestUnit('''
+  Future<void> test_selectionWithBinary() async {
+    await resolveTestCode('''
 main() {
   1 + 2 + 3;
 }
@@ -117,8 +117,8 @@ main() {
     await assertNoAssistAt('1 + 2 + 3', length: '1 + 2 + 3'.length);
   }
 
-  test_simple_afterOperator() async {
-    await resolveTestUnit('''
+  Future<void> test_simple_afterOperator() async {
+    await resolveTestCode('''
 main() {
   1 + 2;
 }
@@ -130,8 +130,8 @@ main() {
 ''');
   }
 
-  test_simple_beforeOperator() async {
-    await resolveTestUnit('''
+  Future<void> test_simple_beforeOperator() async {
+    await resolveTestCode('''
 main() {
   1 + 2;
 }
@@ -143,8 +143,8 @@ main() {
 ''');
   }
 
-  test_simple_fullSelection() async {
-    await resolveTestUnit('''
+  Future<void> test_simple_fullSelection() async {
+    await resolveTestCode('''
 main() {
   1 + 2;
 }
@@ -159,8 +159,8 @@ main() {
         length: '1 + 2'.length);
   }
 
-  test_simple_withLength() async {
-    await resolveTestUnit('''
+  Future<void> test_simple_withLength() async {
+    await resolveTestCode('''
 main() {
   1 + 2;
 }

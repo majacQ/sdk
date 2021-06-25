@@ -42,6 +42,10 @@ static File* GetFile(Dart_NativeArguments args) {
   Dart_Handle result = Dart_GetNativeInstanceField(
       dart_this, kFileNativeFieldIndex, reinterpret_cast<intptr_t*>(&file));
   ASSERT(!Dart_IsError(result));
+  if (file == NULL) {
+    Dart_PropagateError(Dart_NewUnhandledExceptionError(
+        DartUtils::NewInternalError("No native peer")));
+  }
   return file;
 }
 
@@ -64,9 +68,7 @@ void FUNCTION_NAME(File_GetPointer)(Dart_NativeArguments args) {
   Dart_SetIntegerReturnValue(args, file_pointer);
 }
 
-static void ReleaseFile(void* isolate_callback_data,
-                        Dart_WeakPersistentHandle handle,
-                        void* peer) {
+static void ReleaseFile(void* isolate_callback_data, void* peer) {
   File* file = reinterpret_cast<File*>(peer);
   file->Release();
 }
@@ -75,9 +77,9 @@ void FUNCTION_NAME(File_SetPointer)(Dart_NativeArguments args) {
   Dart_Handle dart_this = ThrowIfError(Dart_GetNativeArgument(args, 0));
   intptr_t file_pointer = DartUtils::GetNativeIntptrArgument(args, 1);
   File* file = reinterpret_cast<File*>(file_pointer);
-  Dart_WeakPersistentHandle handle = Dart_NewWeakPersistentHandle(
+  Dart_FinalizableHandle handle = Dart_NewFinalizableHandle(
       dart_this, reinterpret_cast<void*>(file), sizeof(*file), ReleaseFile);
-  file->SetWeakHandle(handle);
+  file->SetFinalizableHandle(handle);
   SetFile(dart_this, file_pointer);
 }
 
@@ -113,12 +115,15 @@ void FUNCTION_NAME(File_Open)(Dart_NativeArguments args) {
 }
 
 void FUNCTION_NAME(File_Exists)(Dart_NativeArguments args) {
-  Namespace* namespc = Namespace::GetNamespace(args, 0);
-  Dart_Handle path_handle = Dart_GetNativeArgument(args, 1);
-  TypedDataScope data(path_handle);
-  ASSERT(data.type() == Dart_TypedData_kUint8);
-  const char* filename = data.GetCString();
-  bool exists = File::Exists(namespc, filename);
+  bool exists;
+  {
+    Namespace* namespc = Namespace::GetNamespace(args, 0);
+    Dart_Handle path_handle = Dart_GetNativeArgument(args, 1);
+    TypedDataScope data(path_handle);
+    ASSERT(data.type() == Dart_TypedData_kUint8);
+    const char* filename = data.GetCString();
+    exists = File::Exists(namespc, filename);
+  }
   Dart_SetBooleanReturnValue(args, exists);
 }
 
@@ -141,7 +146,7 @@ void FUNCTION_NAME(File_Close)(Dart_NativeArguments args) {
     return;
   }
   file->Close();
-  file->DeleteWeakHandle(Dart_CurrentIsolate());
+  file->DeleteFinalizableHandle(Dart_CurrentIsolate(), dart_this);
   file->Release();
 
   ThrowIfError(
@@ -706,17 +711,24 @@ void FUNCTION_NAME(File_GetStdioHandleType)(Dart_NativeArguments args) {
   ASSERT((fd == STDIN_FILENO) || (fd == STDOUT_FILENO) ||
          (fd == STDERR_FILENO));
   File::StdioHandleType type = File::GetStdioHandleType(static_cast<int>(fd));
-  Dart_SetIntegerReturnValue(args, type);
+  if (type == File::StdioHandleType::kTypeError) {
+    Dart_SetReturnValue(args, DartUtils::NewDartOSError());
+  } else {
+    Dart_SetIntegerReturnValue(args, type);
+  }
 }
 
 void FUNCTION_NAME(File_GetType)(Dart_NativeArguments args) {
-  Namespace* namespc = Namespace::GetNamespace(args, 0);
-  Dart_Handle path_handle = Dart_GetNativeArgument(args, 1);
-  TypedDataScope data(path_handle);
-  ASSERT(data.type() == Dart_TypedData_kUint8);
-  const char* path = data.GetCString();
-  bool follow_links = DartUtils::GetNativeBooleanArgument(args, 2);
-  File::Type type = File::GetType(namespc, path, follow_links);
+  File::Type type;
+  {
+    Namespace* namespc = Namespace::GetNamespace(args, 0);
+    Dart_Handle path_handle = Dart_GetNativeArgument(args, 1);
+    TypedDataScope data(path_handle);
+    ASSERT(data.type() == Dart_TypedData_kUint8);
+    const char* path = data.GetCString();
+    bool follow_links = DartUtils::GetNativeBooleanArgument(args, 2);
+    type = File::GetType(namespc, path, follow_links);
+  }
   Dart_SetIntegerReturnValue(args, static_cast<int>(type));
 }
 
@@ -749,7 +761,7 @@ void FUNCTION_NAME(File_AreIdentical)(Dart_NativeArguments args) {
   Namespace* namespc = Namespace::GetNamespace(args, 0);
   const char* path_1 = DartUtils::GetNativeStringArgument(args, 1);
   const char* path_2 = DartUtils::GetNativeStringArgument(args, 2);
-  File::Identical result = File::AreIdentical(namespc, path_1, path_2);
+  File::Identical result = File::AreIdentical(namespc, path_1, namespc, path_2);
   if (result == File::kError) {
     Dart_SetReturnValue(args, DartUtils::NewDartOSError());
   } else {
@@ -1234,9 +1246,12 @@ CObject* File::ReadRequest(const CObjectArray& request) {
     CObject::FreeIOBufferData(io_buffer);
     return CObject::NewOSError();
   }
-  CObjectExternalUint8Array* external_array =
-      new CObjectExternalUint8Array(io_buffer);
-  external_array->SetLength(bytes_read);
+
+  // Possibly shrink the used malloc() storage if the actual number of bytes is
+  // significantly lower.
+  CObject::ShrinkIOBuffer(io_buffer, bytes_read);
+
+  auto external_array = new CObjectExternalUint8Array(io_buffer);
   CObjectArray* result = new CObjectArray(CObject::NewArray(2));
   result->SetAt(0, new CObjectIntptr(CObject::NewInt32(0)));
   result->SetAt(1, external_array);
@@ -1266,9 +1281,12 @@ CObject* File::ReadIntoRequest(const CObjectArray& request) {
     CObject::FreeIOBufferData(io_buffer);
     return CObject::NewOSError();
   }
-  CObjectExternalUint8Array* external_array =
-      new CObjectExternalUint8Array(io_buffer);
-  external_array->SetLength(bytes_read);
+
+  // Possibly shrink the used malloc() storage if the actual number of bytes is
+  // significantly lower.
+  CObject::ShrinkIOBuffer(io_buffer, bytes_read);
+
+  auto external_array = new CObjectExternalUint8Array(io_buffer);
   CObjectArray* result = new CObjectArray(CObject::NewArray(3));
   result->SetAt(0, new CObjectIntptr(CObject::NewInt32(0)));
   result->SetAt(1, new CObjectInt64(CObject::NewInt64(bytes_read)));
@@ -1293,6 +1311,10 @@ static int SizeInBytes(Dart_TypedData_Type type) {
     case Dart_TypedData_kUint64:
     case Dart_TypedData_kFloat64:
       return 8;
+    case Dart_TypedData_kInt32x4:
+    case Dart_TypedData_kFloat32x4:
+    case Dart_TypedData_kFloat64x2:
+      return 16;
     default:
       break;
   }
@@ -1441,7 +1463,7 @@ CObject* File::IdenticalRequest(const CObjectArray& request) {
   CObjectString path1(request[1]);
   CObjectString path2(request[2]);
   File::Identical result =
-      File::AreIdentical(namespc, path1.CString(), path2.CString());
+      File::AreIdentical(namespc, path1.CString(), namespc, path2.CString());
   if (result == File::kError) {
     return CObject::NewOSError();
   }
@@ -1497,7 +1519,7 @@ CObject* File::LockRequest(const CObjectArray& request) {
 // Inspired by sdk/lib/core/uri.dart
 UriDecoder::UriDecoder(const char* uri) : uri_(uri) {
   const char* ch = uri;
-  while ((*ch != 0) && (*ch != '%')) {
+  while ((*ch != '\0') && (*ch != '%')) {
     ch++;
   }
   if (*ch == 0) {
@@ -1514,7 +1536,7 @@ UriDecoder::UriDecoder(const char* uri) : uri_(uri) {
   strncpy(dest, uri, i);
   decoded_ = dest;
   dest += i;
-  while (*ch) {
+  while (*ch != '\0') {
     if (*ch != '%') {
       *(dest++) = *(ch++);
       continue;

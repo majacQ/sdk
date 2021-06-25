@@ -2,16 +2,15 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 library test.instance_members_with_override;
 
 import 'dart:mirrors';
 import 'package:expect/expect.dart';
-import 'package:meta/meta.dart' show virtual;
 
 class S {
-  @virtual
   var field;
-  @virtual
   final finalField = 0;
   method() {}
   get getter {}
@@ -28,8 +27,8 @@ abstract class C extends S {
   /* abstract */ notOverridden();
 }
 
-selectKeys(map, predicate) {
-  return map.keys.where((key) => predicate(map[key]));
+selectKeys<K, V>(Map<K, V> map, bool Function(V) predicate) {
+  return map.keys.where((K key) => predicate(map[key]));
 }
 
 main() {

@@ -4,6 +4,8 @@
 
 library js_backend.backend.codegen_listener;
 
+import 'dart:collection';
+
 import '../common/names.dart' show Identifiers;
 import '../common_elements.dart' show CommonElements, ElementEnvironment;
 import '../constants/values.dart';
@@ -11,6 +13,7 @@ import '../elements/entities.dart';
 import '../elements/types.dart';
 import '../enqueue.dart' show Enqueuer, EnqueuerListener;
 import '../native/enqueue.dart';
+import '../options.dart';
 import '../universe/call_structure.dart' show CallStructure;
 import '../universe/use.dart' show StaticUse, TypeUse;
 import '../universe/world_impact.dart'
@@ -18,9 +21,10 @@ import '../universe/world_impact.dart'
 import 'backend_impact.dart';
 import 'backend_usage.dart';
 import 'custom_elements_analysis.dart';
-import 'runtime_types.dart';
+import 'runtime_types_resolution.dart';
 
 class CodegenEnqueuerListener extends EnqueuerListener {
+  final CompilerOptions _options;
   final ElementEnvironment _elementEnvironment;
   final CommonElements _commonElements;
   final BackendImpacts _impacts;
@@ -33,8 +37,10 @@ class CodegenEnqueuerListener extends EnqueuerListener {
   final NativeCodegenEnqueuer _nativeEnqueuer;
 
   bool _isNoSuchMethodUsed = false;
+  bool _isNewRtiUsed = false;
 
   CodegenEnqueuerListener(
+      this._options,
       this._elementEnvironment,
       this._commonElements,
       this._impacts,
@@ -82,8 +88,12 @@ class CodegenEnqueuerListener extends EnqueuerListener {
       mainImpact.registerStaticUse(
           new StaticUse.staticInvoke(mainMethod, callStructure));
     }
-    mainImpact.registerStaticUse(
-        new StaticUse.staticInvoke(mainMethod, CallStructure.NO_ARGS));
+    if (mainMethod.isGetter) {
+      mainImpact.registerStaticUse(new StaticUse.staticGet(mainMethod));
+    } else {
+      mainImpact.registerStaticUse(
+          new StaticUse.staticInvoke(mainMethod, CallStructure.NO_ARGS));
+    }
     return mainImpact;
   }
 
@@ -111,6 +121,22 @@ class CodegenEnqueuerListener extends EnqueuerListener {
       _isNoSuchMethodUsed = true;
     }
 
+    // TODO(fishythefish): Avoid registering unnecessary impacts.
+    if (!_isNewRtiUsed) {
+      WorldImpactBuilderImpl newRtiImpact = new WorldImpactBuilderImpl();
+      newRtiImpact.registerStaticUse(StaticUse.staticInvoke(
+          _commonElements.rtiAddRulesMethod, CallStructure.TWO_ARGS));
+      newRtiImpact.registerStaticUse(StaticUse.staticInvoke(
+          _commonElements.rtiAddErasedTypesMethod, CallStructure.TWO_ARGS));
+      if (_options.enableVariance) {
+        newRtiImpact.registerStaticUse(StaticUse.staticInvoke(
+            _commonElements.rtiAddTypeParameterVariancesMethod,
+            CallStructure.TWO_ARGS));
+      }
+      enqueuer.applyImpact(newRtiImpact);
+      _isNewRtiUsed = true;
+    }
+
     if (!enqueuer.queueIsEmpty) return false;
 
     return true;
@@ -120,12 +146,15 @@ class CodegenEnqueuerListener extends EnqueuerListener {
   void onQueueClosed() {}
 
   /// Adds the impact of [constant] to [impactBuilder].
-  void _computeImpactForCompileTimeConstant(
-      ConstantValue constant, WorldImpactBuilder impactBuilder) {
-    _computeImpactForCompileTimeConstantInternal(constant, impactBuilder);
+  void _computeImpactForCompileTimeConstant(ConstantValue constant,
+      WorldImpactBuilder impactBuilder, Set<ConstantValue> visited) {
+    if (visited.add(constant)) {
+      _computeImpactForCompileTimeConstantInternal(constant, impactBuilder);
 
-    for (ConstantValue dependency in constant.getDependencies()) {
-      _computeImpactForCompileTimeConstant(dependency, impactBuilder);
+      for (ConstantValue dependency in constant.getDependencies()) {
+        _computeImpactForCompileTimeConstant(
+            dependency, impactBuilder, visited);
+      }
     }
   }
 
@@ -150,7 +179,7 @@ class CodegenEnqueuerListener extends EnqueuerListener {
       // If the type is a web component, we need to ensure the constructors are
       // available to 'upgrade' the native object.
       TypeConstantValue type = constant;
-      if (type.representedType.isInterfaceType) {
+      if (type.representedType is InterfaceType) {
         InterfaceType representedType = type.representedType;
         _customElementsAnalysis.registerTypeConstant(representedType.element);
       }
@@ -159,12 +188,12 @@ class CodegenEnqueuerListener extends EnqueuerListener {
       impactBuilder.registerTypeUse(new TypeUse.instantiation(
           _elementEnvironment.getThisType(_commonElements
               .getInstantiationClass(constant.typeArguments.length))));
-      impactBuilder.registerStaticUse(new StaticUse.staticInvoke(
-          _commonElements.instantiatedGenericFunctionType,
+
+      impactBuilder.registerStaticUse(StaticUse.staticInvoke(
+          _commonElements.instantiatedGenericFunctionTypeNewRti,
           CallStructure.TWO_ARGS));
-      impactBuilder.registerStaticUse(new StaticUse.staticInvoke(
-          _commonElements.extractFunctionTypeObjectFromInternal,
-          CallStructure.ONE_ARG));
+      impactBuilder.registerStaticUse(StaticUse.staticInvoke(
+          _commonElements.closureFunctionType, CallStructure.ONE_ARG));
     }
   }
 
@@ -173,19 +202,15 @@ class CodegenEnqueuerListener extends EnqueuerListener {
     if (type is InterfaceType) {
       impactBuilder.registerTypeUse(new TypeUse.instantiation(type));
       if (_rtiNeed.classNeedsTypeArguments(type.element)) {
+        FunctionEntity helper = _commonElements.setArrayType;
         impactBuilder.registerStaticUse(new StaticUse.staticInvoke(
-            // TODO(johnniwinther): Find the right [CallStructure].
-            _commonElements.setRuntimeTypeInfo,
-            null));
+            helper, helper.parameterStructure.callStructure));
       }
       if (type.element == _commonElements.typeLiteralClass) {
-        // If we use a type literal in a constant, the compile time
-        // constant emitter will generate a call to the createRuntimeType
-        // helper so we register a use of that.
-        impactBuilder.registerStaticUse(new StaticUse.staticInvoke(
-            // TODO(johnniwinther): Find the right [CallStructure].
-            _commonElements.createRuntimeType,
-            null));
+        // If we use a type literal in a constant, the compile time constant
+        // emitter will generate a call to a helper so we register the impact
+        // that contains that call.
+        _impacts.typeLiteral.registerImpact(impactBuilder, _elementEnvironment);
       }
     }
   }
@@ -193,7 +218,8 @@ class CodegenEnqueuerListener extends EnqueuerListener {
   @override
   WorldImpact registerUsedConstant(ConstantValue constant) {
     WorldImpactBuilderImpl impactBuilder = new WorldImpactBuilderImpl();
-    _computeImpactForCompileTimeConstant(constant, impactBuilder);
+    _computeImpactForCompileTimeConstant(
+        constant, impactBuilder, new LinkedHashSet.identity());
     return impactBuilder;
   }
 
@@ -245,9 +271,8 @@ class CodegenEnqueuerListener extends EnqueuerListener {
       registerInstantiation(_commonElements.jsUInt32Class);
       registerInstantiation(_commonElements.jsUInt31Class);
       registerInstantiation(_commonElements.jsNumberClass);
-    } else if (cls == _commonElements.doubleClass ||
-        cls == _commonElements.jsDoubleClass) {
-      registerInstantiation(_commonElements.jsDoubleClass);
+    } else if (cls == _commonElements.jsNumNotIntClass) {
+      registerInstantiation(_commonElements.jsNumNotIntClass);
       registerInstantiation(_commonElements.jsNumberClass);
     } else if (cls == _commonElements.boolClass ||
         cls == _commonElements.jsBoolClass) {
@@ -255,13 +280,14 @@ class CodegenEnqueuerListener extends EnqueuerListener {
     } else if (cls == _commonElements.nullClass ||
         cls == _commonElements.jsNullClass) {
       registerInstantiation(_commonElements.jsNullClass);
-    } else if (cls == _commonElements.numClass ||
+    } else if (cls == _commonElements.doubleClass ||
+        cls == _commonElements.numClass ||
         cls == _commonElements.jsNumberClass) {
       registerInstantiation(_commonElements.jsIntClass);
       registerInstantiation(_commonElements.jsPositiveIntClass);
       registerInstantiation(_commonElements.jsUInt32Class);
       registerInstantiation(_commonElements.jsUInt31Class);
-      registerInstantiation(_commonElements.jsDoubleClass);
+      registerInstantiation(_commonElements.jsNumNotIntClass);
       registerInstantiation(_commonElements.jsNumberClass);
     } else if (cls == _commonElements.jsJavaScriptObjectClass) {
       registerInstantiation(_commonElements.jsJavaScriptObjectClass);

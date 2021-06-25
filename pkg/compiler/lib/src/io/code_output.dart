@@ -50,9 +50,11 @@ abstract class SourceLocations {
 }
 
 class _SourceLocationsImpl implements SourceLocations {
+  @override
   final String name;
   final AbstractCodeOutput codeOutput;
   Map<int, List<SourceLocation>> markers = <int, List<SourceLocation>>{};
+  @override
   Map<int, List<FrameEntry>> frameMarkers = <int, List<FrameEntry>>{};
 
   _SourceLocationsImpl(this.name, this.codeOutput);
@@ -141,18 +143,28 @@ abstract class CodeOutput implements SourceLocationsProvider {
 }
 
 abstract class AbstractCodeOutput extends CodeOutput {
+  final List<CodeOutputListener> _listeners;
+
+  AbstractCodeOutput([this._listeners]);
+
   Map<String, _SourceLocationsImpl> sourceLocationsMap =
       <String, _SourceLocationsImpl>{};
+  @override
   bool isClosed = false;
 
   void _addInternal(String text);
+
+  void _add(String text) {
+    _addInternal(text);
+    _listeners?.forEach((listener) => listener.onText(text));
+  }
 
   @override
   void add(String text) {
     if (isClosed) {
       throw new StateError("Code output is closed. Trying to write '$text'.");
     }
-    _addInternal(text);
+    _add(text);
   }
 
   @override
@@ -163,7 +175,7 @@ abstract class AbstractCodeOutput extends CodeOutput {
     if (!other.isClosed) {
       other.close();
     }
-    _addInternal(other.getText());
+    _add(other.getText());
   }
 
   @override
@@ -172,6 +184,7 @@ abstract class AbstractCodeOutput extends CodeOutput {
       throw new StateError("Code output is already closed.");
     }
     isClosed = true;
+    _listeners?.forEach((listener) => listener.onDone(length));
   }
 
   @override
@@ -191,6 +204,8 @@ abstract class BufferedCodeOutput {
 class CodeBuffer extends AbstractCodeOutput implements BufferedCodeOutput {
   StringBuffer buffer = new StringBuffer();
 
+  CodeBuffer([List<CodeOutputListener> listeners]) : super(listeners);
+
   @override
   void _addInternal(String text) {
     buffer.write(text);
@@ -199,10 +214,12 @@ class CodeBuffer extends AbstractCodeOutput implements BufferedCodeOutput {
   @override
   int get length => buffer.length;
 
+  @override
   String getText() {
     return buffer.toString();
   }
 
+  @override
   String toString() {
     throw "Don't use CodeBuffer.toString() since it drops sourcemap data.";
   }
@@ -210,26 +227,22 @@ class CodeBuffer extends AbstractCodeOutput implements BufferedCodeOutput {
 
 /// [CodeOutput] using a [CompilationOutput] as backend.
 class StreamCodeOutput extends AbstractCodeOutput {
+  @override
   int length = 0;
   final OutputSink output;
-  final List<CodeOutputListener> _listeners;
 
-  StreamCodeOutput(this.output, [this._listeners]);
+  StreamCodeOutput(this.output, [List<CodeOutputListener> listeners])
+      : super(listeners);
 
   @override
   void _addInternal(String text) {
     output.add(text);
     length += text.length;
-    if (_listeners != null) {
-      _listeners.forEach((listener) => listener.onText(text));
-    }
   }
 
+  @override
   void close() {
     output.close();
     super.close();
-    if (_listeners != null) {
-      _listeners.forEach((listener) => listener.onDone(length));
-    }
   }
 }

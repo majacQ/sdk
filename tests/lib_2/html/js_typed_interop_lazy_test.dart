@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 @JS()
 library js_typed_interop_lazy_test;
 
@@ -133,7 +135,6 @@ baz.LazyClass = function LazyClass(a) {
       expect(l is AnonClass, isTrue);
       expect((l as AnonClass) == l, isTrue);
       expect((l as AnonClass2) == l, isTrue);
-      expect(anon is! LazyClass, isTrue); //# 01: ok
       expect(anon is AnonClass, isTrue);
       expect(anon is AnonClass2, isTrue);
 
@@ -226,7 +227,6 @@ baz.foo.NestedLazyClass = function NestedLazyClass(a) {
       expect(l is AnonClass, isTrue);
       expect((l as AnonClass) == l, isTrue);
       expect((l as AnonClass2) == l, isTrue);
-      expect(anon is! NestedLazyClass, isTrue); //# 01: ok
       expect(anon is AnonClass, isTrue);
       expect(anon is AnonClass2, isTrue);
 

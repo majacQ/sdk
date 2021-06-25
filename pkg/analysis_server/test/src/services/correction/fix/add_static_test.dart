@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'fix_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(AddStaticTest);
   });
@@ -19,8 +19,8 @@ class AddStaticTest extends FixProcessorTest {
   @override
   FixKind get kind => DartFixKind.ADD_STATIC;
 
-  test_multipleFields() async {
-    await resolveTestUnit('''
+  Future<void> test_multipleFields() async {
+    await resolveTestCode('''
 class C {
   const int x = 0, y = 0;
 }
@@ -32,14 +32,46 @@ class C {
 ''');
   }
 
-  test_oneField() async {
-    await resolveTestUnit('''
+  Future<void> test_oneField() async {
+    await resolveTestCode('''
 class C {
   const int x = 0;
 }
 ''');
     await assertHasFix('''
 class C {
+  static const int x = 0;
+}
+''');
+  }
+
+  Future<void> test_withAnnotation() async {
+    await resolveTestCode('''
+class C {
+  @ann
+  const int x = 0;
+}
+const ann = 0;
+''');
+    await assertHasFix('''
+class C {
+  @ann
+  static const int x = 0;
+}
+const ann = 0;
+''');
+  }
+
+  Future<void> test_withDocComment() async {
+    await resolveTestCode('''
+class C {
+  /// Doc comment
+  const int x = 0;
+}
+''');
+    await assertHasFix('''
+class C {
+  /// Doc comment
   static const int x = 0;
 }
 ''');

@@ -90,7 +90,8 @@
 // TODO(sigmund): move this file to a shared package.
 import 'dart:convert' show jsonDecode, jsonEncode;
 
-import '../fasta/util/relativize.dart';
+import 'package:_fe_analyzer_shared/src/util/relativize.dart'
+    show relativizeUri, isWindows;
 
 /// Contents from a single library specification file.
 ///
@@ -105,7 +106,7 @@ class LibrariesSpecification {
   /// The library specification for a given [target], or throws if none is
   /// available.
   TargetLibrariesSpecification specificationFor(String target) {
-    var targetSpec = _targets[target];
+    TargetLibrariesSpecification? targetSpec = _targets[target];
     if (targetSpec == null) {
       throw new LibrariesSpecificationException(
           'No library specification for target "$target"');
@@ -118,19 +119,20 @@ class LibrariesSpecification {
   ///
   /// May throw an exception if [json] is not properly formatted or contains
   /// invalid values.
-  static LibrariesSpecification parse(Uri baseUri, String json) {
+  static LibrariesSpecification parse(Uri baseUri, String? json) {
     if (json == null) return const LibrariesSpecification();
-    var jsonData;
+    Map<String, dynamic> jsonData;
     try {
-      var data = jsonDecode(json);
-      if (data is! Map) {
+      dynamic data = jsonDecode(json);
+      if (data is! Map<String, dynamic>) {
         return _reportError('top-level specification is not a map');
       }
-      jsonData = data as Map;
+      jsonData = data;
     } on FormatException catch (e) {
       throw new LibrariesSpecificationException(e);
     }
-    var targets = <String, TargetLibrariesSpecification>{};
+    Map<String, TargetLibrariesSpecification> targets =
+        <String, TargetLibrariesSpecification>{};
     jsonData.forEach((String targetName, targetData) {
       if (targetName.startsWith("comment:")) return null;
       Map<String, LibraryInfo> libraries = <String, LibraryInfo>{};
@@ -142,12 +144,12 @@ class LibrariesSpecification {
         return _reportError("target specification "
             "for '$targetName' doesn't have a libraries entry");
       }
-      var librariesData = targetData["libraries"];
-      if (librariesData is! Map) {
+      dynamic librariesData = targetData["libraries"];
+      if (librariesData is! Map<String, dynamic>) {
         return _reportError("libraries entry for '$targetName' is not a map");
       }
       librariesData.forEach((String name, data) {
-        if (data is! Map) {
+        if (data is! Map<String, dynamic>) {
           return _reportError(
               "library data for '$name' in target '$targetName' is not a map");
         }
@@ -156,14 +158,14 @@ class LibrariesSpecification {
             return _reportError("uri value '$uriString' is not a string"
                 "(from library '$name' in target '$targetName')");
           }
-          var uri = Uri.parse(uriString);
+          Uri uri = Uri.parse(uriString);
           if (uri.scheme != '' && uri.scheme != 'file') {
             return _reportError("uri scheme in '$uriString' is not supported.");
           }
           return baseUri.resolveUri(uri);
         }
 
-        var uri = checkAndResolve(data['uri']);
+        Uri uri = checkAndResolve(data['uri']);
         List<Uri> patches;
         if (data['patches'] is List) {
           patches =
@@ -177,7 +179,7 @@ class LibrariesSpecification {
               "patches entry for '$name' is not a list or a string");
         }
 
-        var supported = data['supported'] ?? true;
+        dynamic supported = data['supported'] ?? true;
         if (supported is! bool) {
           return _reportError("\"supported\" entry: expected a 'bool' but "
               "got a '${supported.runtimeType}' ('$supported')");
@@ -200,11 +202,11 @@ class LibrariesSpecification {
   String toJsonString(Uri outputUri) => jsonEncode(toJsonMap(outputUri));
 
   Map toJsonMap(Uri outputUri) {
-    var result = {};
-    var dir = outputUri.resolve('.');
-    String pathFor(Uri uri) => relativizeUri(uri, base: dir);
+    Map result = {};
+    Uri dir = outputUri.resolve('.');
+    String pathFor(Uri uri) => relativizeUri(dir, uri, isWindows);
     _targets.forEach((targetName, target) {
-      var libraries = {};
+      Map libraries = {};
       target._libraries.forEach((name, lib) {
         libraries[name] = {
           'uri': pathFor(lib.uri),
@@ -231,7 +233,7 @@ class TargetLibrariesSpecification {
       [this._libraries = const <String, LibraryInfo>{}]);
 
   /// Details about a library whose import is `dart:$name`.
-  LibraryInfo libraryInfoFor(String name) => _libraries[name];
+  LibraryInfo? libraryInfoFor(String name) => _libraries[name];
 
   Iterable<LibraryInfo> get allLibraries => _libraries.values;
 }
@@ -254,6 +256,9 @@ class LibraryInfo {
 
   const LibraryInfo(this.name, this.uri, this.patches,
       {this.isSupported: true});
+
+  /// The import uri for the defined library.
+  Uri get importUri => Uri.parse('dart:${name}');
 }
 
 class LibrariesSpecificationException {

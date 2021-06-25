@@ -2,8 +2,6 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-#if !defined(DART_PRECOMPILED_RUNTIME)
-
 #include "vm/compiler/backend/loops.h"
 
 #include "vm/bit_vector.h"
@@ -64,10 +62,12 @@ class InductionVarAnalysis : public ValueObject {
   intptr_t VisitDescendant(LoopInfo* loop, Definition* def);
   void Classify(LoopInfo* loop, Definition* def);
   void ClassifySCC(LoopInfo* loop);
+  void ClassifyControl(LoopInfo* loop);
 
   // Transfer methods. Compute how induction of the operands, if any,
   // tranfers over the operation performed by the given definition.
   InductionVar* TransferPhi(LoopInfo* loop, Definition* def, intptr_t idx = -1);
+  InductionVar* TransferDef(LoopInfo* loop, Definition* def);
   InductionVar* TransferBinary(LoopInfo* loop, Definition* def);
   InductionVar* TransferUnary(LoopInfo* loop, Definition* def);
 
@@ -96,6 +96,7 @@ class InductionVarAnalysis : public ValueObject {
   const GrowableArray<BlockEntryInstr*>& preorder_;
   GrowableArray<Definition*> stack_;
   GrowableArray<Definition*> scc_;
+  GrowableArray<BranchInstr*> branches_;
   DirectChainedHashMap<LoopInfo::InductionKV> cycle_;
   DirectChainedHashMap<VisitKV> map_;
   intptr_t current_index_;
@@ -130,6 +131,81 @@ static bool IsConstant(Definition* def, int64_t* val) {
   return false;
 }
 
+// Helper method to determine if a non-strict (inclusive) bound on
+// a unit stride linear induction can be made strict (exclusive)
+// without arithmetic wrap-around complications.
+static bool CanBeMadeExclusive(LoopInfo* loop,
+                               InductionVar* x,
+                               Instruction* branch,
+                               bool is_lower) {
+  InductionVar* min = nullptr;
+  InductionVar* max = nullptr;
+  if (x->CanComputeBounds(loop, branch, &min, &max)) {
+    int64_t end = 0;
+    if (is_lower) {
+      if (InductionVar::IsConstant(min, &end)) {
+        return kMinInt64 < end;
+      }
+    } else if (InductionVar::IsConstant(max, &end)) {
+      return end < kMaxInt64;
+    } else if (InductionVar::IsInvariant(max) && max->mult() == 1 &&
+               Definition::IsArrayLength(max->def())) {
+      return max->offset() < 0;  // a.length - C, C > 0
+    }
+  }
+  return false;
+}
+
+// Helper method to adjust a range [lower_bound,upper_bound] into the
+// range [lower_bound+lower_bound_offset,upper_bound+upper_bound+offset]
+// without arithmetic wrap-around complications. On entry, we know that
+// lower_bound <= upper_bound is enforced by an actual comparison in the
+// code (so that even if lower_bound > upper_bound, the loop is not taken).
+// This method ensures the resulting range has the same property by
+// very conservatively testing if everything stays between constants
+// or a properly offset array length.
+static bool SafelyAdjust(Zone* zone,
+                         InductionVar* lower_bound,
+                         int64_t lower_bound_offset,
+                         InductionVar* upper_bound,
+                         int64_t upper_bound_offset,
+                         InductionVar** min,
+                         InductionVar** max) {
+  bool success = false;
+  int64_t lval = 0;
+  int64_t uval = 0;
+  if (InductionVar::IsConstant(lower_bound, &lval)) {
+    const int64_t l = lval + lower_bound_offset;
+    if (InductionVar::IsConstant(upper_bound, &uval)) {
+      // Make sure a proper new range [l,u] results. Even if bounds
+      // were subject to arithmetic wrap-around, we preserve the
+      // property that the minimum is in l and the maximum in u.
+      const int64_t u = uval + upper_bound_offset;
+      success = (l <= u);
+    } else if (InductionVar::IsInvariant(upper_bound) &&
+               upper_bound->mult() == 1 &&
+               Definition::IsArrayLength(upper_bound->def())) {
+      // No arithmetic wrap-around on the lower bound, and a properly
+      // non-positive offset on an array length, which is always >= 0.
+      const int64_t c = upper_bound->offset() + upper_bound_offset;
+      success = ((lower_bound_offset >= 0 && lval <= l) ||
+                 (lower_bound_offset < 0 && lval > l)) &&
+                (c <= 0);
+    }
+  }
+  if (success) {
+    *min = (lower_bound_offset == 0)
+               ? lower_bound
+               : new (zone) InductionVar(lval + lower_bound_offset);
+    *max = (upper_bound_offset == 0)
+               ? upper_bound
+               : new (zone)
+                     InductionVar(upper_bound->offset() + upper_bound_offset,
+                                  upper_bound->mult(), upper_bound->def());
+  }
+  return success;
+}
+
 void InductionVarAnalysis::VisitHierarchy(LoopInfo* loop) {
   for (; loop != nullptr; loop = loop->next_) {
     VisitLoop(loop);
@@ -145,6 +221,7 @@ void InductionVarAnalysis::VisitLoop(LoopInfo* loop) {
   current_index_ = 0;
   ASSERT(stack_.is_empty());
   ASSERT(map_.IsEmpty());
+  ASSERT(branches_.is_empty());
   for (BitVector::Iterator it(loop->blocks_); !it.Done(); it.Advance()) {
     BlockEntryInstr* block = preorder_[it.Current()];
     ASSERT(block->loop_info() != nullptr);
@@ -157,13 +234,20 @@ void InductionVarAnalysis::VisitLoop(LoopInfo* loop) {
         Visit(loop, it.Current());
       }
     }
-    // Visit instructions.
+    // Visit instructions and collect branches.
     for (ForwardInstructionIterator it(block); !it.Done(); it.Advance()) {
-      Visit(loop, it.Current()->AsDefinition());
+      Instruction* instruction = it.Current();
+      Visit(loop, instruction->AsDefinition());
+      if (instruction->IsBranch()) {
+        branches_.Add(instruction->AsBranch());
+      }
     }
   }
   ASSERT(stack_.is_empty());
   map_.Clear();
+  // Classify loop control.
+  ClassifyControl(loop);
+  branches_.Clear();
 }
 
 bool InductionVarAnalysis::Visit(LoopInfo* loop, Definition* def) {
@@ -242,17 +326,8 @@ void InductionVarAnalysis::Classify(LoopInfo* loop, Definition* def) {
     }
   } else if (def->IsPhi()) {
     induc = TransferPhi(loop, def);
-  } else if (def->IsBinaryIntegerOp()) {
-    induc = TransferBinary(loop, def);
-  } else if (def->IsUnaryIntegerOp()) {
-    induc = TransferUnary(loop, def);
-  } else if (def->IsConstraint() || def->IsBox() || def->IsUnbox()) {
-    induc = Lookup(loop, def->InputAt(0)->definition());  // pass-through
   } else {
-    Definition* orig = def->OriginalDefinition();
-    if (orig != def) {
-      induc = Lookup(loop, orig);  // pass-through
-    }
+    induc = TransferDef(loop, def);
   }
   // Successfully classified?
   if (induc != nullptr) {
@@ -291,10 +366,8 @@ void InductionVarAnalysis::ClassifySCC(LoopInfo* loop) {
         update = SolveUnary(loop, def, init);
       } else if (def->IsConstraint()) {
         update = SolveConstraint(loop, def, init);
-      } else if (def->IsBox() || def->IsUnbox()) {
-        update = LookupCycle(def->InputAt(0)->definition());  // pass-through
       } else {
-        Definition* orig = def->OriginalDefinition();
+        Definition* orig = def->OriginalDefinitionIgnoreBoxingAndConstraints();
         if (orig != def) {
           update = LookupCycle(orig);  // pass-through
         }
@@ -327,6 +400,109 @@ void InductionVarAnalysis::ClassifySCC(LoopInfo* loop) {
   }
 }
 
+void InductionVarAnalysis::ClassifyControl(LoopInfo* loop) {
+  for (auto branch : branches_) {
+    // Proper comparison?
+    ComparisonInstr* compare = branch->comparison();
+    if (compare->InputCount() != 2) {
+      continue;
+    }
+    Token::Kind cmp = compare->kind();
+    // Proper loop exit? Express the condition in "loop while true" form.
+    TargetEntryInstr* ift = branch->true_successor();
+    TargetEntryInstr* iff = branch->false_successor();
+    if (loop->Contains(ift) && !loop->Contains(iff)) {
+      // ok as is
+    } else if (!loop->Contains(ift) && loop->Contains(iff)) {
+      cmp = Token::NegateComparison(cmp);
+    } else {
+      continue;
+    }
+    // Comparison against linear constant stride induction?
+    // Express the comparison such that induction appears left.
+    int64_t stride = 0;
+    auto left = compare->left()
+                    ->definition()
+                    ->OriginalDefinitionIgnoreBoxingAndConstraints();
+    auto right = compare->right()
+                     ->definition()
+                     ->OriginalDefinitionIgnoreBoxingAndConstraints();
+    InductionVar* x = Lookup(loop, left);
+    InductionVar* y = Lookup(loop, right);
+    if (InductionVar::IsLinear(x, &stride) && InductionVar::IsInvariant(y)) {
+      // ok as is
+    } else if (InductionVar::IsInvariant(x) &&
+               InductionVar::IsLinear(y, &stride)) {
+      InductionVar* tmp = x;
+      x = y;
+      y = tmp;
+      cmp = Token::FlipComparison(cmp);
+    } else {
+      continue;
+    }
+    // Can we find a strict (exclusive) comparison for the looping condition?
+    // Note that we reject symbolic bounds in non-strict (inclusive) looping
+    // conditions like i <= U as upperbound or i >= L as lowerbound since this
+    // could loop forever when U is kMaxInt64 or L is kMinInt64 under Dart's
+    // 64-bit arithmetic wrap-around. Non-unit strides could overshoot the
+    // bound due to aritmetic wrap-around.
+    switch (cmp) {
+      case Token::kLT:
+        // Accept i < U (i++).
+        if (stride == 1) break;
+        continue;
+      case Token::kGT:
+        // Accept i > L (i--).
+        if (stride == -1) break;
+        continue;
+      case Token::kLTE: {
+        // Accept i <= U (i++) as i < U + 1
+        // only when U != MaxInt is certain.
+        if (stride == 1 &&
+            CanBeMadeExclusive(loop, y, branch, /*is_lower=*/false)) {
+          y = Add(y, new (zone_) InductionVar(1));
+          break;
+        }
+        continue;
+      }
+      case Token::kGTE: {
+        // Accept i >= L (i--) as i > L - 1
+        // only when L != MinInt is certain.
+        if (stride == -1 &&
+            CanBeMadeExclusive(loop, y, branch, /*is_lower=*/true)) {
+          y = Sub(y, new (zone_) InductionVar(1));
+          break;
+        }
+        continue;
+      }
+      case Token::kNE: {
+        // Accept i != E as either i < E (i++) or i > E (i--)
+        // for constants bounds that make the loop always-taken.
+        int64_t start = 0;
+        int64_t end = 0;
+        if (InductionVar::IsConstant(x->initial_, &start) &&
+            InductionVar::IsConstant(y, &end)) {
+          if ((stride == +1 && start < end) || (stride == -1 && start > end)) {
+            break;
+          }
+        }
+        continue;
+      }
+      default:
+        continue;
+    }
+    // We found a strict upper or lower bound on a unit stride linear
+    // induction. Note that depending on the intended use of this
+    // information, clients should still test dominance on the test
+    // and the initial value of the induction variable.
+    x->bounds_.Add(InductionVar::Bound(branch, y));
+    // Record control induction.
+    if (branch == loop->header_->last_instruction()) {
+      loop->control_ = x;
+    }
+  }
+}
+
 InductionVar* InductionVarAnalysis::TransferPhi(LoopInfo* loop,
                                                 Definition* def,
                                                 intptr_t idx) {
@@ -346,10 +522,38 @@ InductionVar* InductionVarAnalysis::TransferPhi(LoopInfo* loop,
   return induc;
 }
 
+InductionVar* InductionVarAnalysis::TransferDef(LoopInfo* loop,
+                                                Definition* def) {
+  if (def->IsBinaryIntegerOp()) {
+    return TransferBinary(loop, def);
+  } else if (def->IsUnaryIntegerOp()) {
+    return TransferUnary(loop, def);
+  } else {
+    // Note that induction analysis does not really need the second
+    // argument of a bound check, since it will just pass-through the
+    // index. However, we do a lookup on the, most likely loop-invariant,
+    // length anyway, to make sure it is stored in the induction
+    // environment for later lookup during BCE.
+    if (auto check = def->AsCheckBoundBase()) {
+      Definition* len = check->length()
+                            ->definition()
+                            ->OriginalDefinitionIgnoreBoxingAndConstraints();
+      Lookup(loop, len);  // pre-store likely invariant length
+    }
+    // Proceed with regular pass-through.
+    Definition* orig = def->OriginalDefinitionIgnoreBoxingAndConstraints();
+    if (orig != def) {
+      return Lookup(loop, orig);  // pass-through
+    }
+  }
+  return nullptr;
+}
+
 InductionVar* InductionVarAnalysis::TransferBinary(LoopInfo* loop,
                                                    Definition* def) {
   InductionVar* x = Lookup(loop, def->InputAt(0)->definition());
   InductionVar* y = Lookup(loop, def->InputAt(1)->definition());
+
   switch (def->AsBinaryIntegerOp()->op_kind()) {
     case Token::kADD:
       return Add(x, y);
@@ -400,7 +604,6 @@ InductionVar* InductionVarAnalysis::SolveConstraint(LoopInfo* loop,
   InductionVar* c = LookupCycle(def->InputAt(0)->definition());
   if (c == init) {
     // Record a non-artifical bound constraint on a phi.
-    // TODO(ajcbik): detect full loop logic, trip counts, etc.
     ConstraintInstr* constraint = def->AsConstraint();
     if (constraint->target() != nullptr) {
       loop->limit_ = constraint;
@@ -467,9 +670,9 @@ InductionVar* InductionVarAnalysis::SolveBinary(LoopInfo* loop,
 InductionVar* InductionVarAnalysis::SolveUnary(LoopInfo* loop,
                                                Definition* def,
                                                InductionVar* init) {
+  InductionVar* c = LookupCycle(def->InputAt(0)->definition());
   switch (def->AsUnaryIntegerOp()->op_kind()) {
-    case Token::kNEGATE: {
-      InductionVar* c = LookupCycle(def->InputAt(0)->definition());
+    case Token::kNEGATE:
       // Note that i = - i is periodic. The temporary
       // meaning is expressed in terms of the header phi.
       if (c == init) {
@@ -480,7 +683,6 @@ InductionVar* InductionVarAnalysis::SolveUnary(LoopInfo* loop,
         }
       }
       return nullptr;
-    }
     default:
       return nullptr;
   }
@@ -490,11 +692,15 @@ InductionVar* InductionVarAnalysis::Lookup(LoopInfo* loop, Definition* def) {
   InductionVar* induc = loop->LookupInduction(def);
   if (induc == nullptr) {
     // Loop-invariants are added lazily.
-    if (!loop->Contains(def->GetBlock())) {
-      int64_t val = 0;
-      if (IsConstant(def, &val)) {
-        induc = new (zone_) InductionVar(val);
-      } else {
+    int64_t val = 0;
+    if (IsConstant(def, &val)) {
+      induc = new (zone_) InductionVar(val);
+      loop->AddInduction(def, induc);
+    } else if (!loop->Contains(def->GetBlock())) {
+      // Look "under the hood" of invariant definitions to expose
+      // more details on common constructs like "length - 1".
+      induc = TransferDef(loop, def);
+      if (induc == nullptr) {
         induc = new (zone_) InductionVar(0, 1, def);
       }
       loop->AddInduction(def, induc);
@@ -517,13 +723,16 @@ InductionVar* InductionVarAnalysis::Add(InductionVar* x, InductionVar* y) {
       // Invariant + Invariant : only for same or just one instruction.
       if (x->def_ == y->def_) {
         return new (zone_)
-            InductionVar(x->offset_ + y->offset_, x->mult_ + y->mult_, x->def_);
+            InductionVar(Utils::AddWithWrapAround(x->offset_, y->offset_),
+                         Utils::AddWithWrapAround(x->mult_, y->mult_), x->def_);
       } else if (y->mult_ == 0) {
         return new (zone_)
-            InductionVar(x->offset_ + y->offset_, x->mult_, x->def_);
+            InductionVar(Utils::AddWithWrapAround(x->offset_, y->offset_),
+                         x->mult_, x->def_);
       } else if (x->mult_ == 0) {
         return new (zone_)
-            InductionVar(x->offset_ + y->offset_, y->mult_, y->def_);
+            InductionVar(Utils::AddWithWrapAround(x->offset_, y->offset_),
+                         y->mult_, y->def_);
       }
     } else if (y != nullptr) {
       // Invariant + Induction.
@@ -562,13 +771,16 @@ InductionVar* InductionVarAnalysis::Sub(InductionVar* x, InductionVar* y) {
       // Invariant + Invariant : only for same or just one instruction.
       if (x->def_ == y->def_) {
         return new (zone_)
-            InductionVar(x->offset_ - y->offset_, x->mult_ - y->mult_, x->def_);
+            InductionVar(Utils::SubWithWrapAround(x->offset_, y->offset_),
+                         Utils::SubWithWrapAround(x->mult_, y->mult_), x->def_);
       } else if (y->mult_ == 0) {
         return new (zone_)
-            InductionVar(x->offset_ - y->offset_, x->mult_, x->def_);
+            InductionVar(Utils::SubWithWrapAround(x->offset_, y->offset_),
+                         x->mult_, x->def_);
       } else if (x->mult_ == 0) {
         return new (zone_)
-            InductionVar(x->offset_ - y->offset_, -y->mult_, y->def_);
+            InductionVar(Utils::SubWithWrapAround(x->offset_, y->offset_),
+                         Utils::NegWithWrapAround(y->mult_), y->def_);
       }
     } else if (y != nullptr) {
       // Invariant - Induction.
@@ -617,7 +829,8 @@ InductionVar* InductionVarAnalysis::Mul(InductionVar* x, InductionVar* y) {
   if (InductionVar::IsConstant(x) && y != nullptr) {
     if (y->kind_ == InductionVar::kInvariant) {
       return new (zone_)
-          InductionVar(x->offset_ * y->offset_, x->offset_ * y->mult_, y->def_);
+          InductionVar(Utils::MulWithWrapAround(x->offset_, y->offset_),
+                       Utils::MulWithWrapAround(x->offset_, y->mult_), y->def_);
     }
     return new (zone_)
         InductionVar(y->kind_, Mul(x, y->initial_), Mul(x, y->next_));
@@ -625,28 +838,142 @@ InductionVar* InductionVarAnalysis::Mul(InductionVar* x, InductionVar* y) {
   return nullptr;
 }
 
-const char* InductionVar::ToCString() const {
-  char buffer[1024];
-  BufferFormatter f(buffer, sizeof(buffer));
+bool InductionVar::CanComputeDifferenceWith(const InductionVar* other,
+                                            int64_t* diff) const {
+  if (IsInvariant(this) && IsInvariant(other)) {
+    if (def_ == other->def_ && mult_ == other->mult_) {
+      *diff = other->offset_ - offset_;
+      return true;
+    }
+  } else if (IsLinear(this) && IsLinear(other)) {
+    return next_->IsEqual(other->next_) &&
+           initial_->CanComputeDifferenceWith(other->initial_, diff);
+  }
+  // TODO(ajcbik): examine other induction kinds too?
+  return false;
+}
+
+bool InductionVar::CanComputeBoundsImpl(LoopInfo* loop,
+                                        Instruction* pos,
+                                        InductionVar** min,
+                                        InductionVar** max) {
+  // Refine symbolic part of an invariant with outward induction.
+  if (IsInvariant(this)) {
+    if (mult_ == 1 && def_ != nullptr) {
+      for (loop = loop->outer(); loop != nullptr; loop = loop->outer()) {
+        InductionVar* induc = loop->LookupInduction(def_);
+        InductionVar* i_min = nullptr;
+        InductionVar* i_max = nullptr;
+        // Accept i+C with i in [L,U] as [L+C,U+C] when this adjustment
+        // does not have arithmetic wrap-around complications.
+        if (IsInduction(induc) &&
+            induc->CanComputeBounds(loop, pos, &i_min, &i_max)) {
+          Zone* z = Thread::Current()->zone();
+          return SafelyAdjust(z, i_min, offset_, i_max, offset_, min, max);
+        }
+      }
+    }
+    // Otherwise invariant itself suffices.
+    *min = *max = this;
+    return true;
+  }
+  // Refine unit stride induction with lower and upper bound.
+  //    for (int i = L; i < U; i++)
+  //       j = i+C in [L+C,U+C-1]
+  int64_t stride = 0;
+  int64_t off = 0;
+  if (IsLinear(this, &stride) && Utils::Abs(stride) == 1 &&
+      CanComputeDifferenceWith(loop->control(), &off)) {
+    // Find ranges on both L and U first (and not just minimum
+    // of L and maximum of U) to avoid arithmetic wrap-around
+    // complications such as the one shown below.
+    //   for (int i = 0; i < maxint - 10; i++)
+    //     for (int j = i + 20; j < 100; j++)
+    //       j in [minint, 99] and not in [20, 100]
+    InductionVar* l_min = nullptr;
+    InductionVar* l_max = nullptr;
+    if (initial_->CanComputeBounds(loop, pos, &l_min, &l_max)) {
+      // Find extreme using a control bound for which the branch dominates
+      // the given position (to make sure it really is under its control).
+      // Then refine with anything that dominates that branch.
+      for (auto bound : loop->control()->bounds()) {
+        if (pos->IsDominatedBy(bound.branch_)) {
+          InductionVar* u_min = nullptr;
+          InductionVar* u_max = nullptr;
+          if (bound.limit_->CanComputeBounds(loop, bound.branch_, &u_min,
+                                             &u_max)) {
+            Zone* z = Thread::Current()->zone();
+            return stride > 0 ? SafelyAdjust(z, l_min, 0, u_max, -stride - off,
+                                             min, max)
+                              : SafelyAdjust(z, u_min, -stride - off, l_max, 0,
+                                             min, max);
+          }
+        }
+      }
+    }
+  }
+  // Failure. TODO(ajcbik): examine other kinds of induction too?
+  return false;
+}
+
+// Driver method to compute bounds with per-loop memoization.
+bool InductionVar::CanComputeBounds(LoopInfo* loop,
+                                    Instruction* pos,
+                                    InductionVar** min,
+                                    InductionVar** max) {
+  // Consult cache first.
+  LoopInfo::MemoKV::Pair* pair1 = loop->memo_cache_.Lookup(this);
+  if (pair1 != nullptr) {
+    LoopInfo::MemoVal::PosKV::Pair* pair2 = pair1->value->memo_.Lookup(pos);
+    if (pair2 != nullptr) {
+      *min = pair2->value.first;
+      *max = pair2->value.second;
+      return true;
+    }
+  }
+  // Compute and cache.
+  if (CanComputeBoundsImpl(loop, pos, min, max)) {
+    ASSERT(*min != nullptr && *max != nullptr);
+    LoopInfo::MemoVal* memo = nullptr;
+    if (pair1 != nullptr) {
+      memo = pair1->value;
+    } else {
+      memo = new LoopInfo::MemoVal();
+      loop->memo_cache_.Insert(LoopInfo::MemoKV::Pair(this, memo));
+    }
+    memo->memo_.Insert(
+        LoopInfo::MemoVal::PosKV::Pair(pos, std::make_pair(*min, *max)));
+    return true;
+  }
+  return false;
+}
+
+void InductionVar::PrintTo(BaseTextBuffer* f) const {
   switch (kind_) {
     case kInvariant:
       if (mult_ != 0) {
-        f.Print("(%" Pd64 " + %" Pd64 " x %.4s)", offset_, mult_,
-                def_->ToCString());
+        f->Printf("(%" Pd64 " + %" Pd64 " x %.4s)", offset_, mult_,
+                  def_->ToCString());
       } else {
-        f.Print("%" Pd64, offset_);
+        f->Printf("%" Pd64, offset_);
       }
       break;
     case kLinear:
-      f.Print("LIN(%s + %s * i)", initial_->ToCString(), next_->ToCString());
+      f->Printf("LIN(%s + %s * i)", initial_->ToCString(), next_->ToCString());
       break;
     case kWrapAround:
-      f.Print("WRAP(%s, %s)", initial_->ToCString(), next_->ToCString());
+      f->Printf("WRAP(%s, %s)", initial_->ToCString(), next_->ToCString());
       break;
     case kPeriodic:
-      f.Print("PERIOD(%s, %s)", initial_->ToCString(), next_->ToCString());
+      f->Printf("PERIOD(%s, %s)", initial_->ToCString(), next_->ToCString());
       break;
   }
+}
+
+const char* InductionVar::ToCString() const {
+  char buffer[1024];
+  BufferFormatter f(buffer, sizeof(buffer));
+  PrintTo(&f);
   return Thread::Current()->zone()->MakeCopyOfString(buffer);
 }
 
@@ -656,7 +983,9 @@ LoopInfo::LoopInfo(intptr_t id, BlockEntryInstr* header, BitVector* blocks)
       blocks_(blocks),
       back_edges_(),
       induction_(),
+      memo_cache_(),
       limit_(nullptr),
+      control_(nullptr),
       outer_(nullptr),
       inner_(nullptr),
       next_(nullptr) {}
@@ -673,6 +1002,42 @@ bool LoopInfo::IsBackEdge(BlockEntryInstr* block) const {
   for (intptr_t i = 0, n = back_edges_.length(); i < n; i++) {
     if (back_edges_[i] == block) {
       return true;
+    }
+  }
+  return false;
+}
+
+bool LoopInfo::IsAlwaysTaken(BlockEntryInstr* block) const {
+  // The loop header is always executed when executing a loop (including
+  // loop body of a do-while). Reject any other loop body block that is
+  // not directly controlled by header.
+  if (block == header_) {
+    return true;
+  } else if (block->PredecessorCount() != 1 ||
+             block->PredecessorAt(0) != header_) {
+    return false;
+  }
+  // If the loop has a control induction, make sure the condition is such
+  // that the loop body is entered at least once from the header.
+  if (control_ != nullptr) {
+    InductionVar* limit = nullptr;
+    for (auto bound : control_->bounds()) {
+      if (bound.branch_ == header_->last_instruction()) {
+        limit = bound.limit_;
+        break;
+      }
+    }
+    // Control iterates at least once?
+    if (limit != nullptr) {
+      int64_t stride = 0;
+      int64_t begin = 0;
+      int64_t end = 0;
+      if (InductionVar::IsLinear(control_, &stride) &&
+          InductionVar::IsConstant(control_->initial(), &begin) &&
+          InductionVar::IsConstant(limit, &end) &&
+          ((stride == 1 && begin < end) || (stride == -1 && begin > end))) {
+        return true;
+      }
     }
   }
   return false;
@@ -704,6 +1069,7 @@ intptr_t LoopInfo::NestingDepth() const {
 
 void LoopInfo::ResetInduction() {
   induction_.Clear();
+  memo_cache_.Clear();
 }
 
 void LoopInfo::AddInduction(Definition* def, InductionVar* induc) {
@@ -720,24 +1086,65 @@ InductionVar* LoopInfo::LookupInduction(Definition* def) const {
   return nullptr;
 }
 
-const char* LoopInfo::ToCString() const {
-  char buffer[1024];
-  BufferFormatter f(buffer, sizeof(buffer));
-  f.Print("%*c", static_cast<int>(2 * NestingDepth()), ' ');
-  f.Print("loop%" Pd " B%" Pd " ", id_, header_->block_id());
+// Checks if an index is in range of a given length:
+//   for (int i = initial; i <= length - C; i++) {
+//     .... a[i] ....  // initial >= 0 and C > 0:
+//   }
+bool LoopInfo::IsInRange(Instruction* pos, Value* index, Value* length) {
+  InductionVar* induc = LookupInduction(
+      index->definition()->OriginalDefinitionIgnoreBoxingAndConstraints());
+  InductionVar* len = LookupInduction(
+      length->definition()->OriginalDefinitionIgnoreBoxingAndConstraints());
+  if (induc != nullptr && len != nullptr) {
+    // First, try the most common case. A simple induction directly
+    // bounded by [c>=0,length-C>=0) for the length we are looking for.
+    int64_t stride = 0;
+    int64_t val = 0;
+    int64_t diff = 0;
+    if (InductionVar::IsLinear(induc, &stride) && stride == 1 &&
+        InductionVar::IsConstant(induc->initial(), &val) && 0 <= val) {
+      for (auto bound : induc->bounds()) {
+        if (pos->IsDominatedBy(bound.branch_) &&
+            len->CanComputeDifferenceWith(bound.limit_, &diff) && diff <= 0) {
+          return true;
+        }
+      }
+    }
+    // If that fails, try to compute bounds using more outer loops.
+    // Since array lengths >= 0, the conditions used during this
+    // process avoid arithmetic wrap-around complications.
+    InductionVar* min = nullptr;
+    InductionVar* max = nullptr;
+    if (induc->CanComputeBounds(this, pos, &min, &max)) {
+      return InductionVar::IsConstant(min, &val) && 0 <= val &&
+             len->CanComputeDifferenceWith(max, &diff) && diff < 0;
+    }
+  }
+  return false;
+}
+
+void LoopInfo::PrintTo(BaseTextBuffer* f) const {
+  f->Printf("%*c", static_cast<int>(2 * NestingDepth()), ' ');
+  f->Printf("loop%" Pd " B%" Pd " ", id_, header_->block_id());
   intptr_t num_blocks = 0;
   for (BitVector::Iterator it(blocks_); !it.Done(); it.Advance()) {
     num_blocks++;
   }
-  f.Print("#blocks=%" Pd, num_blocks);
-  if (outer_) f.Print(" outer=%" Pd, outer_->id_);
-  if (inner_) f.Print(" inner=%" Pd, inner_->id_);
-  if (next_) f.Print(" next=%" Pd, next_->id_);
-  f.Print(" [");
+  f->Printf("#blocks=%" Pd, num_blocks);
+  if (outer_ != nullptr) f->Printf(" outer=%" Pd, outer_->id_);
+  if (inner_ != nullptr) f->Printf(" inner=%" Pd, inner_->id_);
+  if (next_ != nullptr) f->Printf(" next=%" Pd, next_->id_);
+  f->AddString(" [");
   for (intptr_t i = 0, n = back_edges_.length(); i < n; i++) {
-    f.Print(" B%" Pd, back_edges_[i]->block_id());
+    f->Printf(" B%" Pd, back_edges_[i]->block_id());
   }
-  f.Print(" ]");
+  f->AddString(" ]");
+}
+
+const char* LoopInfo::ToCString() const {
+  char buffer[1024];
+  BufferFormatter f(buffer, sizeof(buffer));
+  PrintTo(&f);
   return Thread::Current()->zone()->MakeCopyOfString(buffer);
 }
 
@@ -782,7 +1189,7 @@ void LoopHierarchy::Build() {
   }
 }
 
-void LoopHierarchy::Print(LoopInfo* loop) {
+void LoopHierarchy::Print(LoopInfo* loop) const {
   for (; loop != nullptr; loop = loop->next_) {
     THR_Print("%s {", loop->ToCString());
     for (BitVector::Iterator it(loop->blocks_); !it.Done(); it.Advance()) {
@@ -798,5 +1205,3 @@ void LoopHierarchy::ComputeInduction() const {
 }
 
 }  // namespace dart
-
-#endif  // !defined(DART_PRECOMPILED_RUNTIME)

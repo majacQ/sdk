@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -13,14 +13,9 @@ import 'package:analysis_server/protocol/protocol_constants.dart'
     show PROTOCOL_VERSION;
 import 'package:analysis_server/protocol/protocol_generated.dart'
     hide AnalysisOptions;
-import 'package:analysis_server/src/analysis_logger.dart';
 import 'package:analysis_server/src/analysis_server_abstract.dart';
 import 'package:analysis_server/src/channel/channel.dart';
-import 'package:analysis_server/src/collections.dart';
 import 'package:analysis_server/src/computer/computer_highlights.dart';
-import 'package:analysis_server/src/computer/computer_highlights2.dart';
-import 'package:analysis_server/src/computer/computer_outline.dart';
-import 'package:analysis_server/src/computer/new_notifications.dart';
 import 'package:analysis_server/src/context_manager.dart';
 import 'package:analysis_server/src/domain_analysis.dart';
 import 'package:analysis_server/src/domain_analytics.dart';
@@ -29,7 +24,6 @@ import 'package:analysis_server/src/domain_diagnostic.dart';
 import 'package:analysis_server/src/domain_execution.dart';
 import 'package:analysis_server/src/domain_kythe.dart';
 import 'package:analysis_server/src/domain_server.dart';
-import 'package:analysis_server/src/domains/analysis/navigation_dart.dart';
 import 'package:analysis_server/src/domains/analysis/occurrences.dart';
 import 'package:analysis_server/src/domains/analysis/occurrences_dart.dart';
 import 'package:analysis_server/src/edit/edit_domain.dart';
@@ -37,62 +31,42 @@ import 'package:analysis_server/src/flutter/flutter_domain.dart';
 import 'package:analysis_server/src/flutter/flutter_notifications.dart';
 import 'package:analysis_server/src/operation/operation_analysis.dart';
 import 'package:analysis_server/src/plugin/notification_manager.dart';
-import 'package:analysis_server/src/plugin/plugin_manager.dart';
-import 'package:analysis_server/src/plugin/plugin_watcher.dart';
 import 'package:analysis_server/src/protocol_server.dart' as server;
 import 'package:analysis_server/src/search/search_domain.dart';
+import 'package:analysis_server/src/server/crash_reporting_attachments.dart';
 import 'package:analysis_server/src/server/detachable_filesystem_manager.dart';
 import 'package:analysis_server/src/server/diagnostic_server.dart';
-import 'package:analysis_server/src/services/search/search_engine.dart';
-import 'package:analysis_server/src/services/search/search_engine_internal.dart';
-import 'package:analysis_server/src/utilities/null_string_sink.dart';
+import 'package:analysis_server/src/server/error_notifier.dart';
+import 'package:analysis_server/src/server/features.dart';
+import 'package:analysis_server/src/server/sdk_configuration.dart';
+import 'package:analysis_server/src/services/flutter/widget_descriptions.dart';
+import 'package:analysis_server/src/utilities/request_statistics.dart';
 import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/exception/exception.dart';
 import 'package:analyzer/file_system/file_system.dart';
-import 'package:analyzer/file_system/physical_file_system.dart';
 import 'package:analyzer/instrumentation/instrumentation.dart';
-import 'package:analyzer/src/context/builder.dart';
-import 'package:analyzer/src/context/context_root.dart';
-import 'package:analyzer/src/dart/analysis/byte_store.dart';
-import 'package:analyzer/src/dart/analysis/driver.dart' as nd;
-import 'package:analyzer/src/dart/analysis/file_state.dart' as nd;
-import 'package:analyzer/src/dart/analysis/performance_logger.dart';
-import 'package:analyzer/src/dart/analysis/status.dart' as nd;
+import 'package:analyzer/src/dart/analysis/driver.dart' as analysis;
+import 'package:analyzer/src/dart/analysis/status.dart' as analysis;
 import 'package:analyzer/src/generated/engine.dart';
 import 'package:analyzer/src/generated/sdk.dart';
-import 'package:analyzer/src/generated/source.dart';
-import 'package:analyzer/src/generated/source_io.dart';
-import 'package:analyzer/src/generated/utilities_general.dart';
-import 'package:analyzer/src/plugin/resolver_provider.dart';
+import 'package:analyzer/src/util/file_paths.dart' as file_paths;
 import 'package:analyzer_plugin/protocol/protocol_common.dart' hide Element;
 import 'package:analyzer_plugin/src/utilities/navigation/navigation.dart';
+import 'package:analyzer_plugin/utilities/navigation/navigation_dart.dart';
+import 'package:http/http.dart' as http;
 import 'package:telemetry/crash_reporting.dart';
 import 'package:telemetry/telemetry.dart' as telemetry;
 import 'package:watcher/watcher.dart';
 
-typedef void OptionUpdater(AnalysisOptionsImpl options);
+typedef OptionUpdater = void Function(AnalysisOptionsImpl options);
 
 /// Instances of the class [AnalysisServer] implement a server that listens on a
 /// [CommunicationChannel] for analysis requests and process them.
 class AnalysisServer extends AbstractAnalysisServer {
-  /// The options of this server instance.
-  AnalysisServerOptions options;
-
   /// The channel from which requests are received and to which responses should
   /// be sent.
   final ServerCommunicationChannel channel;
-
-  /// The object used to manage sending a subset of notifications to the client.
-  /// The subset of notifications are those to which plugins may contribute.
-  /// This field is `null` when the new plugin support is disabled.
-  final NotificationManager notificationManager;
-
-  /// The object used to manage the execution of plugins.
-  PluginManager pluginManager;
-
-  /// The [SearchEngine] for this server, may be `null` if indexing is disabled.
-  SearchEngine searchEngine;
 
   /// A flag indicating the value of the 'analyzing' parameter sent in the last
   /// status message to the client.
@@ -100,89 +74,46 @@ class AnalysisServer extends AbstractAnalysisServer {
 
   /// A list of the request handlers used to handle the requests sent to this
   /// server.
-  List<RequestHandler> handlers;
-
-  /// The object used to manage the SDK's known to this server.
-  final DartSdkManager sdkManager;
-
-  /// The instrumentation service that is to be used by this analysis server.
-  final InstrumentationService instrumentationService;
+  late List<RequestHandler> handlers;
 
   /// A set of the [ServerService]s to send notifications for.
-  Set<ServerService> serverServices = new HashSet<ServerService>();
+  Set<ServerService> serverServices = HashSet<ServerService>();
 
   /// A set of the [GeneralAnalysisService]s to send notifications for.
   Set<GeneralAnalysisService> generalAnalysisServices =
-      new HashSet<GeneralAnalysisService>();
+      HashSet<GeneralAnalysisService>();
 
   /// A table mapping [AnalysisService]s to the file paths for which these
   /// notifications should be sent.
   Map<AnalysisService, Set<String>> analysisServices =
-      new HashMap<AnalysisService, Set<String>>();
+      HashMap<AnalysisService, Set<String>>();
 
   /// A table mapping [FlutterService]s to the file paths for which these
   /// notifications should be sent.
   Map<FlutterService, Set<String>> flutterServices = {};
 
-  /// Performance information before initial analysis is complete.
-  final ServerPerformance performanceDuringStartup = new ServerPerformance();
-
-  /// Performance information after initial analysis is complete
-  /// or `null` if the initial analysis is not yet complete
-  ServerPerformance performanceAfterStartup;
-
-  /// A [RecentBuffer] of the most recent exceptions encountered by the analysis
-  /// server.
-  final RecentBuffer<ServerException> exceptions = new RecentBuffer(10);
-
-  /// The class into which performance information is currently being recorded.
-  /// During startup, this will be the same as [performanceDuringStartup]
-  /// and after startup is complete, this switches to [performanceAfterStartup].
-  ServerPerformance _performance;
+  /// The support for Flutter properties.
+  WidgetDescriptions flutterWidgetDescriptions = WidgetDescriptions();
 
   /// The [Completer] that completes when analysis is complete.
-  Completer _onAnalysisCompleteCompleter;
+  Completer<void>? _onAnalysisCompleteCompleter;
 
   /// The controller that is notified when analysis is started.
-  StreamController<bool> _onAnalysisStartedController;
-
-  /// The content overlay for all analysis drivers.
-  final nd.FileContentOverlay fileContentOverlay = new nd.FileContentOverlay();
+  final StreamController<bool> _onAnalysisStartedController =
+      StreamController.broadcast();
 
   /// If the "analysis.analyzedFiles" notification is currently being subscribed
   /// to (see [generalAnalysisServices]), and at least one such notification has
   /// been sent since the subscription was enabled, the set of analyzed files
   /// that was delivered in the most recently sent notification.  Otherwise
   /// `null`.
-  Set<String> prevAnalyzedFiles;
-
-  /// The default options used to create new analysis contexts. This object is
-  /// also referenced by the ContextManager.
-  final AnalysisOptionsImpl defaultContextOptions = new AnalysisOptionsImpl();
-
-  /// The file resolver provider used to override the way file URI's are
-  /// resolved in some contexts.
-  ResolverProvider fileResolverProvider;
-
-  /// The package resolver provider used to override the way package URI's are
-  /// resolved in some contexts.
-  ResolverProvider packageResolverProvider;
-
-  PerformanceLog _analysisPerformanceLogger;
-
-  ByteStore byteStore;
-  nd.AnalysisDriverScheduler analysisDriverScheduler;
+  Set<String>? prevAnalyzedFiles;
 
   /// The controller for [onAnalysisSetChanged].
   final StreamController _onAnalysisSetChangedController =
-      new StreamController.broadcast(sync: true);
+      StreamController.broadcast(sync: true);
 
-  /// The DiagnosticServer for this AnalysisServer. If available, it can be used
-  /// to start an http diagnostics server or return the port for an existing
-  /// server.
-  final DiagnosticServer diagnosticServer;
-
-  final DetachableFileSystemManager detachableFileSystemManager;
+  final DetachableFileSystemManager? detachableFileSystemManager;
 
   /// Initialize a newly created server to receive requests from and send
   /// responses to the given [channel].
@@ -193,105 +124,69 @@ class AnalysisServer extends AbstractAnalysisServer {
   /// running a full analysis server.
   AnalysisServer(
     this.channel,
-    ResourceProvider resourceProvider,
-    this.options,
-    this.sdkManager,
-    this.instrumentationService, {
-    this.diagnosticServer,
-    ResolverProvider fileResolverProvider: null,
-    ResolverProvider packageResolverProvider: null,
-    this.detachableFileSystemManager: null,
-  })  : notificationManager =
-            new NotificationManager(channel, resourceProvider),
-        super(resourceProvider) {
-    _performance = performanceDuringStartup;
+    ResourceProvider baseResourceProvider,
+    AnalysisServerOptions options,
+    DartSdkManager sdkManager,
+    CrashReportingAttachmentsBuilder crashReportingAttachmentsBuilder,
+    InstrumentationService instrumentationService, {
+    http.Client? httpClient,
+    RequestStatisticsHelper? requestStatistics,
+    DiagnosticServer? diagnosticServer,
+    this.detachableFileSystemManager,
+    // Disable to avoid using this in unit tests.
+    bool enableBazelWatcher = false,
+  }) : super(
+          options,
+          sdkManager,
+          diagnosticServer,
+          crashReportingAttachmentsBuilder,
+          baseResourceProvider,
+          instrumentationService,
+          httpClient,
+          NotificationManager(channel, baseResourceProvider.pathContext),
+          requestStatistics: requestStatistics,
+          enableBazelWatcher: enableBazelWatcher,
+        ) {
+    var contextManagerCallbacks =
+        ServerContextManagerCallbacks(this, resourceProvider);
+    contextManager.callbacks = contextManagerCallbacks;
 
-    pluginManager = new PluginManager(
-        resourceProvider,
-        _getByteStorePath(),
-        sdkManager.defaultSdkDirectory,
-        notificationManager,
-        instrumentationService);
-    PluginWatcher pluginWatcher =
-        new PluginWatcher(resourceProvider, pluginManager);
-
-    defaultContextOptions.generateImplicitErrors = false;
-    defaultContextOptions.useFastaParser = options.useFastaParser;
-
-    {
-      String name = options.newAnalysisDriverLog;
-      StringSink sink = new NullStringSink();
-      if (name != null) {
-        if (name == 'stdout') {
-          sink = io.stdout;
-        } else if (name.startsWith('file:')) {
-          String path = name.substring('file:'.length);
-          sink = new io.File(path).openWrite(mode: io.FileMode.append);
-        }
-      }
-      _analysisPerformanceLogger = new PerformanceLog(sink);
-    }
-    byteStore = createByteStore(resourceProvider);
-    analysisDriverScheduler = new nd.AnalysisDriverScheduler(
-        _analysisPerformanceLogger,
-        driverWatcher: pluginWatcher);
     analysisDriverScheduler.status.listen(sendStatusNotificationNew);
     analysisDriverScheduler.start();
 
-    contextManager = new ContextManagerImpl(
-        resourceProvider,
-        fileContentOverlay,
-        sdkManager,
-        packageResolverProvider,
-        analyzedFilesGlobs,
-        instrumentationService,
-        defaultContextOptions);
-    this.fileResolverProvider = fileResolverProvider;
-    this.packageResolverProvider = packageResolverProvider;
-    ServerContextManagerCallbacks contextManagerCallbacks =
-        new ServerContextManagerCallbacks(this, resourceProvider);
-    contextManager.callbacks = contextManagerCallbacks;
-    AnalysisEngine.instance.logger = new AnalysisLogger(this);
-    _onAnalysisStartedController = new StreamController.broadcast();
     onAnalysisStarted.first.then((_) {
       onAnalysisComplete.then((_) {
-        performanceAfterStartup = new ServerPerformance();
-        _performance = performanceAfterStartup;
+        performance = performanceAfterStartup = ServerPerformance();
       });
     });
-    searchEngine = new SearchEngineImpl(driverMap.values);
-    Notification notification = new ServerConnectedParams(
-            PROTOCOL_VERSION, io.pid,
-            sessionId: instrumentationService.sessionId)
-        .toNotification();
+    var notification =
+        ServerConnectedParams(PROTOCOL_VERSION, io.pid).toNotification();
     channel.sendNotification(notification);
     channel.listen(handleRequest, onDone: done, onError: error);
     handlers = <server.RequestHandler>[
-      new ServerDomainHandler(this),
-      new AnalysisDomainHandler(this),
-      new EditDomainHandler(this),
-      new SearchDomainHandler(this),
-      new CompletionDomainHandler(this),
-      new ExecutionDomainHandler(this),
-      new DiagnosticDomainHandler(this),
-      new AnalyticsDomainHandler(this),
-      new KytheDomainHandler(this),
-      new FlutterDomainHandler(this)
+      ServerDomainHandler(this),
+      AnalysisDomainHandler(this),
+      EditDomainHandler(this),
+      SearchDomainHandler(this),
+      CompletionDomainHandler(this),
+      ExecutionDomainHandler(this),
+      DiagnosticDomainHandler(this),
+      AnalyticsDomainHandler(this),
+      KytheDomainHandler(this),
+      FlutterDomainHandler(this)
     ];
   }
 
   /// The analytics instance; note, this object can be `null`.
-  telemetry.Analytics get analytics => options.analytics;
+  telemetry.Analytics? get analytics => options.analytics;
 
   /// The [Future] that completes when analysis is complete.
-  Future get onAnalysisComplete {
+  Future<void> get onAnalysisComplete {
     if (isAnalysisComplete()) {
-      return new Future.value();
+      return Future.value();
     }
-    if (_onAnalysisCompleteCompleter == null) {
-      _onAnalysisCompleteCompleter = new Completer();
-    }
-    return _onAnalysisCompleteCompleter.future;
+    var completer = _onAnalysisCompleteCompleter ??= Completer<void>();
+    return completer.future;
   }
 
   /// The stream that is notified when the analysis set is changed - this might
@@ -306,11 +201,8 @@ class AnalysisServer extends AbstractAnalysisServer {
     return _onAnalysisStartedController.stream;
   }
 
-  /// Return the total time the server's been alive.
-  Duration get uptime {
-    DateTime start = new DateTime.fromMillisecondsSinceEpoch(
-        performanceDuringStartup.startTime);
-    return new DateTime.now().difference(start);
+  String get sdkPath {
+    return sdkManager.defaultSdkDirectory;
   }
 
   /// The socket from which requests are being read has been closed.
@@ -320,67 +212,62 @@ class AnalysisServer extends AbstractAnalysisServer {
   /// read.
   void error(argument) {}
 
-  /// Return one of the SDKs that has been created, or `null` if no SDKs have
-  /// been created yet.
-  DartSdk findSdk() {
-    DartSdk sdk = sdkManager.anySdk;
-    if (sdk != null) {
-      return sdk;
-    }
-    // TODO(brianwilkerson) Should we create an SDK using the default options?
-    return null;
-  }
-
   /// Return the cached analysis result for the file with the given [path].
   /// If there is no cached result, return `null`.
-  ResolvedUnitResult getCachedResolvedUnit(String path) {
-    if (!AnalysisEngine.isDartFileName(path)) {
+  ResolvedUnitResult? getCachedResolvedUnit(String path) {
+    if (!file_paths.isDart(resourceProvider.pathContext, path)) {
       return null;
     }
 
-    nd.AnalysisDriver driver = getAnalysisDriver(path);
+    var driver = getAnalysisDriver(path);
     return driver?.getCachedResult(path);
   }
 
   /// Handle a [request] that was read from the communication channel.
   void handleRequest(Request request) {
-    _performance.logRequest(request);
-    runZoned(() {
-      ServerPerformanceStatistics.serverRequests.makeCurrentWhile(() {
-        int count = handlers.length;
-        for (int i = 0; i < count; i++) {
-          try {
-            Response response = handlers[i].handleRequest(request);
-            if (response == Response.DELAYED_RESPONSE) {
-              return;
-            }
-            if (response != null) {
-              channel.sendResponse(response);
-              return;
-            }
-          } on RequestFailure catch (exception) {
-            channel.sendResponse(exception.response);
+    performance.logRequestTiming(request.clientRequestTime);
+    runZonedGuarded(() {
+      var count = handlers.length;
+      for (var i = 0; i < count; i++) {
+        try {
+          var response = handlers[i].handleRequest(request);
+          if (response == Response.DELAYED_RESPONSE) {
             return;
-          } catch (exception, stackTrace) {
-            RequestError error = new RequestError(
-                RequestErrorCode.SERVER_ERROR, exception.toString());
-            if (stackTrace != null) {
-              error.stackTrace = stackTrace.toString();
-            }
-            Response response = new Response(request.id, error: error);
+          }
+          if (response != null) {
             channel.sendResponse(response);
             return;
           }
+        } on RequestFailure catch (exception) {
+          channel.sendResponse(exception.response);
+          return;
+        } catch (exception, stackTrace) {
+          var error =
+              RequestError(RequestErrorCode.SERVER_ERROR, exception.toString());
+          error.stackTrace = stackTrace.toString();
+          var response = Response(request.id, error: error);
+          channel.sendResponse(response);
+          return;
         }
-        channel.sendResponse(new Response.unknownRequest(request));
-      });
-    }, onError: (exception, stackTrace) {
-      sendServerErrorNotification(
-          'Failed to handle request: ${request.toJson()}',
+      }
+      channel.sendResponse(Response.unknownRequest(request));
+    }, (exception, stackTrace) {
+      instrumentationService.logException(
+        FatalException(
+          'Failed to handle request: ${request.method}',
           exception,
           stackTrace,
-          fatal: true);
+        ),
+        null,
+        crashReportingAttachmentsBuilder.forException(exception),
+      );
     });
+  }
+
+  /// Return `true` if the [path] is both absolute and normalized.
+  bool isAbsoluteAndNormalized(String path) {
+    var pathContext = resourceProvider.pathContext;
+    return pathContext.isAbsolute(path) && pathContext.normalize(path) == path;
   }
 
   /// Return `true` if analysis is complete.
@@ -396,12 +283,9 @@ class AnalysisServer extends AbstractAnalysisServer {
         resourceProvider.pathContext.normalize(path) == path;
   }
 
-  /// Trigger reanalysis of all files in the given list of analysis [roots], or
-  /// everything if the analysis roots is `null`.
-  void reanalyze(List<Resource> roots) {
-    // Instruct the contextDirectoryManager to rebuild all contexts from
-    // scratch.
-    contextManager.refresh(roots);
+  @override
+  void notifyFlutterWidgetDescriptions(String path) {
+    flutterWidgetDescriptions.flush();
   }
 
   /// Send the given [notification] to the client.
@@ -414,60 +298,55 @@ class AnalysisServer extends AbstractAnalysisServer {
     channel.sendResponse(response);
   }
 
+  /// If the [path] is not a valid file path, that is absolute and normalized,
+  /// send an error response, and return `true`. If OK then return `false`.
+  bool sendResponseErrorIfInvalidFilePath(Request request, String path) {
+    if (!isAbsoluteAndNormalized(path)) {
+      sendResponse(Response.invalidFilePathFormat(request, path));
+      return true;
+    }
+    return false;
+  }
+
   /// Sends a `server.error` notification.
+  @override
   void sendServerErrorNotification(
     String message,
     dynamic exception,
     /*StackTrace*/ stackTrace, {
-    bool fatal: false,
+    bool fatal = false,
   }) {
-    StringBuffer buffer = new StringBuffer();
-    buffer.write(exception ?? 'null exception');
-    if (stackTrace != null) {
-      buffer.writeln();
-      buffer.write(stackTrace);
-    } else if (exception is! CaughtException) {
+    var msg = exception == null ? message : '$message: $exception';
+    if (stackTrace != null && exception is! CaughtException) {
       stackTrace = StackTrace.current;
-      buffer.writeln();
-      buffer.write(stackTrace);
     }
 
     // send the notification
     channel.sendNotification(
-        new ServerErrorParams(fatal, message, buffer.toString())
-            .toNotification());
-
-    // send to crash reporting
-    if (options.crashReportSender != null) {
-      options.crashReportSender
-          .sendReport(exception,
-              stackTrace: stackTrace is StackTrace ? stackTrace : null)
-          .catchError((_) {
-        // Catch and ignore any exceptions when reporting exceptions (network
-        // errors or other).
-      });
-    }
+        ServerErrorParams(fatal, msg, '$stackTrace').toNotification());
 
     // remember the last few exceptions
     if (exception is CaughtException) {
       stackTrace ??= exception.stackTrace;
     }
-    exceptions.add(new ServerException(
+
+    exceptions.add(ServerException(
       message,
       exception,
-      stackTrace is StackTrace ? stackTrace : null,
+      stackTrace is StackTrace ? stackTrace : StackTrace.current,
       fatal,
     ));
   }
 
   /// Send status notification to the client. The state of analysis is given by
   /// the [status] information.
-  void sendStatusNotificationNew(nd.AnalysisStatus status) {
+  void sendStatusNotificationNew(analysis.AnalysisStatus status) {
     if (status.isAnalyzing) {
       _onAnalysisStartedController.add(true);
     }
-    if (_onAnalysisCompleteCompleter != null && !status.isAnalyzing) {
-      _onAnalysisCompleteCompleter.complete();
+    var onAnalysisCompleteCompleter = _onAnalysisCompleteCompleter;
+    if (onAnalysisCompleteCompleter != null && !status.isAnalyzing) {
+      onAnalysisCompleteCompleter.complete();
       _onAnalysisCompleteCompleter = null;
     }
     // Perform on-idle actions.
@@ -487,9 +366,9 @@ class AnalysisServer extends AbstractAnalysisServer {
       return;
     }
     statusAnalyzing = status.isAnalyzing;
-    AnalysisStatus analysis = new AnalysisStatus(status.isAnalyzing);
+    var analysis = AnalysisStatus(status.isAnalyzing);
     channel.sendNotification(
-        new ServerStatusParams(analysis: analysis).toNotification());
+        ServerStatusParams(analysis: analysis).toNotification());
   }
 
   /// Implementation for `analysis.setAnalysisRoots`.
@@ -503,56 +382,35 @@ class AnalysisServer extends AbstractAnalysisServer {
   /// So, we can start working in parallel on adding services and improving
   /// projects/contexts support.
   void setAnalysisRoots(String requestId, List<String> includedPaths,
-      List<String> excludedPaths, Map<String, String> packageRoots) {
-    if (notificationManager != null) {
-      notificationManager.setAnalysisRoots(includedPaths, excludedPaths);
-    }
+      List<String> excludedPaths) {
+    notificationManager.setAnalysisRoots(includedPaths, excludedPaths);
     try {
-      contextManager.setRoots(includedPaths, excludedPaths, packageRoots);
+      contextManager.setRoots(includedPaths, excludedPaths);
     } on UnimplementedError catch (e) {
-      throw new RequestFailure(
-          new Response.unsupportedFeature(requestId, e.message));
+      throw RequestFailure(Response.unsupportedFeature(
+          requestId, e.message ?? 'Unsupported feature.'));
     }
+    analysisDriverScheduler.transitionToAnalyzingToIdleIfNoFilesToAnalyze();
   }
 
   /// Implementation for `analysis.setSubscriptions`.
   void setAnalysisSubscriptions(
       Map<AnalysisService, Set<String>> subscriptions) {
-    if (notificationManager != null) {
-      notificationManager.setSubscriptions(subscriptions);
-    }
-    this.analysisServices = subscriptions;
-    Set<String> allNewFiles =
-        subscriptions.values.expand((files) => files).toSet();
-    for (String file in allNewFiles) {
-      // The result will be produced by the "results" stream with
-      // the fully resolved unit, and processed with sending analysis
-      // notifications as it happens after content changes.
-      if (AnalysisEngine.isDartFileName(file)) {
-        getResolvedUnit(file, sendCachedToStream: true);
-      }
-    }
+    notificationManager.setSubscriptions(subscriptions);
+    analysisServices = subscriptions;
+    _sendSubscriptions(analysis: true);
   }
 
   /// Implementation for `flutter.setSubscriptions`.
   void setFlutterSubscriptions(Map<FlutterService, Set<String>> subscriptions) {
-    this.flutterServices = subscriptions;
-    Set<String> allNewFiles =
-        subscriptions.values.expand((files) => files).toSet();
-    for (String file in allNewFiles) {
-      // The result will be produced by the "results" stream with
-      // the fully resolved unit, and processed with sending analysis
-      // notifications as it happens after content changes.
-      if (AnalysisEngine.isDartFileName(file)) {
-        getResolvedUnit(file, sendCachedToStream: true);
-      }
-    }
+    flutterServices = subscriptions;
+    _sendSubscriptions(flutter: true);
   }
 
   /// Implementation for `analysis.setGeneralSubscriptions`.
   void setGeneralAnalysisSubscriptions(
       List<GeneralAnalysisService> subscriptions) {
-    Set<GeneralAnalysisService> newServices = subscriptions.toSet();
+    var newServices = subscriptions.toSet();
     if (newServices.contains(GeneralAnalysisService.ANALYZED_FILES) &&
         !generalAnalysisServices
             .contains(GeneralAnalysisService.ANALYZED_FILES) &&
@@ -568,6 +426,14 @@ class AnalysisServer extends AbstractAnalysisServer {
 
   /// Set the priority files to the given [files].
   void setPriorityFiles(String requestId, List<String> files) {
+    bool isPubspec(String filePath) =>
+        file_paths.isPubspecYaml(resourceProvider.pathContext, filePath);
+
+    // When a pubspec is opened, trigger package name caching for completion.
+    if (!pubPackageService.isRunning && files.any(isPubspec)) {
+      pubPackageService.beginPackageNamePreload();
+    }
+
     priorityFiles.clear();
     priorityFiles.addAll(files);
     // Set priority files in drivers.
@@ -576,67 +442,78 @@ class AnalysisServer extends AbstractAnalysisServer {
     });
   }
 
-  /// Returns `true` if errors should be reported for [file] with the given
-  /// absolute path.
-  bool shouldSendErrorsNotificationFor(String file) {
-    return contextManager.isInAnalysisRoot(file);
-  }
-
+  @override
   Future<void> shutdown() {
-    if (options.analytics != null) {
-      options.analytics
-          .waitForLastPing(timeout: new Duration(milliseconds: 200))
-          .then((_) {
-        options.analytics.close();
+    super.shutdown();
+
+    pubApi.close();
+
+    var analytics = options.analytics;
+    if (analytics != null) {
+      analytics.waitForLastPing(timeout: Duration(milliseconds: 200)).then((_) {
+        analytics.close();
       });
     }
 
-    if (options.enableUXExperiment2) {
-      detachableFileSystemManager?.dispose();
-    }
+    detachableFileSystemManager?.dispose();
 
     // Defer closing the channel and shutting down the instrumentation server so
     // that the shutdown response can be sent and logged.
-    new Future(() {
+    Future(() {
       instrumentationService.shutdown();
       channel.close();
     });
 
-    return new Future.value();
+    return Future.value();
   }
 
   /// Implementation for `analysis.updateContent`.
   void updateContent(String id, Map<String, dynamic> changes) {
     _onAnalysisSetChangedController.add(null);
     changes.forEach((file, change) {
+      // Prepare the old overlay contents.
+      String? oldContents;
+      try {
+        if (resourceProvider.hasOverlay(file)) {
+          oldContents = resourceProvider.getFile(file).readAsStringSync();
+        }
+      } catch (_) {}
+
       // Prepare the new contents.
-      String oldContents = fileContentOverlay[file];
-      String newContents;
+      String? newContents;
       if (change is AddContentOverlay) {
         newContents = change.content;
       } else if (change is ChangeContentOverlay) {
         if (oldContents == null) {
           // The client may only send a ChangeContentOverlay if there is
           // already an existing overlay for the source.
-          throw new RequestFailure(new Response(id,
-              error: new RequestError(RequestErrorCode.INVALID_OVERLAY_CHANGE,
+          throw RequestFailure(Response(id,
+              error: RequestError(RequestErrorCode.INVALID_OVERLAY_CHANGE,
                   'Invalid overlay change')));
         }
         try {
           newContents = SourceEdit.applySequence(oldContents, change.edits);
         } on RangeError {
-          throw new RequestFailure(new Response(id,
-              error: new RequestError(RequestErrorCode.INVALID_OVERLAY_CHANGE,
+          throw RequestFailure(Response(id,
+              error: RequestError(RequestErrorCode.INVALID_OVERLAY_CHANGE,
                   'Invalid overlay change')));
         }
       } else if (change is RemoveContentOverlay) {
         newContents = null;
       } else {
         // Protocol parsing should have ensured that we never get here.
-        throw new AnalysisException('Illegal change type');
+        throw AnalysisException('Illegal change type');
       }
 
-      fileContentOverlay[file] = newContents;
+      if (newContents != null) {
+        resourceProvider.setOverlay(
+          file,
+          content: newContents,
+          modificationStamp: overlayModificationStamp++,
+        );
+      } else {
+        resourceProvider.removeOverlay(file);
+      }
 
       driverMap.values.forEach((driver) {
         driver.changeFile(file);
@@ -645,6 +522,9 @@ class AnalysisServer extends AbstractAnalysisServer {
       // If the file did not exist, and is "overlay only", it still should be
       // analyzed. Add it to driver to which it should have been added.
       contextManager.getDriverFor(file)?.addFile(file);
+
+      notifyDeclarationsTracker(file);
+      notifyFlutterWidgetDescriptions(file);
 
       // TODO(scheglov) implement other cases
     });
@@ -675,19 +555,6 @@ class AnalysisServer extends AbstractAnalysisServer {
 //    });
   }
 
-  /// Return the path to the location of the byte store on disk, or `null` if
-  /// there is no on-disk byte store.
-  String _getByteStorePath() {
-    if (resourceProvider is PhysicalResourceProvider) {
-      Folder stateLocation =
-          resourceProvider.getStateLocation('.analysis-driver');
-      if (stateLocation != null) {
-        return stateLocation.path;
-      }
-    }
-    return null;
-  }
-
   /// Returns `true` if there is a subscription for the given [service] and
   /// [file].
   bool _hasAnalysisServiceSubscription(AnalysisService service, String file) {
@@ -699,50 +566,67 @@ class AnalysisServer extends AbstractAnalysisServer {
   }
 
   Future<void> _scheduleAnalysisImplementedNotification() async {
-    // TODO(brianwilkerson) Determine whether this await is necessary.
-    await null;
-    Set<String> files = analysisServices[AnalysisService.IMPLEMENTED];
+    var files = analysisServices[AnalysisService.IMPLEMENTED];
     if (files != null) {
       scheduleImplementedNotification(this, files);
+    }
+  }
+
+  void _sendSubscriptions({bool analysis = false, bool flutter = false}) {
+    var files = <String>{};
+
+    if (analysis) {
+      analysisServices.values.forEach((serviceFiles) {
+        files.addAll(serviceFiles);
+      });
+    }
+
+    if (flutter) {
+      flutterServices.values.forEach((serviceFiles) {
+        files.addAll(serviceFiles);
+      });
+    }
+
+    for (var file in files) {
+      // The result will be produced by the "results" stream with
+      // the fully resolved unit, and processed with sending analysis
+      // notifications as it happens after content changes.
+      if (file_paths.isDart(resourceProvider.pathContext, file)) {
+        getResolvedUnit(file, sendCachedToStream: true);
+      }
     }
   }
 }
 
 /// Various IDE options.
 class AnalysisServerOptions {
-  bool useAnalysisHighlight2 = false;
+  String? newAnalysisDriverLog;
 
-  String fileReadMode = 'as-is';
-  String newAnalysisDriverLog;
-
-  String clientId;
-  String clientVersion;
+  String? clientId;
+  String? clientVersion;
 
   /// Base path where to cache data.
-  String cacheFolder;
+  String? cacheFolder;
 
   /// The analytics instance; note, this object can be `null`, and should be
   /// accessed via a null-aware operator.
-  telemetry.Analytics analytics;
+  telemetry.Analytics? analytics;
 
   /// The crash report sender instance; note, this object can be `null`, and
   /// should be accessed via a null-aware operator.
-  CrashReportSender crashReportSender;
+  CrashReportSender? crashReportSender;
+
+  /// An optional set of configuration overrides specified by the SDK.
+  ///
+  /// These overrides can provide new values for configuration settings, and are
+  /// generally used in specific SDKs (like the internal google3 one).
+  SdkConfiguration? configurationOverrides;
 
   /// Whether to use the Language Server Protocol.
   bool useLanguageServerProtocol = false;
 
-  /// Whether to enable parsing via the Fasta parser.
-  bool useFastaParser = true;
-
-  /// User Experience, Experiment #1. This experiment changes the notion of
-  /// what analysis roots are and priority files: the analysis root is set to be
-  /// the priority files' containing directory.
-  bool enableUXExperiment1 = false;
-
-  /// User Experience, Experiment #2. This experiment introduces the notion of
-  /// an intermittent file system.
-  bool enableUXExperiment2 = false;
+  /// The set of enabled features.
+  FeatureSet featureSet = FeatureSet();
 }
 
 class ServerContextManagerCallbacks extends ContextManagerCallbacks {
@@ -751,64 +635,85 @@ class ServerContextManagerCallbacks extends ContextManagerCallbacks {
   /// The [ResourceProvider] by which paths are converted into [Resource]s.
   final ResourceProvider resourceProvider;
 
+  /// The set of files for which notifications were sent.
+  final Set<String> filesToFlush = {};
+
   ServerContextManagerCallbacks(this.analysisServer, this.resourceProvider);
 
-  @override
-  NotificationManager get notificationManager =>
+  AbstractNotificationManager get _notificationManager =>
       analysisServer.notificationManager;
 
   @override
-  nd.AnalysisDriver addAnalysisDriver(
-      Folder folder, ContextRoot contextRoot, AnalysisOptions options) {
-    ContextBuilder builder = createContextBuilder(folder, options);
-    nd.AnalysisDriver analysisDriver = builder.buildDriver(contextRoot);
+  void afterContextsCreated() {
+    analysisServer.addContextsToDeclarationsTracker();
+    analysisServer._sendSubscriptions(analysis: true, flutter: true);
+  }
+
+  @override
+  void afterContextsDestroyed() {
+    sendAnalysisNotificationFlushResults(
+      analysisServer,
+      filesToFlush.toList(),
+    );
+    filesToFlush.clear();
+  }
+
+  @override
+  void afterWatchEvent(WatchEvent event) {
+    analysisServer._onAnalysisSetChangedController.add(null);
+  }
+
+  @override
+  void applyFileRemoved(String file) {
+    sendAnalysisNotificationFlushResults(analysisServer, [file]);
+    filesToFlush.remove(file);
+  }
+
+  @override
+  void broadcastWatchEvent(WatchEvent event) {
+    analysisServer.notifyDeclarationsTracker(event.path);
+    analysisServer.notifyFlutterWidgetDescriptions(event.path);
+    analysisServer.pluginManager.broadcastWatchEvent(event);
+  }
+
+  @override
+  void listenAnalysisDriver(analysis.AnalysisDriver analysisDriver) {
     analysisDriver.results.listen((result) {
-      NotificationManager notificationManager =
-          analysisServer.notificationManager;
-      String path = result.path;
-      if (analysisServer.shouldSendErrorsNotificationFor(path)) {
-        if (notificationManager != null) {
-          notificationManager.recordAnalysisErrors(
-              NotificationManager.serverId,
-              path,
-              server.doAnalysisError_listFromEngine(
-                  result.session.analysisContext.analysisOptions,
-                  result.lineInfo,
-                  result.errors));
-        } else {
-          new_sendErrorNotification(analysisServer, result);
-        }
+      var path = result.path!;
+      filesToFlush.add(path);
+      if (analysisServer.isAnalyzed(path)) {
+        _notificationManager.recordAnalysisErrors(NotificationManager.serverId,
+            path, server.doAnalysisError_listFromEngine(result));
       }
-      CompilationUnit unit = result.unit;
+      analysisServer.getDocumentationCacheFor(result)?.cacheFromResult(result);
+      analysisServer.getExtensionCacheFor(result)?.cacheFromResult(result);
+      var unit = result.unit;
       if (unit != null) {
-        if (notificationManager != null) {
-          if (analysisServer._hasAnalysisServiceSubscription(
-              AnalysisService.HIGHLIGHTS, path)) {
-            _runDelayed(() {
-              notificationManager.recordHighlightRegions(
-                  NotificationManager.serverId,
-                  path,
-                  _computeHighlightRegions(unit));
-            });
-          }
-          if (analysisServer._hasAnalysisServiceSubscription(
-              AnalysisService.NAVIGATION, path)) {
-            _runDelayed(() {
-              notificationManager.recordNavigationParams(
-                  NotificationManager.serverId,
-                  path,
-                  _computeNavigationParams(path, unit));
-            });
-          }
-          if (analysisServer._hasAnalysisServiceSubscription(
-              AnalysisService.OCCURRENCES, path)) {
-            _runDelayed(() {
-              notificationManager.recordOccurrences(
-                  NotificationManager.serverId,
-                  path,
-                  _computeOccurrences(unit));
-            });
-          }
+        if (analysisServer._hasAnalysisServiceSubscription(
+            AnalysisService.HIGHLIGHTS, path)) {
+          _runDelayed(() {
+            _notificationManager.recordHighlightRegions(
+                NotificationManager.serverId,
+                path,
+                _computeHighlightRegions(unit));
+          });
+        }
+        if (analysisServer._hasAnalysisServiceSubscription(
+            AnalysisService.NAVIGATION, path)) {
+          _runDelayed(() {
+            _notificationManager.recordNavigationParams(
+                NotificationManager.serverId,
+                path,
+                _computeNavigationParams(path, unit));
+          });
+        }
+        if (analysisServer._hasAnalysisServiceSubscription(
+            AnalysisService.OCCURRENCES, path)) {
+          _runDelayed(() {
+            _notificationManager.recordOccurrences(
+                NotificationManager.serverId, path, _computeOccurrences(unit));
+          });
+        }
 //          if (analysisServer._hasAnalysisServiceSubscription(
 //              AnalysisService.OUTLINE, path)) {
 //            _runDelayed(() {
@@ -818,26 +723,6 @@ class ServerContextManagerCallbacks extends ContextManagerCallbacks {
 //                  path, _computeOutlineParams(path, unit, result.lineInfo));
 //            });
 //          }
-        } else {
-          if (analysisServer._hasAnalysisServiceSubscription(
-              AnalysisService.HIGHLIGHTS, path)) {
-            _runDelayed(() {
-              sendAnalysisNotificationHighlights(analysisServer, path, unit);
-            });
-          }
-          if (analysisServer._hasAnalysisServiceSubscription(
-              AnalysisService.NAVIGATION, path)) {
-            _runDelayed(() {
-              new_sendDartNotificationNavigation(analysisServer, result);
-            });
-          }
-          if (analysisServer._hasAnalysisServiceSubscription(
-              AnalysisService.OCCURRENCES, path)) {
-            _runDelayed(() {
-              new_sendDartNotificationOccurrences(analysisServer, result);
-            });
-          }
-        }
         if (analysisServer._hasAnalysisServiceSubscription(
             AnalysisService.CLOSING_LABELS, path)) {
           _runDelayed(() {
@@ -855,12 +740,7 @@ class ServerContextManagerCallbacks extends ContextManagerCallbacks {
         if (analysisServer._hasAnalysisServiceSubscription(
             AnalysisService.OUTLINE, path)) {
           _runDelayed(() {
-            SourceKind sourceKind =
-                unit.directives.any((d) => d is PartOfDirective)
-                    ? SourceKind.PART
-                    : SourceKind.LIBRARY;
-            sendAnalysisNotificationOutline(
-                analysisServer, path, result.lineInfo, sourceKind, unit);
+            sendAnalysisNotificationOutline(analysisServer, result);
           });
         }
         if (analysisServer._hasAnalysisServiceSubscription(
@@ -872,155 +752,40 @@ class ServerContextManagerCallbacks extends ContextManagerCallbacks {
         if (analysisServer._hasFlutterServiceSubscription(
             FlutterService.OUTLINE, path)) {
           _runDelayed(() {
-            sendFlutterNotificationOutline(analysisServer, path, result.content,
-                result.lineInfo, unit, result.typeProvider);
+            sendFlutterNotificationOutline(analysisServer, result);
           });
         }
         // TODO(scheglov) Implement notifications for AnalysisService.IMPLEMENTED.
       }
     });
-    analysisDriver.exceptions.listen((nd.ExceptionResult result) {
-      String message = 'Analysis failed: ${result.path}';
-      if (result.contextKey != null) {
-        message += ' context: ${result.contextKey}';
-      }
-      AnalysisEngine.instance.logger.logError(message, result.exception);
-    });
-    analysisServer.driverMap[folder] = analysisDriver;
-    return analysisDriver;
+    analysisDriver.exceptions.listen(analysisServer.logExceptionResult);
+    analysisDriver.priorityFiles = analysisServer.priorityFiles.toList();
   }
 
   @override
-  void afterWatchEvent(WatchEvent event) {
-    analysisServer._onAnalysisSetChangedController.add(null);
-  }
-
-  @override
-  void applyChangesToContext(Folder contextFolder, ChangeSet changeSet) {
-    nd.AnalysisDriver analysisDriver = analysisServer.driverMap[contextFolder];
-    if (analysisDriver != null) {
-      changeSet.addedSources.forEach((source) {
-        analysisDriver.addFile(source.fullName);
-      });
-      changeSet.changedSources.forEach((source) {
-        analysisDriver.changeFile(source.fullName);
-      });
-      changeSet.removedSources.forEach((source) {
-        analysisDriver.removeFile(source.fullName);
-      });
-    }
-  }
-
-  @override
-  void applyFileRemoved(nd.AnalysisDriver driver, String file) {
-    driver.removeFile(file);
-    sendAnalysisNotificationFlushResults(analysisServer, [file]);
-  }
-
-  @override
-  void broadcastWatchEvent(WatchEvent event) {
-    analysisServer.pluginManager.broadcastWatchEvent(event);
-  }
-
-  @override
-  ContextBuilder createContextBuilder(Folder folder, AnalysisOptions options) {
-    String defaultPackageFilePath = null;
-    String defaultPackagesDirectoryPath = null;
-    String path = (analysisServer.contextManager as ContextManagerImpl)
-        .normalizedPackageRoots[folder.path];
-    if (path != null) {
-      Resource resource = resourceProvider.getResource(path);
-      if (resource.exists) {
-        if (resource is File) {
-          defaultPackageFilePath = path;
-        } else {
-          defaultPackagesDirectoryPath = path;
-        }
-      }
-    }
-
-    ContextBuilderOptions builderOptions = new ContextBuilderOptions();
-    builderOptions.defaultOptions = options;
-    builderOptions.defaultPackageFilePath = defaultPackageFilePath;
-    builderOptions.defaultPackagesDirectoryPath = defaultPackagesDirectoryPath;
-    ContextBuilder builder = new ContextBuilder(
-        resourceProvider, analysisServer.sdkManager, null,
-        options: builderOptions);
-    builder.fileResolverProvider = analysisServer.fileResolverProvider;
-    builder.packageResolverProvider = analysisServer.packageResolverProvider;
-    builder.analysisDriverScheduler = analysisServer.analysisDriverScheduler;
-    builder.performanceLog = analysisServer._analysisPerformanceLogger;
-    builder.byteStore = analysisServer.byteStore;
-    builder.enableIndex = true;
-    builder.fileContentOverlay = analysisServer.fileContentOverlay;
-    return builder;
-  }
-
-  @override
-  void removeContext(Folder folder, List<String> flushedFiles) {
-    sendAnalysisNotificationFlushResults(analysisServer, flushedFiles);
-    nd.AnalysisDriver driver = analysisServer.driverMap.remove(folder);
-    driver.dispose();
+  void recordAnalysisErrors(String path, List<AnalysisError> errors) {
+    filesToFlush.add(path);
+    _notificationManager.recordAnalysisErrors(
+        NotificationManager.serverId, path, errors);
   }
 
   List<HighlightRegion> _computeHighlightRegions(CompilationUnit unit) {
-    if (analysisServer.options.useAnalysisHighlight2) {
-      return new DartUnitHighlightsComputer2(unit).compute();
-    } else {
-      return new DartUnitHighlightsComputer(unit).compute();
-    }
-  }
-
-  String _computeLibraryName(CompilationUnit unit) {
-    for (Directive directive in unit.directives) {
-      if (directive is LibraryDirective && directive.name != null) {
-        return directive.name.name;
-      }
-    }
-    for (Directive directive in unit.directives) {
-      if (directive is PartOfDirective && directive.libraryName != null) {
-        return directive.libraryName.name;
-      }
-    }
-    return null;
+    return DartUnitHighlightsComputer(unit).compute();
   }
 
   server.AnalysisNavigationParams _computeNavigationParams(
       String path, CompilationUnit unit) {
-    NavigationCollectorImpl collector = new NavigationCollectorImpl();
+    var collector = NavigationCollectorImpl();
     computeDartNavigation(resourceProvider, collector, unit, null, null);
     collector.createRegions();
-    return new server.AnalysisNavigationParams(
+    return server.AnalysisNavigationParams(
         path, collector.regions, collector.targets, collector.files);
   }
 
   List<Occurrences> _computeOccurrences(CompilationUnit unit) {
-    OccurrencesCollectorImpl collector = new OccurrencesCollectorImpl();
+    var collector = OccurrencesCollectorImpl();
     addDartOccurrences(collector, unit);
     return collector.allOccurrences;
-  }
-
-  // ignore: unused_element
-  server.AnalysisOutlineParams _computeOutlineParams(
-      String path, CompilationUnit unit, LineInfo lineInfo) {
-    // compute FileKind
-    SourceKind sourceKind = unit.directives.any((d) => d is PartOfDirective)
-        ? SourceKind.PART
-        : SourceKind.LIBRARY;
-    server.FileKind fileKind = server.FileKind.LIBRARY;
-    if (sourceKind == SourceKind.LIBRARY) {
-      fileKind = server.FileKind.LIBRARY;
-    } else if (sourceKind == SourceKind.PART) {
-      fileKind = server.FileKind.PART;
-    }
-    // compute library name
-    String libraryName = _computeLibraryName(unit);
-    // compute Outline
-    DartUnitOutlineComputer computer =
-        new DartUnitOutlineComputer(path, lineInfo, unit);
-    server.Outline outline = computer.compute();
-    return new server.AnalysisOutlineParams(path, fileKind, outline,
-        libraryName: libraryName);
   }
 
   /// Run [f] in a new [Future].
@@ -1036,8 +801,8 @@ class ServerContextManagerCallbacks extends ContextManagerCallbacks {
   /// method, or a top-level declaration, we would not have this problem - the
   /// completion computer would be the only consumer of the partial analysis
   /// result.
-  void _runDelayed(f()) {
-    new Future(f);
+  void _runDelayed(Function() f) {
+    Future(f);
   }
 }
 
@@ -1059,10 +824,13 @@ class ServerException {
 class ServerPerformance {
   /// The creation time and the time when performance information
   /// started to be recorded here.
-  final int startTime = new DateTime.now().millisecondsSinceEpoch;
+  final int startTime = DateTime.now().millisecondsSinceEpoch;
 
   /// The number of requests.
   int requestCount = 0;
+
+  /// The number of requests that recorded latency information.
+  int latencyCount = 0;
 
   /// The total latency (milliseconds) for all recorded requests.
   int requestLatency = 0;
@@ -1073,12 +841,12 @@ class ServerPerformance {
   /// The number of requests with latency > 150 milliseconds.
   int slowRequestCount = 0;
 
-  /// Log performance information about the given request.
-  void logRequest(Request request) {
+  /// Log timing information for a request.
+  void logRequestTiming(int? clientRequestTime) {
     ++requestCount;
-    if (request.clientRequestTime != null) {
-      int latency =
-          new DateTime.now().millisecondsSinceEpoch - request.clientRequestTime;
+    if (clientRequestTime != null) {
+      var latency = DateTime.now().millisecondsSinceEpoch - clientRequestTime;
+      ++latencyCount;
       requestLatency += latency;
       maxLatency = max(maxLatency, latency);
       if (latency > 150) {
@@ -1086,24 +854,4 @@ class ServerPerformance {
       }
     }
   }
-}
-
-/// Container with global [AnalysisServer] performance statistics.
-class ServerPerformanceStatistics {
-  /// The [PerformanceTag] for `package:analysis_server`.
-  static final PerformanceTag server = new PerformanceTag('server');
-
-  /// The [PerformanceTag] for time spent between calls to
-  /// AnalysisServer.performOperation when the server is idle.
-  static final PerformanceTag idle = new PerformanceTag('idle');
-
-  /// The [PerformanceTag] for time spent in
-  /// PerformAnalysisOperation._sendNotices.
-  static final PerformanceTag notices = server.createChild('notices');
-
-  /// The [PerformanceTag] for time spent in server communication channels.
-  static final PerformanceTag serverChannel = server.createChild('channel');
-
-  /// The [PerformanceTag] for time spent in server request handlers.
-  static final PerformanceTag serverRequests = server.createChild('requests');
 }

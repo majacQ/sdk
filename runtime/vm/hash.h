@@ -5,16 +5,18 @@
 #ifndef RUNTIME_VM_HASH_H_
 #define RUNTIME_VM_HASH_H_
 
+#include "platform/globals.h"
+
 namespace dart {
 
-static uint32_t CombineHashes(uint32_t hash, uint32_t other_hash) {
+inline uint32_t CombineHashes(uint32_t hash, uint32_t other_hash) {
   hash += other_hash;
   hash += hash << 10;
   hash ^= hash >> 6;  // Logical shift, unsigned hash.
   return hash;
 }
 
-static uint32_t FinalizeHash(uint32_t hash, intptr_t hashbits) {
+inline uint32_t FinalizeHash(uint32_t hash, intptr_t hashbits = kBitsPerInt32) {
   hash += hash << 3;
   hash ^= hash >> 11;  // Logical shift, unsigned hash.
   hash += hash << 15;
@@ -23,6 +25,16 @@ static uint32_t FinalizeHash(uint32_t hash, intptr_t hashbits) {
   // (uintptr_t) big enough to avoid undefined behavior with the left shift.
   hash &= (static_cast<uintptr_t>(1) << hashbits) - 1;
   return (hash == 0) ? 1 : hash;
+}
+
+inline uint32_t HashBytes(const uint8_t* bytes, intptr_t size) {
+  uint32_t hash = size;
+  while (size > 0) {
+    hash = CombineHashes(hash, *bytes);
+    bytes++;
+    size--;
+  }
+  return hash;
 }
 
 }  // namespace dart

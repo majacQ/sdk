@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -29,9 +29,13 @@ List<String> fruits = const <String>['apples', 'bananas', 'pears'];
   void test_default_asVariableName() {
     testRecovery('''
 const default = const Object();
-''', [ParserErrorCode.MISSING_IDENTIFIER], '''
+''', [
+      ParserErrorCode.EXPECTED_IDENTIFIER_BUT_GOT_KEYWORD
+    ], '''
 const default = const Object();
-''', expectedErrorsInValidCode: [ParserErrorCode.MISSING_IDENTIFIER]);
+''', expectedErrorsInValidCode: [
+      ParserErrorCode.EXPECTED_IDENTIFIER_BUT_GOT_KEYWORD
+    ]);
   }
 
   void test_expressionInPlaceOfTypeName() {
@@ -82,12 +86,16 @@ f() {}
 g() {
   f(with: 3);
 }
-''', [ParserErrorCode.MISSING_IDENTIFIER], '''
+''', [
+      ParserErrorCode.EXPECTED_IDENTIFIER_BUT_GOT_KEYWORD
+    ], '''
 f() {}
 g() {
   f(with: 3);
 }
-''', expectedErrorsInValidCode: [ParserErrorCode.MISSING_IDENTIFIER]);
+''', expectedErrorsInValidCode: [
+      ParserErrorCode.EXPECTED_IDENTIFIER_BUT_GOT_KEYWORD
+    ]);
   }
 
   @failingTest

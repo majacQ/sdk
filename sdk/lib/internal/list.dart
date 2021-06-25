@@ -37,7 +37,7 @@ abstract class FixedLengthListMixin<E> {
   }
 
   /** This operation is not supported by a fixed length list. */
-  bool remove(Object element) {
+  bool remove(Object? element) {
     throw new UnsupportedError("Cannot remove from a fixed-length list");
   }
 
@@ -130,7 +130,7 @@ abstract class UnmodifiableListMixin<E> implements List<E> {
   }
 
   /** This operation is not supported by an unmodifiable list. */
-  bool remove(Object element) {
+  bool remove(Object? element) {
     throw new UnsupportedError("Cannot remove from an unmodifiable list");
   }
 
@@ -145,12 +145,12 @@ abstract class UnmodifiableListMixin<E> implements List<E> {
   }
 
   /** This operation is not supported by an unmodifiable list. */
-  void sort([Comparator<E> compare]) {
+  void sort([Comparator<E>? compare]) {
     throw new UnsupportedError("Cannot modify an unmodifiable list");
   }
 
   /** This operation is not supported by an unmodifiable list. */
-  void shuffle([Random random]) {
+  void shuffle([Random? random]) {
     throw new UnsupportedError("Cannot modify an unmodifiable list");
   }
 
@@ -185,7 +185,7 @@ abstract class UnmodifiableListMixin<E> implements List<E> {
   }
 
   /** This operation is not supported by an unmodifiable list. */
-  void fillRange(int start, int end, [E fillValue]) {
+  void fillRange(int start, int end, [E? fillValue]) {
     throw new UnsupportedError("Cannot modify an unmodifiable list");
   }
 }
@@ -225,7 +225,7 @@ class ListMapView<E> extends UnmodifiableMapBase<int, E> {
 
   ListMapView(this._values);
 
-  E operator [](Object key) => containsKey(key) ? _values[key] : null;
+  E? operator [](Object? key) => containsKey(key) ? _values[key as int] : null;
   int get length => _values.length;
 
   Iterable<E> get values => new SubListIterable<E>(_values, 0, null);
@@ -233,8 +233,8 @@ class ListMapView<E> extends UnmodifiableMapBase<int, E> {
 
   bool get isEmpty => _values.isEmpty;
   bool get isNotEmpty => _values.isNotEmpty;
-  bool containsValue(Object value) => _values.contains(value);
-  bool containsKey(Object key) => key is int && key >= 0 && key < length;
+  bool containsValue(Object? value) => _values.contains(value);
+  bool containsKey(Object? key) => key is int && key >= 0 && key < length;
 
   void forEach(void f(int key, E value)) {
     int length = _values.length;
@@ -302,7 +302,7 @@ abstract class NonGrowableListError {
  * Converts a growable list to a fixed length list with the same elements.
  *
  * For internal use only.
- * Only works on growable lists as created by `[]` or `new List()`.
+ * Only works on growable lists like the one created by `[]`.
  * May throw on any other list.
  *
  * The operation is efficient. It doesn't copy the elements, but converts
@@ -328,13 +328,15 @@ external List<T> makeListFixedLength<T>(List<T> growableList);
  * Converts a fixed-length list to an unmodifiable list.
  *
  * For internal use only.
- * Only works for core fixed-length lists as created by `new List(length)`,
+ *
+ * Only works for core fixed-length lists as created by
+ * `List.filled(length)`/`List.empty()`,
  * or as returned by [makeListFixedLength].
  *
  * The operation is efficient. It doesn't copy the elements, but converts
  * the existing list directly to a fixed length list.
  * That means that it is a destructive conversion.
- * The original list should not be used afterwards.
+ * The original list reference should not be used afterwards.
  *
  * The unmodifiable list type is similar to the one used by const lists.
  */

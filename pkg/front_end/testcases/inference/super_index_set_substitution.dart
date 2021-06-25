@@ -1,7 +1,7 @@
 // Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-
+// @dart=2.9
 /*@testedFeatures=inference*/
 library test;
 
@@ -16,9 +16,9 @@ class B<T> {
 class C<U> extends B<Future<U>> {
   void operator []=(Object x, Object y) {}
   void h() {
-    // Note: the index is inferred with an empty context due to issue 31336.
-    super /*@target=B::[]=*/ [
-        /*@typeArgs=dynamic*/ f()] = /*@typeArgs=List<Future<C::U>>*/ f();
+    super /*@target=B.[]=*/ [
+            /*@ typeArgs=Map<int*, Future<C::U*>*>* */ f()] =
+        /*@ typeArgs=List<Future<C::U*>*>* */ f();
   }
 }
 

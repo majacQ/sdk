@@ -7,7 +7,7 @@ library kernel.external_name;
 import 'ast.dart';
 
 /// Returns external (native) name of given [Member].
-String getExternalName(Member procedure) {
+String? getExternalName(Member procedure) {
   // Native procedures are marked as external and have an annotation,
   // which looks like this:
   //
@@ -20,16 +20,36 @@ String getExternalName(Member procedure) {
     return null;
   }
   for (final Expression annotation in procedure.annotations) {
-    if (annotation is ConstructorInvocation) {
-      if (_isExternalName(annotation.target.enclosingClass)) {
-        return (annotation.arguments.positional.single as StringLiteral).value;
-      }
-    } else if (annotation is ConstantExpression) {
-      final constant = annotation.constant;
-      if (constant is InstanceConstant) {
-        if (_isExternalName(constant.klass)) {
-          return (constant.fieldValues.values.single as StringConstant).value;
-        }
+    final String? value = _getExternalNameValue(annotation);
+    if (value != null) {
+      return value;
+    }
+  }
+  return null;
+}
+
+/// Returns native extension URIs for given [library].
+List<String> getNativeExtensionUris(Library library) {
+  final List<String> uris = <String>[];
+  for (Expression annotation in library.annotations) {
+    final String? value = _getExternalNameValue(annotation);
+    if (value != null) {
+      uris.add(value);
+    }
+  }
+  return uris;
+}
+
+String? _getExternalNameValue(Expression annotation) {
+  if (annotation is ConstructorInvocation) {
+    if (_isExternalName(annotation.target.enclosingClass)) {
+      return (annotation.arguments.positional.single as StringLiteral).value;
+    }
+  } else if (annotation is ConstantExpression) {
+    final Constant constant = annotation.constant;
+    if (constant is InstanceConstant) {
+      if (_isExternalName(constant.classNode)) {
+        return (constant.fieldValues.values.single as StringConstant).value;
       }
     }
   }

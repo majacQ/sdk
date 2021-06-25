@@ -8,7 +8,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'fix_processor.dart';
 
-main() {
+void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(ImportLibraryShowTest);
   });
@@ -19,44 +19,178 @@ class ImportLibraryShowTest extends FixProcessorTest {
   @override
   FixKind get kind => DartFixKind.IMPORT_LIBRARY_SHOW;
 
-  test_package() async {
+  Future<void> test_extension_notShown_getter() async {
     addSource('/home/test/lib/lib.dart', '''
-class A {}
-class B {}
+class C {}
+extension E on String {
+  int get m => 0;
+}
 ''');
-    await resolveTestUnit('''
-import 'lib.dart' show A;
-main() {
-  A a;
-  B b;
-  print('\$a \$b');
+    await resolveTestCode('''
+import 'package:test/lib.dart' show C;
+
+void f(String s, C c) {
+  s.m;
 }
 ''');
     await assertHasFix('''
-import 'lib.dart' show A, B;
-main() {
-  A a;
-  B b;
-  print('\$a \$b');
+import 'package:test/lib.dart' show C, E;
+
+void f(String s, C c) {
+  s.m;
 }
 ''');
   }
 
-  test_sdk() async {
-    await resolveTestUnit('''
-import 'dart:collection' show HashMap;
-main() {
-  HashMap s = null;
-  LinkedHashMap f = null;
-  print('\$s \$f');
+  Future<void> test_extension_notShown_method() async {
+    addSource('/home/test/lib/lib.dart', '''
+class C {}
+extension E on String {
+  void m() {}
+}
+''');
+    await resolveTestCode('''
+import 'package:test/lib.dart' show C;
+
+void f(String s, C c) {
+  s.m();
 }
 ''');
     await assertHasFix('''
+import 'package:test/lib.dart' show C, E;
+
+void f(String s, C c) {
+  s.m();
+}
+''');
+  }
+
+  Future<void> test_extension_notShown_operator() async {
+    addSource('/home/test/lib/lib.dart', '''
+class C {}
+extension E on String {
+  String operator -(String other) => this;
+}
+''');
+    await resolveTestCode('''
+import 'package:test/lib.dart' show C;
+
+void f(String s, C c) {
+  s - '2';
+}
+''');
+    await assertHasFix('''
+import 'package:test/lib.dart' show C, E;
+
+void f(String s, C c) {
+  s - '2';
+}
+''');
+  }
+
+  Future<void> test_extension_notShown_setter() async {
+    addSource('/home/test/lib/lib.dart', '''
+class C {}
+extension E on String {
+  set m(int v) {}
+}
+''');
+    await resolveTestCode('''
+import 'package:test/lib.dart' show C;
+
+void f(String s, C c) {
+  s.m = 2;
+}
+''');
+    await assertHasFix('''
+import 'package:test/lib.dart' show C, E;
+
+void f(String s, C c) {
+  s.m = 2;
+}
+''');
+  }
+
+  Future<void> test_override_samePackage() async {
+    addSource('/home/test/lib/lib.dart', '''
+class A {}
+extension E on int {
+  String m() => '';
+}
+''');
+    await resolveTestCode(r'''
+import 'lib.dart' show A;
+void f(A a) {
+  print('$a ${E(3).m()}');
+}
+''');
+    await assertHasFix(r'''
+import 'lib.dart' show A, E;
+void f(A a) {
+  print('$a ${E(3).m()}');
+}
+''');
+  }
+
+  Future<void> test_package() async {
+    addSource('/home/test/lib/lib.dart', '''
+class A {}
+class B {}
+''');
+    await resolveTestCode(r'''
+import 'lib.dart' show A;
+main() {
+  A? a;
+  B b;
+  print('$a $b');
+}
+''');
+    await assertHasFix(r'''
+import 'lib.dart' show A, B;
+main() {
+  A? a;
+  B b;
+  print('$a $b');
+}
+''');
+  }
+
+  Future<void> test_sdk() async {
+    await resolveTestCode(r'''
+import 'dart:collection' show HashMap;
+main() {
+  HashMap? s = null;
+  LinkedHashMap? f = null;
+  print('$s $f');
+}
+''');
+    await assertHasFix(r'''
 import 'dart:collection' show HashMap, LinkedHashMap;
 main() {
-  HashMap s = null;
-  LinkedHashMap f = null;
-  print('\$s \$f');
+  HashMap? s = null;
+  LinkedHashMap? f = null;
+  print('$s $f');
+}
+''');
+  }
+
+  Future<void> test_static_samePackage() async {
+    addSource('/home/test/lib/lib.dart', '''
+class A {}
+extension E on int {
+  static String m() => '';
+}
+''');
+    await resolveTestCode(r'''
+import 'lib.dart' show A;
+void f(A a) {
+  print('$a ${E.m()}');
+}
+''');
+    await assertHasFix(r'''
+import 'lib.dart' show A, E;
+void f(A a) {
+  print('$a ${E.m()}');
 }
 ''');
   }

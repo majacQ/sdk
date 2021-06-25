@@ -2,11 +2,12 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// @dart = 2.9
+
 // Regression test for CL 194523002.
 import 'dart:html';
 
-import 'package:unittest/html_individual_config.dart';
-import 'package:unittest/unittest.dart';
+import 'package:async_helper/async_minitest.dart';
 
 import 'utils.dart';
 
@@ -16,19 +17,10 @@ class A extends HtmlElement {
   A.created() : super.created();
 }
 
-main() {
-  useHtmlIndividualConfiguration();
-
+main() async {
   // Adapted from Blink's
   // fast/dom/custom/constructor-calls-created-synchronously test.
 
-  var registered = false;
-  setUp(() {
-    return customElementsReady.then((_) {
-      if (!registered) {
-        registered = true;
-        document.registerElement2(A.tag, {'prototype': A});
-      }
-    });
-  });
+  await customElementsReady;
+  document.registerElement2(A.tag, {'prototype': A});
 }
