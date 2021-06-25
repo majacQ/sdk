@@ -10,7 +10,7 @@
     "If you add a package to DEPS or /pkg or change a package's SDK",
     "constraint, update this by running tools/generate_package_config.dart."
   ],
-  "configVersion": 2,
+  "configVersion": "2",
   "generated": "2021-06-15T06:05:26.285605",
   "generator": "tools/generate_package_config.dart",
   "packages": [
